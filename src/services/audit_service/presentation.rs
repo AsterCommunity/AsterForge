@@ -46,10 +46,13 @@ fn summary_message(
     }
 
     match action {
-        AuditAction::ConfigUpdate | AuditAction::AdminDeleteConfig => {
+        AuditAction::ConfigUpdate
+        | AuditAction::ConfigActionExecute
+        | AuditAction::AdminDeleteConfig => {
             if let Some(name) = entity_name {
                 params.insert("key".to_string(), Value::String(name.to_string()));
             }
+            copy_string_param(details, &mut params, "action");
         }
         AuditAction::AdminCreateExternalAuthProvider
         | AuditAction::AdminUpdateExternalAuthProvider
@@ -114,6 +117,11 @@ fn detail_message(
             copy_param(details, &mut params, "prior_visibility");
             Some(message("config_value_updated", params))
         }
+        AuditAction::ConfigActionExecute => {
+            copy_param(details, &mut params, "action");
+            copy_param(details, &mut params, "target_email");
+            Some(message("config_action_executed", params))
+        }
         AuditAction::UserLogin => {
             copy_param(details, &mut params, "identifier");
             Some(message("user_login_identifier", params))
@@ -129,6 +137,20 @@ fn detail_message(
             copy_param(details, &mut params, "kind");
             copy_param(details, &mut params, "previous_attempt_count");
             Some(message("task_retry_scheduled", params))
+        }
+        AuditAction::MailSend => {
+            copy_param(details, &mut params, "to_address");
+            copy_param(details, &mut params, "template_code");
+            copy_param(details, &mut params, "outbox_id");
+            Some(message("mail_sent", params))
+        }
+        AuditAction::MailDeliveryFailed => {
+            copy_param(details, &mut params, "to_address");
+            copy_param(details, &mut params, "template_code");
+            copy_param(details, &mut params, "outbox_id");
+            copy_param(details, &mut params, "attempt_count");
+            copy_param(details, &mut params, "error");
+            Some(message("mail_delivery_failed", params))
         }
         AuditAction::AdminCreateExternalAuthProvider
         | AuditAction::AdminUpdateExternalAuthProvider
@@ -207,6 +229,68 @@ mod tests {
         assert_eq!(
             presentation.detail.as_ref().unwrap().code,
             "config_value_updated"
+        );
+    }
+
+    #[test]
+    fn presentation_includes_config_action_detail() {
+        let presentation = build_audit_presentation(
+            AuditAction::ConfigActionExecute,
+            AuditEntityType::SystemConfig,
+            None,
+            Some("mail"),
+            Some(r#"{"action":"send_test_email","target_email":"admin@example.com"}"#),
+        )
+        .expect("presentation should be built");
+
+        assert_eq!(
+            presentation.summary.as_ref().unwrap().code,
+            "config_action_execute"
+        );
+        assert_eq!(
+            presentation.summary.as_ref().unwrap().params.get("key"),
+            Some(&Value::String("mail".to_string()))
+        );
+        assert_eq!(
+            presentation.detail.as_ref().unwrap().code,
+            "config_action_executed"
+        );
+        assert_eq!(
+            presentation
+                .detail
+                .as_ref()
+                .unwrap()
+                .params
+                .get("target_email"),
+            Some(&Value::String("admin@example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn presentation_includes_mail_delivery_detail() {
+        let presentation = build_audit_presentation(
+            AuditAction::MailDeliveryFailed,
+            AuditEntityType::System,
+            None,
+            Some("mail"),
+            Some(
+                r#"{"to_address":"user@example.com","template_code":"password_reset","outbox_id":7,"attempt_count":2,"error":"smtp timeout"}"#,
+            ),
+        )
+        .expect("presentation should be built");
+
+        assert_eq!(
+            presentation.detail.as_ref().unwrap().code,
+            "mail_delivery_failed"
+        );
+        assert_eq!(
+            presentation
+                .detail
+                .as_ref()
+                .unwrap()
+                .params
+                .get("to_address"),
+            Some(&Value::String("user@example.com".to_string()))
         );
     }
 

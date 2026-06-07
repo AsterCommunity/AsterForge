@@ -1,6 +1,6 @@
 //! Administrator config API routes.
 
-use crate::api::dto::SetConfigReq;
+use crate::api::dto::{ExecuteConfigActionReq, ExecuteConfigActionResp, SetConfigReq};
 use crate::api::pagination::LimitOffsetQuery;
 #[cfg(all(debug_assertions, feature = "openapi"))]
 use crate::api::pagination::OffsetPage;
@@ -55,6 +55,24 @@ pub async fn list_config(
 )]
 pub async fn config_schema() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(ApiResponse::ok(config_service::get_schema())))
+}
+
+#[api_docs_macros::path(
+    get,
+    path = "/api/v1/admin/config/template-variables",
+    tag = "admin",
+    operation_id = "config_template_variables",
+    responses(
+        (status = 200, description = "Template variables", body = inline(ApiResponse<Vec<config_service::TemplateVariableGroup>>)),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn config_template_variables() -> Result<HttpResponse> {
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(
+        config_service::list_template_variable_groups(),
+    )))
 }
 
 #[api_docs_macros::path(
@@ -137,4 +155,51 @@ pub async fn delete_config(
     let ctx = audit_service::AuditContext::from_request(&req, user_id);
     config_service::delete_with_audit(state.get_ref(), &path, &ctx).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::<()>::ok_empty()))
+}
+
+#[api_docs_macros::path(
+    post,
+    path = "/api/v1/admin/config/{key}/action",
+    tag = "admin",
+    operation_id = "execute_config_action",
+    params(("key" = String, Path, description = "Config action target key")),
+    request_body = ExecuteConfigActionReq,
+    responses(
+        (status = 200, description = "Config action executed", body = inline(ApiResponse<ExecuteConfigActionResp>)),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Config action target not found"),
+        (status = 503, description = "Mail service unavailable"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn execute_config_action(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<ExecuteConfigActionReq>,
+) -> Result<HttpResponse> {
+    crate::api::dto::validate_request(&*body)?;
+    let user_id = current_admin_user_id(&req)?;
+    let key = path.into_inner();
+    let ctx = audit_service::AuditContext::from_request(&req, user_id);
+    let action_result = config_service::execute_action_with_audit(
+        state.get_ref(),
+        config_service::ExecuteConfigActionInput {
+            key: &key,
+            action: body.action,
+            actor_user_id: user_id,
+            target_email: body.target_email.as_deref(),
+        },
+        &ctx,
+    )
+    .await?;
+
+    Ok(
+        HttpResponse::Ok().json(ApiResponse::ok(ExecuteConfigActionResp {
+            message: action_result.message,
+            value: action_result.value,
+        })),
+    )
 }

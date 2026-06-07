@@ -1,0 +1,1 @@
+Confirm Your New {{site_name}} Email Address

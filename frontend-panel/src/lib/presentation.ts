@@ -14,6 +14,7 @@ const TASK_TITLE_LABELS = {
 	runtime_task_auth_session_cleanup: "Auth session cleanup",
 	runtime_task_background_task_dispatch: "Background task dispatch",
 	runtime_task_external_auth_flow_cleanup: "External auth flow cleanup",
+	runtime_task_mail_outbox_dispatch: "Mail outbox dispatch",
 	runtime_task_system_health_check: "System health check",
 	runtime_task_task_cleanup: "Task artifact cleanup",
 	status_text_failed: "Failed",
@@ -43,11 +44,14 @@ const AUDIT_ACTION_LABELS = {
 	admin_test_external_auth_provider: "External auth provider tested",
 	admin_update_external_auth_provider: "External auth provider updated",
 	admin_update_user: "User updated",
+	config_action_execute: "Config action executed",
 	config_delete: "Config deleted",
 	config_update: "Config updated",
 	external_auth_provider_create: "External auth provider created",
 	external_auth_provider_delete: "External auth provider deleted",
 	external_auth_provider_update: "External auth provider updated",
+	mail_delivery_failed: "Email delivery failed",
+	mail_send: "Email sent",
 	server_shutdown: "Server stopped",
 	server_start: "Server started",
 	system_setup: "System setup",
@@ -70,6 +74,7 @@ const AUDIT_ENTITY_LABELS = {
 	auth_session: "Auth session",
 	external_auth_identity: "External auth identity",
 	external_auth_provider: "External auth provider",
+	mail: "Mail",
 	server: "Server",
 	system: "System",
 	system_config: "System config",
@@ -78,9 +83,12 @@ const AUDIT_ENTITY_LABELS = {
 } as const satisfies Record<AuditEntityType | "server", string>;
 
 const AUDIT_DETAIL_LABELS = {
+	config_action_executed: "Config action executed",
 	config_value_updated: "Config value updated",
 	external_auth_provider_changed: "Provider settings changed",
 	external_auth_provider_tested: "Provider connection tested",
+	mail_delivery_failed: "Email delivery failed",
+	mail_sent: "Email sent",
 	task_retry_scheduled: "Retry queued",
 	tasks_cleanup_finished: "Cleanup finished",
 	user_login_identifier: "Login identifier",
@@ -290,6 +298,18 @@ function formatAuditDetailMessage(
 			]);
 			return compactJoin([AUDIT_DETAIL_LABELS.config_value_updated, values]);
 		}
+		case "config_action_executed": {
+			const action = paramText(params, "action");
+			const values = formatKeyValues(params, [
+				["target_email", "Target email"],
+			]);
+			return compactJoin([
+				action
+					? `Config action: ${humanizeCode(action)}`
+					: AUDIT_DETAIL_LABELS.config_action_executed,
+				values,
+			]);
+		}
 		case "external_auth_provider_changed": {
 			const values = formatKeyValues(params, [
 				["key", "Key"],
@@ -327,6 +347,24 @@ function formatAuditDetailMessage(
 				["previous_attempt_count", "Previous attempts"],
 			]);
 			return compactJoin([AUDIT_DETAIL_LABELS.task_retry_scheduled, values]);
+		}
+		case "mail_sent": {
+			const values = formatKeyValues(params, [
+				["template_code", "Template"],
+				["to_address", "To"],
+				["outbox_id", "Outbox"],
+			]);
+			return compactJoin([AUDIT_DETAIL_LABELS.mail_sent, values]);
+		}
+		case "mail_delivery_failed": {
+			const values = formatKeyValues(params, [
+				["template_code", "Template"],
+				["to_address", "To"],
+				["outbox_id", "Outbox"],
+				["attempt_count", "Attempts"],
+				["error", "Error"],
+			]);
+			return compactJoin([AUDIT_DETAIL_LABELS.mail_delivery_failed, values]);
 		}
 		case "tasks_cleanup_finished": {
 			const removed = paramText(params, "removed");
@@ -385,6 +423,12 @@ export function formatAuditDetail(entry: Pick<AuditLogEntry, "presentation">) {
 
 export function auditActionBadgeClass(action: AuditAction | string) {
 	const value = String(action);
+	if (value === "mail_delivery_failed") {
+		return "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300";
+	}
+	if (value === "mail_send") {
+		return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300";
+	}
 	if (
 		value.includes("delete") ||
 		value.includes("disable") ||

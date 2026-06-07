@@ -10,6 +10,7 @@ use crate::cache::CacheBackend;
 use crate::config::{Config, RuntimeConfig};
 use crate::db::DbHandles;
 use crate::metrics_core::SharedMetricsRecorder;
+use crate::services::mail_service::MailSender;
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub runtime_config: Arc<RuntimeConfig>,
     pub cache: Arc<dyn CacheBackend>,
+    pub mail_sender: Arc<dyn MailSender>,
     pub metrics: SharedMetricsRecorder,
     pub background_task_dispatch_wakeup: Arc<Notify>,
 }
@@ -41,6 +43,10 @@ pub trait SharedRuntimeState {
     fn runtime_config(&self) -> &Arc<RuntimeConfig>;
     fn cache(&self) -> &Arc<dyn CacheBackend>;
     fn metrics(&self) -> &SharedMetricsRecorder;
+}
+
+pub trait MailRuntimeState: SharedRuntimeState {
+    fn mail_sender(&self) -> &Arc<dyn MailSender>;
 }
 
 impl SharedRuntimeState for AppState {
@@ -66,5 +72,11 @@ impl SharedRuntimeState for AppState {
 
     fn metrics(&self) -> &SharedMetricsRecorder {
         &self.metrics
+    }
+}
+
+impl MailRuntimeState for AppState {
+    fn mail_sender(&self) -> &Arc<dyn MailSender> {
+        &self.mail_sender
     }
 }

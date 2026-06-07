@@ -198,6 +198,44 @@ pub fn spawn_primary_background_tasks(
     ));
 
     tasks.push(spawn_periodic(
+        SystemRuntimeTaskKind::MailOutboxDispatch,
+        mail_outbox_dispatch_interval,
+        None,
+        shutdown_token.clone(),
+        state.clone(),
+        |s| async move {
+            match crate::services::mail_outbox_service::dispatch_due(s.get_ref()).await {
+                Ok(stats)
+                    if stats.claimed > 0
+                        || stats.sent > 0
+                        || stats.retried > 0
+                        || stats.failed > 0 =>
+                {
+                    tracing::info!(
+                        claimed = stats.claimed,
+                        sent = stats.sent,
+                        retried = stats.retried,
+                        failed = stats.failed,
+                        "processed mail outbox batch"
+                    );
+                    RuntimeTaskRunOutcome::succeeded(Some(format!(
+                        "claimed {}, sent {}, retried {}, failed {}",
+                        stats.claimed, stats.sent, stats.retried, stats.failed
+                    )))
+                }
+                Ok(_) => RuntimeTaskRunOutcome::quiet(),
+                Err(error) => {
+                    tracing::warn!("mail outbox dispatch failed: {error}");
+                    RuntimeTaskRunOutcome::failed(
+                        Some("Mail outbox dispatch failed".to_string()),
+                        error.to_string(),
+                    )
+                }
+            }
+        },
+    ));
+
+    tasks.push(spawn_periodic(
         SystemRuntimeTaskKind::SystemHealthCheck,
         maintenance_cleanup_interval,
         None,
@@ -617,6 +655,12 @@ fn background_task_dispatch_idle_max_interval(state: &impl SharedRuntimeState) -
 
 fn maintenance_cleanup_interval(state: &impl SharedRuntimeState) -> Duration {
     Duration::from_secs(operations::maintenance_cleanup_interval_secs(
+        state.runtime_config(),
+    ))
+}
+
+fn mail_outbox_dispatch_interval(state: &impl SharedRuntimeState) -> Duration {
+    Duration::from_secs(operations::mail_outbox_dispatch_interval_secs(
         state.runtime_config(),
     ))
 }

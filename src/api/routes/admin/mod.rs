@@ -12,7 +12,10 @@ pub mod external_auth;
 pub mod tasks;
 
 pub use audit_logs::list_audit_logs;
-pub use config::{config_schema, delete_config, get_config, list_config, set_config};
+pub use config::{
+    config_schema, config_template_variables, delete_config, execute_config_action, get_config,
+    list_config, set_config,
+};
 pub use external_auth::{
     create_external_auth_provider, delete_external_auth_provider, get_external_auth_provider,
     list_external_auth_provider_kinds, list_external_auth_providers, test_external_auth_provider,
@@ -35,9 +38,17 @@ pub fn routes(
                     .route("/audit-logs", web::get().to(list_audit_logs))
                     .route("/config", web::get().to(list_config))
                     .route("/config/schema", web::get().to(config_schema))
+                    .route(
+                        "/config/template-variables",
+                        web::get().to(config_template_variables),
+                    )
                     .route("/config/{key}", web::get().to(get_config))
                     .route("/config/{key}", web::put().to(set_config))
                     .route("/config/{key}", web::delete().to(delete_config))
+                    .route(
+                        "/config/{key}/action",
+                        web::post().to(execute_config_action),
+                    )
                     .route("/tasks", web::get().to(list_tasks))
                     .route("/tasks/cleanup", web::post().to(cleanup_tasks))
                     .route("/tasks/{id}/retry", web::post().to(retry_task))

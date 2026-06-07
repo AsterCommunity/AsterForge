@@ -52,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/config/template-variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["config_template_variables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/config/{key}": {
         parameters: {
             query?: never;
@@ -63,6 +79,22 @@ export interface paths {
         put: operations["set_config"];
         post?: never;
         delete: operations["delete_config"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/config/{key}/action": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["execute_config_action"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -577,11 +609,11 @@ export interface components {
             retryable?: boolean | null;
         };
         /** @enum {string} */
-        AsterErrorCode: "success" | "bad_request" | "not_found" | "internal_server_error" | "database.error" | "config.error" | "endpoint.not_found" | "rate_limited" | "auth.credentials_failed" | "auth.token_expired" | "auth.token_invalid" | "forbidden" | "external_auth.error";
+        AsterErrorCode: "success" | "bad_request" | "not_found" | "internal_server_error" | "database.error" | "config.error" | "endpoint.not_found" | "rate_limited" | "mail.not_configured" | "mail.delivery_failed" | "auth.credentials_failed" | "auth.token_expired" | "auth.token_invalid" | "forbidden" | "external_auth.error";
         /** @enum {string} */
-        AuditAction: "system_setup" | "server_start" | "server_shutdown" | "config_update" | "config_delete" | "user_register" | "user_login" | "user_logout" | "user_refresh_token" | "user_revoke_session" | "user_revoke_other_sessions" | "user_change_password" | "user_update_profile" | "admin_create_user" | "admin_update_user" | "admin_disable_user" | "admin_revoke_user_sessions" | "admin_delete_config" | "admin_cleanup_tasks" | "task_retry" | "admin_create_external_auth_provider" | "admin_update_external_auth_provider" | "admin_delete_external_auth_provider" | "admin_test_external_auth_provider" | "external_auth_provider_create" | "external_auth_provider_update" | "external_auth_provider_delete" | "user_external_auth_login" | "user_external_auth_link" | "user_external_auth_unlink";
+        AuditAction: "system_setup" | "server_start" | "server_shutdown" | "config_update" | "config_delete" | "config_action_execute" | "user_register" | "user_login" | "user_logout" | "user_refresh_token" | "user_revoke_session" | "user_revoke_other_sessions" | "user_change_password" | "user_update_profile" | "admin_create_user" | "admin_update_user" | "admin_disable_user" | "admin_revoke_user_sessions" | "admin_delete_config" | "admin_cleanup_tasks" | "task_retry" | "admin_create_external_auth_provider" | "admin_update_external_auth_provider" | "admin_delete_external_auth_provider" | "admin_test_external_auth_provider" | "mail_send" | "mail_delivery_failed" | "external_auth_provider_create" | "external_auth_provider_update" | "external_auth_provider_delete" | "user_external_auth_login" | "user_external_auth_link" | "user_external_auth_unlink";
         /** @enum {string} */
-        AuditEntityType: "system" | "system_config" | "user" | "auth_session" | "external_auth_provider" | "external_auth_identity" | "api_token" | "task";
+        AuditEntityType: "system" | "system_config" | "user" | "auth_session" | "external_auth_provider" | "external_auth_identity" | "api_token" | "mail" | "task";
         AuditLogEntry: {
             action: components["schemas"]["AuditAction"];
             created_at: string;
@@ -711,6 +743,8 @@ export interface components {
         CheckResp: {
             initialized: boolean;
         };
+        /** @enum {string} */
+        ConfigActionType: "send_test_email";
         ConfigSchemaItem: {
             category: string;
             description: string;
@@ -746,6 +780,14 @@ export interface components {
         ExampleMessage: {
             build_time: string;
             message: string;
+        };
+        ExecuteConfigActionReq: {
+            action: components["schemas"]["ConfigActionType"];
+            target_email?: string | null;
+        };
+        ExecuteConfigActionResp: {
+            message: string;
+            value?: string | null;
         };
         ExternalAuthCallbackQuery: {
             code: string;
@@ -842,6 +884,27 @@ export interface components {
         };
         LogoutResp: {
             revoked: boolean;
+        };
+        /** @enum {string} */
+        MailOutboxStatus: "pending" | "processing" | "retry" | "sent" | "failed";
+        /** @enum {string} */
+        MailTemplateCode: "register_activation" | "contact_change_confirmation" | "password_reset" | "password_reset_notice" | "contact_change_notice" | "external_auth_email_verification" | "login_email_code";
+        Model: {
+            /** Format: int32 */
+            attempt_count: number;
+            created_at: string;
+            /** Format: int64 */
+            id: number;
+            last_error?: string | null;
+            next_attempt_at: string;
+            payload_json: string;
+            processing_started_at?: string | null;
+            sent_at?: string | null;
+            status: components["schemas"]["MailOutboxStatus"];
+            template_code: components["schemas"]["MailTemplateCode"];
+            to_address: string;
+            to_name?: string | null;
+            updated_at: string;
         };
         OffsetPage_AdminExternalAuthProviderInfo: {
             items: {
@@ -1109,7 +1172,7 @@ export interface components {
             title?: null | components["schemas"]["TaskPresentationMessage"];
         };
         /** @enum {string} */
-        TaskPresentationCode: "runtime_system_health_issue_detail" | "runtime_task_audit_cleanup" | "runtime_task_auth_session_cleanup" | "runtime_task_background_task_dispatch" | "runtime_task_external_auth_flow_cleanup" | "runtime_task_system_health_check" | "runtime_task_task_cleanup" | "status_text_failed" | "status_text_quiet" | "status_text_succeeded" | "status_text_system_healthy";
+        TaskPresentationCode: "runtime_system_health_issue_detail" | "runtime_task_audit_cleanup" | "runtime_task_auth_session_cleanup" | "runtime_task_background_task_dispatch" | "runtime_task_external_auth_flow_cleanup" | "runtime_task_mail_outbox_dispatch" | "runtime_task_system_health_check" | "runtime_task_task_cleanup" | "status_text_failed" | "status_text_quiet" | "status_text_succeeded" | "status_text_system_healthy";
         TaskPresentationMessage: {
             code: components["schemas"]["TaskPresentationCode"];
             params?: {
@@ -1134,6 +1197,17 @@ export interface components {
         };
         /** @enum {string} */
         TaskStepStatus: "pending" | "active" | "succeeded" | "failed" | "skipped" | "canceled";
+        TemplateVariableGroup: {
+            category: string;
+            label_i18n_key: string;
+            template_code: string;
+            variables: components["schemas"]["TemplateVariableItem"][];
+        };
+        TemplateVariableItem: {
+            description_i18n_key: string;
+            label_i18n_key: string;
+            token: string;
+        };
         UpdateExternalAuthProviderReq: {
             authorization_url?: string | null;
             authorize_url?: string | null;
@@ -1365,6 +1439,50 @@ export interface operations {
             };
         };
     };
+    config_template_variables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template variables */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code: components["schemas"]["AsterErrorCode"];
+                        data?: {
+                            category: string;
+                            label_i18n_key: string;
+                            template_code: string;
+                            variables: components["schemas"]["TemplateVariableItem"][];
+                        }[];
+                        error?: null | components["schemas"]["ApiErrorInfo"];
+                        msg: string;
+                    };
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_config: {
         parameters: {
             query?: never;
@@ -1534,6 +1652,76 @@ export interface operations {
             };
             /** @description Config key not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    execute_config_action: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Config action target key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecuteConfigActionReq"];
+            };
+        };
+        responses: {
+            /** @description Config action executed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code: components["schemas"]["AsterErrorCode"];
+                        data?: {
+                            message: string;
+                            value?: string | null;
+                        };
+                        error?: null | components["schemas"]["ApiErrorInfo"];
+                        msg: string;
+                    };
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Config action target not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Mail service unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -5,14 +5,25 @@ mod common;
 
 use actix_web::test;
 use aster_forge::config::definitions::BRANDING_TITLE_KEY;
-use aster_forge::entities::{audit_log, background_task};
+use aster_forge::db::repository::mail_outbox_repo;
+use aster_forge::entities::{audit_log, background_task, mail_outbox};
+use aster_forge::errors::{AsterError, Result as AsterResult};
 use aster_forge::runtime::{AppState, SharedRuntimeState};
-use aster_forge::services::audit_service;
-use aster_forge::types::{BackgroundTaskKind, BackgroundTaskStatus, StoredTaskPayload};
+use aster_forge::services::{
+    audit_service, mail_outbox_service,
+    mail_service::{MailMessage, MailSender},
+};
+use aster_forge::types::{
+    BackgroundTaskKind, BackgroundTaskStatus, MailOutboxStatus, MailTemplateCode,
+    StoredMailPayload, StoredTaskPayload,
+};
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use sea_orm::Set;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::Value;
+use std::any::Any;
+use std::sync::Arc;
 
 fn find_action<'a>(items: &'a [Value], action: &str) -> &'a Value {
     items
@@ -71,6 +82,54 @@ async fn insert_failed_retryable_task(
     .await
     .expect("test background task should insert");
     task.id
+}
+
+struct FailingMailSender;
+
+#[async_trait]
+impl MailSender for FailingMailSender {
+    async fn send(&self, _message: MailMessage) -> AsterResult<()> {
+        Err(AsterError::mail_delivery_failed("smtp unavailable"))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn mail_outbox_model(
+    attempt_count: i32,
+    payload_json: StoredMailPayload,
+) -> mail_outbox::ActiveModel {
+    let now = Utc::now();
+    mail_outbox::ActiveModel {
+        template_code: Set(MailTemplateCode::RegisterActivation),
+        to_address: Set("audit-mail@example.com".to_string()),
+        to_name: Set(Some("Audit Mail".to_string())),
+        payload_json: Set(payload_json),
+        status: Set(MailOutboxStatus::Pending),
+        attempt_count: Set(attempt_count),
+        next_attempt_at: Set(now),
+        processing_started_at: Set(None),
+        sent_at: Set(None),
+        last_error: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+}
+
+async fn latest_audit_entry(
+    state: &AppState,
+    action: audit_service::AuditAction,
+) -> audit_log::Model {
+    audit_log::Entity::find()
+        .filter(audit_log::Column::Action.eq(action))
+        .order_by_desc(audit_log::Column::Id)
+        .one(state.writer_db())
+        .await
+        .expect("audit log query should succeed")
+        .expect("audit log entry should exist")
 }
 
 #[actix_web::test]
@@ -300,4 +359,69 @@ async fn admin_task_retry_records_audit_log() {
     let details: Value = serde_json::from_str(retry_entry["details"].as_str().unwrap()).unwrap();
     assert_eq!(details["kind"], "system_runtime");
     assert_eq!(details["previous_attempt_count"], 2);
+}
+
+#[actix_web::test]
+async fn mail_outbox_dispatch_records_delivery_audit_logs() {
+    let state = common::setup().await;
+    let payload = aster_forge::services::mail_template::MailTemplatePayload::register_activation(
+        "alice",
+        "token-123",
+        "AsterForge",
+    )
+    .to_stored()
+    .expect("mail payload should serialize");
+    let sent_row = mail_outbox_repo::create(state.writer_db(), mail_outbox_model(0, payload))
+        .await
+        .expect("mail outbox row should insert");
+
+    let stats = mail_outbox_service::dispatch_due(&state)
+        .await
+        .expect("mail outbox dispatch should succeed");
+
+    assert_eq!(stats.claimed, 1);
+    assert_eq!(stats.sent, 1);
+    let sent_entry = latest_audit_entry(&state, audit_service::AuditAction::MailSend).await;
+    assert_eq!(sent_entry.user_id, 0);
+    assert_eq!(sent_entry.entity_type, "mail");
+    assert_eq!(sent_entry.entity_id, Some(sent_row.id));
+    assert_eq!(sent_entry.entity_name.as_deref(), Some("mail"));
+    let sent_details: Value = serde_json::from_str(sent_entry.details.as_deref().unwrap()).unwrap();
+    assert_eq!(sent_details["to_address"], "audit-mail@example.com");
+    assert_eq!(sent_details["template_code"], "register_activation");
+    assert_eq!(sent_details["to_name"], "Audit Mail");
+    assert_eq!(sent_details["outbox_id"], sent_row.id);
+    assert_eq!(sent_details["attempt_count"], 0);
+
+    let payload = aster_forge::services::mail_template::MailTemplatePayload::register_activation(
+        "alice",
+        "token-456",
+        "AsterForge",
+    )
+    .to_stored()
+    .expect("mail payload should serialize");
+    let failed_row = mail_outbox_repo::create(state.writer_db(), mail_outbox_model(5, payload))
+        .await
+        .expect("mail outbox row should insert");
+    let sender: Arc<dyn MailSender> = Arc::new(FailingMailSender);
+
+    let stats =
+        mail_outbox_service::dispatch_due_with(state.writer_db(), &state.runtime_config, &sender)
+            .await
+            .expect("mail outbox dispatch should handle final delivery failure");
+
+    assert_eq!(stats.claimed, 1);
+    assert_eq!(stats.failed, 1);
+    let failed_entry =
+        latest_audit_entry(&state, audit_service::AuditAction::MailDeliveryFailed).await;
+    assert_eq!(failed_entry.user_id, 0);
+    assert_eq!(failed_entry.entity_type, "mail");
+    assert_eq!(failed_entry.entity_id, Some(failed_row.id));
+    let failed_details: Value =
+        serde_json::from_str(failed_entry.details.as_deref().unwrap()).unwrap();
+    assert_eq!(failed_details["to_address"], "audit-mail@example.com");
+    assert_eq!(failed_details["template_code"], "register_activation");
+    assert_eq!(failed_details["outbox_id"], failed_row.id);
+    assert_eq!(failed_details["attempt_count"], 6);
+    assert_eq!(failed_details["error"], "smtp unavailable");
 }

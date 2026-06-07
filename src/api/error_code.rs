@@ -61,6 +61,8 @@ define_error_codes! {
     ConfigError => "config.error",
     EndpointNotFound => "endpoint.not_found",
     RateLimited => "rate_limited",
+    MailNotConfigured => "mail.not_configured",
+    MailDeliveryFailed => "mail.delivery_failed",
 
     AuthCredentialsFailed => "auth.credentials_failed",
     AuthTokenExpired => "auth.token_expired",

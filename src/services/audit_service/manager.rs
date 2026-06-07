@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::context::AuditContext;
+use crate::config::RuntimeConfig;
 use crate::db::repository::audit_log_repo;
 use crate::entities::audit_log;
 use crate::runtime::SharedRuntimeState;
@@ -274,16 +275,19 @@ pub fn should_record<S: SharedRuntimeState>(state: &S, action: AuditAction) -> b
     state.runtime_config().should_record_audit_action(action)
 }
 
-async fn record_prechecked<S: SharedRuntimeState>(
-    state: &S,
+pub fn should_record_with_config(runtime_config: &RuntimeConfig, action: AuditAction) -> bool {
+    runtime_config.should_record_audit_action(action)
+}
+
+fn audit_model(
     ctx: &AuditContext,
     action: AuditAction,
     entity_type: AuditEntityType,
     entity_id: Option<i64>,
     entity_name: Option<&str>,
     details: Option<serde_json::Value>,
-) {
-    let model = audit_log::ActiveModel {
+) -> audit_log::ActiveModel {
+    audit_log::ActiveModel {
         id: Default::default(),
         user_id: Set(ctx.user_id),
         action: Set(action),
@@ -294,12 +298,42 @@ async fn record_prechecked<S: SharedRuntimeState>(
         ip_address: Set(ctx.ip_address.clone()),
         user_agent: Set(ctx.user_agent.clone()),
         created_at: Set(Utc::now()),
-    };
+    }
+}
+
+async fn record_prechecked<S: SharedRuntimeState>(
+    state: &S,
+    ctx: &AuditContext,
+    action: AuditAction,
+    entity_type: AuditEntityType,
+    entity_id: Option<i64>,
+    entity_name: Option<&str>,
+    details: Option<serde_json::Value>,
+) {
+    let model = audit_model(ctx, action, entity_type, entity_id, entity_name, details);
 
     if let Some(manager) = GLOBAL_AUDIT_LOG_MANAGER.get() {
         manager.record(model).await;
     } else {
         write_audit_model(state.writer_db(), model).await;
+    }
+}
+
+async fn record_prechecked_with_db(
+    db: &DatabaseConnection,
+    ctx: &AuditContext,
+    action: AuditAction,
+    entity_type: AuditEntityType,
+    entity_id: Option<i64>,
+    entity_name: Option<&str>,
+    details: Option<serde_json::Value>,
+) {
+    let model = audit_model(ctx, action, entity_type, entity_id, entity_name, details);
+
+    if let Some(manager) = GLOBAL_AUDIT_LOG_MANAGER.get() {
+        manager.record(model).await;
+    } else {
+        write_audit_model(db, model).await;
     }
 }
 
@@ -324,6 +358,34 @@ pub async fn log<S: SharedRuntimeState>(
         entity_id,
         entity_name,
         details,
+    )
+    .await;
+}
+
+pub async fn log_with_db_and_config<F>(
+    db: &DatabaseConnection,
+    runtime_config: &RuntimeConfig,
+    ctx: &AuditContext,
+    action: AuditAction,
+    entity_type: AuditEntityType,
+    entity_id: Option<i64>,
+    entity_name: Option<&str>,
+    details: F,
+) where
+    F: FnOnce() -> Option<serde_json::Value>,
+{
+    if !should_record_with_config(runtime_config, action) {
+        return;
+    }
+
+    record_prechecked_with_db(
+        db,
+        ctx,
+        action,
+        entity_type,
+        entity_id,
+        entity_name,
+        details(),
     )
     .await;
 }

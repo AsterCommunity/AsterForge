@@ -12,6 +12,29 @@ pub struct ConfigUpdateDetails<'a> {
 }
 
 #[derive(Serialize)]
+pub struct ConfigActionDetails<'a> {
+    pub action: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_email: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+pub struct MailAuditDetails<'a> {
+    pub to_address: &'a str,
+    pub template_code: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbox_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<&'a str>,
+}
+
+#[derive(Serialize)]
 pub struct AdminTaskCleanupAuditDetails {
     pub removed: u64,
     pub finished_before: DateTime<Utc>,
@@ -52,8 +75,8 @@ pub fn details<T: Serialize>(value: T) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdminTaskCleanupAuditDetails, ConfigUpdateDetails, LoginAuditDetails,
-        TaskRetryAuditDetails, details,
+        AdminTaskCleanupAuditDetails, ConfigActionDetails, ConfigUpdateDetails, LoginAuditDetails,
+        MailAuditDetails, TaskRetryAuditDetails, details,
     };
     use crate::types::{BackgroundTaskKind, BackgroundTaskStatus, SystemConfigVisibility};
     use chrono::Utc;
@@ -89,6 +112,32 @@ mod tests {
     }
 
     #[test]
+    fn details_serializes_config_action_and_omits_missing_target_email() {
+        assert_eq!(
+            details(ConfigActionDetails {
+                action: "send_test_email",
+                target_email: Some("admin@example.com"),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "action": "send_test_email",
+                "target_email": "admin@example.com",
+            })
+        );
+
+        assert_eq!(
+            details(ConfigActionDetails {
+                action: "send_test_email",
+                target_email: None,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "action": "send_test_email",
+            })
+        );
+    }
+
+    #[test]
     fn details_serializes_task_cleanup_and_retry_shapes() {
         let finished_before = Utc::now();
         assert_eq!(
@@ -116,6 +165,31 @@ mod tests {
             serde_json::json!({
                 "kind": "system_runtime",
                 "previous_attempt_count": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn details_serializes_mail_audit_shape() {
+        assert_eq!(
+            details(MailAuditDetails {
+                to_address: "user@example.com",
+                template_code: "password_reset",
+                to_name: Some("User"),
+                subject: Some("Reset password"),
+                outbox_id: Some(42),
+                attempt_count: Some(2),
+                error: Some("smtp timeout"),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "to_address": "user@example.com",
+                "template_code": "password_reset",
+                "to_name": "User",
+                "subject": "Reset password",
+                "outbox_id": 42,
+                "attempt_count": 2,
+                "error": "smtp timeout",
             })
         );
     }

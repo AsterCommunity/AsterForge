@@ -6,8 +6,8 @@ use crate::errors::{AsterError, Result};
 pub use crate::config::definitions::{
     BACKGROUND_TASK_DISPATCH_IDLE_MAX_INTERVAL_SECS_KEY,
     BACKGROUND_TASK_DISPATCH_INTERVAL_SECS_KEY, BACKGROUND_TASK_MAX_ATTEMPTS_KEY,
-    BACKGROUND_TASK_MAX_CONCURRENCY_KEY, MAINTENANCE_CLEANUP_INTERVAL_SECS_KEY,
-    TASK_LIST_MAX_LIMIT_KEY, TASK_RETENTION_HOURS_KEY,
+    BACKGROUND_TASK_MAX_CONCURRENCY_KEY, MAIL_OUTBOX_DISPATCH_INTERVAL_SECS_KEY,
+    MAINTENANCE_CLEANUP_INTERVAL_SECS_KEY, TASK_LIST_MAX_LIMIT_KEY, TASK_RETENTION_HOURS_KEY,
 };
 
 pub const DEFAULT_BACKGROUND_TASK_DISPATCH_INTERVAL_SECS: u64 = 5;
@@ -16,6 +16,7 @@ pub const DEFAULT_BACKGROUND_TASK_MAX_CONCURRENCY: usize = 4;
 pub const DEFAULT_BACKGROUND_TASK_MAX_ATTEMPTS: i32 = 3;
 pub const DEFAULT_TASK_LIST_MAX_LIMIT: u64 = 100;
 pub const DEFAULT_MAINTENANCE_CLEANUP_INTERVAL_SECS: u64 = 3600;
+pub const DEFAULT_MAIL_OUTBOX_DISPATCH_INTERVAL_SECS: u64 = 5;
 
 pub fn normalize_interval_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_positive_u64(value)
@@ -84,6 +85,14 @@ pub fn maintenance_cleanup_interval_secs(runtime_config: &RuntimeConfig) -> u64 
         runtime_config,
         MAINTENANCE_CLEANUP_INTERVAL_SECS_KEY,
         DEFAULT_MAINTENANCE_CLEANUP_INTERVAL_SECS,
+    )
+}
+
+pub fn mail_outbox_dispatch_interval_secs(runtime_config: &RuntimeConfig) -> u64 {
+    read_positive_u64(
+        runtime_config,
+        MAIL_OUTBOX_DISPATCH_INTERVAL_SECS_KEY,
+        DEFAULT_MAIL_OUTBOX_DISPATCH_INTERVAL_SECS,
     )
 }
 

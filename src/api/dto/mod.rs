@@ -10,8 +10,8 @@ pub(crate) mod validation;
 
 pub use admin::{
     AdminAuditLogSortQuery, AdminTaskCleanupReq, AdminTaskListQuery, CreateExternalAuthProviderReq,
-    ExternalAuthProviderTestParamsReq, RemovedCountResponse, SetConfigReq,
-    UpdateExternalAuthProviderReq,
+    ExecuteConfigActionReq, ExecuteConfigActionResp, ExternalAuthProviderTestParamsReq,
+    RemovedCountResponse, SetConfigReq, UpdateExternalAuthProviderReq,
 };
 pub use auth::{CheckResp, LoginReq, LogoutReq, LogoutResp, RefreshReq, RegisterReq, SetupReq};
 pub use external_auth::{ExternalAuthCallbackQuery, StartExternalAuthReq};

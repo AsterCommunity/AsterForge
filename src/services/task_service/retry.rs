@@ -21,7 +21,9 @@ impl TaskRetryClass {
 
 pub(super) fn default_retry_class(error: &AsterError) -> TaskRetryClass {
     match error {
-        AsterError::DatabaseConnection(_) => TaskRetryClass::Auto,
+        AsterError::DatabaseConnection(_) | AsterError::MailDeliveryFailed(_) => {
+            TaskRetryClass::Auto
+        }
         AsterError::DatabaseOperation(_)
         | AsterError::ConfigError(_)
         | AsterError::ExternalAuthError(_)
@@ -31,7 +33,8 @@ pub(super) fn default_retry_class(error: &AsterError) -> TaskRetryClass {
         | AsterError::AuthTokenInvalid(_)
         | AsterError::AuthTokenExpired(_)
         | AsterError::AuthForbidden(_)
-        | AsterError::RecordNotFound(_) => TaskRetryClass::Never,
+        | AsterError::RecordNotFound(_)
+        | AsterError::MailNotConfigured(_) => TaskRetryClass::Never,
     }
 }
 
@@ -58,6 +61,10 @@ mod tests {
             default_retry_class(&AsterError::database_connection("connect failed")),
             TaskRetryClass::Auto
         );
+        assert_eq!(
+            default_retry_class(&AsterError::mail_delivery_failed("smtp timeout")),
+            TaskRetryClass::Auto
+        );
 
         for error in [
             AsterError::database_operation("query failed"),
@@ -75,6 +82,7 @@ mod tests {
             AsterError::auth_token_expired("expired token"),
             AsterError::auth_forbidden("forbidden"),
             AsterError::record_not_found("missing"),
+            AsterError::mail_not_configured("smtp missing"),
         ] {
             assert_eq!(default_retry_class(&error), TaskRetryClass::Never);
         }

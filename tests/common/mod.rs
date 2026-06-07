@@ -774,6 +774,7 @@ pub async fn setup_with_memory_cache() -> AppState {
         config: base.config,
         runtime_config: base.runtime_config,
         cache,
+        mail_sender: aster_forge::services::mail_service::memory_sender(),
         metrics: aster_forge::metrics_core::NoopMetrics::arc(),
         background_task_dispatch_wakeup:
             aster_forge::runtime::AppState::new_background_task_dispatch_wakeup(),
@@ -965,6 +966,7 @@ pub async fn setup_with_database_url(database_url: &str) -> AppState {
         config,
         runtime_config,
         cache,
+        mail_sender: aster_forge::services::mail_service::memory_sender(),
         metrics: aster_forge::metrics_core::NoopMetrics::arc(),
         background_task_dispatch_wakeup:
             aster_forge::runtime::AppState::new_background_task_dispatch_wakeup(),

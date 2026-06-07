@@ -11,6 +11,7 @@ use crate::config::branding;
 use crate::config::cors;
 use crate::config::definitions::{ALL_CONFIGS, ConfigDef};
 use crate::config::local_email_policy;
+use crate::config::mail;
 use crate::config::operations;
 use crate::config::site_url;
 use crate::entities::system_config;
@@ -119,13 +120,37 @@ where
         | local_email_policy::AUTH_LOCAL_EMAIL_BLOCKLIST_KEY => {
             local_email_policy::normalize_local_email_policy_config_value(key, value)
         }
+        mail::MAIL_SMTP_HOST_KEY => mail::normalize_smtp_host_config_value(value),
+        mail::MAIL_SMTP_PORT_KEY => mail::normalize_smtp_port_config_value(value),
+        mail::MAIL_FROM_ADDRESS_KEY => mail::normalize_mail_address_config_value(value),
+        mail::MAIL_FROM_NAME_KEY => mail::normalize_mail_name_config_value(value),
+        mail::MAIL_SECURITY_KEY => mail::normalize_mail_security_config_value(value),
+        mail::MAIL_TEMPLATE_REGISTER_ACTIVATION_SUBJECT_KEY
+        | mail::MAIL_TEMPLATE_CONTACT_CHANGE_CONFIRMATION_SUBJECT_KEY
+        | mail::MAIL_TEMPLATE_PASSWORD_RESET_SUBJECT_KEY
+        | mail::MAIL_TEMPLATE_PASSWORD_RESET_NOTICE_SUBJECT_KEY
+        | mail::MAIL_TEMPLATE_CONTACT_CHANGE_NOTICE_SUBJECT_KEY
+        | mail::MAIL_TEMPLATE_EXTERNAL_AUTH_EMAIL_VERIFICATION_SUBJECT_KEY
+        | mail::MAIL_TEMPLATE_LOGIN_EMAIL_CODE_SUBJECT_KEY => {
+            mail::normalize_mail_template_subject_config_value(key, value)
+        }
+        mail::MAIL_TEMPLATE_REGISTER_ACTIVATION_HTML_KEY
+        | mail::MAIL_TEMPLATE_CONTACT_CHANGE_CONFIRMATION_HTML_KEY
+        | mail::MAIL_TEMPLATE_PASSWORD_RESET_HTML_KEY
+        | mail::MAIL_TEMPLATE_PASSWORD_RESET_NOTICE_HTML_KEY
+        | mail::MAIL_TEMPLATE_CONTACT_CHANGE_NOTICE_HTML_KEY
+        | mail::MAIL_TEMPLATE_EXTERNAL_AUTH_EMAIL_VERIFICATION_HTML_KEY
+        | mail::MAIL_TEMPLATE_LOGIN_EMAIL_CODE_HTML_KEY => {
+            mail::normalize_mail_template_body_config_value(key, value)
+        }
         operations::BACKGROUND_TASK_DISPATCH_INTERVAL_SECS_KEY
         | operations::BACKGROUND_TASK_DISPATCH_IDLE_MAX_INTERVAL_SECS_KEY
         | operations::BACKGROUND_TASK_MAX_CONCURRENCY_KEY
         | operations::BACKGROUND_TASK_MAX_ATTEMPTS_KEY
         | operations::TASK_RETENTION_HOURS_KEY
         | operations::TASK_LIST_MAX_LIMIT_KEY
-        | operations::MAINTENANCE_CLEANUP_INTERVAL_SECS_KEY => {
+        | operations::MAINTENANCE_CLEANUP_INTERVAL_SECS_KEY
+        | operations::MAIL_OUTBOX_DISPATCH_INTERVAL_SECS_KEY => {
             operations::normalize_interval_config_value(key, value)
         }
         cors::CORS_ENABLED_KEY => cors::normalize_enabled_config_value(value),

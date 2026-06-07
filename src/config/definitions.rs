@@ -8,6 +8,9 @@ pub const CONFIG_CATEGORY_EXTERNAL_AUTH: &str = "external_auth";
 pub const CONFIG_CATEGORY_NETWORK: &str = "network";
 pub const CONFIG_CATEGORY_AUDIT: &str = "audit";
 pub const CONFIG_CATEGORY_RUNTIME: &str = "runtime";
+pub const CONFIG_CATEGORY_RUNTIME_MAIL: &str = "runtime.mail";
+pub const CONFIG_CATEGORY_MAIL_CONFIG: &str = "mail.config";
+pub const CONFIG_CATEGORY_MAIL_TEMPLATE: &str = "mail.template";
 
 pub const SYSTEM_CONFIG_ALLOWED_CATEGORIES: &[&str] = &[
     CONFIG_CATEGORY_SITE,
@@ -16,6 +19,9 @@ pub const SYSTEM_CONFIG_ALLOWED_CATEGORIES: &[&str] = &[
     CONFIG_CATEGORY_NETWORK,
     CONFIG_CATEGORY_AUDIT,
     CONFIG_CATEGORY_RUNTIME,
+    CONFIG_CATEGORY_RUNTIME_MAIL,
+    CONFIG_CATEGORY_MAIL_CONFIG,
+    CONFIG_CATEGORY_MAIL_TEMPLATE,
 ];
 
 pub const PUBLIC_SITE_URL_KEY: &str = "public_site_url";
@@ -59,6 +65,40 @@ pub const AUDIT_LOG_ENABLED_KEY: &str = "audit_log_enabled";
 pub const AUDIT_LOG_RETENTION_DAYS_KEY: &str = "audit_log_retention_days";
 pub const AUDIT_LOG_RECORDED_ACTIONS_KEY: &str = "audit_log_recorded_actions";
 
+pub const MAIL_SMTP_HOST_KEY: &str = "mail_smtp_host";
+pub const MAIL_SMTP_PORT_KEY: &str = "mail_smtp_port";
+pub const MAIL_SMTP_USERNAME_KEY: &str = "mail_smtp_username";
+pub const MAIL_SMTP_PASSWORD_KEY: &str = "mail_smtp_password";
+pub const MAIL_FROM_ADDRESS_KEY: &str = "mail_from_address";
+pub const MAIL_FROM_NAME_KEY: &str = "mail_from_name";
+pub const MAIL_SECURITY_KEY: &str = "mail_security";
+pub const MAIL_TEMPLATE_REGISTER_ACTIVATION_SUBJECT_KEY: &str =
+    "mail_template_register_activation_subject";
+pub const MAIL_TEMPLATE_REGISTER_ACTIVATION_HTML_KEY: &str =
+    "mail_template_register_activation_html";
+pub const MAIL_TEMPLATE_CONTACT_CHANGE_CONFIRMATION_SUBJECT_KEY: &str =
+    "mail_template_contact_change_confirmation_subject";
+pub const MAIL_TEMPLATE_CONTACT_CHANGE_CONFIRMATION_HTML_KEY: &str =
+    "mail_template_contact_change_confirmation_html";
+pub const MAIL_TEMPLATE_PASSWORD_RESET_SUBJECT_KEY: &str = "mail_template_password_reset_subject";
+pub const MAIL_TEMPLATE_PASSWORD_RESET_HTML_KEY: &str = "mail_template_password_reset_html";
+pub const MAIL_TEMPLATE_PASSWORD_RESET_NOTICE_SUBJECT_KEY: &str =
+    "mail_template_password_reset_notice_subject";
+pub const MAIL_TEMPLATE_PASSWORD_RESET_NOTICE_HTML_KEY: &str =
+    "mail_template_password_reset_notice_html";
+pub const MAIL_TEMPLATE_CONTACT_CHANGE_NOTICE_SUBJECT_KEY: &str =
+    "mail_template_contact_change_notice_subject";
+pub const MAIL_TEMPLATE_CONTACT_CHANGE_NOTICE_HTML_KEY: &str =
+    "mail_template_contact_change_notice_html";
+pub const MAIL_TEMPLATE_EXTERNAL_AUTH_EMAIL_VERIFICATION_SUBJECT_KEY: &str =
+    "mail_template_external_auth_email_verification_subject";
+pub const MAIL_TEMPLATE_EXTERNAL_AUTH_EMAIL_VERIFICATION_HTML_KEY: &str =
+    "mail_template_external_auth_email_verification_html";
+pub const MAIL_TEMPLATE_LOGIN_EMAIL_CODE_SUBJECT_KEY: &str =
+    "mail_template_login_email_code_subject";
+pub const MAIL_TEMPLATE_LOGIN_EMAIL_CODE_HTML_KEY: &str = "mail_template_login_email_code_html";
+
+pub const MAIL_OUTBOX_DISPATCH_INTERVAL_SECS_KEY: &str = "mail_outbox_dispatch_interval_secs";
 pub const BACKGROUND_TASK_DISPATCH_INTERVAL_SECS_KEY: &str =
     "background_task_dispatch_interval_secs";
 pub const BACKGROUND_TASK_DISPATCH_IDLE_MAX_INTERVAL_SECS_KEY: &str =
@@ -437,6 +477,320 @@ pub static ALL_CONFIGS: &[ConfigDef] = &[
         is_sensitive: false,
         category: CONFIG_CATEGORY_AUDIT,
         description: "Audit action allowlist stored as a JSON string array",
+    },
+    ConfigDef {
+        key: MAIL_SMTP_HOST_KEY,
+        label_i18n_key: "settings_item_mail_smtp_host_label",
+        description_i18n_key: "settings_item_mail_smtp_host_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: String::new,
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "SMTP server hostname used for transactional email delivery",
+    },
+    ConfigDef {
+        key: MAIL_SMTP_PORT_KEY,
+        label_i18n_key: "settings_item_mail_smtp_port_label",
+        description_i18n_key: "settings_item_mail_smtp_port_desc",
+        value_type: SystemConfigValueType::Number,
+        default_fn: || crate::config::mail::DEFAULT_MAIL_SMTP_PORT.to_string(),
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "SMTP server port used for transactional email delivery",
+    },
+    ConfigDef {
+        key: MAIL_SMTP_USERNAME_KEY,
+        label_i18n_key: "settings_item_mail_smtp_username_label",
+        description_i18n_key: "settings_item_mail_smtp_username_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: String::new,
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "SMTP username for authenticated mail delivery",
+    },
+    ConfigDef {
+        key: MAIL_SMTP_PASSWORD_KEY,
+        label_i18n_key: "settings_item_mail_smtp_password_label",
+        description_i18n_key: "settings_item_mail_smtp_password_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: String::new,
+        requires_restart: false,
+        is_sensitive: true,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "SMTP password for authenticated mail delivery",
+    },
+    ConfigDef {
+        key: MAIL_FROM_ADDRESS_KEY,
+        label_i18n_key: "settings_item_mail_from_address_label",
+        description_i18n_key: "settings_item_mail_from_address_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: String::new,
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "From address used for transactional email delivery",
+    },
+    ConfigDef {
+        key: MAIL_FROM_NAME_KEY,
+        label_i18n_key: "settings_item_mail_from_name_label",
+        description_i18n_key: "settings_item_mail_from_name_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || "AsterForge".to_string(),
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "Display name used for transactional email delivery",
+    },
+    ConfigDef {
+        key: MAIL_SECURITY_KEY,
+        label_i18n_key: "settings_item_mail_security_label",
+        description_i18n_key: "settings_item_mail_security_desc",
+        value_type: SystemConfigValueType::Boolean,
+        default_fn: || crate::config::mail::DEFAULT_MAIL_SECURITY.to_string(),
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_CONFIG,
+        description: "Whether SMTP uses encryption. Port 465 uses implicit TLS; other ports use STARTTLS when enabled",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_REGISTER_ACTIVATION_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_register_activation_subject_label",
+        description_i18n_key: "settings_item_mail_template_register_activation_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::RegisterActivation,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for registration activation emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_REGISTER_ACTIVATION_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_register_activation_html_label",
+        description_i18n_key: "settings_item_mail_template_register_activation_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::RegisterActivation,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for registration activation emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_CONTACT_CHANGE_CONFIRMATION_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_contact_change_confirmation_subject_label",
+        description_i18n_key: "settings_item_mail_template_contact_change_confirmation_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::ContactChangeConfirmation,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for contact change confirmation emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_CONTACT_CHANGE_CONFIRMATION_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_contact_change_confirmation_html_label",
+        description_i18n_key: "settings_item_mail_template_contact_change_confirmation_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::ContactChangeConfirmation,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for contact change confirmation emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_PASSWORD_RESET_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_password_reset_subject_label",
+        description_i18n_key: "settings_item_mail_template_password_reset_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::PasswordReset,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for password reset emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_PASSWORD_RESET_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_password_reset_html_label",
+        description_i18n_key: "settings_item_mail_template_password_reset_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::PasswordReset,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for password reset emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_PASSWORD_RESET_NOTICE_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_password_reset_notice_subject_label",
+        description_i18n_key: "settings_item_mail_template_password_reset_notice_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::PasswordResetNotice,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for password reset notice emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_PASSWORD_RESET_NOTICE_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_password_reset_notice_html_label",
+        description_i18n_key: "settings_item_mail_template_password_reset_notice_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::PasswordResetNotice,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for password reset notice emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_CONTACT_CHANGE_NOTICE_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_contact_change_notice_subject_label",
+        description_i18n_key: "settings_item_mail_template_contact_change_notice_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::ContactChangeNotice,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for contact change notice emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_CONTACT_CHANGE_NOTICE_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_contact_change_notice_html_label",
+        description_i18n_key: "settings_item_mail_template_contact_change_notice_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::ContactChangeNotice,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for contact change notice emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_EXTERNAL_AUTH_EMAIL_VERIFICATION_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_external_auth_email_verification_subject_label",
+        description_i18n_key: "settings_item_mail_template_external_auth_email_verification_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::ExternalAuthEmailVerification,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for external auth email verification emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_EXTERNAL_AUTH_EMAIL_VERIFICATION_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_external_auth_email_verification_html_label",
+        description_i18n_key: "settings_item_mail_template_external_auth_email_verification_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::ExternalAuthEmailVerification,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for external auth email verification emails",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_LOGIN_EMAIL_CODE_SUBJECT_KEY,
+        label_i18n_key: "settings_item_mail_template_login_email_code_subject_label",
+        description_i18n_key: "settings_item_mail_template_login_email_code_subject_desc",
+        value_type: SystemConfigValueType::String,
+        default_fn: || {
+            crate::config::mail::default_template_subject(
+                crate::types::MailTemplateCode::LoginEmailCode,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "Subject template for login email code messages",
+    },
+    ConfigDef {
+        key: MAIL_TEMPLATE_LOGIN_EMAIL_CODE_HTML_KEY,
+        label_i18n_key: "settings_item_mail_template_login_email_code_html_label",
+        description_i18n_key: "settings_item_mail_template_login_email_code_html_desc",
+        value_type: SystemConfigValueType::Multiline,
+        default_fn: || {
+            crate::config::mail::default_template_html(
+                crate::types::MailTemplateCode::LoginEmailCode,
+            )
+            .to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_MAIL_TEMPLATE,
+        description: "HTML template for login email code messages",
+    },
+    ConfigDef {
+        key: MAIL_OUTBOX_DISPATCH_INTERVAL_SECS_KEY,
+        label_i18n_key: "settings_item_mail_outbox_dispatch_interval_secs_label",
+        description_i18n_key: "settings_item_mail_outbox_dispatch_interval_secs_desc",
+        value_type: SystemConfigValueType::Number,
+        default_fn: || {
+            crate::config::operations::DEFAULT_MAIL_OUTBOX_DISPATCH_INTERVAL_SECS.to_string()
+        },
+        requires_restart: false,
+        is_sensitive: false,
+        category: CONFIG_CATEGORY_RUNTIME_MAIL,
+        description: "Seconds between mail outbox dispatch polls",
     },
     ConfigDef {
         key: BACKGROUND_TASK_DISPATCH_INTERVAL_SECS_KEY,

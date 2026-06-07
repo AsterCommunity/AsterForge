@@ -379,6 +379,7 @@ mod tests {
             config,
             runtime_config,
             cache,
+            mail_sender: crate::services::mail_service::memory_sender(),
             metrics: crate::metrics_core::NoopMetrics::arc(),
             background_task_dispatch_wakeup: AppState::new_background_task_dispatch_wakeup(),
         }

@@ -7,7 +7,7 @@ use utoipa::{IntoParams, ToSchema};
 use validator::Validate;
 
 use crate::api::pagination::{AdminAuditLogSortBy, AdminTaskSortBy, SortOrder};
-use crate::services::config_service::SystemConfigValue;
+use crate::services::config_service::{ConfigActionType, SystemConfigValue};
 use crate::services::external_auth_service::{
     CreateExternalAuthProviderInput, ExternalAuthProviderTestParamsInput,
     UpdateExternalAuthProviderInput,
@@ -21,6 +21,21 @@ use crate::types::{
 pub struct SetConfigReq {
     pub value: SystemConfigValue,
     pub visibility: Option<SystemConfigVisibility>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
+pub struct ExecuteConfigActionReq {
+    pub action: ConfigActionType,
+    #[validate(email(message = "target_email must be a valid email address"))]
+    pub target_email: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
+pub struct ExecuteConfigActionResp {
+    pub message: String,
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -20,6 +20,8 @@ pub enum AsterError {
     AuthForbidden(String),
     RecordNotFound(String),
     ExternalAuthError(String),
+    MailNotConfigured(String),
+    MailDeliveryFailed(String),
     InternalError(String),
 }
 
@@ -64,6 +66,14 @@ impl AsterError {
         Self::ExternalAuthError(message.into())
     }
 
+    pub fn mail_not_configured(message: impl Into<String>) -> Self {
+        Self::MailNotConfigured(message.into())
+    }
+
+    pub fn mail_delivery_failed(message: impl Into<String>) -> Self {
+        Self::MailDeliveryFailed(message.into())
+    }
+
     pub fn internal_error(message: impl Into<String>) -> Self {
         Self::InternalError(message.into())
     }
@@ -81,6 +91,8 @@ impl AsterError {
             Self::AuthTokenInvalid(_) => "E012",
             Self::AuthForbidden(_) => "E013",
             Self::ExternalAuthError(_) => "E020",
+            Self::MailNotConfigured(_) => "E030",
+            Self::MailDeliveryFailed(_) => "E031",
         }
     }
 
@@ -97,6 +109,8 @@ impl AsterError {
             Self::AuthForbidden(_) => AsterErrorCode::Forbidden,
             Self::RecordNotFound(_) => AsterErrorCode::NotFound,
             Self::ExternalAuthError(_) => AsterErrorCode::ExternalAuthError,
+            Self::MailNotConfigured(_) => AsterErrorCode::MailNotConfigured,
+            Self::MailDeliveryFailed(_) => AsterErrorCode::MailDeliveryFailed,
             Self::InternalError(_) => AsterErrorCode::InternalServerError,
         }
     }
@@ -104,6 +118,8 @@ impl AsterError {
     pub fn retryable(&self) -> Option<bool> {
         match self {
             Self::DatabaseConnection(_) | Self::DatabaseOperation(_) => Some(true),
+            Self::MailDeliveryFailed(_) => Some(true),
+            Self::MailNotConfigured(_) => Some(false),
             _ => None,
         }
     }
@@ -120,6 +136,8 @@ impl AsterError {
             | Self::AuthForbidden(message)
             | Self::RecordNotFound(message)
             | Self::ExternalAuthError(message)
+            | Self::MailNotConfigured(message)
+            | Self::MailDeliveryFailed(message)
             | Self::InternalError(message) => message,
         }
     }
@@ -133,6 +151,9 @@ impl AsterError {
             Self::AuthForbidden(_) => StatusCode::FORBIDDEN,
             Self::RecordNotFound(_) => StatusCode::NOT_FOUND,
             Self::ExternalAuthError(_) => StatusCode::BAD_REQUEST,
+            Self::MailNotConfigured(_) | Self::MailDeliveryFailed(_) => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             Self::DatabaseConnection(_)
             | Self::DatabaseOperation(_)
             | Self::ConfigError(_)

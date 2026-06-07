@@ -41,6 +41,7 @@ pub enum SystemRuntimeTaskKind {
     SystemHealthCheck,
     AuthSessionCleanup,
     ExternalAuthFlowCleanup,
+    MailOutboxDispatch,
     AuditCleanup,
     TaskCleanup,
 }
@@ -52,6 +53,7 @@ impl SystemRuntimeTaskKind {
             Self::SystemHealthCheck => "system-health-check",
             Self::AuthSessionCleanup => "auth-session-cleanup",
             Self::ExternalAuthFlowCleanup => "external-auth-flow-cleanup",
+            Self::MailOutboxDispatch => "mail-outbox-dispatch",
             Self::AuditCleanup => "audit-cleanup",
             Self::TaskCleanup => "task-cleanup",
         }
@@ -63,6 +65,7 @@ impl SystemRuntimeTaskKind {
             Self::SystemHealthCheck => "System health check",
             Self::AuthSessionCleanup => "Auth session cleanup",
             Self::ExternalAuthFlowCleanup => "External auth flow cleanup",
+            Self::MailOutboxDispatch => "Mail outbox dispatch",
             Self::AuditCleanup => "Audit log cleanup",
             Self::TaskCleanup => "Task artifact cleanup",
         }
@@ -76,6 +79,7 @@ impl SystemRuntimeTaskKind {
             Self::ExternalAuthFlowCleanup => {
                 TaskPresentationCode::RuntimeTaskExternalAuthFlowCleanup
             }
+            Self::MailOutboxDispatch => TaskPresentationCode::RuntimeTaskMailOutboxDispatch,
             Self::AuditCleanup => TaskPresentationCode::RuntimeTaskAuditCleanup,
             Self::TaskCleanup => TaskPresentationCode::RuntimeTaskTaskCleanup,
         }
@@ -87,6 +91,7 @@ impl SystemRuntimeTaskKind {
             "system-health-check" => Some(Self::SystemHealthCheck),
             "auth-session-cleanup" => Some(Self::AuthSessionCleanup),
             "external-auth-flow-cleanup" => Some(Self::ExternalAuthFlowCleanup),
+            "mail-outbox-dispatch" => Some(Self::MailOutboxDispatch),
             "audit-cleanup" => Some(Self::AuditCleanup),
             "task-cleanup" => Some(Self::TaskCleanup),
             _ => None,
@@ -333,6 +338,7 @@ mod tests {
             config,
             runtime_config,
             cache,
+            mail_sender: crate::services::mail_service::memory_sender(),
             metrics: crate::metrics_core::NoopMetrics::arc(),
             background_task_dispatch_wakeup:
                 crate::runtime::AppState::new_background_task_dispatch_wakeup(),

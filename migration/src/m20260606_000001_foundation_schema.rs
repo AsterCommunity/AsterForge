@@ -15,6 +15,7 @@ impl MigrationTrait for Migration {
         create_external_auth_login_flows(manager).await?;
         create_system_config(manager).await?;
         create_audit_logs(manager).await?;
+        create_mail_outbox(manager).await?;
         create_background_tasks(manager).await?;
         Ok(())
     }
@@ -22,6 +23,7 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         for table in [
             BackgroundTasks::Table.into_iden(),
+            MailOutbox::Table.into_iden(),
             AuditLogs::Table.into_iden(),
             SystemConfig::Table.into_iden(),
             ExternalAuthLoginFlows::Table.into_iden(),
@@ -465,6 +467,69 @@ async fn create_audit_logs(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     Ok(())
 }
 
+async fn create_mail_outbox(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    manager
+        .create_table(
+            Table::create()
+                .table(MailOutbox::Table)
+                .if_not_exists()
+                .col(big_integer_pk(MailOutbox::Id))
+                .col(
+                    ColumnDef::new(MailOutbox::TemplateCode)
+                        .string_len(32)
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(MailOutbox::ToAddress)
+                        .string_len(255)
+                        .not_null(),
+                )
+                .col(ColumnDef::new(MailOutbox::ToName).string_len(255).null())
+                .col(ColumnDef::new(MailOutbox::PayloadJson).text().not_null())
+                .col(ColumnDef::new(MailOutbox::Status).string_len(16).not_null())
+                .col(
+                    ColumnDef::new(MailOutbox::AttemptCount)
+                        .integer()
+                        .not_null()
+                        .default(0),
+                )
+                .col(utc_timestamp(manager, MailOutbox::NextAttemptAt).not_null())
+                .col(utc_timestamp(manager, MailOutbox::ProcessingStartedAt).null())
+                .col(utc_timestamp(manager, MailOutbox::SentAt).null())
+                .col(ColumnDef::new(MailOutbox::LastError).text().null())
+                .col(utc_timestamp(manager, MailOutbox::CreatedAt).not_null())
+                .col(utc_timestamp(manager, MailOutbox::UpdatedAt).not_null())
+                .to_owned(),
+        )
+        .await?;
+
+    for index in [
+        Index::create()
+            .name("idx_mail_outbox_due")
+            .table(MailOutbox::Table)
+            .col(MailOutbox::Status)
+            .col(MailOutbox::NextAttemptAt)
+            .col(MailOutbox::CreatedAt)
+            .to_owned(),
+        Index::create()
+            .name("idx_mail_outbox_processing")
+            .table(MailOutbox::Table)
+            .col(MailOutbox::Status)
+            .col(MailOutbox::ProcessingStartedAt)
+            .col(MailOutbox::CreatedAt)
+            .to_owned(),
+        Index::create()
+            .name("idx_mail_outbox_sent_at")
+            .table(MailOutbox::Table)
+            .col(MailOutbox::SentAt)
+            .to_owned(),
+    ] {
+        manager.create_index(index).await?;
+    }
+
+    Ok(())
+}
+
 async fn create_background_tasks(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
         .create_table(
@@ -700,6 +765,24 @@ enum AuditLogs {
     IpAddress,
     UserAgent,
     CreatedAt,
+}
+
+#[derive(DeriveIden)]
+enum MailOutbox {
+    Table,
+    Id,
+    TemplateCode,
+    ToAddress,
+    ToName,
+    PayloadJson,
+    Status,
+    AttemptCount,
+    NextAttemptAt,
+    ProcessingStartedAt,
+    SentAt,
+    LastError,
+    CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(DeriveIden)]

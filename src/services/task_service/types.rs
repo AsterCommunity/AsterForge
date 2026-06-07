@@ -45,6 +45,7 @@ pub enum TaskPresentationCode {
     RuntimeTaskAuthSessionCleanup,
     RuntimeTaskBackgroundTaskDispatch,
     RuntimeTaskExternalAuthFlowCleanup,
+    RuntimeTaskMailOutboxDispatch,
     RuntimeTaskSystemHealthCheck,
     RuntimeTaskTaskCleanup,
     StatusTextFailed,

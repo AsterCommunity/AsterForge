@@ -83,6 +83,7 @@ hex = "0.4"
 http = "1"
 ipnet = "2.12.0"
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 migration = { version = "0.1.0", path = "migration" }
 moka = { version = "0.12.15", features = ["future"] }
 num_cpus = "1.17.0"
@@ -108,6 +109,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
 url = "2"
+urlencoding = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 validator = { version = "0.20", features = ["derive"] }
 
