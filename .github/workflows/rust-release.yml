@@ -1,0 +1,338 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build frontend
+        working-directory: frontend-panel
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: frontend-panel/dist
+          retention-days: 1
+
+  build-linux-windows:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            name: linux_x86_64
+            packages: gcc
+          - target: i686-unknown-linux-gnu
+            name: linux_i686
+            packages: gcc-multilib g++-multilib
+          - target: x86_64-pc-windows-gnu
+            name: windows_x86_64.exe
+            packages: gcc-mingw-w64-x86-64 nasm
+          - target: i686-pc-windows-gnu
+            name: windows_i686.exe
+            packages: gcc-mingw-w64-i686 nasm
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend-panel/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Configure linker
+        run: |
+          case "${{ matrix.target }}" in
+            i686-pc-windows-gnu)
+              echo "CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc" >> $GITHUB_ENV
+              ;;
+            x86_64-pc-windows-gnu)
+              echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Build
+        run: |
+          RUSTFLAGS="-C link-arg=-s" \
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          SRC="target/${{ matrix.target }}/release/aster_forge"
+          [[ "${{ matrix.target }}" == *windows* ]] && SRC="${SRC}.exe"
+          mv "$SRC" "aster_forge_${VERSION}_${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.name }}
+          path: aster_forge_*
+
+  build-linux-arm:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            name: linux_aarch64
+            packages: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - target: armv7-unknown-linux-gnueabihf
+            name: linux_armv7
+            packages: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend-panel/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install ARM toolchain
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Configure linker
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-gnu)
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=${{ matrix.linker }}" >> $GITHUB_ENV
+              ;;
+            armv7-unknown-linux-gnueabihf)
+              echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=${{ matrix.linker }}" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Build
+        env:
+          RUSTFLAGS: "-C link-arg=-s"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          mv "target/${{ matrix.target }}/release/aster_forge" "aster_forge_${VERSION}_${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.name }}
+          path: aster_forge_*
+
+  build-macos:
+    needs: build-frontend
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            name: macos_aarch64
+          - target: x86_64-apple-darwin
+            name: macos_x86_64
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend-panel/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        env:
+          RUSTFLAGS: "-C link-arg=-s"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          mv target/${{ matrix.target }}/release/aster_forge "aster_forge_${VERSION}_${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.name }}
+          path: aster_forge_*
+
+  build-windows-arm64:
+    needs: build-frontend
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: frontend-panel/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Rename binary
+        shell: pwsh
+        run: |
+          Move-Item `
+            -Path "target/aarch64-pc-windows-msvc/release/aster_forge.exe" `
+            -Destination "aster_forge_$($env:GITHUB_REF_NAME)_windows_arm64.exe"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-windows_arm64.exe
+          path: aster_forge_*
+
+  release:
+    needs: [build-linux-windows, build-linux-arm, build-macos, build-windows-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -type f -name "aster_forge_*" -exec cp {} release/ \;
+          cd release && sha256sum * > checksums.txt
+
+      - name: Sign checksums
+        run: |
+          cosign sign-blob --yes \
+            release/checksums.txt \
+            --output-signature release/checksums.txt.sig \
+            --output-certificate release/checksums.txt.pem
+
+      - name: Extract changelog
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          # 提取当前版本的 changelog（从 ## [version] 到下一个 ## [ 或文件结束）
+          awk '/^## \['"${VERSION}"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+
+          if [ ! -s release_notes.md ]; then
+            echo "No changelog found for ${VERSION}, using fallback"
+            echo "## What's Changed" > release_notes.md
+            echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details." >> release_notes.md
+          fi
+
+          echo "--- Changelog for ${VERSION} ---"
+          cat release_notes.md
+
+      - name: Build release body
+        run: |
+          cat > release_body.md << 'EOF'
+          ${{ steps.changelog.outputs.body }}
+          EOF
+
+          # 合并 changelog + download 表格
+          {
+            cat release_notes.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Download"
+            echo ""
+            echo "| Platform | Architecture | Download |"
+            echo "|----------|--------------|----------|"
+            echo "| Linux | x86_64 | [aster_forge_${{ github.ref_name }}_linux_x86_64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_linux_x86_64) |"
+            echo "| Linux | x86 | [aster_forge_${{ github.ref_name }}_linux_i686](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_linux_i686) |"
+            echo "| Linux | ARM64 | [aster_forge_${{ github.ref_name }}_linux_aarch64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_linux_aarch64) |"
+            echo "| Linux | ARMv7 | [aster_forge_${{ github.ref_name }}_linux_armv7](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_linux_armv7) |"
+            echo "| Windows | x86_64 | [aster_forge_${{ github.ref_name }}_windows_x86_64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_windows_x86_64.exe) |"
+            echo "| Windows | x86 | [aster_forge_${{ github.ref_name }}_windows_i686.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_windows_i686.exe) |"
+            echo "| Windows | ARM64 | [aster_forge_${{ github.ref_name }}_windows_arm64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_windows_arm64.exe) |"
+            echo "| macOS | x86_64 | [aster_forge_${{ github.ref_name }}_macos_x86_64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_macos_x86_64) |"
+            echo "| macOS | ARM64 | [aster_forge_${{ github.ref_name }}_macos_aarch64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/aster_forge_${{ github.ref_name }}_macos_aarch64) |"
+            echo ""
+            echo "**Checksums**: [checksums.txt](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/checksums.txt)"
+            echo ""
+            echo "### Verify signatures"
+            echo ""
+            echo "All release binaries are signed with [Sigstore cosign](https://docs.sigstore.dev/). To verify:"
+            echo ""
+            echo '```bash'
+            echo "# Download checksums + signature + certificate"
+            echo "wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/{checksums.txt,checksums.txt.sig,checksums.txt.pem}"
+            echo ""
+            echo "# Verify signature"
+            echo 'cosign verify-blob checksums.txt \'
+            echo '  --signature checksums.txt.sig \'
+            echo '  --certificate checksums.txt.pem \'
+            echo '  --certificate-oidc-issuer https://token.actions.githubusercontent.com \'
+            echo "  --certificate-identity-regexp 'github.com/AsterCommunity/AsterForge'"
+            echo ""
+            echo "# Verify binary integrity"
+            echo "sha256sum -c checksums.txt"
+            echo '```'
+          } > release_body.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AsterForge ${{ github.ref_name }}
+          body_path: release_body.md
+          files: release/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

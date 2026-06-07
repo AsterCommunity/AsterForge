@@ -1,0 +1,19 @@
+labels: ["show-and-tell"]
+body:
+  - type: textarea
+    id: project-description
+    attributes:
+      label: Project description
+      description: Share what you built with AsterForge
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical-details
+    attributes:
+      label: Technical details
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or links

@@ -1,0 +1,13 @@
+[package]
+name = "migration"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+sea-orm-migration = { version = "2.0.0-rc.40", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lib]
+doctest = false

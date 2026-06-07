@@ -1,0 +1,27 @@
+labels: ["discussion"]
+body:
+  - type: textarea
+    id: topic
+    attributes:
+      label: Topic
+      description: What would you like to discuss?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Usage / experience
+        - Deployment
+        - Performance
+        - Security
+        - Feature discussion
+        - Other
+      default: 0
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details

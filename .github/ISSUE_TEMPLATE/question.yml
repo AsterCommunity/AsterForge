@@ -1,0 +1,53 @@
+name: Question
+description: Ask a question about using AsterForge
+title: "[Question]: "
+labels: ["Question"]
+assignees:
+  - AptS-1547
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For general discussion, consider using [Discussions](https://github.com/AsterCommunity/AsterForge/discussions) instead.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Installation / deployment
+        - Configuration
+        - Runtime
+        - API usage
+        - Frontend
+        - Docker
+        - Troubleshooting
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - AsterForge version:
+        - Installation method:
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked the documentation
+          required: true
+        - label: I have searched existing issues and discussions
+          required: true

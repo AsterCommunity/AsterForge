@@ -1,0 +1,23 @@
+[template]
+cargo_generate_version = ">=0.10.0"
+ignore = [
+    ".git",
+    ".DS_Store",
+    "target",
+    "tmp",
+    "data",
+    "coverage",
+    "playwright-report",
+    "frontend-panel/node_modules",
+    "frontend-panel/dist",
+    "frontend-panel/dev-dist",
+    "frontend-panel/generated",
+    "frontend-panel/data",
+    "frontend-panel/playwright-report",
+    "frontend-panel/test-results",
+    "frontend-panel/.playwright",
+    "frontend-panel/coverage",
+    "docs/node_modules",
+    "docs/.vitepress/dist",
+    "docs/.vitepress/cache",
+]

@@ -1,0 +1,169 @@
+//! OpenAPI document assembly.
+
+use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+use utoipa::{Modify, OpenApi};
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "AsterForge API",
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Reusable Rust + React service foundation for Aster projects.",
+        license(name = "MIT"),
+    ),
+    modifiers(&SecurityAddon),
+    paths(
+        crate::api::routes::health::health,
+        crate::api::routes::health::ready,
+
+        crate::api::routes::auth::check,
+        crate::api::routes::auth::setup,
+        crate::api::routes::auth::register,
+        crate::api::routes::auth::login,
+        crate::api::routes::auth::refresh,
+        crate::api::routes::auth::logout,
+        crate::api::routes::auth::me,
+        crate::api::routes::auth::sessions,
+
+        crate::api::routes::external_auth::list_providers,
+        crate::api::routes::external_auth::start_login,
+        crate::api::routes::external_auth::finish_login,
+        crate::api::routes::auth_external_auth::list_providers,
+        crate::api::routes::auth_external_auth::list_providers_by_kind,
+        crate::api::routes::auth_external_auth::start_login,
+        crate::api::routes::auth_external_auth::finish_login,
+
+        crate::api::routes::admin::config::list_config,
+        crate::api::routes::admin::config::config_schema,
+        crate::api::routes::admin::config::get_config,
+        crate::api::routes::admin::config::set_config,
+        crate::api::routes::admin::config::delete_config,
+        crate::api::routes::admin::audit_logs::list_audit_logs,
+        crate::api::routes::admin::tasks::list_tasks,
+        crate::api::routes::admin::tasks::retry_task,
+        crate::api::routes::admin::tasks::cleanup_tasks,
+        crate::api::routes::admin::external_auth::list_external_auth_provider_kinds,
+        crate::api::routes::admin::external_auth::list_external_auth_providers,
+        crate::api::routes::admin::external_auth::create_external_auth_provider,
+        crate::api::routes::admin::external_auth::test_external_auth_provider_params,
+        crate::api::routes::admin::external_auth::get_external_auth_provider,
+        crate::api::routes::admin::external_auth::update_external_auth_provider,
+        crate::api::routes::admin::external_auth::delete_external_auth_provider,
+        crate::api::routes::admin::external_auth::test_external_auth_provider,
+
+        crate::api::routes::examples::public_example,
+        crate::api::routes::examples::protected_example,
+
+        crate::api::routes::system::info,
+    ),
+    components(
+        schemas(
+            crate::api::error_code::AsterErrorCode,
+            crate::api::response::ApiErrorInfo,
+            crate::api::response::HealthResponse,
+
+            crate::api::dto::CheckResp,
+            crate::api::dto::SetupReq,
+            crate::api::dto::RegisterReq,
+            crate::api::dto::LoginReq,
+            crate::api::dto::RefreshReq,
+            crate::api::dto::LogoutReq,
+            crate::api::dto::LogoutResp,
+            crate::api::dto::StartExternalAuthReq,
+            crate::api::dto::ExternalAuthCallbackQuery,
+            crate::api::dto::SetConfigReq,
+            crate::api::dto::AdminTaskCleanupReq,
+            crate::api::dto::AdminTaskListQuery,
+            crate::api::dto::AdminAuditLogSortQuery,
+            crate::api::dto::RemovedCountResponse,
+            crate::api::dto::CreateExternalAuthProviderReq,
+            crate::api::dto::UpdateExternalAuthProviderReq,
+            crate::api::dto::ExternalAuthProviderTestParamsReq,
+
+            crate::api::routes::system::SystemInfo,
+
+            crate::services::auth_service::AuthUserInfo,
+            crate::services::auth_service::AuthTokenResponse,
+            crate::services::auth_service::AccessClaims,
+            crate::services::example_service::ExampleMessage,
+            crate::services::example_service::ProtectedExampleMessage,
+            crate::services::external_auth_service::ExternalAuthPublicProvider,
+            crate::services::external_auth_service::ExternalAuthProviderKindInfo,
+            crate::services::external_auth_service::AdminExternalAuthProviderInfo,
+            crate::services::external_auth_service::ExternalAuthProviderTestCheck,
+            crate::services::external_auth_service::ExternalAuthProviderTestResult,
+            crate::services::external_auth_service::ExternalAuthStartLoginResponse,
+            crate::services::external_auth_service::ExternalAuthFinishLoginResponse,
+            crate::services::config_service::ConfigSchemaItem,
+            crate::services::config_service::ConfigSchemaOption,
+            crate::services::config_service::SystemConfig,
+            crate::services::config_service::SystemConfigValue,
+            crate::services::audit_service::AuditLogEntry,
+            crate::services::audit_service::AuditLogFilterQuery,
+            crate::services::audit_service::AuditPresentation,
+            crate::services::audit_service::AuditPresentationMessage,
+            crate::services::audit_service::AuditUserSummary,
+            crate::api::pagination::LimitOffsetQuery,
+            crate::api::pagination::SortOrder,
+            crate::api::pagination::AdminTaskSortBy,
+            crate::api::pagination::AdminAuditLogSortBy,
+            crate::api::pagination::OffsetPage<crate::services::config_service::SystemConfig>,
+            crate::api::pagination::OffsetPage<crate::services::external_auth_service::AdminExternalAuthProviderInfo>,
+            crate::api::pagination::OffsetPage<crate::services::task_service::types::TaskInfo>,
+            crate::api::pagination::OffsetPage<crate::services::audit_service::AuditLogEntry>,
+            crate::services::task_service::types::RuntimeSystemHealthComponent,
+            crate::services::task_service::types::RuntimeSystemHealthResult,
+            crate::services::task_service::types::RuntimeSystemHealthStatus,
+            crate::services::task_service::types::RuntimeTaskPayload,
+            crate::services::task_service::types::RuntimeTaskResult,
+            crate::services::task_service::types::TaskCreatorSummary,
+            crate::services::task_service::types::TaskInfo,
+            crate::services::task_service::types::TaskPayload,
+            crate::services::task_service::types::TaskPresentation,
+            crate::services::task_service::types::TaskPresentationCode,
+            crate::services::task_service::types::TaskPresentationMessage,
+            crate::services::task_service::types::TaskResult,
+            crate::services::task_service::types::TaskStepInfo,
+            crate::services::task_service::types::TaskStepStatus,
+
+            crate::entities::audit_log::Model,
+            crate::entities::auth_session::Model,
+            crate::entities::background_task::Model,
+            crate::entities::external_auth_provider::Model,
+            crate::entities::system_config::Model,
+            crate::entities::user::Model,
+
+            crate::types::UserRole,
+            crate::types::UserStatus,
+            crate::types::ExternalAuthKind,
+            crate::types::SystemConfigSource,
+            crate::types::SystemConfigValueType,
+            crate::types::SystemConfigVisibility,
+            crate::types::BackgroundTaskKind,
+            crate::types::BackgroundTaskStatus,
+            crate::types::AuditAction,
+            crate::types::AuditEntityType,
+        ),
+    ),
+    tags(
+        (name = "auth", description = "Authentication"),
+        (name = "external-auth", description = "External authentication"),
+        (name = "admin", description = "Administrator operations"),
+        (name = "examples", description = "Template example endpoints"),
+        (name = "system", description = "System information"),
+        (name = "health", description = "Health checks"),
+    ),
+)]
+pub struct ApiDoc;
+
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "bearer",
+            SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+        );
+    }
+}

@@ -1,0 +1,27 @@
+labels: ["Q&A"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What I have tried
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - AsterForge version:
+        - Deployment method:

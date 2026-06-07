@@ -1,0 +1,9 @@
+# cargo-audit 配置
+# 忽略已确认不影响本项目的上游传递依赖 advisory
+
+[advisories]
+ignore = [
+    # paste 1.0.x unmaintained — dtolnay 不再维护
+    # 纯编译期宏，零运行时代码，无安全风险
+    "RUSTSEC-2024-0436",
+]

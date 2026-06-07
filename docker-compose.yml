@@ -1,0 +1,19 @@
+services:
+  asterforge:
+    image: ghcr.io/astercommunity/asterforge:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - ASTER__SERVER__HOST=0.0.0.0
+      - ASTER__DATABASE__URL=sqlite:///data/asterforge.db?mode=rwc
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 45s
+    restart: unless-stopped

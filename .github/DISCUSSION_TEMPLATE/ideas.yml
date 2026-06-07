@@ -1,0 +1,18 @@
+labels: ["idea"]
+body:
+  - type: textarea
+    id: idea-description
+    attributes:
+      label: Your idea
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples or references

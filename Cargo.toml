@@ -1,0 +1,122 @@
+[package]
+name = "aster_forge"
+version = "0.1.0"
+description = "A reusable Rust + React service foundation for Aster projects."
+authors = [
+    "AptS-1547 <apts-1547@esaps.net>",
+    "AptS-1548 <apts-1548@esaps.net>",
+]
+repository = "https://github.com/AsterCommunity/AsterForge"
+license = "MIT"
+edition = "2024"
+rust-version = "1.94.0"
+
+# 优化配置
+[profile.dev]
+opt-level = 1
+lto = false
+codegen-units = 16
+panic = "unwind"
+strip = false
+incremental = true
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# 压测/火焰图采样用：接近 release，但保留符号并关闭 LTO，方便 perf 展开栈。
+# frame pointer 需要通过 RUSTFLAGS 传入：
+# RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
+[profile.profiling]
+inherits = "release"
+opt-level = 2
+codegen-units = 1
+debug = true
+strip = false
+lto = false
+panic = "abort"
+
+[profile.release-performance]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
+members = [".", "migration", "api-docs-macros"]
+
+[features]
+default = ["server"]
+server = []
+cli = ["server", "dep:clap"]
+metrics = ["server", "dep:prometheus", "dep:sysinfo"]
+openapi = ["dep:utoipa", "dep:utoipa-swagger-ui", "api-docs-macros/openapi"]
+full = ["server", "cli", "metrics", "openapi"]
+jemalloc = ["dep:tikv-jemallocator"]
+jemalloc-stats = [
+    "jemalloc",
+    "tikv-jemallocator/stats",
+    "dep:tikv-jemalloc-ctl",
+    "tikv-jemalloc-ctl/stats",
+]
+jemalloc-profiling = ["jemalloc-stats", "tikv-jemallocator/profiling"]
+
+[dependencies]
+actix-web = { version = "4.13.0", features = ["compress-brotli", "compress-gzip"] }
+actix-governor = "0.10"
+api-docs-macros = { path = "api-docs-macros" }
+argon2 = "0.5.3"
+async-trait = "0.1"
+base64 = "0.22"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4", features = ["derive", "env"], optional = true }
+config = { version = "0.15", default-features = false, features = ["toml"] }
+dashmap = "6"
+dotenvy = "0.15"
+futures = "0.3"
+governor = "0.10"
+hex = "0.4"
+http = "1"
+ipnet = "2.12.0"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+migration = { version = "0.1.0", path = "migration" }
+moka = { version = "0.12.15", features = ["future"] }
+num_cpus = "1.17.0"
+parking_lot = "0.12"
+prometheus = { version = "0.14", optional = true, default-features = false }
+rand = { version = "0.10.1", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+redis = { version = "1.2.2", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+rust-embed = "8"
+sea-orm = { version = "2.0.0-rc.40", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11"
+sysinfo = { version = "0.38", optional = true, default-features = false, features = ["system"] }
+tikv-jemallocator = { version = "0.7", optional = true }
+tikv-jemalloc-ctl = { version = "0.7", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["io", "io-util"] }
+toml = "1.1"
+toml_edit = "0.25"
+tracing = { version = "0.1.44", default-features = false }
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["ansi", "env-filter", "fmt", "json"] }
+utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"], optional = true }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+validator = { version = "0.20", features = ["derive"] }
+
+[build-dependencies]
+chrono = "0.4"
+
+[dev-dependencies]
+fs2 = "0.4"
+testcontainers = { version = "0.27", features = ["reusable-containers"] }
+
+[lib]
+doctest = false
