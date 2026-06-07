@@ -272,7 +272,7 @@ jobs:
           if [ ! -s release_notes.md ]; then
             echo "No changelog found for ${VERSION}, using fallback"
             echo "## What's Changed" > release_notes.md
-            echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details." >> release_notes.md
+            echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/master/CHANGELOG.md) for details." >> release_notes.md
           fi
 
           echo "--- Changelog for ${VERSION} ---"
