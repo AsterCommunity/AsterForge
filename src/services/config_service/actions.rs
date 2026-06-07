@@ -42,24 +42,17 @@ pub struct ExecuteConfigActionInput<'a> {
     pub target_email: Option<&'a str>,
 }
 
-pub async fn execute_action(
-    state: &impl MailRuntimeState,
-    input: ExecuteConfigActionInput<'_>,
-) -> Result<ConfigActionResult> {
-    match input.key {
-        MAIL_CONFIG_ACTION_KEY => execute_mail_action(state, input).await,
-        key => Err(AsterError::record_not_found(format!(
-            "config action target '{key}'"
-        ))),
-    }
-}
-
 pub async fn execute_action_with_audit(
     state: &impl MailRuntimeState,
     input: ExecuteConfigActionInput<'_>,
     audit_ctx: &AuditContext,
 ) -> Result<ConfigActionResult> {
-    let action_result = execute_action(state, input).await?;
+    let action_result = match input.key {
+        MAIL_CONFIG_ACTION_KEY => execute_mail_action(state, input, audit_ctx).await,
+        key => Err(AsterError::record_not_found(format!(
+            "config action target '{key}'"
+        ))),
+    }?;
     audit_service::log_with_details(
         state,
         audit_ctx,
@@ -81,6 +74,7 @@ pub async fn execute_action_with_audit(
 async fn execute_mail_action(
     state: &impl MailRuntimeState,
     input: ExecuteConfigActionInput<'_>,
+    audit_ctx: &AuditContext,
 ) -> Result<ConfigActionResult> {
     match input.action {
         ConfigActionType::SendTestEmail => {
@@ -102,12 +96,16 @@ async fn execute_mail_action(
             let result =
                 mail_service::send_test_email(state, &normalized_target, Some(&actor.username))
                     .await;
+            let ip_address = audit_ctx.ip_address.as_deref();
+            let user_agent = audit_ctx.user_agent.as_deref();
             match &result {
                 Ok(()) => {
                     mail_audit_service::log_send(
                         state,
                         mail_audit_service::MailAuditInput {
                             actor_user_id: input.actor_user_id,
+                            ip_address,
+                            user_agent,
                             to_address: &normalized_target,
                             to_name: None,
                             template_code: "smtp_test",
@@ -126,6 +124,8 @@ async fn execute_mail_action(
                         state.runtime_config(),
                         mail_audit_service::MailAuditInput {
                             actor_user_id: input.actor_user_id,
+                            ip_address,
+                            user_agent,
                             to_address: &normalized_target,
                             to_name: None,
                             template_code: "smtp_test",

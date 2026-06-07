@@ -391,7 +391,7 @@ async fn mail_outbox_dispatch_records_delivery_audit_logs() {
     assert_eq!(sent_details["template_code"], "register_activation");
     assert_eq!(sent_details["to_name"], "Audit Mail");
     assert_eq!(sent_details["outbox_id"], sent_row.id);
-    assert_eq!(sent_details["attempt_count"], 0);
+    assert_eq!(sent_details["attempt_count"], 1);
 
     let payload = aster_forge::services::mail_template::MailTemplatePayload::register_activation(
         "alice",

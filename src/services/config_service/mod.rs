@@ -9,7 +9,7 @@ pub use crate::services::mail_template::{
 };
 pub use actions::{
     ConfigActionResult, ConfigActionType, ExecuteConfigActionInput, MAIL_CONFIG_ACTION_KEY,
-    execute_action, execute_action_with_audit,
+    execute_action_with_audit,
 };
 pub use schema::{ConfigSchemaItem, ConfigSchemaOption, get_schema};
 pub use system::{

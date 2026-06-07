@@ -44,7 +44,7 @@ jobs:
 
       - name: Upload coverage reports to Codecov
         if: always() && hashFiles('frontend-panel/coverage/lcov.info') != ''
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: frontend-panel/coverage/lcov.info
           flags: frontend
