@@ -11,6 +11,8 @@
 - 运行时配置变更。
 - 管理员删除配置。
 - 管理员维护外部认证 provider。
+- 管理员发送测试邮件。
+- 邮件发送成功和最终投递失败。
 - 管理员清理任务。
 - 后台任务重试。
 
@@ -46,6 +48,16 @@ GET /api/v1/admin/audit-logs
 - presentation 映射。
 - 管理员查询时的展示覆盖。
 - 测试或集成测试覆盖。
+
+当前邮件相关 presentation code：
+
+| Action | Presentation code | 关键参数 |
+| --- | --- | --- |
+| `mail_send` | `mail_sent` | `to_address`、`template_code`、`outbox_id` |
+| `mail_delivery_failed` | `mail_delivery_failed` | `to_address`、`template_code`、`outbox_id`、`attempt_count`、`error` |
+| `config_action_execute` | `config_action_executed` | `action`、`target_email` |
+
+管理员执行测试邮件时，会记录 `config_action_execute`。测试邮件发送成功会额外记录 `mail_send`；失败会记录 `mail_delivery_failed`。Outbox 周期投递成功或最终失败也会写邮件审计。
 
 ## 后台任务
 
@@ -85,8 +97,11 @@ AsterForge 已经包含这些维护任务：
 - task artifact cleanup
 - auth session cleanup
 - external auth login flow cleanup
+- mail outbox dispatch
 
 管理员也可以通过 Admin Task Cleanup API 触发任务清理。这个操作本身需要审计，因为它会删除历史任务数据。
+
+其中 `mail-outbox-dispatch` 是外部副作用任务，只在 primary 节点运行。它从 `mail_outbox` claim 到期邮件、投递 SMTP、按结果标记 `sent`、`retry` 或 `failed`。如果这个任务持续失败，管理员应该同时看任务失败详情和邮件审计里的 `mail_delivery_failed`。
 
 清理策略应考虑：
 

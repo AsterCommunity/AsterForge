@@ -26,6 +26,7 @@ Primary nodes start these runtime loops:
 - system health check
 - auth session cleanup
 - external auth login flow cleanup
+- mail outbox dispatch
 - audit log cleanup
 - task artifact cleanup
 
@@ -65,6 +66,14 @@ When adding a task, decide:
 - Whether retry is safe and idempotent.
 
 AsterForge does not assume regular users can see task records. The template provides admin-facing and runtime-facing task APIs only.
+
+## Mail Outbox
+
+Mail delivery is also a primary-only runtime responsibility. Product flows write to `mail_outbox`; the `mail-outbox-dispatch` periodic task claims due rows and sends SMTP messages.
+
+This loop belongs on primary because mail is an external side effect. If multiple nodes deliver the same message, users may receive duplicate mail. If delivery succeeds but the sent state is not persisted, retries may send again. AsterForge keeps that window controlled with claim semantics, state transitions, post-delivery `mark_sent`, and audit records.
+
+See [Mail Delivery](./mail.md) for settings, templates, and troubleshooting.
 
 ## Audit Writes
 

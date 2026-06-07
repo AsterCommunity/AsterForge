@@ -9,6 +9,11 @@ The public `docs/` tree is reserved for deployment-facing and user-facing docume
 - [English](./en/README.md)
 - [Simplified Chinese](./zh-CN/README.md)
 
+## Focused Guides
+
+- [Mail runtime extension](./en/mail-runtime.md)
+- [邮件运行时扩展](./zh-CN/mail-runtime.md)
+
 ## Status
 
 These docs describe the current AsterForge implementation. They are not a plan archive and should be updated when the foundation contracts change.

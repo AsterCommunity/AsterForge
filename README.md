@@ -1,10 +1,11 @@
 # AsterForge
 
-AsterForge is a reusable Rust + React service foundation for Aster projects. It is the base layer you copy before adding product-specific domain code: HTTP server, authentication, runtime configuration, audit logs, background tasks, admin APIs, OpenAPI generation, embedded frontend assets, and deployment defaults.
+AsterForge is a reusable Rust + React service foundation for Aster projects. It is the base layer you copy before adding product-specific domain code: HTTP server, authentication, runtime configuration, mail delivery, audit logs, background tasks, admin APIs, OpenAPI generation, embedded frontend assets, and deployment defaults.
 
 The repository focuses on common runtime capabilities that are useful across services. Product-specific domains should be added by downstream projects on top of this foundation.
 
 - Chinese README: [README.zh.md](README.zh.md)
+- Public docs: [docs/index.md](docs/index.md)
 - Developer docs: [developer-docs/README.md](developer-docs/README.md)
 - Example config: [config.example.toml](config.example.toml)
 - Frontend panel: [frontend-panel/](frontend-panel/)
@@ -20,6 +21,7 @@ The repository focuses on common runtime capabilities that are useful across ser
 - External auth provider scaffolding for OIDC/OAuth2-style flows.
 - Admin APIs for runtime config, audit logs, external auth providers, and background tasks.
 - Runtime config stored in `system_config`, separate from static `config.toml`.
+- Mail delivery with SMTP runtime settings, template variables, durable outbox, test mail, and mail audit records.
 - Memory/noop/Redis cache backends behind a shared cache trait.
 - Request ID, security headers, runtime CORS, CSRF helpers, request metrics, and IP rate limit middleware.
 - Health and readiness endpoints, plus optional Prometheus metrics.
@@ -35,16 +37,17 @@ The repository focuses on common runtime capabilities that are useful across ser
   - system health check
   - auth session cleanup
   - external auth flow cleanup
+  - mail outbox dispatch
   - audit log cleanup
   - task artifact cleanup
 
-Follower mode keeps common runtime initialization but skips primary-only dispatch and cleanup loops.
+Follower mode keeps common runtime initialization but skips primary-only dispatch, mail outbox delivery, and cleanup loops.
 
 ### Frontend foundation
 
 - React + Vite + TypeScript admin panel under `frontend-panel/`.
 - Typed service layer generated from OpenAPI.
-- Admin pages for configuration, audit logs, external auth providers, and tasks.
+- Admin pages for configuration, audit logs, external auth providers, and tasks. SMTP settings, templates, and test mail live under runtime configuration.
 - Stable audit/task presentation formatting so the frontend does not parse raw JSON details or task payloads.
 - Unit tests with Vitest and jsdom, formatting/linting with Biome, and Vite production build.
 
@@ -76,7 +79,7 @@ src/db/                      Connections, retry helpers, transactions, repositor
 src/entities/                SeaORM entity models
 src/metrics/                 Prometheus implementation behind the metrics feature
 src/runtime/                 App state, startup, shutdown, logging, background task loops
-src/services/                Auth, external auth, config, audit, task, health, examples
+src/services/                Auth, external auth, config, mail, audit, task, health, examples
 src/types/                   Shared domain enums and stored DB wrapper types
 src/utils/                   Crypto, ID, path, number, email, and RAII helpers
 migration/                   SeaORM migration crate
@@ -199,9 +202,11 @@ GET  /api/v1/auth/external-auth/{kind}/{provider}/callback
 
 GET    /api/v1/admin/config
 GET    /api/v1/admin/config/schema
+GET    /api/v1/admin/config/template-variables
 GET    /api/v1/admin/config/{key}
 PUT    /api/v1/admin/config/{key}
 DELETE /api/v1/admin/config/{key}
+POST   /api/v1/admin/config/mail/action
 
 GET  /api/v1/admin/audit-logs
 
@@ -242,6 +247,8 @@ ASTER__AUTH__JWT_SECRET='replace-with-a-long-random-secret'
 See [config.example.toml](config.example.toml) for the full static config shape.
 
 Runtime config lives in `system_config` and is edited through the Admin Config API/UI. Use runtime config for values that should change without editing `config.toml`; use static config for boot-critical settings such as database URL, bind address, and secrets.
+
+Mail delivery is runtime configuration too. SMTP host, port, encryption, credentials, sender settings, mail templates, and `mail_outbox_dispatch_interval_secs` are managed through the Admin Config API/UI. Administrator test mail uses `POST /api/v1/admin/config/mail/action`, and the primary node delivers queued mail through the `mail-outbox-dispatch` periodic task. See [docs/en/guide/mail.md](docs/en/guide/mail.md) for details.
 
 ## Development Commands
 
@@ -299,7 +306,8 @@ When building a product from AsterForge:
 5. Register new OpenAPI paths and schemas in `src/api/openapi.rs`.
 6. Add audit events for admin or security-relevant state changes.
 7. Add task kinds only when the task has a clear owner, retry model, and visibility model.
-8. Keep foundation modules generic. Product-specific workflows belong in the product repository.
+8. Keep new mail templates, mail payloads, or outbox semantic changes synchronized with runtime config, OpenAPI, audit presentation, and generated frontend types.
+9. Keep foundation modules generic. Product-specific workflows belong in the product repository.
 
 ## Reference Implementation
 

@@ -11,6 +11,8 @@ Audit logs record important operations:
 - Runtime config changes.
 - Admin config deletion.
 - Admin external auth provider maintenance.
+- Administrator test mail.
+- Successful mail send and final delivery failure.
 - Admin task cleanup.
 - Background task retry.
 
@@ -46,6 +48,16 @@ When adding an audit action, add:
 - Presentation mapping.
 - Admin query display coverage.
 - Unit or integration tests.
+
+Current mail-related presentation codes:
+
+| Action | Presentation code | Important params |
+| --- | --- | --- |
+| `mail_send` | `mail_sent` | `to_address`, `template_code`, `outbox_id` |
+| `mail_delivery_failed` | `mail_delivery_failed` | `to_address`, `template_code`, `outbox_id`, `attempt_count`, `error` |
+| `config_action_execute` | `config_action_executed` | `action`, `target_email` |
+
+When an administrator sends test mail, AsterForge records `config_action_execute`. A successful test also records `mail_send`; a failed test records `mail_delivery_failed`. Outbox background delivery also records mail audit on successful send or final failure.
 
 ## Background Tasks
 
@@ -85,8 +97,11 @@ AsterForge includes these maintenance tasks:
 - task artifact cleanup
 - auth session cleanup
 - external auth login flow cleanup
+- mail outbox dispatch
 
 Administrators can also trigger task cleanup through the Admin Task Cleanup API. That operation itself should be audited because it deletes historical task data.
+
+`mail-outbox-dispatch` is an external-side-effect task and runs only on primary nodes. It claims due rows from `mail_outbox`, sends SMTP, and marks each row as `sent`, `retry`, or `failed`. If this task keeps failing, administrators should inspect both task failure details and `mail_delivery_failed` audit entries.
 
 Cleanup policy should consider:
 

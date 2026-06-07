@@ -1,11 +1,11 @@
 ---
 layout: home
-description: AsterForge public documentation home covering getting started, runtime, configuration, authentication, audit and tasks, template generation, and Docker deployment.
+description: AsterForge public documentation home covering getting started, runtime, configuration, authentication, mail delivery, audit and tasks, template generation, and Docker deployment.
 
 hero:
   name: AsterForge
   text: Reusable service foundation
-  tagline: Rust + React foundation for authentication, runtime configuration, audit logs, background tasks, OpenAPI, admin UI, and deployment defaults, so downstream projects can focus on their product domain.
+  tagline: Rust + React foundation for authentication, runtime configuration, mail delivery, audit logs, background tasks, OpenAPI, admin UI, and deployment defaults, so downstream projects can focus on their product domain.
   actions:
     - theme: brand
       text: Getting Started
@@ -30,6 +30,9 @@ features:
   - title: Auth And External Login
     details: First-admin setup, local sessions, refresh/logout, external auth providers, and secure cookie policy are included.
     link: /en/guide/authentication
+  - title: Mail Delivery
+    details: SMTP runtime settings, mail templates, durable outbox, test mail, dispatch task, and audit records are already wired.
+    link: /en/guide/mail
   - title: Template Initialization
     details: Use cargo-generate or init.sh while keeping engineering config and filtering local build, runtime, and docs cache artifacts.
     link: /en/guide/template-generation
@@ -38,7 +41,7 @@ features:
     link: /en/deployment/docker
 ---
 
-AsterForge is a reusable service foundation for Aster projects. It covers the Rust backend, React admin panel, runtime configuration, authentication, audit logs, background tasks, OpenAPI, deployment defaults, and project template initialization.
+AsterForge is a reusable service foundation for Aster projects. It covers the Rust backend, React admin panel, runtime configuration, authentication, mail delivery, audit logs, background tasks, OpenAPI, deployment defaults, and project template initialization.
 
 It is meant to be the starting point for new services, not a finished product domain. Downstream projects can add their own models, APIs, frontend pages, background jobs, and deployment rules while keeping the shared runtime foundation.
 
@@ -51,6 +54,7 @@ It already includes:
 - Actix Web HTTP service with embedded frontend assets.
 - SeaORM entities, migrations, repositories, transactions, and database retry helpers.
 - Local auth, first-admin setup, session management, and external auth provider scaffolding.
+- SMTP mail delivery, template variables, durable outbox, test mail, and mail audit records.
 - Admin APIs for runtime config, audit logs, external auth providers, and background tasks.
 - `system_config` runtime configuration, separated from static `config.toml`.
 - Buffered audit writes, structured presentation data, and Admin UI query support.
@@ -69,8 +73,9 @@ If you want to build a new service on top of it:
 2. Use [Template Generation](./guide/template-generation.md) to initialize project naming.
 3. Use [Configuration](./guide/configuration.md) to separate static config from runtime config.
 4. Use [Authentication](./guide/authentication.md) to decide registration, external auth, and cookie policy.
-5. Use [Audit and Tasks](./guide/audit-tasks.md) when adding admin operations or background jobs.
-6. Use [Docker Deployment](./deployment/docker.md) for a minimal production deployment.
+5. Use [Mail Delivery](./guide/mail.md) to configure SMTP, templates, and test mail.
+6. Use [Audit and Tasks](./guide/audit-tasks.md) when adding admin operations or background jobs.
+7. Use [Docker Deployment](./deployment/docker.md) for a minimal production deployment.
 
 Implementation notes, extension contracts, and maintenance checklists live under `developer-docs/`. The public `docs/` tree is for users and deployers.
 
@@ -92,7 +97,7 @@ flowchart LR
 
 AsterForge keeps startup-critical values in static config, such as bind address, database URL, secrets, and node mode. Values that can be changed online live in `system_config` and are managed through the Admin Config API or the admin panel.
 
-Background dispatch and periodic maintenance run only when `server.start_mode = "primary"`. A follower node initializes the common runtime, but skips the dispatcher, system health check, auth session cleanup, external auth flow cleanup, audit cleanup, and task artifact cleanup.
+Background dispatch and periodic maintenance run only when `server.start_mode = "primary"`. A follower node initializes the common runtime, but skips the dispatcher, system health check, auth session cleanup, external auth flow cleanup, mail outbox dispatch, audit cleanup, and task artifact cleanup.
 
 ## Key Entrypoints
 
@@ -125,4 +130,5 @@ bun run generate-api
 - [Getting Started](./guide/getting-started.md)
 - [Configuration](./guide/configuration.md)
 - [Runtime](./guide/runtime.md)
+- [Mail Delivery](./guide/mail.md)
 - [Docker Deployment](./deployment/docker.md)

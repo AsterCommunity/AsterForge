@@ -73,6 +73,8 @@ frontend-panel/src/pages/      需要时增加管理页面
 
 如果产品要加业务 task kind，payload/result 类型、registry、retry 分类、初始 steps、presentation、可见性规则要一起设计。
 
+邮件 outbox 投递也是系统运行时任务，具体扩展规则见 [邮件运行时扩展](./mail-runtime.md)。
+
 ## Audit Service
 
 Audit 代码在 `src/services/audit_service/`。
@@ -84,9 +86,12 @@ Audit 代码在 `src/services/audit_service/`。
 - admin config 变更
 - admin external auth provider 变更
 - admin task retry 和 cleanup
+- mail send 和 mail delivery failure
 - 产品自己的管理员状态变更
 
 Audit entry 应包含结构化 details 和 presentation metadata。前端优先展示 `presentation`，raw `details` 只作为 fallback/debug 信息。
+
+邮件 audit 的 details、presentation 和测试要求见 [邮件运行时扩展](./mail-runtime.md)。
 
 ## API 与错误
 
@@ -146,6 +151,8 @@ bun run build
 ```bash
 cargo test --test test_admin_tasks
 cargo test --test test_audit
+cargo test --test test_audit mail_outbox_dispatch_records_delivery_audit_logs
+cargo test mail_template
 cargo test task_service::presentation
 cargo test shutdown_release_returns_processing_task_to_retry_without_failure_update
 ```

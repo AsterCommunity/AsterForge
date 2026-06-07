@@ -1,10 +1,11 @@
 # AsterForge
 
-AsterForge 是 Aster 系列项目复用的 Rust + React 服务地基。它不是一个具体产品，而是开新服务前应该复制的底座：HTTP 服务、认证、运行时配置、审计日志、后台任务、管理员 API、OpenAPI 生成、内嵌前端资源和部署默认值。
+AsterForge 是 Aster 系列项目复用的 Rust + React 服务地基。它不是一个具体产品，而是开新服务前应该复制的底座：HTTP 服务、认证、运行时配置、邮件投递、审计日志、后台任务、管理员 API、OpenAPI 生成、内嵌前端资源和部署默认值。
 
 这个仓库聚焦跨服务通用的运行时能力。具体业务域应该由下游项目基于这层地基继续添加。
 
 - English README: [README.md](README.md)
+- 公开文档: [docs/index.md](docs/index.md)
 - 开发者文档: [developer-docs/README.md](developer-docs/README.md)
 - 配置示例: [config.example.toml](config.example.toml)
 - 前端面板: [frontend-panel/](frontend-panel/)
@@ -20,6 +21,7 @@ AsterForge 是 Aster 系列项目复用的 Rust + React 服务地基。它不是
 - 外部认证 provider 脚手架，用于 OIDC/OAuth2 一类登录流程。
 - 管理员 API：运行时配置、审计日志、外部认证 provider、后台任务。
 - `system_config` 运行时配置，和静态 `config.toml` 分离。
+- 邮件投递：SMTP 运行时配置、模板变量、持久化 outbox、测试邮件和邮件审计。
 - memory/noop/Redis cache backend，统一挂在 cache trait 后面。
 - request id、安全响应头、运行时 CORS、CSRF helper、请求 metrics、IP 限流 middleware。
 - 健康检查、readiness，以及可选 Prometheus metrics。
@@ -35,16 +37,17 @@ AsterForge 是 Aster 系列项目复用的 Rust + React 服务地基。它不是
   - system health check
   - auth session cleanup
   - external auth flow cleanup
+  - mail outbox dispatch
   - audit log cleanup
   - task artifact cleanup
 
-Follower 模式会保留公共运行时初始化，但跳过 primary-only 的 dispatch 和 cleanup loop。
+Follower 模式会保留公共运行时初始化，但跳过 primary-only 的 dispatch、邮件 outbox 投递和 cleanup loop。
 
 ### 前端地基
 
 - `frontend-panel/` 下的 React + Vite + TypeScript 管理面板。
 - 基于 OpenAPI 生成的类型化 service 层。
-- 管理员页面：配置、审计日志、外部认证 provider、后台任务。
+- 管理员页面：配置、审计日志、外部认证 provider、后台任务。邮件 SMTP、模板和测试邮件属于运行时配置入口。
 - audit/task presentation 格式化，前端不需要解析 raw details 或 task payload。
 - Vitest + jsdom 单测、Biome 检查、Vite 生产构建。
 
@@ -76,7 +79,7 @@ src/db/                      数据库连接、重试、事务、repository
 src/entities/                SeaORM entity model
 src/metrics/                 metrics feature 下的 Prometheus 实现
 src/runtime/                 App state、启动、关闭、日志、后台任务 loop
-src/services/                auth、external auth、config、audit、task、health、examples
+src/services/                auth、external auth、config、mail、audit、task、health、examples
 src/types/                   共享 domain enum 和 DB wrapper type
 src/utils/                   crypto、ID、path、number、email、RAII helper
 migration/                   SeaORM migration crate
@@ -199,9 +202,11 @@ GET  /api/v1/auth/external-auth/{kind}/{provider}/callback
 
 GET    /api/v1/admin/config
 GET    /api/v1/admin/config/schema
+GET    /api/v1/admin/config/template-variables
 GET    /api/v1/admin/config/{key}
 PUT    /api/v1/admin/config/{key}
 DELETE /api/v1/admin/config/{key}
+POST   /api/v1/admin/config/mail/action
 
 GET  /api/v1/admin/audit-logs
 
@@ -242,6 +247,8 @@ ASTER__AUTH__JWT_SECRET='replace-with-a-long-random-secret'
 完整静态配置见 [config.example.toml](config.example.toml)。
 
 运行时配置存在 `system_config`，通过 Admin Config API/UI 修改。需要不改 `config.toml` 就能热调整的值放运行时配置；数据库 URL、监听地址、密钥这类启动关键值放静态配置。
+
+邮件投递也是运行时配置：SMTP 主机、端口、加密、用户名密码、发件人、邮件模板和 `mail_outbox_dispatch_interval_secs` 都通过 Admin Config API/UI 管理。管理员测试邮件走 `POST /api/v1/admin/config/mail/action`，outbox 由 primary 节点的 `mail-outbox-dispatch` 周期任务投递。详细说明见 [docs/guide/mail.md](docs/guide/mail.md)。
 
 ## 开发命令
 
@@ -299,7 +306,8 @@ jemalloc-profiling   jemalloc profiling 支持
 5. 新路径和 schema 要注册到 `src/api/openapi.rs`。
 6. 管理员操作和安全相关状态变更要接 audit。
 7. 新 task kind 必须先明确 owner、retry 模型和可见性模型。
-8. 地基模块保持通用，产品工作流留在产品仓库。
+8. 新邮件模板、邮件 payload 或 outbox 语义要同步 runtime config、OpenAPI、audit presentation 和前端生成类型。
+9. 地基模块保持通用，产品工作流留在产品仓库。
 
 ## 参考实现
 

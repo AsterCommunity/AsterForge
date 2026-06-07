@@ -84,6 +84,7 @@ data/.tmp
 
 - 站点展示名称、公开 URL 等 branding/site 设置。
 - CORS、注册策略、本地邮箱策略等可以在线调整的策略。
+- SMTP、邮件发件人、邮件模板和 outbox 投递间隔。
 - 审计保留天数和维护任务参数。
 - 不需要重启进程即可生效的业务开关。
 
@@ -117,6 +118,44 @@ DELETE /api/v1/admin/config/{key}
 - normalizer 或 validator。
 - Admin UI 展示。
 - 相关操作的 audit log。
+
+## 邮件配置
+
+邮件投递配置也是运行时配置，不放进 `config.toml`。常用 key 包括：
+
+```text
+mail_smtp_host
+mail_smtp_port
+mail_security
+mail_smtp_username
+mail_smtp_password
+mail_from_address
+mail_from_name
+mail_outbox_dispatch_interval_secs
+```
+
+邮件模板使用 `mail_template_*_subject` 和 `mail_template_*_html` 这类 key。可用模板变量可以从这个端点读取：
+
+```text
+GET /api/v1/admin/config/template-variables
+```
+
+管理员可以通过 config action 发送测试邮件：
+
+```text
+POST /api/v1/admin/config/mail/action
+```
+
+请求体：
+
+```json
+{
+  "action": "send_test_email",
+  "target_email": "ops@example.com"
+}
+```
+
+详细说明见 [邮件投递](./mail.md)。
 
 ## 配置变更审计
 

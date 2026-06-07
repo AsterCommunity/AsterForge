@@ -26,6 +26,7 @@ Primary 节点会启动这些运行时 loop：
 - system health check
 - auth session cleanup
 - external auth login flow cleanup
+- mail outbox dispatch
 - audit log cleanup
 - task artifact cleanup
 
@@ -65,6 +66,14 @@ sequenceDiagram
 - 失败是否允许重试，以及重试会不会造成重复副作用。
 
 普通用户任务可见性不是 AsterForge 的默认假设。这个仓库只提供管理员和运行时层面的任务 API。
+
+## 邮件 Outbox
+
+邮件投递也是 primary-only 运行时职责。业务流程写入 `mail_outbox` 后，由 `mail-outbox-dispatch` 周期任务 claim 到期记录并发送 SMTP。
+
+这个 loop 放在 primary 的原因很简单：邮件是外部副作用。如果多个节点同时投递同一封邮件，用户可能收到重复邮件；如果投递成功后没有正确标记状态，后续重试也可能重复发送。AsterForge 通过 claim、状态流转、发送后 `mark_sent` 和审计记录把这个窗口压到可控范围。
+
+邮件配置、模板和排查见 [邮件投递](./mail.md)。
 
 ## 审计写入
 

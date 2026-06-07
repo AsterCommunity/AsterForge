@@ -73,6 +73,8 @@ Key contracts:
 
 If a product adds a domain task kind, define its payload/result types, registry entry, retry classification, initial steps, presentation, and visibility rules together.
 
+Mail outbox delivery is also a system runtime task. See [Mail Runtime Extension](./mail-runtime.md) for the concrete extension rules.
+
 ## Audit Service
 
 Audit code lives in `src/services/audit_service/`.
@@ -84,9 +86,12 @@ Use audit for:
 - admin config changes
 - admin external auth provider changes
 - admin task retry and cleanup
+- mail send and mail delivery failure
 - product-specific administrator state changes
 
 Audit entries should include structured details and presentation metadata. Frontend code should display `presentation` first and use raw `details` only as a fallback/debug surface.
+
+Mail audit details, presentation, and tests are covered in [Mail Runtime Extension](./mail-runtime.md).
 
 ## API And Errors
 
@@ -146,6 +151,8 @@ Targeted commands used often:
 ```bash
 cargo test --test test_admin_tasks
 cargo test --test test_audit
+cargo test --test test_audit mail_outbox_dispatch_records_delivery_audit_logs
+cargo test mail_template
 cargo test task_service::presentation
 cargo test shutdown_release_returns_processing_task_to_retry_without_failure_update
 ```

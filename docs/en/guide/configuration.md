@@ -84,6 +84,7 @@ Runtime config is suitable for:
 
 - Site name, public URL, and branding-related values.
 - CORS, registration policy, and local email policy.
+- SMTP, mail sender settings, mail templates, and outbox dispatch interval.
 - Audit retention and maintenance parameters.
 - Feature switches that do not require process restart.
 
@@ -117,6 +118,44 @@ When adding a runtime config key, also add:
 - Normalizer or validator.
 - Admin UI coverage.
 - Audit log for related operations.
+
+## Mail Configuration
+
+Mail delivery settings are runtime config too. They do not belong in `config.toml`. Common keys include:
+
+```text
+mail_smtp_host
+mail_smtp_port
+mail_security
+mail_smtp_username
+mail_smtp_password
+mail_from_address
+mail_from_name
+mail_outbox_dispatch_interval_secs
+```
+
+Mail templates use keys such as `mail_template_*_subject` and `mail_template_*_html`. Available template variables can be read from:
+
+```text
+GET /api/v1/admin/config/template-variables
+```
+
+Administrators can send test mail through a config action:
+
+```text
+POST /api/v1/admin/config/mail/action
+```
+
+Request body:
+
+```json
+{
+  "action": "send_test_email",
+  "target_email": "ops@example.com"
+}
+```
+
+See [Mail Delivery](./mail.md) for details.
 
 ## Auditing Config Changes
 
