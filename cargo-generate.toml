@@ -1,5 +1,15 @@
 [template]
 cargo_generate_version = ">=0.10.0"
+# AsterForge does project-specific renaming in init.sh. cargo-generate should
+# copy template files without parsing GitHub expressions, JSX, or Rust macros as
+# Liquid syntax.
+exclude = [
+    "*",
+    "**/*",
+    ".github/**/*",
+    ".cargo/**/*",
+    ".gcop/**/*",
+]
 ignore = [
     ".git",
     ".DS_Store",
