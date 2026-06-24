@@ -76,10 +76,14 @@ pub async fn rollback<T: sea_orm::TransactionSession>(txn: T) -> Result<()> {
 }
 
 /// Runs a transaction callback with consistent tracing and rollback guarding.
-pub async fn with_transaction<C, F, T>(db: &C, operation: F) -> Result<T>
+///
+/// The callback may return a product-specific error type. Forge-created transaction boundary
+/// errors are converted through `E: From<DbError>`, while callback errors are preserved unchanged.
+pub async fn with_transaction<C, F, T, E>(db: &C, operation: F) -> std::result::Result<T, E>
 where
     C: sea_orm::TransactionTrait,
-    F: for<'txn> AsyncFnOnce(&'txn C::Transaction) -> Result<T>,
+    F: for<'txn> AsyncFnOnce(&'txn C::Transaction) -> std::result::Result<T, E>,
+    E: From<DbError> + std::fmt::Display,
 {
     let location = Location::caller();
     tracing::debug!(
@@ -87,13 +91,13 @@ where
         line = location.line(),
         "beginning transaction"
     );
-    let txn = begin(db).await?;
+    let txn = begin(db).await.map_err(E::from)?;
     let mut rollback_guard = RollbackGuard::new(location);
 
     match operation(&txn).await {
         Ok(value) => {
             rollback_guard.disarm();
-            commit(txn).await?;
+            commit(txn).await.map_err(E::from)?;
             tracing::debug!(
                 file = location.file(),
                 line = location.line(),
@@ -128,6 +132,7 @@ mod tests {
     use super::{rollback, with_transaction};
     use crate::{DbError, connection::DatabaseConfig};
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
+    use std::fmt;
 
     async fn sqlite_db() -> DatabaseConnection {
         crate::connection::connect(&DatabaseConfig {
@@ -150,6 +155,27 @@ mod tests {
             .expect("count query should succeed")
             .expect("count query should return one row");
         row.try_get_by_index(0).expect("count should decode")
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum ProductError {
+        Db(String),
+        Validation(&'static str),
+    }
+
+    impl From<DbError> for ProductError {
+        fn from(value: DbError) -> Self {
+            Self::Db(value.to_string())
+        }
+    }
+
+    impl fmt::Display for ProductError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Db(message) => formatter.write_str(message),
+                Self::Validation(message) => formatter.write_str(message),
+            }
+        }
     }
 
     #[tokio::test]
@@ -189,6 +215,30 @@ mod tests {
         .expect_err("callback error should propagate");
 
         assert!(matches!(error, DbError::DatabaseOperation(_)));
+        assert_eq!(count_rows(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn with_transaction_preserves_product_callback_errors() {
+        let db = sqlite_db().await;
+        db.execute_unprepared("CREATE TABLE transaction_items (id INTEGER PRIMARY KEY);")
+            .await
+            .expect("table should be created");
+
+        let error = with_transaction(&db, async |txn| {
+            txn.execute_unprepared("INSERT INTO transaction_items (id) VALUES (1);")
+                .await
+                .map_err(DbError::from)
+                .map_err(ProductError::from)?;
+            Err::<(), _>(ProductError::Validation("business validation failed"))
+        })
+        .await
+        .expect_err("callback error should propagate");
+
+        assert_eq!(
+            error,
+            ProductError::Validation("business validation failed")
+        );
         assert_eq!(count_rows(&db).await, 0);
     }
 

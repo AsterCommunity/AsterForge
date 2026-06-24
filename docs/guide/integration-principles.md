@@ -26,6 +26,8 @@ Forge 的错误类型用于表达共享机制失败，例如 `TaskCoreError`、`
 
 不要让 API handler 直接依赖 Forge 错误文案。文案、状态码、审计字段和本地化属于产品层。
 
+事务回调是一个容易混淆的边界：`aster_forge_db::transaction::with_transaction` 只拥有 begin、commit、rollback 这些数据库事务机械错误。回调里的校验失败、权限失败、协议失败或业务状态失败应该继续使用产品/子系统错误类型，并由 `with_transaction` 原样返回。产品错误类型只需要实现 `From<DbError>`，让 Forge 创建的事务边界失败可以进入产品边界即可。
+
 ## 3. 不做无意义薄封装
 
 如果产品仓库里有这种函数：

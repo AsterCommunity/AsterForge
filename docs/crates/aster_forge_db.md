@@ -81,7 +81,54 @@ db_handles.close().await?;
 
 模块：`transaction`
 
-事务 helper 用来统一 SeaORM transaction 调用形式。业务规则仍然留在 repository/service 层。
+事务 helper 用来统一 SeaORM transaction 调用形式。Forge 负责事务机械行为，包括 begin、commit、rollback、rollback 失败日志和未显式结束事务的 guard 记录；业务规则仍然留在 repository/service 层。
+
+手动事务边界直接返回 `DbError`：
+
+```rust
+let txn = aster_forge_db::transaction::begin(db).await?;
+repository::write(&txn, input).await?;
+aster_forge_db::transaction::commit(txn).await?;
+```
+
+产品仓库如果要保留自己的错误类型，可以在本地 facade 或 service 边界把 `DbError` 转成产品错误。
+
+`with_transaction` 更适合 service/repository 组合调用。它允许回调返回产品错误类型 `E`，并只把 Forge 自己创建的事务边界错误映射成 `E`：
+
+```rust
+impl From<aster_forge_db::DbError> for AsterError {
+    fn from(value: aster_forge_db::DbError) -> Self {
+        AsterError::internal(value)
+    }
+}
+
+let user = aster_forge_db::transaction::with_transaction(db, async |txn| {
+    let user = user_repo::create(txn, input).await?;
+    audit_repo::record_user_create(txn, user.id).await?;
+    Ok::<_, AsterError>(user)
+})
+.await?;
+```
+
+错误边界规则：
+
+- begin、commit、rollback 失败是 Forge DB 边界错误，来源类型是 `DbError`。
+- `with_transaction` 的回调错误是产品或子系统错误，会原样返回，不会包装成 `DbError`。
+- `with_transaction` 的错误类型需要满足 `E: From<DbError> + std::fmt::Display`，这样 commit/begin 失败可以进入产品错误边界，rollback 日志也能记录回调错误。
+- 回调失败后 rollback 如果也失败，函数仍然返回原始回调错误，同时记录 rollback 失败日志；不要用 rollback 失败覆盖业务失败。
+
+不要把校验错误、权限错误、协议错误等业务失败转换成 `DbError`。如果子系统有自己的错误类型，例如协议层错误，可以直接为该类型实现 `From<DbError>`，或者先转成产品错误再由子系统错误接收。
+
+## 错误边界
+
+`DbError` 表达共享数据库基础设施失败，包括连接、关闭、重试耗尽、查询 helper 参数错误和事务边界失败。产品侧应该在启动、service 或协议边界映射成自己的错误类型。
+
+推荐边界：
+
+- repository 只表达数据库读写需要的输入输出，不构造 HTTP 或协议错误。
+- service 使用产品错误类型组合 repository、事务、audit 和外部副作用。
+- API handler 把产品错误映射为稳定响应码、状态码、审计字段和本地化文案。
+- Yggdrasil/Authlib-injector 这类协议端点可以使用协议错误类型，但仍然应该在协议边界接收 `DbError`，不要让 Forge 错误文案泄漏到协议响应。
 
 ## 测试要求
 
