@@ -9,6 +9,7 @@
 - limit/offset 分页。
 - cursor 分页。
 - 常见 cursor 参数解析。
+- PATCH 请求三态字段。
 - 列表响应结构。
 - `SortOrder` 的稳定序列化。
 - debug + `openapi` feature 下的 `utoipa` schema 派生。
@@ -75,6 +76,38 @@ let page = aster_forge_api::CursorSlice::from_overfetched(rows, limit);
 
 `SortOrder` 只表达 `Asc` / `Desc`，不表达产品字段名。字段白名单应该留在产品仓库，不要让客户端传任意列名后直接拼到数据库层。
 
+## PATCH 三态字段
+
+类型：
+
+- `NullablePatch<T>`
+- `deserialize_nullable_patch_option`
+
+`NullablePatch<T>` 用于区分 PATCH DTO 中的三种状态：
+
+- `Absent`：字段未传，保持原值。
+- `Null`：字段显式传入 `null`，清空原值。
+- `Value(T)`：字段传入具体值，更新为新值。
+
+常见写法：
+
+```rust
+#[derive(serde::Deserialize)]
+struct UpdateItemRequest {
+    #[serde(default)]
+    title: aster_forge_api::NullablePatch<String>,
+    #[serde(
+        default,
+        deserialize_with = "aster_forge_api::deserialize_nullable_patch_option"
+    )]
+    description: Option<aster_forge_api::NullablePatch<String>>,
+}
+```
+
+如果字段本身不是 `Option`，直接用 `#[serde(default)]` 即可。字段本身需要 `Option<NullablePatch<T>>` 时，使用 `deserialize_nullable_patch_option()` 保留显式 `null`。
+
+产品 service 应该在更新逻辑里显式匹配三态，不要把 `Null` 和 `Absent` 混掉。
+
 ## OpenAPI 接入
 
 如果产品启用 OpenAPI：
@@ -90,6 +123,7 @@ openapi = ["aster_forge_api/openapi"]
 
 - cursor 参数成对出现的错误路径。
 - limit clamp 到产品允许范围。
+- PATCH DTO 中 omitted/null/value 三态。
 - overfetch 后 `next_cursor` 是否正确。
 - OpenAPI feature 下 schema 编译通过。
 
