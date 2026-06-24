@@ -100,9 +100,10 @@ pub fn u32_to_usize(value: u32, value_name: &str) -> Result<usize> {
 }
 
 /// Converts `u32` to `i64`.
-pub fn u32_to_i64(value: u32, value_name: &str) -> Result<i64> {
-    let _ = value_name;
-    Ok(i64::from(value))
+///
+/// This conversion is infallible because every `u32` value fits into `i64`.
+pub fn u32_to_i64(value: u32) -> i64 {
+    i64::from(value)
 }
 
 /// Converts `u32` to `i32`.
@@ -292,7 +293,7 @@ mod tests {
     fn u32_conversions_are_lossless_on_supported_targets() {
         assert_eq!(u32_to_i32(0, "value").unwrap(), 0);
         assert_eq!(u32_to_i32(i32::MAX as u32, "value").unwrap(), i32::MAX);
-        assert_eq!(u32_to_i64(u32::MAX, "value").unwrap(), i64::from(u32::MAX));
+        assert_eq!(u32_to_i64(u32::MAX), i64::from(u32::MAX));
         assert_eq!(u32_to_usize(0, "value").unwrap(), 0);
 
         #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]

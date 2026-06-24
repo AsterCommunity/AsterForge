@@ -13,14 +13,14 @@ use rand_core_06::OsRng;
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 
-fn password_hasher() -> Result<Argon2<'static>> {
-    Ok(Argon2::default())
+fn password_hasher() -> Argon2<'static> {
+    Argon2::default()
 }
 
 /// Hashes a password with Argon2 and a fresh random salt.
 pub fn hash_password(password: &str) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);
-    password_hasher()?
+    password_hasher()
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
         .map_err(CryptoError::password_hash)
@@ -29,7 +29,7 @@ pub fn hash_password(password: &str) -> Result<String> {
 /// Verifies a password against a stored Argon2 password hash.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     let parsed = PasswordHash::new(hash).map_err(CryptoError::password_hash)?;
-    Ok(password_hasher()?
+    Ok(password_hasher()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok())
 }

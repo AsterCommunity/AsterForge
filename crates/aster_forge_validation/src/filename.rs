@@ -96,8 +96,38 @@ fn is_windows_reserved_name(name: &str) -> bool {
 }
 
 /// Builds a two-level sharded storage path from a blob key.
-pub fn storage_path_from_blob_key(blob_key: &str) -> String {
-    format!("{}/{}/{}", &blob_key[..2], &blob_key[2..4], blob_key)
+///
+/// The key must be long enough to supply the two shard segments and must be an ASCII storage token,
+/// not a path supplied by a caller. This keeps the helper from panicking on short or non-UTF-8
+/// boundary inputs and prevents accidental nested paths from bypassing the intended sharding
+/// layout.
+pub fn storage_path_from_blob_key(blob_key: &str) -> Result<String> {
+    validate_blob_key_for_storage_path(blob_key)?;
+
+    Ok(format!(
+        "{}/{}/{}",
+        &blob_key[..2],
+        &blob_key[2..4],
+        blob_key
+    ))
+}
+
+fn validate_blob_key_for_storage_path(blob_key: &str) -> Result<()> {
+    if blob_key.len() < 4 {
+        return Err(ValidationError::new(
+            "blob key must contain at least 4 ASCII characters",
+        ));
+    }
+    if !blob_key.is_ascii()
+        || blob_key
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b'\\'))
+    {
+        return Err(ValidationError::new(
+            "blob key must be an ASCII token without path separators",
+        ));
+    }
+    Ok(())
 }
 
 /// Parses a name into the template used to generate copy names.
@@ -322,6 +352,17 @@ mod tests {
     #[test]
     fn storage_path_from_blob_key_uses_two_level_sharding() {
         let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-        assert_eq!(storage_path_from_blob_key(hash), format!("ab/cd/{hash}"));
+        assert_eq!(
+            storage_path_from_blob_key(hash).unwrap(),
+            format!("ab/cd/{hash}")
+        );
+    }
+
+    #[test]
+    fn storage_path_from_blob_key_rejects_values_that_cannot_be_safely_sharded() {
+        assert!(storage_path_from_blob_key("abc").is_err());
+        assert!(storage_path_from_blob_key("ab/cd").is_err());
+        assert!(storage_path_from_blob_key("ab\\cd").is_err());
+        assert!(storage_path_from_blob_key("猫猫猫猫").is_err());
     }
 }
