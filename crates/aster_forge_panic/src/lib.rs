@@ -356,7 +356,9 @@ mod tests {
     }
 
     fn write_parent_file_fixture(path: &std::path::Path) {
-        let parent = path.parent().expect("parent-file fixture should have parent");
+        let parent = path
+            .parent()
+            .expect("parent-file fixture should have parent");
         std::fs::create_dir_all(parent).expect("parent-file fixture dir should be writable");
         std::fs::write(path, "not a directory").expect("parent-file fixture should be writable");
     }

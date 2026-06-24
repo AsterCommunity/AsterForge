@@ -36,7 +36,10 @@ pub use registry::{
     ConfigDefinition, ConfigDependencyValidator, ConfigNormalizer, ConfigRegistry,
     ConfigSeedRecord, ConfigValueLookup,
 };
-pub use runtime::{ConfigSnapshot, ConfigStore, RuntimeConfig, RuntimeConfigChange, StoredConfig};
+pub use runtime::{
+    AsyncConfigSnapshot, AsyncConfigStore, AsyncRuntimeConfig, RuntimeConfigChange,
+    RuntimeConfigRecord, StoredConfig, SyncConfigSnapshot, SyncRuntimeConfig,
+};
 pub use value::{
     ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility, validate_storage_value,
 };

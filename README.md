@@ -11,12 +11,13 @@
 </p>
 
 <p align="center">
-  <a href="https://forge.astercosm.com/"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-VitePress-0F766E?style=for-the-badge&logo=vitepress&logoColor=white"></a>
-  <a href="docs/guide/index.md"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48?style=for-the-badge"></a>
-  <a href="docs/en/index.md"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB?style=for-the-badge"></a>
-  <a href="docs/crates/aster_forge_actix_middleware.md"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669?style=for-the-badge"></a>
-  <img alt="Rust 1.95+" src="https://img.shields.io/badge/rust-1.95%2B-B7410E?style=for-the-badge&logo=rust&logoColor=white">
-  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-0F172A?style=for-the-badge">
+  <a href="https://forge.astercosm.com/"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-VitePress-0F766E?logo=vitepress&logoColor=white"></a>
+  <a href="https://codecov.io/github/AsterCommunity/AsterForge"><img alt="Coverage" src="https://codecov.io/github/AsterCommunity/AsterForge/graph/badge.svg?token=IefDQVj2y6"></a>
+  <a href="docs/guide/index.md"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
+  <a href="docs/en/index.md"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
+  <a href="docs/crates/aster_forge_actix_middleware.md"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
+  <img alt="Rust 1.94+" src="https://img.shields.io/badge/rust-1.94%2B-B7410E?logo=rust&logoColor=white">
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-0F172A">
 </p>
 
 ## What is AsterForge?
@@ -25,7 +26,7 @@ AsterForge is the shared Rust crate workspace for Aster projects. It collects lo
 
 Forge is not an application framework. Product-specific code, SeaORM entities, migrations, permissions, business repositories, storage policies, task payloads, and user-facing API semantics should stay in the owning application repositories.
 
-All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.95.0+`, edition 2024, and uses MIT license metadata.
+All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+`, edition 2024, and uses MIT license metadata.
 
 ## Crates
 

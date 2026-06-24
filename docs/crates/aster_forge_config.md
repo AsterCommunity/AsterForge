@@ -52,7 +52,8 @@ aster_forge_config = {
 - `ConfigSource`：`system` / `custom` 来源。
 - `ConfigVisibility`：`private` / `public` / `authenticated` 可见性。
 - `StoredConfig`：产品数据库行转换后的 Forge 存储模型。
-- `RuntimeConfig` / `ConfigSnapshot`：进程内配置快照和 reload diff。
+- `AsyncRuntimeConfig` / `AsyncConfigSnapshot`：基于 `tokio::sync::RwLock` 的 async 配置快照和 reload diff。
+- `SyncRuntimeConfig` / `SyncConfigSnapshot`：基于标准库 `RwLock` 的同步热读配置快照。
 - `ConfigChangeNotifier`：reload 通知抽象。
 - `ConfigReloadMessage`：跨进程 reload 信号载荷。
 
@@ -152,11 +153,16 @@ for seed in CONFIG_REGISTRY.default_seed_records()? {
 
 custom key 不在 registry 中，通常按产品策略固定为 string 类型，并由产品自己决定 visibility 和权限边界。
 
-## RuntimeConfig
+## Runtime Config
 
-Forge 的 `RuntimeConfig` 使用 `tokio::sync::RwLock`，适合新接入的 async runtime。已有产品如果已经有大量同步读取配置的 helper，可以先只接入 registry 和 validation，保留本地同步 runtime snapshot；等读路径清理后再切换到 Forge runtime。
+Forge 提供两条 runtime cache 路径：
 
-`requires_restart` 的语义由 Forge runtime 保证：如果 key 已经存在，之后收到 `requires_restart=true` 的热更新会被忽略，直到进程重启后通过完整 reload 加载新值。
+- `AsyncRuntimeConfig` 使用 `tokio::sync::RwLock`，适合新接入的 async-first 服务。
+- `SyncRuntimeConfig` 使用标准库 `RwLock`，适合 request handler、middleware、policy builder、task registry 这类需要同步热读配置的路径。
+
+已有产品如果已经有大量同步读取配置的 helper，应优先接入 `SyncRuntimeConfig`，不要为了使用公共 runtime cache 把读路径强行改成 async。
+
+两条路径都保持同一套 `requires_restart` 语义：如果 key 已经存在，之后收到 `requires_restart=true` 的热更新会被忽略，直到进程重启后通过完整 reload 加载新值。
 
 产品如果保留本地 runtime，也应该保持同样语义，避免配置在不同服务中表现不一致。
 
