@@ -15,7 +15,7 @@ use openidconnect::{
 };
 use openidconnect::{EndpointMaybeSet, EndpointNotSet, EndpointSet};
 
-use crate::OUTBOUND_HTTP_USER_AGENT;
+use crate::outbound_http_user_agent;
 use crate::types::{ExternalAuthProtocol, ExternalAuthProviderKind};
 use crate::{ExternalAuthError, MapExternalAuthErr, Result};
 
@@ -95,7 +95,7 @@ impl ExternalAuthProviderDriver for OidcProviderDriver {
             ExternalAuthError::database_operation("stored OIDC PKCE verifier is missing")
         })?;
         let client = build_client(provider, &callback.redirect_uri).await?;
-        let http_client = oidc_http_client()?;
+        let http_client = oidc_http_client(provider)?;
         let token_request = client
             .exchange_code(AuthorizationCode::new(callback.code))
             .map_external_auth_err_ctx(
@@ -202,11 +202,11 @@ pub(super) fn start_authorization_with_oidc_client(
     })
 }
 
-pub(super) fn oidc_http_client() -> Result<OidcHttpClient> {
+pub(super) fn oidc_http_client(provider: &ExternalAuthProviderConfig) -> Result<OidcHttpClient> {
     reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent(OUTBOUND_HTTP_USER_AGENT)
+        .user_agent(outbound_http_user_agent(provider))
         .build()
         .map_external_auth_err_ctx(
             "failed to build OIDC HTTP client",
@@ -218,7 +218,7 @@ pub(super) async fn build_client(
     provider: &ExternalAuthProviderConfig,
     redirect_uri: &str,
 ) -> Result<OidcClient> {
-    let http_client = oidc_http_client()?;
+    let http_client = oidc_http_client(provider)?;
     let issuer = IssuerUrl::new(provider.require_issuer_url()?.to_string())
         .map_external_auth_err_ctx(
             "invalid OIDC issuer URL",
@@ -247,7 +247,7 @@ pub(super) async fn build_client(
 pub(super) async fn discover_provider(
     provider: &ExternalAuthProviderConfig,
 ) -> Result<CoreProviderMetadata> {
-    let http_client = oidc_http_client()?;
+    let http_client = oidc_http_client(provider)?;
     let issuer = IssuerUrl::new(provider.require_issuer_url()?.to_string())
         .map_external_auth_err_ctx(
             "invalid OIDC issuer URL",

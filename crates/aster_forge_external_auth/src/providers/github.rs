@@ -91,7 +91,7 @@ impl ExternalAuthProviderDriver for GitHubProviderDriver {
             ExternalAuthError::database_operation("stored GitHub OAuth2 PKCE verifier is missing")
         })?;
         let provider = github_oauth2_config(provider);
-        let http_client = oauth2_http_client()?;
+        let http_client = oauth2_http_client(&provider)?;
         let token = exchange_code_for_token(
             &http_client,
             &provider,
@@ -286,6 +286,7 @@ mod tests {
             email_verified_claim: None,
             groups_claim: None,
             avatar_url_claim: None,
+            outbound_http_user_agent: None,
         }
     }
 

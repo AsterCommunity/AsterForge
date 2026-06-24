@@ -203,7 +203,7 @@ async fn exchange_microsoft_callback(
     })?;
     let metadata = discover_microsoft_provider(provider).await?;
     let client = build_client_from_metadata(provider, &callback.redirect_uri, metadata.clone())?;
-    let http_client = oidc_http_client()?;
+    let http_client = oidc_http_client(provider)?;
     let token_request = client
         .exchange_code(openidconnect::AuthorizationCode::new(callback.code))
         .map_external_auth_err_ctx(
@@ -318,7 +318,7 @@ async fn discover_microsoft_provider(
 ) -> Result<CoreProviderMetadata> {
     let configured_issuer = provider.require_issuer_url()?;
     let discovery_url = microsoft_discovery_url(configured_issuer)?;
-    let http_client = oidc_http_client()?;
+    let http_client = oidc_http_client(provider)?;
     let response = http_client
         .get(discovery_url.as_str())
         .send()
@@ -597,6 +597,7 @@ mod tests {
             email_verified_claim: Some("email_verified".to_string()),
             groups_claim: None,
             avatar_url_claim: Some("picture".to_string()),
+            outbound_http_user_agent: None,
         }
     }
 

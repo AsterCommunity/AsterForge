@@ -602,6 +602,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_tasks"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "utoipa",
+]
+
+[[package]]
 name = "aster_forge_utils"
 version = "0.1.0"
 dependencies = [

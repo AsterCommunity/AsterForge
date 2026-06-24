@@ -14,12 +14,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::OUTBOUND_HTTP_USER_AGENT;
 use crate::driver::{
     ExternalAuthAuthorizationStart, ExternalAuthCallback, ExternalAuthProfile,
     ExternalAuthProviderConfig, ExternalAuthProviderDescriptor, ExternalAuthProviderDriver,
     ExternalAuthProviderTestCheck, ExternalAuthProviderTestResult,
 };
+use crate::outbound_http_user_agent;
 use crate::types::{ExternalAuthProtocol, ExternalAuthProviderKind};
 use crate::{ExternalAuthError, MapExternalAuthErr, Result};
 use aster_forge_utils::url::parse_url;
@@ -152,7 +152,7 @@ impl ExternalAuthProviderDriver for OAuth2ProviderDriver {
         let pkce_verifier = callback.pkce_verifier.ok_or_else(|| {
             ExternalAuthError::database_operation("stored OAuth2 PKCE verifier is missing")
         })?;
-        let http_client = oauth2_http_client()?;
+        let http_client = oauth2_http_client(provider)?;
         let token = exchange_code_for_token(
             &http_client,
             provider,
@@ -230,11 +230,11 @@ impl ExternalAuthProviderDriver for OAuth2ProviderDriver {
 ///
 /// GitHub rejects API calls without a User-Agent header, so keep the project
 /// user agent on the shared client instead of setting it per request.
-pub(super) fn oauth2_http_client() -> Result<reqwest::Client> {
+pub(super) fn oauth2_http_client(provider: &ExternalAuthProviderConfig) -> Result<reqwest::Client> {
     reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(TOKEN_ENDPOINT_TIMEOUT_SECS))
-        .user_agent(OUTBOUND_HTTP_USER_AGENT)
+        .user_agent(outbound_http_user_agent(provider))
         .build()
         .map_external_auth_err_ctx(
             "failed to build OAuth2 HTTP client",
@@ -634,6 +634,7 @@ mod tests {
             email_verified_claim: None,
             groups_claim: None,
             avatar_url_claim: None,
+            outbound_http_user_agent: None,
         }
     }
 
@@ -700,6 +701,67 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn oauth2_http_client_uses_default_crate_user_agent_when_app_value_is_missing() {
+        let user_agent = observed_user_agent(None).await;
+
+        assert_eq!(user_agent.as_deref(), Some(crate::OUTBOUND_HTTP_USER_AGENT));
+    }
+
+    #[actix_web::test]
+    async fn oauth2_http_client_uses_application_user_agent() {
+        let user_agent = observed_user_agent(Some("AsterYggdrasil/0.1.0-beta.1")).await;
+
+        assert_eq!(user_agent.as_deref(), Some("AsterYggdrasil/0.1.0-beta.1"));
+    }
+
+    #[actix_web::test]
+    async fn oauth2_http_client_falls_back_for_blank_application_user_agent() {
+        let user_agent = observed_user_agent(Some(" \t\n ")).await;
+
+        assert_eq!(user_agent.as_deref(), Some(crate::OUTBOUND_HTTP_USER_AGENT));
+    }
+
+    async fn observed_user_agent(configured_user_agent: Option<&str>) -> Option<String> {
+        use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
+
+        async fn echo_user_agent(req: HttpRequest) -> HttpResponse {
+            let user_agent = req
+                .headers()
+                .get("User-Agent")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            HttpResponse::Ok().json(user_agent)
+        }
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener local address should resolve");
+        let server = HttpServer::new(|| App::new().route("/", web::get().to(echo_user_agent)))
+            .listen(listener)
+            .expect("server should listen")
+            .run();
+        let handle = server.handle();
+        actix_web::rt::spawn(server);
+
+        let mut provider = provider();
+        provider.outbound_http_user_agent = configured_user_agent.map(str::to_string);
+        let http_client = oauth2_http_client(&provider).expect("HTTP client should build");
+        let response = http_client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("request should succeed");
+        let user_agent = response
+            .json::<Option<String>>()
+            .await
+            .expect("response should decode");
+
+        handle.stop(true).await;
+        user_agent
+    }
+
+    #[actix_web::test]
     async fn userinfo_error_includes_safe_provider_diagnostics() {
         use actix_web::{App, HttpResponse, HttpServer, web};
 
@@ -729,7 +791,7 @@ mod tests {
 
         let mut provider = provider();
         provider.userinfo_url = Some(format!("http://127.0.0.1:{}/userinfo", addr.port()));
-        let http_client = oauth2_http_client().expect("HTTP client should build");
+        let http_client = oauth2_http_client(&provider).expect("HTTP client should build");
 
         let error = fetch_userinfo(&http_client, &provider, "opaque-access-token")
             .await

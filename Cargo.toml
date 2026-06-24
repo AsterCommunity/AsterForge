@@ -13,6 +13,7 @@ members = [
     "crates/aster_forge_metrics",
     "crates/aster_forge_panic",
     "crates/aster_forge_storage_core",
+    "crates/aster_forge_tasks",
     "crates/aster_forge_utils",
     "crates/aster_forge_validation",
 ]

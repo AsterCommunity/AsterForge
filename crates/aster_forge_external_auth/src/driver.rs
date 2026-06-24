@@ -87,6 +87,8 @@ pub struct ExternalAuthProviderConfig {
     pub groups_claim: Option<String>,
     /// Optional profile claim name reserved for avatar URL extraction by application crates.
     pub avatar_url_claim: Option<String>,
+    /// Optional application-owned User-Agent for outbound provider API requests.
+    pub outbound_http_user_agent: Option<String>,
 }
 
 impl fmt::Debug for ExternalAuthProviderConfig {
@@ -114,6 +116,7 @@ impl fmt::Debug for ExternalAuthProviderConfig {
             .field("email_verified_claim", &self.email_verified_claim)
             .field("groups_claim", &self.groups_claim)
             .field("avatar_url_claim", &self.avatar_url_claim)
+            .field("outbound_http_user_agent", &self.outbound_http_user_agent)
             .finish()
     }
 }

@@ -43,3 +43,13 @@ pub use types::{
 #[cfg(any(feature = "oauth2", feature = "oidc"))]
 pub(crate) const OUTBOUND_HTTP_USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
+#[cfg(any(feature = "oauth2", feature = "oidc"))]
+pub(crate) fn outbound_http_user_agent(provider: &driver::ExternalAuthProviderConfig) -> &str {
+    provider
+        .outbound_http_user_agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(OUTBOUND_HTTP_USER_AGENT)
+}

@@ -116,7 +116,7 @@ impl ExternalAuthProviderDriver for QqProviderDriver {
         let pkce_verifier = callback.pkce_verifier.ok_or_else(|| {
             ExternalAuthError::database_operation("stored QQ OAuth2 PKCE verifier is missing")
         })?;
-        let http_client = oauth2_http_client()?;
+        let http_client = oauth2_http_client(&provider)?;
         let access_token = exchange_qq_code_for_token(
             &http_client,
             &provider,
@@ -523,6 +523,7 @@ mod tests {
             email_verified_claim: Some("email_verified".to_string()),
             groups_claim: None,
             avatar_url_claim: None,
+            outbound_http_user_agent: None,
         }
     }
 

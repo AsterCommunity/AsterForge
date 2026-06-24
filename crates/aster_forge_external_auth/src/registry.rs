@@ -401,6 +401,7 @@ mod tests {
             email_verified_claim: None,
             groups_claim: None,
             avatar_url_claim: None,
+            outbound_http_user_agent: None,
         }
     }
 
