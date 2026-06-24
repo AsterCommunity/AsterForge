@@ -9,11 +9,14 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+actix-governor.workspace = true
 actix-web.workspace = true
 aster_forge_metrics = { path = "../aster_forge_metrics" }
 aster_forge_utils = { path = "../aster_forge_utils" }
 base64.workspace = true
 futures.workspace = true
+governor.workspace = true
+ipnet.workspace = true
 rand.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

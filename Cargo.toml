@@ -34,12 +34,14 @@ authors = [
 
 [workspace.dependencies]
 actix-web = "4.14.0"
+actix-governor = "0.10"
 async-trait = "0.1"
 argon2 = "0.5.3"
 base64 = "0.22"
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 dashmap = "6"
 futures = "0.3"
+governor = "0.10"
 http = "1"
 ipnet = "2.12.0"
 moka = { version = "0.12.15", features = ["future"] }

@@ -8,6 +8,7 @@
 - 注入基础安全响应头。
 - 提供 CSRF token 和 request source 校验 helper。
 - 提供 runtime CORS middleware 的 Actix 机械层。
+- 提供可信代理真实 IP 提取和通用 keyed rate limiter。
 - 记录 Actix HTTP 请求指标。
 - 让 Drive、Yggdrasil 等 Actix 服务复用同一套 HTTP 基础行为。
 
@@ -25,6 +26,106 @@ aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterF
 ```
 
 当前没有 feature flag。
+
+## Rate Limit
+
+模块：`aster_forge_actix_middleware::rate_limit`
+
+主要类型和函数：
+
+- `TrustedProxyIpKeyExtractor`
+- `NormalizedStringRateLimiter`
+- `RateLimitRejection`
+- `build_ip_governor_config(seconds_per_request, burst_size, trusted_proxies)`
+- `retry_after_seconds(not_until)`
+
+Forge 负责产品无关的 rate-limit 机械行为：
+
+- 解析可信代理 CIDR / 单 IP 列表。
+- 仅当 direct peer 是可信代理时，使用 `X-Forwarded-For` 最左侧地址作为客户端 IP。
+- 为 `actix-governor` 提供可复用 IP key extractor。
+- 从非零 `(seconds_per_request, burst_size)` 构造 governor quota。
+- 提供按字符串 key 限流的 `NormalizedStringRateLimiter`，默认 trim 并 lowercase key。
+- 把 governor rejection 转成可复用的 `retry_after_seconds`。
+
+产品侧仍然负责：
+
+- 配置结构、默认值、热更新策略。
+- `429 Too Many Requests` 的 response body、错误码和本地化文案。
+- 决定哪些路由使用 IP 限流，哪些协议端点使用 username/email/provider id 等业务 key 限流。
+- 审计、指标标签和安全事件记录。
+
+典型 Actix API 接入：
+
+```rust
+use actix_governor::{GovernorConfig, GovernorConfigBuilder, KeyExtractor};
+use actix_web::{HttpResponse, HttpResponseBuilder, dev::ServiceRequest};
+use aster_forge_actix_middleware::rate_limit::{
+    TrustedProxyIpKeyExtractor, retry_after_seconds,
+};
+use governor::{NotUntil, clock::QuantaInstant, middleware::NoOpMiddleware};
+use std::net::IpAddr;
+
+#[derive(Debug, Clone)]
+struct ProductIpKeyExtractor {
+    inner: TrustedProxyIpKeyExtractor,
+}
+
+impl KeyExtractor for ProductIpKeyExtractor {
+    type Key = IpAddr;
+    type KeyExtractionError = actix_governor::SimpleKeyExtractionError<&'static str>;
+
+    fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
+        self.inner.extract(req)
+    }
+
+    fn exceed_rate_limit_response(
+        &self,
+        negative: &NotUntil<QuantaInstant>,
+        _response: HttpResponseBuilder,
+    ) -> HttpResponse {
+        let retry_after = retry_after_seconds(negative);
+        HttpResponse::TooManyRequests()
+            .insert_header(("Retry-After", retry_after.to_string()))
+            .finish()
+    }
+}
+
+fn build_config(
+    seconds_per_request: u64,
+    burst_size: u32,
+    trusted_proxies: &[String],
+) -> GovernorConfig<ProductIpKeyExtractor, NoOpMiddleware> {
+    GovernorConfigBuilder::default()
+        .key_extractor(ProductIpKeyExtractor {
+            inner: TrustedProxyIpKeyExtractor::new(trusted_proxies),
+        })
+        .seconds_per_request(seconds_per_request)
+        .burst_size(burst_size)
+        .finish()
+        .expect("validated non-zero rate-limit quota")
+}
+```
+
+典型协议端点接入：
+
+```rust
+use aster_forge_actix_middleware::rate_limit::NormalizedStringRateLimiter;
+use std::num::{NonZeroU32, NonZeroU64};
+
+let limiter = NormalizedStringRateLimiter::new(
+    true,
+    NonZeroU64::new(60).unwrap(),
+    NonZeroU32::new(1).unwrap(),
+);
+
+if let Some(rejection) = limiter.check("User@Example.com") {
+    let retry_after = rejection.retry_after_seconds();
+    // Product code maps this into its own protocol error body.
+}
+```
+
+不要把产品 `ApiResponse`、Yggdrasil 协议错误体、Drive 错误码或 config key 放进 Forge。Forge 的职责是共享限流机械件，产品侧负责面向客户端的语义。
 
 ## Metrics
 
