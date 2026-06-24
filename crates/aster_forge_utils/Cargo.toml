@@ -9,8 +9,11 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+http.workspace = true
+ipnet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

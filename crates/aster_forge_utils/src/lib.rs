@@ -22,6 +22,7 @@ pub mod net;
 pub mod numbers;
 pub mod paths;
 pub mod raii;
+pub mod url;
 
 /// Result type returned by utility helpers.
 pub type Result<T> = std::result::Result<T, UtilsError>;
