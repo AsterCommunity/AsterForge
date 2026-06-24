@@ -151,7 +151,14 @@ fn write_crash_report(
 ) -> Result<(), CrashReportWriteFailure> {
     let file_mutex = crash_log_file(crash_log_path)
         .map_err(|reason| CrashReportWriteFailure::new(reason, context))?;
+    write_crash_report_to_file(file_mutex, crash_log_path, context)
+}
 
+fn write_crash_report_to_file(
+    file_mutex: &Mutex<std::fs::File>,
+    crash_log_path: &Path,
+    context: &PanicContext,
+) -> Result<(), CrashReportWriteFailure> {
     let mut guard = file_mutex.try_lock().map_err(|_| {
         CrashReportWriteFailure::new(
             "crash log is locked by another panic writer".to_string(),
@@ -171,24 +178,26 @@ fn write_crash_report(
 
 fn crash_log_file(crash_log_path: &Path) -> Result<&'static Mutex<std::fs::File>, String> {
     CRASH_LOG
-        .get_or_init(|| {
-            if let Some(parent) = crash_log_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| {
-                    format!(
-                        "failed to create crash log dir '{}': {error}",
-                        parent.display()
-                    )
-                })?;
-            }
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(crash_log_path)
-                .map(Mutex::new)
-                .map_err(|error| format!("failed to open {}: {error}", crash_log_path.display()))
-        })
+        .get_or_init(|| open_crash_log_file(crash_log_path))
         .as_ref()
         .map_err(Clone::clone)
+}
+
+fn open_crash_log_file(crash_log_path: &Path) -> Result<Mutex<std::fs::File>, String> {
+    if let Some(parent) = crash_log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create crash log dir '{}': {error}",
+                parent.display()
+            )
+        })?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crash_log_path)
+        .map(Mutex::new)
+        .map_err(|error| format!("failed to open {}: {error}", crash_log_path.display()))
 }
 
 fn crash_log_display_path(crash_log_path: &Path) -> PathBuf {
@@ -280,9 +289,37 @@ fn render_user_panic_notice(
 #[cfg(test)]
 mod tests {
     use super::{
-        CrashReportWriteFailure, PanicContext, issue_report_target, panic_payload_message,
-        render_crash_report, render_user_panic_notice,
+        CrashReportWriteFailure, PanicContext, PanicHookConfig, issue_report_target,
+        open_crash_log_file, panic_payload_message, render_crash_report, render_user_panic_notice,
+        write_crash_report_to_file,
     };
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    static PANIC_HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn write_crash_report_with_log(
+        crash_log: &OnceLock<Result<Mutex<std::fs::File>, String>>,
+        crash_log_path: &std::path::Path,
+        context: &PanicContext,
+    ) -> Result<(), CrashReportWriteFailure> {
+        let file_mutex = crash_log_file_from(crash_log, crash_log_path)
+            .map_err(|reason| CrashReportWriteFailure::new(reason, context))?;
+        write_crash_report_to_file(file_mutex, crash_log_path, context)
+    }
+
+    fn crash_log_file_from<'a>(
+        crash_log: &'a OnceLock<Result<Mutex<std::fs::File>, String>>,
+        crash_log_path: &std::path::Path,
+    ) -> Result<&'a Mutex<std::fs::File>, String> {
+        crash_log
+            .get_or_init(|| open_crash_log_file(crash_log_path))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
 
     fn test_context() -> PanicContext {
         PanicContext {
@@ -296,6 +333,26 @@ mod tests {
             location: "src/main.rs:42:9".to_string(),
             message: "secret panic payload".to_string(),
         }
+    }
+
+    fn unique_crash_log_path(test_name: &str) -> std::path::PathBuf {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("unnamed");
+        let counter = TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir()
+            .join("aster_forge_panic_tests")
+            .join(format!(
+                "{}-{}-{}-{}-{}.log",
+                test_name,
+                std::process::id(),
+                thread_name.replace(':', "_"),
+                timestamp,
+                counter
+            ))
     }
 
     #[test]
@@ -352,6 +409,134 @@ mod tests {
             "Report:    https://example.test/asterdrive/issues/new?template=bug_report.yml"
         ));
         assert!(report.contains("Backtrace:\nframe 1\nframe 2"));
+    }
+
+    #[test]
+    fn crash_report_write_failure_new_renders_report_with_reason() {
+        let context = test_context();
+        let failure = CrashReportWriteFailure::new("permission denied".to_string(), &context);
+
+        assert_eq!(failure.reason, "permission denied");
+        assert!(failure.report.contains("=== AsterDrive Panic Report ==="));
+        assert!(failure.report.contains("Message:   secret panic payload"));
+        assert!(failure.report.contains("Backtrace:"));
+    }
+
+    #[test]
+    fn crash_log_file_creates_parent_directory_and_reuses_file() {
+        let crash_log = OnceLock::new();
+        let path = unique_crash_log_path("crash_log_file_creates_parent_directory_and_reuses_file");
+
+        let first = crash_log_file_from(&crash_log, &path).expect("crash log should open");
+        let second = crash_log_file_from(&crash_log, &path).expect("crash log should be reused");
+
+        assert!(path.parent().expect("test path has parent").exists());
+        assert!(path.exists());
+        assert!(std::ptr::eq(first, second));
+    }
+
+    #[test]
+    fn crash_log_file_returns_cached_initialization_error() {
+        let crash_log = OnceLock::new();
+        let path =
+            unique_crash_log_path("crash_log_file_returns_cached_initialization_error_parent");
+        std::fs::write(&path, "not a directory").expect("parent-file fixture should be writable");
+        let nested_log = path.join("crash.log");
+
+        let first_error = crash_log_file_from(&crash_log, &nested_log)
+            .expect_err("file parent should not be usable as directory");
+        let second_error = crash_log_file_from(&crash_log, &nested_log)
+            .expect_err("cached initialization error should be returned");
+
+        assert!(first_error.contains("failed to create crash log dir"));
+        assert_eq!(first_error, second_error);
+    }
+
+    #[test]
+    fn write_crash_report_appends_developer_report() {
+        let crash_log = OnceLock::new();
+        let path = unique_crash_log_path("write_crash_report_appends_developer_report");
+        let context = test_context();
+
+        write_crash_report_with_log(&crash_log, &path, &context)
+            .expect("crash report should be written");
+        write_crash_report_with_log(&crash_log, &path, &context)
+            .expect("second crash report should append");
+
+        let contents =
+            std::fs::read_to_string(&path).expect("crash report should be readable from fixture");
+        assert_eq!(
+            contents.matches("=== AsterDrive Panic Report ===").count(),
+            2
+        );
+        assert!(contents.contains("Location:  src/main.rs:42:9"));
+        assert!(contents.contains("Message:   secret panic payload"));
+    }
+
+    #[test]
+    fn write_crash_report_returns_rendered_failure_when_log_is_locked() {
+        let crash_log = OnceLock::new();
+        let path = unique_crash_log_path("write_crash_report_returns_rendered_failure_when_locked");
+        let context = test_context();
+        let file_mutex = crash_log_file_from(&crash_log, &path).expect("crash log should open");
+        let _locked = file_mutex.lock().expect("fixture lock should be available");
+
+        let failure = write_crash_report_with_log(&crash_log, &path, &context)
+            .expect_err("locked crash log should report failure");
+
+        assert_eq!(
+            failure.reason,
+            "crash log is locked by another panic writer"
+        );
+        assert!(failure.report.contains("=== AsterDrive Panic Report ==="));
+        assert!(failure.report.contains("Message:   secret panic payload"));
+    }
+
+    #[test]
+    fn write_crash_report_returns_rendered_failure_when_log_cannot_open() {
+        let crash_log = OnceLock::new();
+        let path = unique_crash_log_path("write_crash_report_returns_failure_parent");
+        std::fs::write(&path, "not a directory").expect("parent-file fixture should be writable");
+        let nested_log = path.join("crash.log");
+        let context = test_context();
+
+        let failure = write_crash_report_with_log(&crash_log, &nested_log, &context)
+            .expect_err("invalid crash log path should report failure");
+
+        assert!(failure.reason.contains("failed to create crash log dir"));
+        assert!(failure.report.contains("=== AsterDrive Panic Report ==="));
+        assert!(failure.report.contains("Backtrace:"));
+    }
+
+    #[test]
+    fn install_panic_hook_writes_report_for_caught_thread_panic() {
+        let _guard = PANIC_HOOK_TEST_LOCK
+            .lock()
+            .expect("panic hook test lock should be available");
+        let path =
+            unique_crash_log_path("install_panic_hook_writes_report_for_caught_thread_panic");
+        let config = PanicHookConfig::new("HookTest", "9.9.9-test", "https://example.test/hook")
+            .with_crash_log_path(path.clone())
+            .with_issue_template("issues/new?template=panic.yml");
+
+        super::install_panic_hook(config);
+
+        let result = std::thread::Builder::new()
+            .name("panic-hook-fixture".to_string())
+            .spawn(|| panic!("hook panic payload"))
+            .expect("panic fixture thread should spawn")
+            .join();
+
+        assert!(result.is_err());
+        let contents =
+            std::fs::read_to_string(&path).expect("panic hook should write crash report");
+        assert!(contents.contains("=== HookTest Panic Report ==="));
+        assert!(contents.contains("Version:   9.9.9-test"));
+        assert!(contents.contains("Thread:    panic-hook-fixture"));
+        assert!(contents.contains("Message:   hook panic payload"));
+        assert!(
+            contents.contains("Report:    https://example.test/hook/issues/new?template=panic.yml")
+        );
     }
 
     #[test]

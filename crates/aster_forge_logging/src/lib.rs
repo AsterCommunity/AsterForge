@@ -186,7 +186,35 @@ fn push_warning(warning: &mut Option<String>, message: String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoggingConfig, build_filter, build_writer};
+    use super::{
+        DEFAULT_JSON_FORMAT, LoggingConfig, build_file_writer, build_filter, build_rolling_writer,
+        build_writer, init_logging,
+    };
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn unique_test_path(test_name: &str) -> std::path::PathBuf {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("unnamed");
+        let counter = TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir()
+            .join("aster_forge_logging_tests")
+            .join(format!(
+                "{}-{}-{}-{}-{}",
+                test_name,
+                std::process::id(),
+                thread_name.replace(':', "_"),
+                timestamp,
+                counter
+            ))
+    }
 
     #[test]
     fn build_writer_uses_stdout_for_empty_file() {
@@ -212,6 +240,71 @@ mod tests {
     }
 
     #[test]
+    fn build_file_writer_creates_file_and_appends_bytes() {
+        let path = unique_test_path("build_file_writer_creates_file_and_appends_bytes");
+        let path = path.join("logs").join("aster.log");
+        std::fs::create_dir_all(path.parent().expect("test path has parent"))
+            .expect("fixture parent should be created");
+
+        let (mut writer, warning) =
+            build_file_writer(path.to_str().expect("test path should be utf-8"));
+        assert!(warning.is_none());
+        writer
+            .write_all(b"first line\n")
+            .expect("file writer should accept first write");
+        drop(writer);
+
+        let (mut writer, warning) =
+            build_file_writer(path.to_str().expect("test path should be utf-8"));
+        assert!(warning.is_none());
+        writer
+            .write_all(b"second line\n")
+            .expect("file writer should append second write");
+        drop(writer);
+
+        let contents =
+            std::fs::read_to_string(&path).expect("file writer output should be readable");
+        assert_eq!(contents, "first line\nsecond line\n");
+    }
+
+    #[test]
+    fn build_rolling_writer_creates_daily_appender_for_valid_directory() {
+        let root = unique_test_path("build_rolling_writer_creates_daily_appender");
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let file = root.join("service.log");
+
+        let (mut writer, warning) = build_rolling_writer(&LoggingConfig {
+            file: file.to_string_lossy().into_owned(),
+            max_backups: 2,
+            ..LoggingConfig::default()
+        });
+
+        assert!(warning.is_none());
+        writer
+            .write_all(b"rolling line\n")
+            .expect("rolling writer should accept writes");
+    }
+
+    #[test]
+    fn build_rolling_writer_reports_invalid_directory_and_falls_back_to_stdout() {
+        let parent_file = unique_test_path("build_rolling_writer_reports_invalid_directory");
+        std::fs::create_dir_all(parent_file.parent().expect("test path has parent"))
+            .expect("fixture root should be created");
+        std::fs::write(&parent_file, "not a directory")
+            .expect("parent-file fixture should be writable");
+        let file = parent_file.join("aster.log");
+
+        let (_writer, warning) = build_rolling_writer(&LoggingConfig {
+            file: file.to_string_lossy().into_owned(),
+            ..LoggingConfig::default()
+        });
+
+        let warning = warning.expect("invalid rolling log path should report warning");
+        assert!(warning.contains("Failed to create rolling log appender"));
+        assert!(warning.contains("Falling back to stdout"));
+    }
+
+    #[test]
     fn build_filter_reports_invalid_level_warning() {
         let mut warning = None;
         let _filter = build_filter("aster=not-a-level", &mut warning);
@@ -222,5 +315,52 @@ mod tests {
                 || warning.contains("RUST_LOG environment variable detected"),
             "{warning}"
         );
+    }
+
+    #[test]
+    fn init_logging_can_initialize_global_subscriber_in_child_process() {
+        if std::env::var("ASTER_FORGE_LOGGING_INIT_CHILD").is_ok() {
+            run_init_logging_child();
+            return;
+        }
+
+        let current_exe = std::env::current_exe().expect("current test executable should resolve");
+        let output = std::process::Command::new(current_exe)
+            .arg("--exact")
+            .arg("tests::init_logging_can_initialize_global_subscriber_in_child_process")
+            .arg("--nocapture")
+            .env("ASTER_FORGE_LOGGING_INIT_CHILD", "1")
+            .env_remove("RUST_LOG")
+            .output()
+            .expect("init_logging child process should run");
+
+        assert!(
+            output.status.success(),
+            "child process failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn run_init_logging_child() {
+        let log_path = unique_test_path("init_logging_child")
+            .join("logs")
+            .join("aster.log");
+        std::fs::create_dir_all(log_path.parent().expect("test path has parent"))
+            .expect("fixture parent should be created");
+
+        let result = init_logging(&LoggingConfig {
+            level: "aster=not-a-level".to_string(),
+            format: DEFAULT_JSON_FORMAT.to_string(),
+            file: log_path.to_string_lossy().into_owned(),
+            enable_rotation: false,
+            max_backups: 1,
+        });
+
+        let warning = result
+            .warning
+            .expect("invalid logging level should report startup warning");
+        assert!(warning.contains("Invalid logging.level"));
+        drop(result.guard);
     }
 }

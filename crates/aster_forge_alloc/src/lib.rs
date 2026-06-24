@@ -262,6 +262,31 @@ mod tests {
         assert_stats_bytes(0, 64);
     }
 
+    #[cfg(not(feature = "jemalloc"))]
+    #[test]
+    fn tracking_alloc_realloc_same_size_leaves_counters_unchanged() {
+        let _guard = reset_tracking_counters();
+        let allocator = super::TrackingAlloc;
+        let layout = Layout::from_size_align(40, 8).unwrap();
+
+        // SAFETY: `layout` is non-zero and valid. The returned pointer is checked
+        // for null before use and remains owned until the final dealloc.
+        let ptr = unsafe { allocator.alloc(layout) };
+        assert!(!ptr.is_null());
+        assert_stats_bytes(40, 40);
+
+        // SAFETY: `ptr` was allocated with `layout` and has not been freed. Passing
+        // the existing allocation size exercises the equal-size realloc path.
+        let same_size_ptr = unsafe { allocator.realloc(ptr, layout, layout.size()) };
+        assert!(!same_size_ptr.is_null());
+        assert_stats_bytes(40, 40);
+
+        // SAFETY: `same_size_ptr` is the live pointer returned by realloc and
+        // `layout` still matches the allocation size and alignment.
+        unsafe { allocator.dealloc(same_size_ptr, layout) };
+        assert_stats_bytes(0, 40);
+    }
+
     #[cfg(all(feature = "jemalloc", not(feature = "jemalloc-stats")))]
     #[test]
     fn jemalloc_without_stats_returns_zeroes() {
