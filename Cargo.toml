@@ -3,12 +3,14 @@ members = [
     "crates/aster_forge_actix_middleware",
     "crates/aster_forge_api_docs_macros",
     "crates/aster_forge_api",
+    "crates/aster_forge_alloc",
     "crates/aster_forge_cache",
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
     "crates/aster_forge_file_classification",
     "crates/aster_forge_logging",
     "crates/aster_forge_metrics",
+    "crates/aster_forge_panic",
     "crates/aster_forge_storage_core",
     "crates/aster_forge_utils",
     "crates/aster_forge_validation",
@@ -53,6 +55,7 @@ tokio-util = "0.7"
 tracing = { version = "0.1.44", default-features = false }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tikv-jemalloc-ctl = "0.7"
 utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }

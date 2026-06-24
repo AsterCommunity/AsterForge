@@ -470,6 +470,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_alloc"
+version = "0.1.0"
+dependencies = [
+ "tikv-jemalloc-ctl",
+ "tracing",
+]
+
+[[package]]
 name = "aster_forge_api"
 version = "0.1.0"
 dependencies = [
@@ -554,6 +562,13 @@ dependencies = [
  "sea-orm",
  "thiserror",
  "tokio-util",
+]
+
+[[package]]
+name = "aster_forge_panic"
+version = "0.1.0"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]
@@ -2630,6 +2645,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3973,6 +3994,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "tikv-jemalloc-ctl"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a184c43b8ab2f41df2733b55556e3f5f632f4aeaa205b1bb018f574b7f5f142"
+dependencies = [
+ "libc",
+ "paste",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
+name = "tikv-jemalloc-sys"
+version = "0.7.1+5.3.1-0-g81034ce1f1373e37dc865038e1bc8eeecf559ce8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a2825c78386b4ae0314074867860ba9577875de945f05992c38815cbec327f0"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]

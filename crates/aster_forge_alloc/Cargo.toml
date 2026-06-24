@@ -1,0 +1,18 @@
+[package]
+name = "aster_forge_alloc"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = []
+jemalloc = []
+jemalloc-stats = ["jemalloc", "dep:tikv-jemalloc-ctl", "tikv-jemalloc-ctl/stats"]
+
+[dependencies]
+tikv-jemalloc-ctl = { workspace = true, optional = true }
+tracing.workspace = true
