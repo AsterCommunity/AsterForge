@@ -30,6 +30,7 @@ const cratePages = [
   ["API", "/crates/aster_forge_api"],
   ["API docs macros", "/crates/aster_forge_api_docs_macros"],
   ["Cache", "/crates/aster_forge_cache"],
+  ["Config", "/crates/aster_forge_config"],
   ["Crypto", "/crates/aster_forge_crypto"],
   ["Database", "/crates/aster_forge_db"],
   ["External auth", "/crates/aster_forge_external_auth"],
