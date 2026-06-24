@@ -22,6 +22,7 @@
 
 mod dispatch;
 mod error;
+mod execution;
 mod heartbeat;
 mod lease;
 mod registry;
@@ -38,6 +39,11 @@ pub use dispatch::{
     run_with_concurrency_limit,
 };
 pub use error::{Result, TaskCoreError};
+pub use execution::{
+    ClaimedTaskExecutionConfig, ClaimedTaskExecutionStore, ExecutableTaskRecord,
+    TaskPermanentFailure, TaskRetryUpdate, boxed_task_future, process_claimed_task,
+    run_claimed_task_batch_with_store,
+};
 pub use heartbeat::{
     TaskHeartbeatStore, evaluate_heartbeat_result, run_task_heartbeat_loop,
     spawn_task_heartbeat_with_interval, stop_task_heartbeat,
@@ -47,7 +53,7 @@ pub use lease::{
     task_lease_renewal_timeout,
 };
 pub use registry::TaskRecord;
-pub use retry::TaskRetryClass;
+pub use retry::{TaskRetryClass, default_task_retry_delay_secs};
 pub use runtime::{
     BACKGROUND_TASK_DISPATCH_ERROR_BACKOFF_CAP, BACKGROUND_TASK_SHUTDOWN_GRACE,
     BackgroundTaskDispatchBackoff, BackgroundTaskDispatchIteration, BackgroundTaskDispatchTrigger,
