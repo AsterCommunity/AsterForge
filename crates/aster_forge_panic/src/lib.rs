@@ -355,6 +355,12 @@ mod tests {
             ))
     }
 
+    fn write_parent_file_fixture(path: &std::path::Path) {
+        let parent = path.parent().expect("parent-file fixture should have parent");
+        std::fs::create_dir_all(parent).expect("parent-file fixture dir should be writable");
+        std::fs::write(path, "not a directory").expect("parent-file fixture should be writable");
+    }
+
     #[test]
     fn user_notice_is_short_and_omits_developer_diagnostics() {
         let context = test_context();
@@ -440,7 +446,7 @@ mod tests {
         let crash_log = OnceLock::new();
         let path =
             unique_crash_log_path("crash_log_file_returns_cached_initialization_error_parent");
-        std::fs::write(&path, "not a directory").expect("parent-file fixture should be writable");
+        write_parent_file_fixture(&path);
         let nested_log = path.join("crash.log");
 
         let first_error = crash_log_file_from(&crash_log, &nested_log)
@@ -496,7 +502,7 @@ mod tests {
     fn write_crash_report_returns_rendered_failure_when_log_cannot_open() {
         let crash_log = OnceLock::new();
         let path = unique_crash_log_path("write_crash_report_returns_failure_parent");
-        std::fs::write(&path, "not a directory").expect("parent-file fixture should be writable");
+        write_parent_file_fixture(&path);
         let nested_log = path.join("crash.log");
         let context = test_context();
 
