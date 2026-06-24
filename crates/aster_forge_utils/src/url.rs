@@ -42,6 +42,15 @@ pub fn has_http_scheme(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
 
+/// Parses a URL and maps parser failures into [`UtilsError`].
+///
+/// The parser requires an absolute URL. The `context` is included verbatim in the error message so
+/// callers can name the field or operation that supplied the value, then map [`UtilsError`] into
+/// their own validation or configuration error category at the application boundary.
+pub fn parse_url(value: &str, context: &str) -> Result<Url> {
+    Url::parse(value).map_err(|error| UtilsError::invalid_value(format!("{context}: {error}")))
+}
+
 /// Returns whether `url` is HTTPS or an HTTP loopback URL.
 ///
 /// This is useful for development-friendly security checks where plain HTTP is accepted only for
@@ -161,8 +170,21 @@ pub fn normalize_origin(origin: &str, allow_wildcard: bool) -> Result<String> {
 mod tests {
     use super::{
         HttpBaseUrlOptions, has_http_scheme, is_https_or_loopback_http, normalize_http_base_url,
-        normalize_origin, parse_absolute_url,
+        normalize_origin, parse_absolute_url, parse_url,
     };
+    use crate::UtilsError;
+
+    #[test]
+    fn parse_url_maps_parser_errors_with_context() {
+        let parsed = parse_url("https://example.com/callback", "callback URL").unwrap();
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("example.com"));
+
+        let error = parse_url("not a url", "callback URL").unwrap_err();
+        assert!(matches!(error, UtilsError::InvalidValue(_)));
+        assert!(error.to_string().contains("callback URL:"));
+        assert!(error.to_string().contains("relative URL without a base"));
+    }
 
     #[test]
     fn http_base_url_normalization_trims_and_removes_trailing_slashes() {

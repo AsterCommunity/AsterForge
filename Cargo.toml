@@ -7,6 +7,7 @@ members = [
     "crates/aster_forge_cache",
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
+    "crates/aster_forge_external_auth",
     "crates/aster_forge_file_classification",
     "crates/aster_forge_logging",
     "crates/aster_forge_metrics",
@@ -33,6 +34,7 @@ authors = [
 actix-web = "4.14.0"
 async-trait = "0.1"
 argon2 = "0.5.3"
+base64 = "0.22"
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 dashmap = "6"
 futures = "0.3"
@@ -41,9 +43,11 @@ ipnet = "2.12.0"
 moka = { version = "0.12.15", features = ["future"] }
 proc-macro2 = "1"
 quote = "1"
+openidconnect = "4.0.1"
 rand = { version = "0.10.1", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 redis = { version = "1.2.4", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+reqwest = { version = "0.13", features = ["json"] }
 sea-orm = { version = "2.0.0-rc.41", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

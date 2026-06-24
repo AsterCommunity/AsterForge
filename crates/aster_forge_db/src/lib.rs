@@ -1,8 +1,9 @@
 //! Shared database utilities for Aster services.
 //!
 //! This crate contains framework-neutral SeaORM helpers: connection setup, retry policy, offset
-//! pagination, whitelisted sorting, and transaction wrappers. Product migrations, entities, and
-//! repository-specific query logic intentionally remain outside this crate.
+//! pagination, full-text search query helpers, whitelisted sorting, and transaction wrappers.
+//! Product migrations, entities, and repository-specific query logic intentionally remain outside
+//! this crate.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
@@ -19,6 +20,7 @@
 pub mod connection;
 pub mod pagination;
 pub mod retry;
+pub mod search_query;
 pub mod sort;
 pub mod transaction;
 

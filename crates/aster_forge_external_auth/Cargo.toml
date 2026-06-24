@@ -1,0 +1,39 @@
+[package]
+name = "aster_forge_external_auth"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = ["oidc", "oauth2"]
+openapi = ["dep:utoipa"]
+oidc = ["dep:openidconnect"]
+oauth2 = ["dep:base64", "dep:rand", "dep:reqwest", "dep:sha2", "dep:url"]
+github = ["oauth2"]
+google = ["oidc"]
+microsoft = ["oidc"]
+qq = ["oauth2"]
+
+[dependencies]
+aster_forge_utils = { path = "../aster_forge_utils" }
+aster_forge_validation = { path = "../aster_forge_validation" }
+async-trait.workspace = true
+base64 = { workspace = true, optional = true }
+openidconnect = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+tracing.workspace = true
+utoipa = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[dev-dependencies]
+actix-web.workspace = true
+tokio.workspace = true
