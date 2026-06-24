@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/aster_forge_api_docs_macros",
+    "crates/aster_forge_api",
+    "crates/aster_forge_cache",
+    "crates/aster_forge_crypto",
+    "crates/aster_forge_db",
+    "crates/aster_forge_file_classification",
+    "crates/aster_forge_storage_core",
+    "crates/aster_forge_utils",
+    "crates/aster_forge_validation",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+repository = "https://github.com/AsterCommunity/AsterForge"
+authors = [
+    "AptS-1547 <apts-1547@esaps.net>",
+    "AptS-1548 <apts-1548@esaps.net>",
+    "AptS-1738 <apts-1738@esaps.net>",
+    "AptS-1543 <apts-1543@esaps.net>",
+]
+
+[workspace.dependencies]
+async-trait = "0.1"
+argon2 = "0.5.3"
+dashmap = "6"
+futures = "0.3"
+http = "1"
+moka = { version = "0.12.15", features = ["future"] }
+proc-macro2 = "1"
+quote = "1"
+rand = { version = "0.10.1", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
+redis = { version = "1.2.4", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+sea-orm = { version = "2.0.0-rc.41", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11"
+testcontainers = { version = "0.27", features = ["reusable-containers"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tracing = { version = "0.1.44", default-features = false }
+utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
+uuid = { version = "1", features = ["v4"] }
