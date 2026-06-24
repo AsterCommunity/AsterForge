@@ -11,6 +11,7 @@ Current crates:
 
 - `aster_forge_api_docs_macros`
 - `aster_forge_api`
+- `aster_forge_actix_middleware`
 - `aster_forge_cache`
 - `aster_forge_crypto`
 - `aster_forge_db`

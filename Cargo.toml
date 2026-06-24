@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/aster_forge_actix_middleware",
     "crates/aster_forge_api_docs_macros",
     "crates/aster_forge_api",
     "crates/aster_forge_cache",
@@ -27,6 +28,7 @@ authors = [
 ]
 
 [workspace.dependencies]
+actix-web = "4.14.0"
 async-trait = "0.1"
 argon2 = "0.5.3"
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
