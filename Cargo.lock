@@ -605,10 +605,17 @@ dependencies = [
 name = "aster_forge_tasks"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_utils",
+ "async-trait",
  "chrono",
+ "futures",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
  "utoipa",
 ]
 
