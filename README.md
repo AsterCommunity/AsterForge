@@ -15,6 +15,7 @@ Current crates:
 - `aster_forge_crypto`
 - `aster_forge_db`
 - `aster_forge_file_classification`
+- `aster_forge_logging`
 - `aster_forge_storage_core`
 - `aster_forge_utils`
 - `aster_forge_validation`
