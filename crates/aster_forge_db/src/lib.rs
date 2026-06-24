@@ -23,7 +23,7 @@ pub mod sort;
 pub mod transaction;
 
 pub use connection::{
-    DatabaseConfig, DbHandles, DbMetricsRecorder, NoopDbMetrics, connect,
+    DatabaseConfig, DbHandles, DbMetricsRecorder, NoopDbMetrics, SharedDbMetricsRecorder, connect,
     connect_reader_for_writer, connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
 

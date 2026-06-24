@@ -86,6 +86,18 @@ impl DbHandles {
     pub fn sqlite_read_write_split(&self) -> bool {
         self.sqlite_read_write_split
     }
+
+    /// Closes the underlying database pools.
+    ///
+    /// Split SQLite handles own two independent pools, so both reader and writer must be closed.
+    /// Single-handle configurations clone the same pool into both fields and only close the writer
+    /// once.
+    pub async fn close(self) -> Result<()> {
+        if self.sqlite_read_write_split {
+            self.reader.close().await.map_err(DbError::from)?;
+        }
+        self.writer.close().await.map_err(DbError::from)
+    }
 }
 
 /// Connects to the configured database and installs a metrics callback.
@@ -404,6 +416,11 @@ mod tests {
             handles.writer().get_database_backend(),
             handles.reader().get_database_backend()
         );
+
+        handles
+            .close()
+            .await
+            .expect("single sqlite handles should close");
     }
 
     #[tokio::test]
@@ -437,6 +454,11 @@ mod tests {
             .execute_unprepared("INSERT INTO reader_guard (id) VALUES (1);")
             .await;
         assert!(write_result.is_err(), "reader pool must reject writes");
+
+        handles
+            .close()
+            .await
+            .expect("split sqlite handles should close");
     }
 
     #[tokio::test]
@@ -500,5 +522,10 @@ mod tests {
         txn.rollback()
             .await
             .expect("writer transaction should roll back");
+
+        handles
+            .close()
+            .await
+            .expect("split sqlite handles should close after reader query");
     }
 }
