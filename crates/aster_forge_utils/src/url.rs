@@ -166,11 +166,146 @@ pub fn normalize_origin(origin: &str, allow_wildcard: bool) -> Result<String> {
     ))
 }
 
+/// Parses a JSON array of public site origins.
+///
+/// Empty input is rejected because a public-site URL configuration value should either be absent
+/// at the product layer or contain an explicit JSON array. Empty strings inside the array are
+/// ignored so operators can clean up accidental blank entries without blocking the whole value.
+pub fn parse_public_site_origin_entries(value: &str) -> Result<Vec<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(UtilsError::invalid_value(
+            "public_site_url must be a JSON array of origins",
+        ));
+    }
+
+    let entries = serde_json::from_str::<Vec<String>>(trimmed).map_err(|error| {
+        UtilsError::invalid_value(format!(
+            "public_site_url must be a JSON array of origins: {error}"
+        ))
+    })?;
+
+    Ok(entries
+        .into_iter()
+        .map(|origin| origin.trim().to_string())
+        .filter(|origin| !origin.is_empty())
+        .collect())
+}
+
+/// Normalizes a public site origin.
+///
+/// Public-site origins intentionally reject wildcards because they are used for selecting concrete
+/// callback, CSRF, and frontend URLs.
+pub fn normalize_public_site_origin(origin: &str) -> Result<String> {
+    if origin.trim() == "*" {
+        return Err(UtilsError::invalid_value(
+            "public_site_url does not support wildcard origins",
+        ));
+    }
+
+    normalize_origin(origin, false).map_err(|error| {
+        UtilsError::invalid_value(format!(
+            "invalid public_site_url origin '{origin}': {error}"
+        ))
+    })
+}
+
+/// Parses, normalizes, and de-duplicates configured public site origins while preserving order.
+pub fn parse_public_site_origins(value: &str) -> Result<Vec<String>> {
+    let mut origins = Vec::new();
+    for origin in parse_public_site_origin_entries(value)? {
+        let normalized = normalize_public_site_origin(&origin)?;
+        if !origins.contains(&normalized) {
+            origins.push(normalized);
+        }
+    }
+
+    Ok(origins)
+}
+
+/// Normalizes a public-site URL config value into canonical JSON.
+pub fn normalize_public_site_origins_config_value(value: &str) -> Result<String> {
+    let origins = parse_public_site_origins(value)?;
+    serde_json::to_string(&origins).map_err(|error| {
+        UtilsError::invalid_value(format!(
+            "failed to serialize public_site_url origins: {error}"
+        ))
+    })
+}
+
+/// Parses runtime public-site origins, ignoring invalid entries individually.
+///
+/// The `on_invalid` callback receives invalid entries or whole-value parse failures so product
+/// crates can log with their own config key and context.
+pub fn runtime_public_site_origins_with<F>(value: Option<&str>, mut on_invalid: F) -> Vec<String>
+where
+    F: FnMut(Option<&str>, &UtilsError),
+{
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+
+    let entries = match parse_public_site_origin_entries(value) {
+        Ok(entries) => entries,
+        Err(error) => {
+            on_invalid(None, &error);
+            return Vec::new();
+        }
+    };
+
+    let mut origins = Vec::new();
+    for origin in entries {
+        match normalize_public_site_origin(&origin) {
+            Ok(normalized) => {
+                if !origins.contains(&normalized) {
+                    origins.push(normalized);
+                }
+            }
+            Err(error) => on_invalid(Some(&origin), &error),
+        }
+    }
+
+    origins
+}
+
+/// Selects the configured public-site origin that matches the current request, falling back to the
+/// first configured origin.
+pub fn public_site_origin_for_request(
+    origins: &[String],
+    scheme: &str,
+    host: &str,
+) -> Option<String> {
+    if origins.is_empty() {
+        return None;
+    }
+
+    let request_origin = normalize_origin(&format!("{scheme}://{host}"), false).ok();
+    if let Some(request_origin) = request_origin
+        && origins.iter().any(|origin| origin == &request_origin)
+    {
+        return Some(request_origin);
+    }
+
+    origins.first().cloned()
+}
+
+/// Joins an origin and an application path.
+pub fn join_origin_and_path(base: &str, path: &str) -> String {
+    let normalized_path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+
+    format!("{base}{normalized_path}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         HttpBaseUrlOptions, has_http_scheme, is_https_or_loopback_http, normalize_http_base_url,
-        normalize_origin, parse_absolute_url, parse_url,
+        normalize_origin, normalize_public_site_origins_config_value, parse_absolute_url,
+        parse_public_site_origins, parse_url, public_site_origin_for_request,
     };
     use crate::UtilsError;
 
@@ -269,6 +404,59 @@ mod tests {
         assert!(normalize_origin("https://user@app.example.com", false).is_err());
         assert!(normalize_origin("ftp://app.example.com", false).is_err());
         assert!(normalize_origin("https:///missing-host", false).is_err());
+    }
+
+    #[test]
+    fn public_site_origins_are_normalized_and_deduplicated() {
+        assert_eq!(
+            normalize_public_site_origins_config_value(
+                r#"[" HTTPS://Forge.EXAMPLE.com/ ","https://Panel.example.com","https://forge.example.com"]"#
+            )
+            .unwrap(),
+            r#"["https://forge.example.com","https://panel.example.com"]"#
+        );
+        assert_eq!(
+            parse_public_site_origins(
+                r#"["https://forge.example.com","","https://api.example.com"]"#
+            )
+            .unwrap(),
+            vec![
+                "https://forge.example.com".to_string(),
+                "https://api.example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn public_site_origins_reject_invalid_entries() {
+        assert!(
+            normalize_public_site_origins_config_value(r#"["https://forge.example.com/app"]"#)
+                .is_err()
+        );
+        assert!(
+            normalize_public_site_origins_config_value(r#"["ftp://forge.example.com"]"#).is_err()
+        );
+        assert!(normalize_public_site_origins_config_value(r#"["*"]"#).is_err());
+        assert!(
+            normalize_public_site_origins_config_value(r#""https://forge.example.com""#).is_err()
+        );
+    }
+
+    #[test]
+    fn public_site_origin_for_request_prefers_matching_origin() {
+        let origins = vec![
+            "https://forge.example.com".to_string(),
+            "https://panel.example.com".to_string(),
+        ];
+
+        assert_eq!(
+            public_site_origin_for_request(&origins, "https", "panel.example.com").as_deref(),
+            Some("https://panel.example.com")
+        );
+        assert_eq!(
+            public_site_origin_for_request(&origins, "https", "evil.example.com").as_deref(),
+            Some("https://forge.example.com")
+        );
     }
 
     #[test]

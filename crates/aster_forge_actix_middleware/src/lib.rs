@@ -15,6 +15,7 @@
     )
 )]
 
+pub mod cors;
 pub mod csrf;
 pub mod metrics;
 pub mod request_id;

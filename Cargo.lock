@@ -646,6 +646,7 @@ version = "0.1.0"
 dependencies = [
  "http 1.4.2",
  "ipnet",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

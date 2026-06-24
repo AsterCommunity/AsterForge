@@ -11,6 +11,7 @@
 - 路径渲染和运行时临时目录路径。
 - RAII 临时文件/目录清理。
 - URL 解析、origin/base URL 规范化。
+- public-site origin 列表解析和 origin/path 拼接。
 
 不适合放在这里的内容：
 
@@ -90,8 +91,13 @@ aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge" }
 - `is_https_or_loopback_http`
 - `normalize_http_base_url`
 - `normalize_origin`
+- `parse_public_site_origins`
+- `normalize_public_site_origins_config_value`
+- `runtime_public_site_origins_with`
+- `public_site_origin_for_request`
+- `join_origin_and_path`
 
-适合 external auth callback、CORS origin、公开 base URL 等配置规范化。
+适合 external auth callback、CORS origin、公开 base URL 等配置规范化。`public_site_*` helper 只处理产品无关的 origin 解析、去重、请求 origin 匹配和 URL 拼接；产品侧仍然保留具体 config key、runtime snapshot、日志上下文和错误映射。
 
 ## 错误边界
 
