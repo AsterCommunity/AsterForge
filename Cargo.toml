@@ -6,6 +6,7 @@ members = [
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
     "crates/aster_forge_file_classification",
+    "crates/aster_forge_metrics",
     "crates/aster_forge_storage_core",
     "crates/aster_forge_utils",
     "crates/aster_forge_validation",
@@ -43,6 +44,7 @@ sha2 = "0.11"
 testcontainers = { version = "0.27", features = ["reusable-containers"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-util = "0.7"
 tracing = { version = "0.1.44", default-features = false }
 utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
 uuid = { version = "1", features = ["v4"] }
