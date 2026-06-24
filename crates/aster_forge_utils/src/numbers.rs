@@ -4,7 +4,24 @@
 //! widths and signedness. These helpers make overflow and sign-loss checks explicit while producing
 //! consistent error messages for callers.
 
+use std::num::{NonZeroU32, NonZeroU64};
+
 use crate::{Result, UtilsError};
+
+/// Converts `0` to [`NonZeroU32::MIN`] and preserves non-zero values.
+///
+/// This helper is for APIs that require a non-zero numeric parameter but where product policy has
+/// already decided that an input of zero means "use the smallest legal value".
+pub fn non_zero_u32(value: u32) -> NonZeroU32 {
+    NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+}
+
+/// Converts `0` to [`NonZeroU64::MIN`] and preserves non-zero values.
+///
+/// This is the `u64` companion to [`non_zero_u32`].
+pub fn non_zero_u64(value: u64) -> NonZeroU64 {
+    NonZeroU64::new(value).unwrap_or(NonZeroU64::MIN)
+}
 
 /// Converts a signed byte count to `usize`.
 pub fn bytes_to_usize(bytes: i64, value_name: &str) -> Result<usize> {
@@ -88,6 +105,13 @@ pub fn u32_to_i64(value: u32, value_name: &str) -> Result<i64> {
     Ok(i64::from(value))
 }
 
+/// Converts `u32` to `i32`.
+pub fn u32_to_i32(value: u32, value_name: &str) -> Result<i32> {
+    i32::try_from(value).map_err(|_| {
+        UtilsError::numeric_conversion(format!("{value_name} exceeds i32 range: {value}"))
+    })
+}
+
 /// Converts `u64` to `i64`.
 pub fn u64_to_i64(value: u64, value_name: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
@@ -165,6 +189,18 @@ mod tests {
     #[test]
     fn bytes_to_usize_accepts_positive_values() {
         assert_eq!(bytes_to_usize(5_242_880, "chunk_size").unwrap(), 5_242_880);
+    }
+
+    #[test]
+    fn non_zero_helpers_preserve_positive_values() {
+        assert_eq!(non_zero_u32(7).get(), 7);
+        assert_eq!(non_zero_u64(9).get(), 9);
+    }
+
+    #[test]
+    fn non_zero_helpers_fallback_to_min_for_zero() {
+        assert_eq!(non_zero_u32(0), NonZeroU32::MIN);
+        assert_eq!(non_zero_u64(0), NonZeroU64::MIN);
     }
 
     #[test]
@@ -254,11 +290,22 @@ mod tests {
 
     #[test]
     fn u32_conversions_are_lossless_on_supported_targets() {
+        assert_eq!(u32_to_i32(0, "value").unwrap(), 0);
+        assert_eq!(u32_to_i32(i32::MAX as u32, "value").unwrap(), i32::MAX);
         assert_eq!(u32_to_i64(u32::MAX, "value").unwrap(), i64::from(u32::MAX));
         assert_eq!(u32_to_usize(0, "value").unwrap(), 0);
 
         #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
         assert_eq!(u32_to_usize(u32::MAX, "value").unwrap(), u32::MAX as usize);
+    }
+
+    #[test]
+    fn u32_to_i32_rejects_overflow() {
+        let overflow = u32::try_from(i32::MAX)
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        let err = u32_to_i32(overflow, "value").unwrap_err();
+        assert!(matches!(err, UtilsError::NumericConversion(_)));
     }
 
     #[test]
