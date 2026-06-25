@@ -1,8 +1,9 @@
 //! Product-neutral mail runtime configuration normalization.
 //!
-//! Product crates still own the concrete configuration keys, default values,
-//! SMTP transport implementation, and API error mapping. This module only keeps
-//! recurring validation and normalization rules for mail-related config values.
+//! Product crates still own the concrete configuration keys, default values, runtime config
+//! reading, and API error mapping. This module keeps recurring validation and normalization rules
+//! for mail-related config values, plus the product-neutral runtime settings model used by shared
+//! sender implementations.
 
 use std::error::Error;
 use std::fmt;
@@ -15,6 +16,51 @@ pub const MAIL_TEMPLATE_MAX_SUBJECT_LEN: usize = 255;
 
 /// Maximum HTML body length accepted by the shared mail template normalizer.
 pub const MAIL_TEMPLATE_MAX_BODY_LEN: usize = 64 * 1024;
+
+/// Default SMTP port used by Aster services when runtime config is absent.
+pub const DEFAULT_MAIL_SMTP_PORT: u16 = 587;
+
+/// Default SMTP encryption policy used by Aster services when runtime config is absent.
+pub const DEFAULT_MAIL_SECURITY: bool = true;
+
+/// Runtime SMTP settings shared by Aster service mail senders.
+///
+/// Product crates still own config keys, persistence, validation error mapping,
+/// and transport error mapping. This struct only keeps the repeated SMTP
+/// readiness rules and sender envelope values in one place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailRuntimeSettings {
+    /// SMTP relay host.
+    pub smtp_host: String,
+    /// SMTP relay port.
+    pub smtp_port: u16,
+    /// Optional SMTP username.
+    pub smtp_username: String,
+    /// Optional SMTP password.
+    pub smtp_password: String,
+    /// Sender email address.
+    pub from_address: String,
+    /// Sender display name.
+    pub from_name: String,
+    /// Whether TLS/STARTTLS transport should be used.
+    pub encryption_enabled: bool,
+}
+
+impl MailRuntimeSettings {
+    /// Returns whether the minimum outbound mail settings are configured.
+    pub fn is_configured(&self) -> bool {
+        !self.smtp_host.trim().is_empty() && !self.from_address.trim().is_empty()
+    }
+
+    /// Returns whether settings are ready for a delivery attempt.
+    ///
+    /// The SMTP auth fields are intentionally all-or-nothing so products do not
+    /// accidentally attempt passwordless auth or send a password without a user.
+    pub fn is_ready_for_delivery(&self) -> bool {
+        self.is_configured()
+            && self.smtp_username.trim().is_empty() == self.smtp_password.trim().is_empty()
+    }
+}
 
 /// Error returned when mail configuration normalization fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +200,7 @@ fn normalize_multiline(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        DEFAULT_MAIL_SECURITY, DEFAULT_MAIL_SMTP_PORT, MailRuntimeSettings,
         normalize_mail_address_config_value, normalize_mail_name_config_value,
         normalize_mail_security_config_value, normalize_mail_template_body_config_value,
         normalize_mail_template_subject_config_value, normalize_smtp_host_config_value,
@@ -177,6 +224,31 @@ mod tests {
         assert_eq!(parse_smtp_port("65536"), None);
         assert_eq!(normalize_smtp_port_config_value(" 465 ").unwrap(), "465");
         assert!(normalize_smtp_port_config_value("0").is_err());
+    }
+
+    #[test]
+    fn mail_runtime_settings_report_readiness() {
+        let mut settings = MailRuntimeSettings {
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: DEFAULT_MAIL_SMTP_PORT,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            from_address: "ops@example.com".to_string(),
+            from_name: "Aster Ops".to_string(),
+            encryption_enabled: DEFAULT_MAIL_SECURITY,
+        };
+        assert!(settings.is_configured());
+        assert!(settings.is_ready_for_delivery());
+
+        settings.smtp_password = "secret".to_string();
+        assert!(!settings.is_ready_for_delivery());
+
+        settings.smtp_username = "ops".to_string();
+        assert!(settings.is_ready_for_delivery());
+
+        settings.smtp_host.clear();
+        assert!(!settings.is_configured());
+        assert!(!settings.is_ready_for_delivery());
     }
 
     #[test]

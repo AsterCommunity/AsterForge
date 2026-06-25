@@ -1,15 +1,17 @@
 # aster_forge_mail
 
-`aster_forge_mail` 提供产品无关的邮件基础机械层。它不拥有 SMTP 配置、模板、收件人、用户上下文、审计记录或数据库实体。
+`aster_forge_mail` 提供产品无关的邮件基础机械层。它不拥有 SMTP 配置 key、产品模板、用户上下文、审计记录或数据库实体。
 
 当前这个 crate 主要覆盖各服务里重复出现的 outbox 投递机制：
 
 - SMTP / sender / 模板配置值的产品无关规范化；
+- SMTP runtime settings 模型、默认端口和 readiness 判定；
 - 投递计数统计；
 - 重试延迟策略；
 - 投递错误截断；
 - SMTP 成功后对 `mark_sent` 的最佳努力重试。
 - 邮件 envelope / body 数据模型；
+- `MailSender` trait、SMTP sender、memory sender；
 - 邮件模板注册、变量元数据和 placeholder 渲染。
 
 ## 适用场景
@@ -19,8 +21,10 @@
 - 产品希望对持久化错误做 UTF-8 安全截断。
 - 产品希望在 SMTP 已接受邮件后，对 `mark_sent` 做共享重试。
 - 产品希望复用 `MailRecipient` / `MailMessage` 这类不带发送语义的数据模型。
+- 产品希望复用统一的 SMTP 发送实现和内存测试 sender。
 - 产品希望用注册式方式维护模板变量，并复用 HTML escape、placeholder 替换和 text fallback 生成。
 - 产品希望复用 SMTP host/port、sender address/name、mail security、模板 subject/body 的规范化规则。
+- 产品希望复用统一的 SMTP runtime settings 结构和“是否可投递”判定。
 
 不适合放在这里的内容：
 
@@ -28,9 +32,8 @@
 - 产品配置 key 和默认值。
 - 审计动作。
 - 用户 ID 或用户上下文。
-- runtime 配置 key。
+- runtime 配置 key 和 runtime config 读取函数。
 - 具体 SeaORM repository。
-- 具体 `MailSender` trait、SMTP transport、测试 sender。
 - 具体 payload enum、业务 URL 生成和本地化文案。
 
 ## Config Normalization
@@ -41,6 +44,7 @@
 
 - `MailConfigError`
 - `MailConfigResult<T>`
+- `MailRuntimeSettings`
 - `parse_smtp_port(value)`
 - `normalize_smtp_host_config_value(value)`
 - `normalize_smtp_port_config_value(value)`
@@ -49,6 +53,8 @@
 - `normalize_mail_security_config_value(value)`
 - `normalize_mail_template_subject_config_value(key, value)`
 - `normalize_mail_template_body_config_value(key, value)`
+- `DEFAULT_MAIL_SMTP_PORT`
+- `DEFAULT_MAIL_SECURITY`
 - `MAIL_TEMPLATE_MAX_SUBJECT_LEN`
 - `MAIL_TEMPLATE_MAX_BODY_LEN`
 
@@ -62,12 +68,16 @@
 - template subject 会 trim，不能为空，不能包含换行，最长 255 字符。
 - template body 会把 CRLF/CR 规范化成 LF，不能为空，最长 64 KiB。
 
+`MailRuntimeSettings` 是发送前的产品无关 SMTP 设置快照：
+
+- `is_configured()` 要求 `smtp_host` 和 `from_address` 非空；
+- `is_ready_for_delivery()` 在已配置基础上，要求 `smtp_username` 和 `smtp_password` 同时为空或同时非空。
+
 产品侧仍然负责：
 
 - 配置 key、默认值、敏感标记和前端 schema；
-- runtime settings struct；
-- 是否允许未配置 SMTP；
-- SMTP transport；
+- 从自己的 runtime config 读取并构造 `MailRuntimeSettings`；
+- 是否允许在业务流程中静默跳过未配置 SMTP；
 - `MailConfigError` 到产品 API 错误码的映射。
 
 示例：
@@ -86,6 +96,51 @@ pub fn normalize_mail_security_config_value(value: &str) -> Result<String> {
 aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
+## Sender
+
+模块：`aster_forge_mail::sender`
+
+主要类型和函数：
+
+- `MailSender`
+- `MailDeliveryError`
+- `MailSendResult<T>`
+- `SmtpMailSender`
+- `MemoryMailSender`
+- `smtp_sender(settings_provider)`
+- `memory_sender()`
+- `memory_sender_ref(sender)`
+- `send_rendered_with(sender, settings, to, rendered)`
+- `DEFAULT_SMTP_SEND_TIMEOUT_SECS`
+
+`SmtpMailSender` 在每次投递前调用 `settings_provider`，因此产品侧可以继续从自己的 runtime config 快照读取最新 SMTP 设置：
+
+```rust
+pub fn runtime_sender(runtime_config: Arc<RuntimeConfig>) -> Arc<dyn aster_forge_mail::MailSender> {
+    aster_forge_mail::smtp_sender(move || runtime_mail_settings(&runtime_config))
+}
+```
+
+`send_rendered_with` 只负责把 `RenderedMail` 和 `MailRuntimeSettings` 中的 sender identity 组装成 `MailMessage`，再交给传入的 sender。产品侧仍然负责把 `MailDeliveryError` 映射成自己的错误类型：
+
+```rust
+fn map_mail_delivery_error(error: aster_forge_mail::MailDeliveryError) -> AsterError {
+    match error {
+        aster_forge_mail::MailDeliveryError::NotConfigured(message) => {
+            AsterError::mail_not_configured(message)
+        }
+        aster_forge_mail::MailDeliveryError::InvalidMessage(message) => {
+            AsterError::validation_error(message)
+        }
+        aster_forge_mail::MailDeliveryError::Config(message) => AsterError::config_error(message),
+        aster_forge_mail::MailDeliveryError::Delivery(message) => {
+            AsterError::mail_delivery_failed(message)
+        }
+        aster_forge_mail::MailDeliveryError::Internal(message) => AsterError::internal_error(message),
+    }
+}
+```
+
 ## Outbox
 
 模块：`aster_forge_mail::outbox`
@@ -93,8 +148,12 @@ aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge" }
 主要类型和函数：
 
 - `DispatchStats`
+- `MailOutboxDispatchConfig`
+- `MailOutboxDispatchRow`
 - `MailOutboxRetryPolicy`
 - `MailOutboxDeliveryFailureDecision`
+- `dispatch_mail_outbox(config, callbacks...)`
+- `drain_mail_outbox(config, dispatch)`
 - `DEFAULT_ERROR_MAX_LEN`
 - `DEFAULT_MARK_SENT_RETRY_DELAYS_MS`
 - `retry_delay_secs(attempt_count)`
@@ -146,6 +205,33 @@ match decision {
 
 Forge 只决定“永久失败还是重试”和“错误字符串如何截断”。数据库状态、审计、时间戳和事务仍然由产品侧处理。
 
+### Dispatch Loop
+
+`dispatch_mail_outbox` 把 outbox 的控制流收进 Forge：
+
+- 拉取可 claim 的 rows；
+- 对每行执行 claim；
+- 成功 claim 后调用产品传入的 deliver；
+- deliver 成功后用 `retry_mark_sent` 尽力标记 sent；
+- deliver 失败后按 `MailOutboxRetryPolicy` 决定 retry / failed；
+- 调用产品传入的 audit callback；
+- 返回统一的 `DispatchStats`。
+
+产品侧仍然保留具体 `mail_outbox` entity/repository、claimable 查询条件、timestamp 计算、模板渲染、audit 写入和产品错误类型。
+
+产品的 row model 只需要实现最小 metadata trait：
+
+```rust
+impl aster_forge_mail::MailOutboxDispatchRow for mail_outbox::Model {
+    fn id(&self) -> i64 { self.id }
+    fn attempt_count(&self) -> i32 { self.attempt_count }
+    fn template_code(&self) -> &str { self.template_code.as_str() }
+    fn to_address(&self) -> &str { &self.to_address }
+}
+```
+
+`drain_mail_outbox` 负责多轮调用产品提供的 dispatch 函数，直到没有 row 被 claim，或者达到 `drain_max_rounds`。
+
 ### mark_sent 重试
 
 `retry_mark_sent` 缩小了一个典型窗口：SMTP 已成功，但数据库行仍然是 `Processing`。
@@ -194,12 +280,7 @@ let message = MailMessage {
 };
 ```
 
-产品侧仍然负责：
-
-- `MailSender` trait 和测试 sender；
-- SMTP / API mail provider transport；
-- 地址校验和 transport-specific mailbox 转换；
-- 错误映射、审计、metrics 和 outbox 状态。
+产品侧仍然负责错误映射、审计、metrics、outbox 状态和业务投递策略。
 
 ## Template Registry
 
@@ -211,6 +292,7 @@ let message = MailMessage {
 - `MailTemplateRegistry`
 - `MailTemplateCatalog`
 - `MailTemplateCatalogBuilder`
+- `MailTemplateRegistrar`
 - `MailTemplateRegistryError`
 - `TemplateVariableSpec`
 - `TemplateVariableGroup`
@@ -273,6 +355,23 @@ let mut builder = MailTemplateCatalog::builder();
 builder.register(&ACCOUNT_TEMPLATE);
 builder.register(&BILLING_TEMPLATE);
 let catalog = builder.build()?;
+```
+
+如果子系统导出注册函数，可以让 Forge 统一执行这些 registrar：
+
+```rust
+fn register_account_templates(builder: &mut MailTemplateCatalogBuilder) {
+    builder.register(&ACCOUNT_TEMPLATE);
+}
+
+fn register_billing_templates(builder: &mut MailTemplateCatalogBuilder) {
+    builder.register(&BILLING_TEMPLATE);
+}
+
+let catalog = MailTemplateCatalog::from_registrars(&[
+    register_account_templates,
+    register_billing_templates,
+])?;
 ```
 
 `build()` 会校验：

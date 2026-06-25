@@ -20,7 +20,10 @@
 pub mod object_key;
 pub mod s3_config;
 
-pub use object_key::{join_key_prefix, normalize_relative_key, strip_key_prefix};
+pub use object_key::{
+    join_key_prefix, normalize_object_key, normalize_object_prefix, normalize_relative_key,
+    strip_key_prefix,
+};
 pub use s3_config::{NormalizedS3Config, S3ConfigError, normalize_s3_endpoint_and_bucket};
 
 /// Result type returned by storage core helpers.

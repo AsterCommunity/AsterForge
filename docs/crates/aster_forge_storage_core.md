@@ -36,10 +36,19 @@ aster_forge_storage_core = { git = "https://github.com/AsterCommunity/AsterForge
 主要 API：
 
 - `normalize_relative_key(value)`
+- `normalize_object_key(value)`
+- `normalize_object_prefix(value)`
 - `join_key_prefix(prefix, key)`
 - `strip_key_prefix(prefix, key)`
 
-`normalize_relative_key()` 会拒绝空 key、绝对路径、上级目录逃逸等危险输入。产品侧应该把 `StorageCoreError::InvalidObjectKey` 映射为配置错误或 bad request，取决于输入来源。
+`normalize_relative_key()` 是底层相对路径 normalizer。它会把空值和 root-like 输入表示为 `"."`，并拒绝上级目录逃逸。
+
+产品侧做具体对象操作时优先用更明确的 helper：
+
+- `normalize_object_key()`：用于 get/put/delete/metadata 这类具体对象操作；会拒绝空值和 root-like 输入。
+- `normalize_object_prefix()`：用于 list/prefix scope；空值和 root-like 输入会映射成空 prefix。
+
+产品侧应该把 `StorageCoreError::InvalidObjectKey` 映射为配置错误或 bad request，取决于输入来源。
 
 接入注意点：
 

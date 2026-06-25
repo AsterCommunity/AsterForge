@@ -164,10 +164,28 @@ pub struct MailTemplateCatalog {
     definitions: Vec<&'static MailTemplateDefinition>,
 }
 
+/// Function exported by a product subsystem to register its mail templates.
+pub type MailTemplateRegistrar = fn(&mut MailTemplateCatalogBuilder);
+
 impl MailTemplateCatalog {
     /// Creates an empty catalog builder.
     pub fn builder() -> MailTemplateCatalogBuilder {
         MailTemplateCatalogBuilder::new()
+    }
+
+    /// Builds a catalog from subsystem registrar functions.
+    ///
+    /// Each registrar receives the same builder and can add one or more static template
+    /// definitions. This keeps product bootstrapping declarative without forcing subsystems to
+    /// share a concrete registry type.
+    pub fn from_registrars(
+        registrars: &[MailTemplateRegistrar],
+    ) -> Result<Self, MailTemplateRegistryError> {
+        let mut builder = Self::builder();
+        for registrar in registrars {
+            registrar(&mut builder);
+        }
+        builder.build()
     }
 
     /// Returns registered definitions in registration order.
@@ -527,9 +545,9 @@ struct ParsedTag {
 #[cfg(test)]
 mod tests {
     use super::{
-        MailTemplateCatalog, MailTemplateDefinition, MailTemplateRegistry,
-        MailTemplateRegistryError, TemplatePlaceholderSet, TemplateVariableSpec, escape_html,
-        html_to_text, render_template,
+        MailTemplateCatalog, MailTemplateCatalogBuilder, MailTemplateDefinition,
+        MailTemplateRegistry, MailTemplateRegistryError, TemplatePlaceholderSet,
+        TemplateVariableSpec, escape_html, html_to_text, render_template,
     };
 
     const VARIABLES: &[TemplateVariableSpec] = &[
@@ -610,6 +628,30 @@ mod tests {
                 .get("password_reset")
                 .map(|definition| definition.code),
             Some("password_reset")
+        );
+    }
+
+    #[test]
+    fn catalog_can_be_built_from_registrars() {
+        fn register_welcome(builder: &mut MailTemplateCatalogBuilder) {
+            builder.register_all(DEFINITIONS);
+        }
+
+        fn register_password_reset(builder: &mut MailTemplateCatalogBuilder) {
+            builder.register(&SECOND_DEFINITION);
+        }
+
+        let catalog =
+            MailTemplateCatalog::from_registrars(&[register_welcome, register_password_reset])
+                .unwrap();
+
+        assert_eq!(
+            catalog
+                .definitions()
+                .iter()
+                .map(|definition| definition.code)
+                .collect::<Vec<_>>(),
+            vec!["welcome", "password_reset"]
         );
     }
 

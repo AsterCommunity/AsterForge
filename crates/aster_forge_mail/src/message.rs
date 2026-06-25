@@ -1,8 +1,8 @@
 //! Product-neutral mail message models.
 //!
 //! These types describe the message envelope and rendered body passed between product mail
-//! services, outbox workers, and test senders. They intentionally do not include SMTP transport
-//! settings, product error types, audit context, persistence metadata, or delivery state.
+//! services, outbox workers, and test senders. They intentionally do not include product error
+//! types, audit context, persistence metadata, or delivery state.
 
 /// Address and optional display name for a mail sender or recipient.
 #[derive(Debug, Clone, PartialEq, Eq)]

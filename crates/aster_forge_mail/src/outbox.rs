@@ -41,6 +41,57 @@ impl DispatchStats {
     }
 }
 
+/// Minimal row metadata needed by the shared outbox dispatcher.
+///
+/// Product crates keep their concrete database model and implement this trait on it so Forge can
+/// log and apply retry policy without knowing SeaORM entities or product-specific columns.
+pub trait MailOutboxDispatchRow: Clone {
+    /// Stable row id.
+    fn id(&self) -> i64;
+
+    /// Current delivery attempt count stored on the row before this dispatch attempt.
+    fn attempt_count(&self) -> i32;
+
+    /// Stable product template code used for logs and audits.
+    fn template_code(&self) -> &str;
+
+    /// Recipient address used for logs and audits.
+    fn to_address(&self) -> &str;
+}
+
+/// Configuration for the shared mail outbox dispatcher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailOutboxDispatchConfig {
+    /// Maximum rows loaded in one dispatch pass.
+    pub batch_size: u64,
+    /// Stale processing window in seconds. Product callbacks decide how this maps to timestamps.
+    pub processing_stale_secs: i64,
+    /// Maximum dispatch rounds during a drain pass.
+    pub drain_max_rounds: usize,
+    /// Delivery retry policy.
+    pub retry_policy: MailOutboxRetryPolicy,
+    /// Retry delays for marking a row as sent after delivery success.
+    pub mark_sent_retry_delays_ms: &'static [u64],
+}
+
+impl MailOutboxDispatchConfig {
+    /// Creates a dispatch config.
+    pub const fn new(
+        batch_size: u64,
+        processing_stale_secs: i64,
+        drain_max_rounds: usize,
+        retry_policy: MailOutboxRetryPolicy,
+    ) -> Self {
+        Self {
+            batch_size,
+            processing_stale_secs,
+            drain_max_rounds,
+            retry_policy,
+            mark_sent_retry_delays_ms: DEFAULT_MARK_SENT_RETRY_DELAYS_MS,
+        }
+    }
+}
+
 /// Retry and truncation policy for an outbox dispatcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailOutboxRetryPolicy {
@@ -135,6 +186,220 @@ pub const fn retry_delay_secs(attempt_count: i32) -> i64 {
 /// Truncates an error string without splitting UTF-8 code points.
 pub fn truncate_error(error: &str, max_len: usize) -> String {
     error.chars().take(max_len).collect()
+}
+
+/// Runs one mail outbox dispatch pass using product-provided persistence callbacks.
+///
+/// Forge owns the control flow and retry classification. Product crates own time calculation,
+/// repository calls, template rendering, mail auditing, and error types.
+#[allow(clippy::too_many_arguments)]
+pub async fn dispatch_mail_outbox<
+    R,
+    E,
+    List,
+    ListFut,
+    Claim,
+    ClaimFut,
+    Deliver,
+    DeliverFut,
+    MarkSent,
+    MarkSentFut,
+    MarkRetry,
+    MarkRetryFut,
+    MarkFailed,
+    MarkFailedFut,
+    OnSent,
+    OnSentFut,
+    OnFailed,
+    OnFailedFut,
+>(
+    config: &MailOutboxDispatchConfig,
+    mut list_claimable: List,
+    mut try_claim: Claim,
+    mut deliver: Deliver,
+    mut mark_sent: MarkSent,
+    mut mark_retry: MarkRetry,
+    mut mark_failed: MarkFailed,
+    mut on_sent: OnSent,
+    mut on_failed: OnFailed,
+) -> Result<DispatchStats, E>
+where
+    R: MailOutboxDispatchRow,
+    E: std::fmt::Display,
+    List: FnMut(u64, i64) -> ListFut,
+    ListFut: Future<Output = Result<Vec<R>, E>>,
+    Claim: FnMut(R) -> ClaimFut,
+    ClaimFut: Future<Output = Result<bool, E>>,
+    Deliver: FnMut(R) -> DeliverFut,
+    DeliverFut: Future<Output = Result<String, E>>,
+    MarkSent: FnMut(i64, usize) -> MarkSentFut,
+    MarkSentFut: Future<Output = Result<bool, E>>,
+    MarkRetry: FnMut(R, i32, i64, String) -> MarkRetryFut,
+    MarkRetryFut: Future<Output = Result<bool, E>>,
+    MarkFailed: FnMut(R, i32, String) -> MarkFailedFut,
+    MarkFailedFut: Future<Output = Result<bool, E>>,
+    OnSent: FnMut(R, i32, String) -> OnSentFut,
+    OnSentFut: Future<Output = ()>,
+    OnFailed: FnMut(R, i32, String) -> OnFailedFut,
+    OnFailedFut: Future<Output = ()>,
+{
+    let rows = list_claimable(config.batch_size, config.processing_stale_secs).await?;
+    let mut stats = DispatchStats::default();
+    tracing::debug!(
+        batch_size = config.batch_size,
+        due_count = rows.len(),
+        stale_secs = config.processing_stale_secs,
+        "dispatching due mail outbox rows"
+    );
+
+    for row in rows {
+        if !try_claim(row.clone()).await? {
+            tracing::debug!(
+                mail_outbox_id = row.id(),
+                template_code = %row.template_code(),
+                "mail outbox claim skipped because row was already claimed"
+            );
+            continue;
+        }
+
+        stats.claimed += 1;
+        tracing::debug!(
+            mail_outbox_id = row.id(),
+            template_code = %row.template_code(),
+            attempt_count = row.attempt_count(),
+            "claimed mail outbox row"
+        );
+
+        match deliver(row.clone()).await {
+            Ok(subject) => {
+                tracing::debug!(
+                    mail_outbox_id = row.id(),
+                    template_code = %row.template_code(),
+                    "mail outbox delivery succeeded"
+                );
+                match retry_mark_sent(row.id(), config.mark_sent_retry_delays_ms, &mut mark_sent)
+                    .await
+                {
+                    Ok(true) => {
+                        stats.sent += 1;
+                        on_sent(row.clone(), row.attempt_count() + 1, subject).await;
+                    }
+                    Ok(false) => {
+                        tracing::warn!(
+                            mail_outbox_id = row.id(),
+                            template_code = %row.template_code(),
+                            to = %row.to_address(),
+                            "mark_sent affected 0 rows after successful delivery; state will be rechecked"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            mail_outbox_id = row.id(),
+                            template_code = %row.template_code(),
+                            to = %row.to_address(),
+                            stale_secs = config.processing_stale_secs,
+                            error = %error,
+                            "CRITICAL: mail delivery succeeded but mark_sent failed after all retries; \
+                             row remains Processing and may be re-claimed, causing duplicate delivery"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                let attempt_count = row.attempt_count() + 1;
+                match config
+                    .retry_policy
+                    .delivery_failure_decision(attempt_count, error.to_string())
+                {
+                    MailOutboxDeliveryFailureDecision::PermanentFailure {
+                        attempt_count,
+                        error_message,
+                    } => {
+                        if mark_failed(row.clone(), attempt_count, error_message.clone()).await? {
+                            stats.failed += 1;
+                            on_failed(row.clone(), attempt_count, error_message.clone()).await;
+                        }
+                        tracing::warn!(
+                            mail_outbox_id = row.id(),
+                            template_code = %row.template_code(),
+                            to = %row.to_address(),
+                            attempt_count,
+                            error = %error_message,
+                            "mail outbox delivery permanently failed"
+                        );
+                    }
+                    MailOutboxDeliveryFailureDecision::Retry {
+                        attempt_count,
+                        retry_delay_secs,
+                        error_message,
+                    } => {
+                        if mark_retry(
+                            row.clone(),
+                            attempt_count,
+                            retry_delay_secs,
+                            error_message.clone(),
+                        )
+                        .await?
+                        {
+                            stats.retried += 1;
+                        }
+                        tracing::warn!(
+                            mail_outbox_id = row.id(),
+                            template_code = %row.template_code(),
+                            to = %row.to_address(),
+                            attempt_count,
+                            retry_delay_secs,
+                            error = %error_message,
+                            "mail outbox delivery failed; scheduled retry"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        claimed = stats.claimed,
+        sent = stats.sent,
+        retried = stats.retried,
+        failed = stats.failed,
+        "finished dispatching due mail outbox rows"
+    );
+    Ok(stats)
+}
+
+/// Runs mail outbox dispatch passes until no rows are claimed or the configured drain limit is hit.
+#[allow(clippy::too_many_arguments)]
+pub async fn drain_mail_outbox<E, Dispatch, DispatchFut>(
+    config: &MailOutboxDispatchConfig,
+    mut dispatch: Dispatch,
+) -> Result<DispatchStats, E>
+where
+    E: std::fmt::Display,
+    Dispatch: FnMut() -> DispatchFut,
+    DispatchFut: Future<Output = Result<DispatchStats, E>>,
+{
+    let mut total = DispatchStats::default();
+    tracing::debug!("draining mail outbox");
+
+    for _ in 0..config.drain_max_rounds {
+        let stats = dispatch().await?;
+        let claimed = stats.claimed;
+        total.merge(stats);
+        if claimed == 0 {
+            tracing::debug!("mail outbox drain finished because no rows were claimed");
+            break;
+        }
+    }
+
+    tracing::debug!(
+        claimed = total.claimed,
+        sent = total.sent,
+        retried = total.retried,
+        failed = total.failed,
+        "mail outbox drain completed"
+    );
+    Ok(total)
 }
 
 /// Retries a product-provided `mark_sent` operation after SMTP success.

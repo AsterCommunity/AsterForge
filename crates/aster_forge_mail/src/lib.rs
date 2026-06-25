@@ -22,10 +22,12 @@
 pub mod config;
 pub mod message;
 pub mod outbox;
+pub mod sender;
 pub mod template;
 
 pub use config::{
-    MAIL_TEMPLATE_MAX_BODY_LEN, MAIL_TEMPLATE_MAX_SUBJECT_LEN, MailConfigError, MailConfigResult,
+    DEFAULT_MAIL_SECURITY, DEFAULT_MAIL_SMTP_PORT, MAIL_TEMPLATE_MAX_BODY_LEN,
+    MAIL_TEMPLATE_MAX_SUBJECT_LEN, MailConfigError, MailConfigResult, MailRuntimeSettings,
     normalize_mail_address_config_value, normalize_mail_name_config_value,
     normalize_mail_security_config_value, normalize_mail_template_body_config_value,
     normalize_mail_template_subject_config_value, normalize_smtp_host_config_value,
@@ -34,11 +36,18 @@ pub use config::{
 pub use message::{MailMessage, MailRecipient};
 pub use outbox::{
     DEFAULT_ERROR_MAX_LEN, DEFAULT_MARK_SENT_RETRY_DELAYS_MS, DispatchStats,
-    MailOutboxDeliveryFailureDecision, MailOutboxRetryPolicy, retry_mark_sent, truncate_error,
+    MailOutboxDeliveryFailureDecision, MailOutboxDispatchConfig, MailOutboxDispatchRow,
+    MailOutboxRetryPolicy, dispatch_mail_outbox, drain_mail_outbox, retry_mark_sent,
+    truncate_error,
+};
+pub use sender::{
+    DEFAULT_SMTP_SEND_TIMEOUT_SECS, MailDeliveryError, MailSendResult, MailSender,
+    MemoryMailSender, SmtpMailSender, memory_sender, memory_sender_ref, send_rendered_with,
+    smtp_sender,
 };
 pub use template::{
-    MailTemplateCatalog, MailTemplateCatalogBuilder, MailTemplateDefinition, MailTemplateRegistry,
-    MailTemplateRegistryError, RenderedMail, TemplatePlaceholderSet, TemplateVariableGroup,
-    TemplateVariableItem, TemplateVariableSpec, escape_html, html_to_text, render_placeholders,
-    render_template,
+    MailTemplateCatalog, MailTemplateCatalogBuilder, MailTemplateDefinition, MailTemplateRegistrar,
+    MailTemplateRegistry, MailTemplateRegistryError, RenderedMail, TemplatePlaceholderSet,
+    TemplateVariableGroup, TemplateVariableItem, TemplateVariableSpec, escape_html, html_to_text,
+    render_placeholders, render_template,
 };

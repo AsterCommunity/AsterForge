@@ -39,6 +39,34 @@ pub fn normalize_relative_key(value: &str) -> Result<String> {
     }
 }
 
+/// Normalizes an object key and rejects the storage namespace root.
+///
+/// Use this for concrete object operations such as get, put, delete, exists,
+/// and metadata. It accepts leading slashes and Windows separators but rejects
+/// empty/root-like values and parent-directory escape attempts.
+pub fn normalize_object_key(value: &str) -> Result<String> {
+    let key = normalize_relative_key(value.trim())?;
+    if key == "." {
+        return Err(StorageCoreError::InvalidObjectKey(
+            "object key cannot target the storage namespace root".to_string(),
+        ));
+    }
+    Ok(key)
+}
+
+/// Normalizes a storage prefix.
+///
+/// Empty and root-like inputs map to an empty prefix. Concrete object keys
+/// should use [`normalize_object_key`] instead.
+pub fn normalize_object_prefix(value: &str) -> Result<String> {
+    let prefix = normalize_relative_key(value.trim())?;
+    if prefix == "." {
+        Ok(String::new())
+    } else {
+        Ok(prefix)
+    }
+}
+
 /// Join a storage prefix and object key without producing duplicate separators.
 ///
 /// This deliberately only trims trailing slashes from the prefix. Existing S3 policies may have
@@ -73,7 +101,10 @@ pub fn strip_key_prefix<'a>(prefix: &str, key: &'a str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{join_key_prefix, normalize_relative_key, strip_key_prefix};
+    use super::{
+        join_key_prefix, normalize_object_key, normalize_object_prefix, normalize_relative_key,
+        strip_key_prefix,
+    };
 
     #[test]
     fn normalize_relative_key_collapses_slashes_and_dot_segments() {
@@ -100,6 +131,28 @@ mod tests {
         );
         assert_eq!(normalize_relative_key("////").unwrap(), ".");
         assert_eq!(normalize_relative_key("././").unwrap(), ".");
+    }
+
+    #[test]
+    fn normalize_object_key_rejects_root_like_values() {
+        assert_eq!(
+            normalize_object_key("/folder//file.txt").unwrap(),
+            "folder/file.txt"
+        );
+        assert!(normalize_object_key("").is_err());
+        assert!(normalize_object_key("/").is_err());
+        assert!(normalize_object_key("../secret.txt").is_err());
+    }
+
+    #[test]
+    fn normalize_object_prefix_allows_root_like_values() {
+        assert_eq!(normalize_object_prefix("").unwrap(), "");
+        assert_eq!(normalize_object_prefix("/").unwrap(), "");
+        assert_eq!(
+            normalize_object_prefix("/folder//prefix/").unwrap(),
+            "folder/prefix"
+        );
+        assert!(normalize_object_prefix("folder/../secret").is_err());
     }
 
     #[test]

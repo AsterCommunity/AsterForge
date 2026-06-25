@@ -46,6 +46,7 @@ futures = "0.3"
 governor = "0.10"
 http = "1"
 ipnet = "2.12.0"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 md-5 = "0.11"
 moka = { version = "0.12.15", features = ["future"] }
 proc-macro2 = "1"
