@@ -127,6 +127,38 @@ if let Some(rejection) = limiter.check("User@Example.com") {
 
 不要把产品 `ApiResponse`、Yggdrasil 协议错误体、Drive 错误码或 config key 放进 Forge。Forge 的职责是共享限流机械件，产品侧负责面向客户端的语义。
 
+## Client IP
+
+模块：`aster_forge_actix_middleware::client_ip`
+
+主要函数：
+
+- `real_ip_from_headers(headers, peer, trusted_proxies)`
+- `real_ip_from_trusted_headers(headers, peer, trusted)`
+
+这个模块只做 Actix `HeaderMap` 适配：从请求头里读取 `X-Forwarded-For`，然后把可信代理判断交给
+`aster_forge_utils::net`。适合 service 或 audit 代码已经拿到 `HttpRequest` / `HeaderMap`，但不想重复写
+header 解析逻辑的场景。
+
+```rust
+use aster_forge_actix_middleware::client_ip::real_ip_from_headers;
+
+let peer = req.peer_addr().map(|socket| socket.ip());
+let client_ip = peer.map(|peer| {
+    real_ip_from_headers(
+        req.headers(),
+        peer,
+        &state.config().network_trust.trusted_proxies,
+    )
+});
+```
+
+产品侧仍然负责：
+
+- 从配置里读取 trusted proxy 列表；
+- 决定 peer address 缺失时返回 `None`、localhost 还是产品错误；
+- 把 client IP 写入审计、协议缓存或日志字段。
+
 ## Metrics
 
 模块：`aster_forge_actix_middleware::metrics`

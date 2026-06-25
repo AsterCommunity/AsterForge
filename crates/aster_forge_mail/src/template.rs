@@ -366,12 +366,7 @@ pub fn render_placeholders(mut template: String, values: &[(&'static str, String
 
 /// Escapes text for insertion into HTML templates.
 pub fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    aster_forge_utils::html::escape_html(value)
 }
 
 /// Converts simple HTML email content into a plain-text fallback.

@@ -23,6 +23,7 @@
 
 pub mod driver;
 mod error;
+pub mod normalize;
 pub mod providers;
 pub mod registry;
 pub mod types;

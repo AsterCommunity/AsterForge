@@ -15,6 +15,7 @@
     )
 )]
 
+pub mod client_ip;
 pub mod cors;
 pub mod csrf;
 pub mod metrics;

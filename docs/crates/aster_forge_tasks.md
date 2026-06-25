@@ -42,6 +42,7 @@ aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge" }
 - `registry`：`TaskRecord` 和 `task_registry!`。
 - `retry`：`TaskRetryClass` 和默认 retry delay。
 - `runtime`：periodic task、dispatch worker、`BackgroundTasks`。
+- `runtime_metadata`：`RuntimeTaskDefinition`、`RegisteredRuntimeTaskKind`、`RuntimeTaskName<K>` 和 `runtime_task_registry!`。
 - `spec`：typed task spec、payload/result codec、erased adapter。
 - `steps`：task step 状态。
 - `temp`：task/runtime 临时目录清理。
@@ -96,6 +97,89 @@ aster_forge_tasks::task_registry! {
 ```
 
 宏只注册映射关系，不替产品定义业务类型。
+
+## 注册 runtime task 元数据
+
+如果产品有一组系统运行时任务，通常会同时维护：
+
+- 存在 payload 里的 wire value；
+- 管理端展示名；
+- 前端/i18n presentation code；
+- 从历史 wire value 解析回 enum 的逻辑。
+
+这类逻辑在 Drive 和 Yggdrasil 都会重复，但任务列表本身是产品语义，所以 Forge 只提供元数据注册宏：
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SystemRuntimeTaskKind {
+    SystemHealthCheck,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskPresentationCode {
+    RuntimeTaskSystemHealthCheck,
+}
+
+aster_forge_tasks::runtime_task_registry! {
+    mod registered_runtime_tasks {
+        kind: SystemRuntimeTaskKind;
+        presentation: TaskPresentationCode;
+        tasks {
+            SystemRuntimeTaskKind::SystemHealthCheck => {
+                wire: "system-health-check",
+                display: "System health check",
+                presentation: TaskPresentationCode::RuntimeTaskSystemHealthCheck,
+            },
+        }
+    }
+}
+
+assert_eq!(registered_runtime_tasks::as_str(SystemRuntimeTaskKind::SystemHealthCheck), "system-health-check");
+assert_eq!(
+    registered_runtime_tasks::from_wire_value("system-health-check"),
+    Some(SystemRuntimeTaskKind::SystemHealthCheck)
+);
+```
+
+宏会生成一致的 lookup 函数，并在测试里检查 wire value、display name、presentation code 和反向解析是否一致。产品仍然自己决定：
+
+- runtime task enum 有哪些 variant；
+- 哪些任务被实际调度；
+- task payload/result 的 schema；
+- task presentation code 的 i18n 含义；
+- runtime task 记录写入数据库的策略。
+
+如果 runtime task payload 需要保存“已知任务或历史任务字符串”，可以让产品 enum 实现
+`RegisteredRuntimeTaskKind`，然后直接使用 `RuntimeTaskName<SystemRuntimeTaskKind>`：
+
+```rust
+impl aster_forge_tasks::RegisteredRuntimeTaskKind for SystemRuntimeTaskKind {
+    fn as_str(self) -> &'static str {
+        registered_runtime_tasks::as_str(self)
+    }
+
+    fn display_name(self) -> &'static str {
+        registered_runtime_tasks::display_name(self)
+    }
+
+    fn from_wire_value(value: &str) -> Option<Self> {
+        registered_runtime_tasks::from_wire_value(value)
+    }
+}
+
+type RuntimeTaskName = aster_forge_tasks::RuntimeTaskName<SystemRuntimeTaskKind>;
+
+let known = RuntimeTaskName::from(SystemRuntimeTaskKind::SystemHealthCheck);
+let legacy = RuntimeTaskName::from("removed-maintenance-task");
+
+assert_eq!(known.as_str(), "system-health-check");
+assert_eq!(known.known(), Some(SystemRuntimeTaskKind::SystemHealthCheck));
+assert_eq!(legacy.known(), None);
+assert_eq!(legacy.display_name(), "removed maintenance task");
+```
+
+这样产品侧不需要重复写 serde、display、legacy fallback，但仍然保留自己的 task enum 和
+payload/result schema。数据库里已有的旧 wire value 也可以继续反序列化并原样保存。
 
 ## Claimed task execution
 

@@ -63,11 +63,7 @@ impl TrustedProxyIpKeyExtractor {
 
     /// Resolves the client IP for a request and direct peer IP.
     pub fn real_ip(&self, req: &ServiceRequest, peer: IpAddr) -> IpAddr {
-        let x_forwarded_for = req
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|value| value.to_str().ok());
-        aster_forge_utils::net::real_ip_from_forwarded_for(x_forwarded_for, peer, &self.trusted)
+        crate::client_ip::real_ip_from_trusted_headers(req.headers(), peer, &self.trusted)
     }
 }
 

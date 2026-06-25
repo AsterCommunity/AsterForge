@@ -12,4 +12,5 @@ publish = false
 aster_forge_utils = { path = "../aster_forge_utils" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "signal", "time"] }
+tokio-util.workspace = true
 tracing.workspace = true

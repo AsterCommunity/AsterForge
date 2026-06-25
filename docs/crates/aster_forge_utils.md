@@ -6,6 +6,7 @@
 
 - boolean-like 字符串解析。
 - best-effort 临时文件和目录清理。
+- HTML 和 inline script 占位符 escaping。
 - UUID 和 token 生成。
 - 网络地址和 trusted proxy 解析。
 - 安全数值转换。
@@ -51,6 +52,23 @@ Spotlight/Finder 或文件监听器在删除过程中短暂写入目录的情况
 
 不要把它们用于需要事务语义、用户可见错误或存储驱动一致性的删除操作；那些场景应该保留产品侧
 显式错误处理。
+
+### html
+
+主要 API：
+
+- `escape_html(value)`
+- `escape_script_json(value)`
+
+`escape_html` 用于把普通文本插入已经存在的 HTML text/attribute 占位符，例如后端渲染
+`index.html` 里的标题、图标 URL、CSP meta 和 CSRF token 名称。它会转义 `&`、`"`、`'`、
+`<`、`>`。
+
+`escape_script_json` 用于 JSON 序列化之后、插入 inline `<script>` 之前的二次 escaping。
+它会转义 HTML parser 相关字符和 JavaScript 行分隔符，避免 `</script>` 这类文本打断脚本块。
+
+这两个 helper 不是富文本 sanitizer。用户提交的 HTML 是否允许、如何过滤标签和属性，仍然是产品
+安全策略。
 
 ### id
 

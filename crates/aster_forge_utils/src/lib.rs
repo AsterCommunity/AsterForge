@@ -19,6 +19,7 @@
 
 pub mod bool_like;
 pub mod fs;
+pub mod html;
 pub mod id;
 pub mod net;
 pub mod numbers;

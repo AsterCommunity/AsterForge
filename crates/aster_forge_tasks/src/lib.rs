@@ -28,6 +28,7 @@ mod lease;
 mod registry;
 mod retry;
 mod runtime;
+mod runtime_metadata;
 mod spec;
 mod steps;
 mod temp;
@@ -61,6 +62,7 @@ pub use runtime::{
     effective_dispatch_max_interval, effective_jitter_cap, periodic_sleep_duration,
     run_dispatch_worker, run_periodic_task, run_recorded_task_iteration,
 };
+pub use runtime_metadata::{RegisteredRuntimeTaskKind, RuntimeTaskDefinition, RuntimeTaskName};
 pub use spec::{
     BackgroundTaskSpec, ErasedBackgroundTaskSpec, TaskProcessFuture, TaskSpecAdapter,
     decode_payload_as, decode_result_as, serialize_payload, serialize_result,

@@ -578,6 +578,7 @@ name = "aster_forge_external_auth"
 version = "0.1.0"
 dependencies = [
  "actix-web",
+ "aster_forge_crypto",
  "aster_forge_utils",
  "aster_forge_validation",
  "async-trait",
@@ -616,6 +617,7 @@ dependencies = [
 name = "aster_forge_mail"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_utils",
  "serde",
  "tokio",
  "tracing",
@@ -647,6 +649,7 @@ dependencies = [
  "aster_forge_utils",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

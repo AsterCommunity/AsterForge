@@ -13,6 +13,7 @@ default = []
 openapi = ["dep:utoipa"]
 
 [dependencies]
+aster_forge_utils = { path = "../aster_forge_utils" }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true

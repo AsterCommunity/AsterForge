@@ -10,6 +10,7 @@
 - 创建短命 runtime 临时目录。
 - 收集 shutdown phase 的执行顺序、耗时和错误。
 - 等待 `SIGINT` / `SIGTERM` / `Ctrl+C`。
+- 为 runtime 副作用队列提供通用的内存缓冲、批量 flush、延迟 flush 和溢出直写机制。
 
 不适合放在这里的内容：
 
@@ -19,6 +20,7 @@
 - 产品资源初始化顺序。
 - 具体数据库、缓存、邮件或存储的业务检查。
 - 产品 shutdown 顺序里的业务副作用。
+- 产品审计、邮件、任务等具体实体和 repository 写入语义。
 
 ## Cargo
 
@@ -87,6 +89,76 @@ assert_eq!(report.summary(), "database healthy");
 ```
 
 产品侧把 health report 映射到 task outcome、HTTP response 或 admin DTO 时，优先使用这些投影 helper。比如 Drive 和 Yggdrasil 的 runtime health task 都可以用 `issue_summary()` / `issue_details()` 把异常组件写进失败记录，同时保留产品自己的 task result 类型。
+
+## Buffered Batch Writer
+
+模块：`aster_forge_runtime::buffered`
+
+主要类型：
+
+- `BufferedBatchConfig`
+- `BufferedBatchWriter<T>`
+
+`BufferedBatchWriter<T>` 抽的是 Aster 服务里反复出现的一类 runtime 机械层：调用点需要快速接收一条记录，但真实写入可以合并成批量操作；如果迟迟凑不满批次，也要在短延迟后 flush；如果队列满了，则不能无限堆内存，而是把新记录走一次直写并触发后台 flush。
+
+它适合承载这些公共规则：
+
+- 内存队列上限。
+- 达到批量大小后立即后台 flush。
+- 首条记录进入空队列后安排延迟 flush。
+- 队列溢出时对当前记录执行单条写入。
+- shutdown 前取消延迟任务，并由产品侧显式 flush 剩余记录。
+
+它不承载这些业务语义：
+
+- 审计日志、邮件 outbox、任务记录等具体实体。
+- repository、事务、错误类型和重试策略。
+- 是否应该记录某个审计动作。
+- shutdown 阶段应该在哪一步 flush。
+- 指标名称、审计动作名称和产品日志格式。
+
+示例：
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use aster_forge_runtime::{BufferedBatchConfig, BufferedBatchWriter};
+
+let db_for_batch = db.clone();
+let db_for_single = db.clone();
+
+let writer = Arc::new(BufferedBatchWriter::new(
+    BufferedBatchConfig::new(4096, 100, Duration::from_secs(1), "audit_log"),
+    move |items: Vec<audit_log::ActiveModel>| {
+        let db = db_for_batch.clone();
+        async move {
+            if let Err(error) = audit_log_repo::create_many(&db, items).await {
+                tracing::warn!("failed to write audit log batch: {error}");
+            }
+        }
+    },
+    move |item: audit_log::ActiveModel| {
+        let db = db_for_single.clone();
+        async move {
+            if let Err(error) = audit_log_repo::create(&db, item).await {
+                tracing::warn!("failed to write audit log: {error}");
+            }
+        }
+    },
+));
+
+writer.record(model).await;
+```
+
+shutdown 时产品侧应该先取消延迟 flush，再手动 flush：
+
+```rust
+writer.cancel();
+writer.flush().await;
+```
+
+这个顺序可以避免延迟任务在 shutdown 过程中继续被唤醒，同时保留“进程退出前尽量写完内存队列”的行为。Yggdrasil 的 audit manager 采用的就是这个边界：Forge 负责队列调度和批量切片，Yggdrasil 负责 audit model 构造、database repository、错误日志和是否记录某个动作。
 
 ## Startup
 

@@ -70,6 +70,24 @@ aster_forge_external_auth = {
 - `ExternalAuthProviderOptions`
 - `MicrosoftExternalAuthProviderOptions`
 
+规范化层：
+
+- `normalize::normalize_provider_key(value)`
+- `normalize::normalize_required_field(value, field, max_len)`
+- `normalize::normalize_optional_claim(value, field)`
+- `normalize::normalize_scopes_with_default(value, default_scopes, protocol)`
+- `normalize::normalize_scopes(value, protocol)`
+- `normalize::normalize_icon_url_input(value, max_len)`
+- `normalize::normalize_issuer_url_input(value, required, max_len)`
+- `normalize::normalize_manual_endpoint_input(value, field, required, supported, max_len)`
+- `normalize::normalize_allowed_domains(value)`
+- `normalize::parse_allowed_domains(raw)`
+- `normalize::email_domain_allowed(raw, email)`
+- `normalize::state_hash(state)`
+- `normalize::token_hash(token)`
+- `normalize::normalize_return_path(value, max_len)`
+- `normalize::normalize_flow_token(value, max_len)`
+
 错误层：
 
 - `ExternalAuthError`
@@ -85,6 +103,35 @@ aster_forge_external_auth = {
 6. 产品 service 用 profile 查找或绑定本地用户。
 
 Forge 到第 5 步结束。第 6 步必须留在产品仓库。
+
+## 规范化规则
+
+模块：`aster_forge_external_auth::normalize`
+
+这个模块收纳 Drive / Yggdrasil 已经重复的 provider 配置规范化规则。它们属于外部认证协议或管理端表单的机械边界，不依赖产品数据库：
+
+```rust
+use aster_forge_external_auth::{ExternalAuthProtocol, normalize};
+
+let key = normalize::normalize_provider_key(" GitHub ")?;
+let scopes = normalize::normalize_scopes(Some("email profile"), ExternalAuthProtocol::Oidc)?;
+let icon_url = normalize::normalize_icon_url_input(Some("/assets/github.svg".to_string()), 2048)?;
+let return_path = normalize::normalize_return_path(Some("/settings?tab=login"), 2048)?;
+
+assert_eq!(key, "github");
+assert_eq!(scopes, "openid email profile");
+assert_eq!(icon_url.as_deref(), Some("/assets/github.svg"));
+assert_eq!(return_path, "/settings?tab=login");
+```
+
+产品侧仍然负责：
+
+- 把 `ExternalAuthError` 映射成产品错误码和 HTTP response。
+- 决定 URL / issuer / return path 的最大长度。
+- 构建 callback redirect URI，因为它需要读取产品 runtime config、当前 request host 和产品 API 错误码。
+- 本地邮箱格式校验、账号绑定、自动创建用户、审计和 session 写入。
+
+不要在产品仓库保留只重复这些规则的实现；如果产品要保留同名 helper，应该只做错误映射或注入产品常量。
 
 ## 自定义 provider
 
