@@ -241,6 +241,26 @@ impl ConfigRegistry {
         self.normalize_value(lookup, key, &storage)
     }
 
+    /// Converts an API-facing value into storage for either a registered key or a custom key.
+    ///
+    /// Registered keys use their declared [`ConfigValueType`] and run through the full registry
+    /// normalization pipeline. Custom keys are treated as scalar strings by default, leaving their
+    /// visibility, permissions, and persistence policy to the product crate.
+    pub fn value_to_storage_for_key(
+        &self,
+        lookup: &dyn ConfigValueLookup,
+        key: &str,
+        value: &ConfigValue,
+    ) -> Result<String> {
+        match self.get(key) {
+            Some(definition) => {
+                let storage = value.to_storage_for_type(definition.value_type)?;
+                self.normalize_value(lookup, key, &storage)
+            }
+            None => value.to_storage_for_type(ConfigValueType::String),
+        }
+    }
+
     /// Applies definition metadata to a system-owned stored row.
     pub fn apply_definition(&self, mut config: StoredConfig) -> StoredConfig {
         if config.source != ConfigSource::System {
@@ -449,6 +469,37 @@ mod tests {
                 )
                 .unwrap(),
             "x"
+        );
+    }
+
+    #[test]
+    fn registry_converts_registered_and_custom_values_for_storage() {
+        let registry = ConfigRegistry::new(&[PRIMARY]);
+
+        assert_eq!(
+            registry
+                .value_to_storage_for_key(&HashMap::new(), "primary", &ConfigValue::from("  x  "))
+                .unwrap(),
+            "x"
+        );
+        assert_eq!(
+            registry
+                .value_to_storage_for_key(
+                    &HashMap::new(),
+                    "custom.banner",
+                    &ConfigValue::from("  x  ")
+                )
+                .unwrap(),
+            "  x  "
+        );
+        assert!(
+            registry
+                .value_to_storage_for_key(
+                    &HashMap::new(),
+                    "custom.list",
+                    &ConfigValue::StringArray(vec!["x".to_string()])
+                )
+                .is_err()
         );
     }
 

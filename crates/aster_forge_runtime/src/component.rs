@@ -11,8 +11,74 @@ use std::time::Duration;
 
 use crate::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckScope,
-    HealthComponentReport, ShutdownCoordinator, ShutdownReport, SystemHealthReport,
+    HealthComponentReport, ShutdownCoordinator, ShutdownReport, StartupCoordinator,
+    StartupPhaseFailurePolicy, StartupReport, SystemHealthReport,
 };
+
+/// Function exported by a product subsystem to register runtime components.
+pub type RuntimeComponentRegistrar = fn(&mut RuntimeComponentRegistry);
+
+/// Function exported by a product subsystem to register runtime components using product state.
+pub type RuntimeComponentStateRegistrar<S> = fn(&mut RuntimeComponentRegistry, &S);
+
+/// Product-owned runtime component bundle.
+///
+/// A bundle is useful when registration needs to consume owned handles such as database pools,
+/// background task collections, or other shutdown-only resources. Stateless subsystems can keep
+/// using [`RuntimeComponentRegistrar`]; resource-owning subsystems can implement this trait and let
+/// the product entrypoint pass the bundle to [`RuntimeComponentRegistry::configured_with_bundle`].
+pub trait RuntimeComponentBundle {
+    /// Registers this bundle into the runtime component registry.
+    fn register(self, registry: &mut RuntimeComponentRegistry);
+}
+
+impl<F> RuntimeComponentBundle for F
+where
+    F: FnOnce(&mut RuntimeComponentRegistry),
+{
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        self(registry);
+    }
+}
+
+impl<A, B> RuntimeComponentBundle for (A, B)
+where
+    A: RuntimeComponentBundle,
+    B: RuntimeComponentBundle,
+{
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        self.0.register(registry);
+        self.1.register(registry);
+    }
+}
+
+impl<A, B, C> RuntimeComponentBundle for (A, B, C)
+where
+    A: RuntimeComponentBundle,
+    B: RuntimeComponentBundle,
+    C: RuntimeComponentBundle,
+{
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        self.0.register(registry);
+        self.1.register(registry);
+        self.2.register(registry);
+    }
+}
+
+impl<A, B, C, D> RuntimeComponentBundle for (A, B, C, D)
+where
+    A: RuntimeComponentBundle,
+    B: RuntimeComponentBundle,
+    C: RuntimeComponentBundle,
+    D: RuntimeComponentBundle,
+{
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        self.0.register(registry);
+        self.1.register(registry);
+        self.2.register(registry);
+        self.3.register(registry);
+    }
+}
 
 /// Broad category for a registered runtime component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +126,24 @@ pub struct RuntimeShutdownDescriptor {
     pub timeout: Option<Duration>,
 }
 
+/// Static startup metadata for a registered component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeStartupDescriptor {
+    /// Stable startup phase name.
+    pub phase_name: &'static str,
+    /// Failure policy used by this startup phase.
+    pub failure_policy: StartupPhaseFailurePolicy,
+}
+
+/// Static runtime task metadata for a registered component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeTaskDescriptor {
+    /// Stable task name used in logs, persisted runtime payloads, or admin UI.
+    pub task_name: &'static str,
+    /// Operator-facing display name.
+    pub display_name: &'static str,
+}
+
 /// Static metadata for a registered runtime component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeComponentDescriptor {
@@ -69,8 +153,12 @@ pub struct RuntimeComponentDescriptor {
     pub kind: RuntimeComponentKind,
     /// Stable names of components that should be initialized before this one.
     pub dependencies: Vec<&'static str>,
+    /// Registered startup phases owned by this component.
+    pub startup: Vec<RuntimeStartupDescriptor>,
     /// Registered health checks owned by this component.
     pub health_checks: Vec<HealthCheckDescriptor>,
+    /// Registered runtime tasks owned by this component.
+    pub tasks: Vec<RuntimeTaskDescriptor>,
     /// Registered shutdown phase owned by this component, if any.
     pub shutdown: Option<RuntimeShutdownDescriptor>,
 }
@@ -81,7 +169,9 @@ impl RuntimeComponentDescriptor {
             name,
             kind: RuntimeComponentKind::Product,
             dependencies: Vec::new(),
+            startup: Vec::new(),
             health_checks: Vec::new(),
+            tasks: Vec::new(),
             shutdown: None,
         }
     }
@@ -91,6 +181,7 @@ impl RuntimeComponentDescriptor {
 #[derive(Default)]
 pub struct RuntimeComponentRegistry {
     components: Vec<RuntimeComponentDescriptor>,
+    startup: StartupCoordinator,
     health: HealthCheckRegistry,
     shutdown: ShutdownCoordinator,
 }
@@ -111,6 +202,57 @@ impl RuntimeComponentRegistry {
         registry
     }
 
+    /// Creates a registry and applies one state-aware registration function.
+    pub fn configured_with_state<S, F>(state: &S, configure: F) -> Self
+    where
+        F: FnOnce(&mut Self, &S),
+    {
+        let mut registry = Self::new();
+        registry.configure_with_state(state, configure);
+        registry
+    }
+
+    /// Creates a registry and registers one product-owned component bundle.
+    pub fn configured_with_bundle<B>(bundle: B) -> Self
+    where
+        B: RuntimeComponentBundle,
+    {
+        let mut registry = Self::new();
+        registry.register_bundle(bundle);
+        registry
+    }
+
+    /// Creates a registry from one bundle, runs registered shutdown phases, and returns the report.
+    pub async fn shutdown_bundle<B>(bundle: B) -> ShutdownReport
+    where
+        B: RuntimeComponentBundle,
+    {
+        let mut registry = Self::configured_with_bundle(bundle);
+        registry.shutdown().await
+    }
+
+    /// Creates a registry and applies subsystem registrars in order.
+    ///
+    /// This is the static-list counterpart to [`RuntimeComponentRegistry::configured`]. Product
+    /// entrypoints can keep a single ordered registrar slice and let each subsystem own its own
+    /// component declaration, which avoids spreading root registry construction through tests and
+    /// startup code.
+    pub fn from_registrars(registrars: &[RuntimeComponentRegistrar]) -> Self {
+        let mut registry = Self::new();
+        registry.register_all(registrars);
+        registry
+    }
+
+    /// Creates a registry and applies state-aware subsystem registrars in order.
+    pub fn from_state_registrars<S>(
+        state: &S,
+        registrars: &[RuntimeComponentStateRegistrar<S>],
+    ) -> Self {
+        let mut registry = Self::new();
+        registry.register_all_with_state(state, registrars);
+        registry
+    }
+
     /// Applies a product or subsystem registration function.
     ///
     /// This mirrors Actix Web's `configure` style: subsystem modules receive a
@@ -121,6 +263,136 @@ impl RuntimeComponentRegistry {
         F: FnOnce(&mut Self),
     {
         configure(self);
+        self
+    }
+
+    /// Applies a state-aware product or subsystem registration function.
+    pub fn configure_with_state<S, F>(&mut self, state: &S, configure: F) -> &mut Self
+    where
+        F: FnOnce(&mut Self, &S),
+    {
+        configure(self, state);
+        self
+    }
+
+    /// Registers one product-owned component bundle.
+    pub fn register_bundle<B>(&mut self, bundle: B) -> &mut Self
+    where
+        B: RuntimeComponentBundle,
+    {
+        bundle.register(self);
+        self
+    }
+
+    /// Applies subsystem registrars in order.
+    pub fn register_all(&mut self, registrars: &[RuntimeComponentRegistrar]) -> &mut Self {
+        for registrar in registrars {
+            registrar(self);
+        }
+        self
+    }
+
+    /// Applies state-aware subsystem registrars in order.
+    pub fn register_all_with_state<S>(
+        &mut self,
+        state: &S,
+        registrars: &[RuntimeComponentStateRegistrar<S>],
+    ) -> &mut Self {
+        for registrar in registrars {
+            registrar(self, state);
+        }
+        self
+    }
+
+    /// Registers a component health check with explicit options.
+    pub fn component_health_with_options<F, Fut>(
+        &mut self,
+        component_name: &'static str,
+        kind: RuntimeComponentKind,
+        check_name: &'static str,
+        options: HealthCheckOptions,
+        check: F,
+    ) -> &mut Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HealthComponentReport> + Send + 'static,
+    {
+        self.component(component_name)
+            .kind(kind)
+            .health_with_options(check_name, options, check);
+        self
+    }
+
+    /// Registers a component startup phase.
+    pub fn component_startup<F, Fut>(
+        &mut self,
+        component_name: &'static str,
+        kind: RuntimeComponentKind,
+        phase_name: &'static str,
+        failure_policy: StartupPhaseFailurePolicy,
+        phase: F,
+    ) -> &mut Self
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        self.component(component_name)
+            .kind(kind)
+            .startup(phase_name, failure_policy, phase);
+        self
+    }
+
+    /// Registers a component-owned runtime task descriptor.
+    pub fn component_task(
+        &mut self,
+        component_name: &'static str,
+        kind: RuntimeComponentKind,
+        task_name: &'static str,
+        display_name: &'static str,
+    ) -> &mut Self {
+        self.component(component_name)
+            .kind(kind)
+            .task(task_name, display_name);
+        self
+    }
+
+    /// Registers a component shutdown phase.
+    pub fn component_shutdown<F, Fut>(
+        &mut self,
+        component_name: &'static str,
+        kind: RuntimeComponentKind,
+        phase_name: &'static str,
+        timeout: Option<Duration>,
+        phase: F,
+    ) -> &mut Self
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        self.component(component_name)
+            .kind(kind)
+            .shutdown(phase_name, timeout, phase);
+        self
+    }
+
+    /// Registers a component shutdown phase that consumes one owned value at most once.
+    pub fn component_shutdown_once<T, F, Fut>(
+        &mut self,
+        component_name: &'static str,
+        kind: RuntimeComponentKind,
+        phase_name: &'static str,
+        timeout: Option<Duration>,
+        value: T,
+        phase: F,
+    ) -> &mut Self
+    where
+        T: Send + 'static,
+        F: FnOnce(T) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        self.component(component_name)
+            .kind(kind)
+            .shutdown_once(phase_name, timeout, value, phase);
         self
     }
 
@@ -171,6 +443,11 @@ impl RuntimeComponentRegistry {
         self.health.run_scope(scope).await
     }
 
+    /// Runs registered startup phases.
+    pub async fn startup(&mut self) -> StartupReport {
+        self.startup.run().await
+    }
+
     /// Runs registered shutdown phases.
     pub async fn shutdown(&mut self) -> ShutdownReport {
         self.shutdown.run().await
@@ -206,6 +483,46 @@ impl RuntimeComponentBuilder<'_> {
         if !descriptor.dependencies.contains(&dependency) {
             descriptor.dependencies.push(dependency);
         }
+        self
+    }
+
+    /// Adds component dependencies in order.
+    pub fn depends_on_all(&mut self, dependencies: &[&'static str]) -> &mut Self {
+        for dependency in dependencies {
+            self.depends_on(dependency);
+        }
+        self
+    }
+
+    /// Registers a component startup phase.
+    pub fn startup<F, Fut>(
+        &mut self,
+        phase_name: &'static str,
+        failure_policy: StartupPhaseFailurePolicy,
+        phase: F,
+    ) -> &mut Self
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        self.registry
+            .startup
+            .phase(phase_name, failure_policy, phase);
+        self.descriptor_mut()
+            .startup
+            .push(RuntimeStartupDescriptor {
+                phase_name,
+                failure_policy,
+            });
+        self
+    }
+
+    /// Registers a component-owned runtime task descriptor.
+    pub fn task(&mut self, task_name: &'static str, display_name: &'static str) -> &mut Self {
+        self.descriptor_mut().tasks.push(RuntimeTaskDescriptor {
+            task_name,
+            display_name,
+        });
         self
     }
 
@@ -294,32 +611,30 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use super::{RuntimeComponentKind, RuntimeComponentRegistry};
+    use super::{RuntimeComponentBundle, RuntimeComponentKind, RuntimeComponentRegistry};
     use crate::{
         HealthCheckOptions, HealthCheckScope, HealthCheckScopes, HealthComponentReport,
-        HealthStatus, ShutdownPhaseStatus,
+        HealthStatus, ShutdownPhaseStatus, StartupPhaseFailurePolicy,
     };
 
     #[tokio::test]
     async fn registry_runs_component_health_checks_by_scope() {
         let mut registry = RuntimeComponentRegistry::new();
-        registry
-            .component("database")
-            .kind(RuntimeComponentKind::Database)
-            .health_with_options(
-                "database",
-                HealthCheckOptions::required(Some(Duration::from_secs(1)))
-                    .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
-                || async { HealthComponentReport::healthy("database", "ok") },
-            );
-        registry
-            .component("cache")
-            .kind(RuntimeComponentKind::Cache)
-            .health_with_options(
-                "cache",
-                HealthCheckOptions::optional(None).with_scopes(HealthCheckScopes::diagnostics()),
-                || async { HealthComponentReport::degraded("cache", "fallback") },
-            );
+        registry.component_health_with_options(
+            "database",
+            RuntimeComponentKind::Database,
+            "database",
+            HealthCheckOptions::required(Some(Duration::from_secs(1)))
+                .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
+            || async { HealthComponentReport::healthy("database", "ok") },
+        );
+        registry.component_health_with_options(
+            "cache",
+            RuntimeComponentKind::Cache,
+            "cache",
+            HealthCheckOptions::optional(None).with_scopes(HealthCheckScopes::diagnostics()),
+            || async { HealthComponentReport::degraded("cache", "fallback") },
+        );
 
         let readiness = registry.run_health(HealthCheckScope::Readiness).await;
         let diagnostics = registry.run_health(HealthCheckScope::Diagnostics).await;
@@ -333,27 +648,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registry_runs_component_startup_and_records_task_descriptors() {
+        let startup_events = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::new();
+        registry
+            .component("mail")
+            .kind(RuntimeComponentKind::Mail)
+            .startup("mail_templates", StartupPhaseFailurePolicy::Required, {
+                let startup_events = Arc::clone(&startup_events);
+                move || {
+                    let startup_events = Arc::clone(&startup_events);
+                    async move {
+                        startup_events.lock().unwrap().push("mail_templates");
+                        Ok(())
+                    }
+                }
+            })
+            .task("mail-outbox-dispatch", "Mail outbox dispatch");
+
+        let report = registry.startup().await;
+
+        assert!(!report.aborted());
+        assert_eq!(
+            startup_events.lock().unwrap().as_slice(),
+            ["mail_templates"]
+        );
+        let descriptor = registry.descriptor("mail").expect("mail descriptor");
+        assert_eq!(descriptor.startup[0].phase_name, "mail_templates");
+        assert_eq!(
+            descriptor.startup[0].failure_policy,
+            StartupPhaseFailurePolicy::Required
+        );
+        assert_eq!(descriptor.tasks[0].task_name, "mail-outbox-dispatch");
+        assert_eq!(descriptor.tasks[0].display_name, "Mail outbox dispatch");
+    }
+
+    fn register_database_component(registry: &mut RuntimeComponentRegistry) {
+        registry.component_health_with_options(
+            "database",
+            RuntimeComponentKind::Database,
+            "database",
+            HealthCheckOptions::required(None),
+            || async { HealthComponentReport::healthy("database", "ok") },
+        );
+    }
+
+    fn register_cache_component(registry: &mut RuntimeComponentRegistry) {
+        registry
+            .component("cache")
+            .kind(RuntimeComponentKind::Cache)
+            .depends_on("database")
+            .health_with_options(
+                "cache",
+                HealthCheckOptions::optional(None).with_scopes(HealthCheckScopes::diagnostics()),
+                || async { HealthComponentReport::healthy("cache", "ok") },
+            );
+    }
+
+    struct TestState {
+        cache_enabled: bool,
+    }
+
+    fn register_cache_component_with_state(
+        registry: &mut RuntimeComponentRegistry,
+        state: &TestState,
+    ) {
+        if state.cache_enabled {
+            register_cache_component(registry);
+        }
+    }
+
+    #[test]
+    fn registry_builds_from_ordered_registrars() {
+        let registry = RuntimeComponentRegistry::from_registrars(&[
+            register_database_component,
+            register_cache_component,
+        ]);
+
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.descriptors()[0].name, "database");
+        assert_eq!(registry.descriptors()[1].name, "cache");
+        assert_eq!(registry.descriptors()[1].dependencies, vec!["database"]);
+    }
+
+    #[test]
+    fn registry_builds_from_state_aware_registrars() {
+        let state = TestState {
+            cache_enabled: true,
+        };
+        let registry = RuntimeComponentRegistry::from_state_registrars(
+            &state,
+            &[register_cache_component_with_state],
+        );
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.descriptors()[0].name, "cache");
+
+        let state = TestState {
+            cache_enabled: false,
+        };
+        let registry =
+            RuntimeComponentRegistry::configured_with_state(&state, |registry, state| {
+                register_cache_component_with_state(registry, state);
+            });
+        assert!(registry.is_empty());
+    }
+
+    #[tokio::test]
     async fn registry_runs_shutdown_phases_in_registration_order() {
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut registry = RuntimeComponentRegistry::new();
 
-        registry
-            .component("tasks")
-            .kind(RuntimeComponentKind::Tasks)
-            .shutdown("tasks", None, {
+        registry.component_shutdown("tasks", RuntimeComponentKind::Tasks, "tasks", None, {
+            let order = Arc::clone(&order);
+            move || {
                 let order = Arc::clone(&order);
-                move || {
-                    let order = Arc::clone(&order);
-                    async move {
-                        order.lock().unwrap().push("tasks");
-                        Ok(())
-                    }
+                async move {
+                    order.lock().unwrap().push("tasks");
+                    Ok(())
                 }
-            });
+            }
+        });
         registry
             .component("database")
             .kind(RuntimeComponentKind::Database)
-            .depends_on("tasks")
+            .depends_on_all(&["tasks"])
             .shutdown("database", None, {
                 let order = Arc::clone(&order);
                 move || {
@@ -388,15 +807,20 @@ mod tests {
         let values = Arc::new(Mutex::new(Vec::new()));
         let mut registry = RuntimeComponentRegistry::new();
 
-        registry
-            .component("database")
-            .shutdown_once("database", None, "writer", {
+        registry.component_shutdown_once(
+            "database",
+            RuntimeComponentKind::Database,
+            "database",
+            None,
+            "writer",
+            {
                 let values = Arc::clone(&values);
                 move |value| async move {
                     values.lock().unwrap().push(value);
                     Ok(())
                 }
-            });
+            },
+        );
 
         let first = registry.shutdown().await;
         let second = registry.shutdown().await;
@@ -404,5 +828,97 @@ mod tests {
         assert!(!first.has_failures());
         assert!(!second.has_failures());
         assert_eq!(values.lock().unwrap().as_slice(), ["writer"]);
+        assert_eq!(
+            registry
+                .descriptor("database")
+                .map(|descriptor| descriptor.kind),
+            Some(RuntimeComponentKind::Database)
+        );
+    }
+
+    struct TestShutdownBundle {
+        values: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RuntimeComponentBundle for TestShutdownBundle {
+        fn register(self, registry: &mut RuntimeComponentRegistry) {
+            registry.component_shutdown("audit", RuntimeComponentKind::Product, "audit", None, {
+                let values = Arc::clone(&self.values);
+                move || {
+                    let values = Arc::clone(&values);
+                    async move {
+                        values.lock().unwrap().push("audit");
+                        Ok(())
+                    }
+                }
+            });
+            registry
+                .component("database")
+                .kind(RuntimeComponentKind::Database)
+                .depends_on("audit")
+                .shutdown_once("database", None, self.values, |values| async move {
+                    values.lock().unwrap().push("database");
+                    Ok(())
+                });
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_accepts_owned_component_bundle() {
+        let values = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::configured_with_bundle(TestShutdownBundle {
+            values: Arc::clone(&values),
+        });
+
+        assert_eq!(registry.len(), 2);
+        assert_eq!(
+            registry
+                .descriptor("database")
+                .expect("database descriptor should exist")
+                .dependencies,
+            vec!["audit"]
+        );
+
+        let report = registry.shutdown().await;
+
+        assert!(!report.has_failures());
+        assert_eq!(values.lock().unwrap().as_slice(), ["audit", "database"]);
+    }
+
+    #[test]
+    fn registry_accepts_closure_component_bundle() {
+        let registry = RuntimeComponentRegistry::configured_with_bundle(
+            |registry: &mut RuntimeComponentRegistry| {
+                register_database_component(registry);
+            },
+        );
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.descriptors()[0].name, "database");
+    }
+
+    #[test]
+    fn registry_accepts_tuple_component_bundle() {
+        let registry = RuntimeComponentRegistry::configured_with_bundle((
+            register_database_component,
+            register_cache_component,
+        ));
+
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.descriptors()[0].name, "database");
+        assert_eq!(registry.descriptors()[1].name, "cache");
+    }
+
+    #[tokio::test]
+    async fn registry_can_shutdown_component_bundle_directly() {
+        let values = Arc::new(Mutex::new(Vec::new()));
+
+        let report = RuntimeComponentRegistry::shutdown_bundle(TestShutdownBundle {
+            values: Arc::clone(&values),
+        })
+        .await;
+
+        assert!(!report.has_failures());
+        assert_eq!(values.lock().unwrap().as_slice(), ["audit", "database"]);
     }
 }

@@ -34,8 +34,11 @@
 
 - `RuntimeComponentRegistry`
 - `RuntimeComponentBuilder`
+- `RuntimeComponentBundle`
 - `RuntimeComponentDescriptor`
 - `RuntimeComponentKind`
+- `RuntimeComponentRegistrar`
+- `RuntimeComponentStateRegistrar`
 - `RuntimeShutdownDescriptor`
 
 `RuntimeComponentRegistry` 是组件元数据和 lifecycle hook 的组合注册表。它的目标不是接管产品 `AppState`，也不是替产品创建数据库、缓存、存储或邮件资源。它只让子系统用统一方式声明：
@@ -45,9 +48,9 @@
 - 组件拥有的 health checks。
 - 组件拥有的 shutdown phase。
 
-它不是健康检查的默认入口。只跑 `/health/ready` 或 runtime health task 时，优先用下面的 `HealthCheckRegistry`，避免为了执行探针而创建完整组件目录。只有需要 admin 组件目录、依赖关系展示、health 和 shutdown 绑定到同一个 component descriptor 时，才使用 `RuntimeComponentRegistry`。
+它可以作为产品 runtime 的统一组件目录。只需要裸健康检查、不关心组件依赖或 shutdown 绑定时，仍然可以直接用下面的 `HealthCheckRegistry`；但对于 Aster 产品主服务，推荐用 `RuntimeComponentRegistry` 把 health、shutdown 和组件 descriptor 绑在一起，避免同一组组件在多处重复注册。
 
-推荐接入方式和 Actix Web 的 route registration 一样：子系统暴露一个 `configure_runtime_components` 函数，调用方只负责 `.configure(...)`。
+推荐接入方式和 Actix Web 的 route registration 一样：子系统暴露一个 `configure_runtime_components` 函数，调用方只负责 `.configure_with_state(...)` 或 `.from_state_registrars(...)`。
 
 ```rust
 use aster_forge_runtime::{
@@ -57,25 +60,24 @@ use aster_forge_runtime::{
 pub fn configure_runtime_components(registry: &mut RuntimeComponentRegistry, state: &AppState) {
     let reader_db = state.reader_db().clone();
 
-    registry
-        .component("database")
-        .kind(RuntimeComponentKind::Database)
-        .health_with_options(
-            "database",
-            HealthCheckOptions::required(Some(std::time::Duration::from_secs(5)))
-                .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
-            move || {
-                let reader_db = reader_db.clone();
-                async move { database_health_check(&reader_db).await }
-            },
-        );
+    registry.component_health_with_options(
+        "database",
+        RuntimeComponentKind::Database,
+        "database",
+        HealthCheckOptions::required(Some(std::time::Duration::from_secs(5)))
+            .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
+        move || {
+            let reader_db = reader_db.clone();
+            async move { database_health_check(&reader_db).await }
+        },
+    );
 }
 ```
 
-需要组件目录时，产品入口统一组合这些子系统：
+产品入口统一组合这些子系统：
 
 ```rust
-let mut registry = RuntimeComponentRegistry::configured(|registry| {
+let mut registry = RuntimeComponentRegistry::configured_with_state(state, |registry, state| {
     health_service::configure_runtime_components(registry, state);
     storage_runtime::configure_runtime_components(registry, state);
     task_runtime::configure_runtime_components(registry, state);
@@ -86,18 +88,101 @@ let diagnostics = registry
     .await;
 ```
 
-shutdown 也走同一个注册模型。普通 phase 使用 `shutdown()`；如果 phase 需要消费数据库句柄、后台任务集合这类只能关闭一次的资源，优先使用 `shutdown_once()`，让 Forge 处理 `Option<T>::take()` 这类机械层：
+如果子系统注册函数不需要捕获额外上下文，可以直接维护 registrar 列表：
 
 ```rust
-pub fn configure_runtime_components(
+let registry = RuntimeComponentRegistry::from_registrars(&[
+    audit_runtime::register_runtime_components,
+    task_runtime::register_runtime_components,
+]);
+```
+
+带 `AppState` 的主服务更适合 `from_state_registrars()`：
+
+```rust
+let mut registry = RuntimeComponentRegistry::from_state_registrars(state, &[
+    health_service::register_core_health_checks,
+    storage_runtime::register_storage_health_checks,
+]);
+```
+
+如果子系统拥有 shutdown-only 资源，例如 database handles 或 background tasks，优先做成 bundle：
+
+```rust
+struct ShutdownComponents {
+    background_tasks: BackgroundTasks,
+    db_handles: DbHandles,
+}
+
+impl RuntimeComponentBundle for ShutdownComponents {
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        registry.component_shutdown_once(
+            "background_tasks",
+            RuntimeComponentKind::Tasks,
+            "background_tasks",
+            None,
+            self.background_tasks,
+            |background_tasks| async move {
+                background_tasks.shutdown().await;
+                Ok(())
+            },
+        );
+
+        registry
+            .component("database")
+            .kind(RuntimeComponentKind::Database)
+            .depends_on("background_tasks")
+            .shutdown_once(
+                "database_connections",
+                None,
+                self.db_handles,
+                |db_handles| async move {
+                    db_handles.close().await.map_err(|error| error.to_string())?;
+                    Ok(())
+                },
+            );
+    }
+}
+
+let mut registry = RuntimeComponentRegistry::configured_with_bundle(
+    ShutdownComponents {
+        background_tasks,
+        db_handles,
+    },
+);
+```
+
+entrypoint 里可以直接运行 bundle shutdown，这样注册发生在产品入口附近：
+
+```rust
+let shutdown_components = ShutdownComponents {
+    background_tasks,
+    db_handles,
+};
+let report = RuntimeComponentRegistry::shutdown_bundle(shutdown_components).await;
+log_shutdown_report(&report);
+```
+
+如果入口要组合多个资源包，可以用 tuple bundle：
+
+```rust
+let report = RuntimeComponentRegistry::shutdown_bundle((
+    ShutdownComponents { background_tasks, db_handles },
+    ProductAuditComponents,
+)).await;
+```
+
+shutdown 也走同一个注册模型。普通 phase 使用 `component_shutdown()`；如果 phase 需要消费数据库句柄、后台任务集合这类只能关闭一次的资源，优先使用 `component_shutdown_once()`，让 Forge 处理 `Option<T>::take()` 这类机械层。需要在同一个 builder 链上追加依赖时，可以用 `depends_on_all()`：
+
+```rust
+pub fn register_database_shutdown(
     registry: &mut RuntimeComponentRegistry,
     db_handles: DbHandles,
 ) {
-    let mut db_handles = Some(db_handles);
-
     registry
         .component("database")
         .kind(RuntimeComponentKind::Database)
+        .depends_on_all(&["background_tasks", "audit_logs"])
         .shutdown_once(
             "database_connections",
             None,
@@ -110,13 +195,29 @@ pub fn configure_runtime_components(
 }
 ```
 
+如果不需要链式添加依赖，可以直接使用 registry shortcut：
+
+```rust
+registry.component_shutdown_once(
+    "background_tasks",
+    RuntimeComponentKind::Tasks,
+    "background_tasks",
+    None,
+    background_tasks,
+    |background_tasks| async move {
+        background_tasks.shutdown().await;
+        Ok(())
+    },
+);
+```
+
 边界约定：
 
 - Forge 负责 registry、descriptor、health/shutdown 机械层。
 - 产品侧负责资源创建、`AppState` 组合、业务 startup 顺序、审计和 API 响应格式。
 - 子系统不要自己创建根 registry；只暴露 `configure_runtime_components`。
 - 产品入口也尽量只创建一次 registry，然后链式调用各子系统 configure。
-- 健康检查的普通执行路径不要为了 descriptors 强行绕到 component registry。
+- 如果健康检查已经是产品 runtime component 的一部分，优先走 `RuntimeComponentRegistry`，这样 admin 组件目录、readiness、diagnostics 和 shutdown descriptor 使用同一份注册来源。
 
 ## Cargo
 
@@ -124,6 +225,72 @@ pub fn configure_runtime_components(
 [dependencies]
 aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
+
+## AsterRuntime
+
+模块：`aster_forge_runtime::lifecycle`
+
+主要类型：
+
+- `AsterRuntime`
+- `AsterRuntimeBuilder`
+- `RuntimeServiceComponent`
+- `runtime_component`
+
+`AsterRuntime` 是产品 entrypoint 使用的组合入口。它不创建 HTTP server、不拥有 `AppState`、不决定业务资源怎么初始化；它只把这些产品已经创建好的东西按统一 lifecycle 串起来：
+
+- service component；
+- termination signal 后的 service stop hook；
+- service stop 后、组件 shutdown 前的业务 hook；
+- runtime component registration；
+- shutdown report logging。
+
+推荐的产品入口形态：
+
+```rust
+AsterRuntime::builder()
+    .component(http_component(server, shutdown_token))
+    .before_shutdown(move || {
+        let state = state.clone();
+        async move {
+            record_server_shutdown(state.get_ref()).await;
+        }
+    })
+    .component(database_component(db_handles))
+    .component(task_component(background_tasks))
+    .run()
+    .await?;
+```
+
+HTTP 组件通常是很薄的产品函数：产品负责创建 Actix `Server`，Forge 只接收 service future、shutdown token 和 stop hook。
+
+```rust
+fn http_component(
+    server: actix_web::dev::Server,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> RuntimeServiceComponent<actix_web::dev::Server> {
+    let handle = server.handle();
+    RuntimeServiceComponent::new(
+        "http",
+        RuntimeComponentKind::Core,
+        server,
+        shutdown_token,
+        move || async move {
+            handle.stop(true).await;
+        },
+    )
+}
+```
+
+普通组件应该由子系统暴露成构造函数，内部用 `runtime_component(...)` 适配 `RuntimeComponentBundle`。调用方仍然只看到 `.component(...)`，不用自己接触 root registry：
+
+```rust
+pub fn database_component(db_handles: DbHandles) -> RuntimeComponentBundleRegistration<DatabaseComponents> {
+    runtime_component(DatabaseComponents::new(db_handles))
+}
+```
+
+这就是 Forge runtime 的目标形态：产品入口只声明“有哪些组件”，组件自己把 health、startup、task、shutdown 和 descriptor 注册进 Forge registry。Forge 不替产品创建资源，也不把业务 shutdown 顺序藏在框架默认值里。
 
 ## 健康检查
 

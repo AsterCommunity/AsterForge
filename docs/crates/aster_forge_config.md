@@ -30,6 +30,7 @@ aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 可选 feature：
 
+- `openapi`：在 debug + openapi 构建下为公共 API 类型派生 `utoipa::ToSchema`。
 - `redis`：启用 `RedisConfigChangeNotifier` 和 `RedisConfigReloadListener`。
 
 ```toml
@@ -46,8 +47,8 @@ aster_forge_config = {
 主要 API 分组：
 
 - `ConfigDefinition`：一个系统配置项的静态定义。
-- `ConfigRegistry`：配置定义注册表，负责 key 查找、结构验证、normalizer 调用、default seed 记录生成和 metadata overlay。
-- `ConfigValue`：API-facing 配置值，当前支持 scalar string 和 string array。
+- `ConfigRegistry`：配置定义注册表，负责 key 查找、结构验证、normalizer 调用、API value 到 storage value 的预处理、default seed 记录生成和 metadata overlay。
+- `ConfigValue`：API-facing 配置值，当前支持 scalar string 和 string array，并提供存储转换、展示脱敏和读取容错。
 - `ConfigValueType`：存储值类型，包括 `string`、`multiline`、`string_array`、`string_enum`、`string_enum_set`、`number`、`boolean`。
 - `parse_single_string_enum_selection()`：解析 `string_enum`，并兼容历史单元素 JSON array。
 - `parse_string_enum_set_selection()` / `normalize_string_enum_set_selection()`：解析和规范化 `string_enum_set`。
@@ -161,15 +162,57 @@ for seed in CONFIG_REGISTRY.default_seed_records()? {
 1. 判断 key 是否允许直接更新。
 2. 判断 system key 是否禁止修改 visibility。
 3. 从 registry 查找 definition。
-4. 用 `ConfigValue::to_storage_for_type()` 把 API 值转成存储字符串。
-5. 用 `ConfigRegistry::normalize_value()` 执行结构验证、normalizer 和依赖校验。
-6. 产品 repository upsert。
-7. 用 `ConfigRegistry::apply_definition()` 覆盖 metadata。
-8. 更新本进程 runtime snapshot。
-9. 记录审计。
-10. 多进程部署时发布 `ConfigReloadMessage`。
+4. 用 `ConfigRegistry::value_to_storage_for_key()` 把 API 值转成可保存的 storage value；注册 key 会走声明的类型和 normalizer，custom key 默认按 string 保存。
+5. 产品 repository upsert。
+6. 用 `ConfigRegistry::apply_definition()` 覆盖 metadata。
+7. 更新本进程 runtime snapshot。
+8. 记录审计。
+9. 多进程部署时发布 `ConfigReloadMessage`。
 
 custom key 不在 registry 中，通常按产品策略固定为 string 类型，并由产品自己决定 visibility 和权限边界。
+
+## API 值和展示脱敏
+
+`ConfigValue` 是产品管理 API 可以直接复用的配置值类型：
+
+```rust
+use aster_forge_config::{ConfigValue, ConfigValueType};
+
+let value = ConfigValue::from_storage(ConfigValueType::StringArray, r#"["a","b"]"#.to_string())?;
+assert_eq!(value.to_storage_for_type(ConfigValueType::StringArray)?, r#"["a","b"]"#);
+```
+
+写入路径优先使用 `ConfigRegistry::value_to_storage_for_key()`，它会把 `ConfigValue` 按注册定义转成 storage string，并执行结构校验、normalizer 和 dependency validator：
+
+```rust
+let normalized_storage = CONFIG_REGISTRY.value_to_storage_for_key(
+    runtime_config.as_ref(),
+    key,
+    &value,
+)?;
+```
+
+如果产品正在实现更底层的 repository 或迁移逻辑，也可以单独使用 `ConfigValue::to_storage_for_type()`。
+
+读取和列表展示路径可以使用 `ConfigValue::for_presentation()`：
+
+```rust
+let value = ConfigValue::for_presentation(
+    value_type,
+    stored_value,
+    is_sensitive,
+    |error| tracing::warn!(%error, "invalid stored config value"),
+);
+```
+
+这个 helper 的边界很明确：
+
+- `is_sensitive=true` 时统一返回 `ConfigValue::String("***REDACTED***")`；
+- 非敏感值按 `ConfigValueType` 从存储字符串解析；
+- 如果历史数据里有 malformed JSON array，展示路径返回对应类型的空值，避免整个配置页打不开；
+- 它不吞写入错误，产品保存配置时仍然必须走严格校验。
+
+产品侧仍然负责 `ConfigValue` 到本地数据库 enum 的转换、权限判断、审计上下文和配置变更后的业务动作。不要为了“适配旧代码”再包一层等价的本地 enum。
 
 ### String Enum 兼容解析
 

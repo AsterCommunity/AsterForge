@@ -174,6 +174,7 @@ impl fmt::Display for ConfigVisibility {
 /// API-facing configuration value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
 pub enum ConfigValue {
     /// Scalar string value.
     String(String),
@@ -182,14 +183,70 @@ pub enum ConfigValue {
 }
 
 impl ConfigValue {
+    /// Redacted value used when presenting sensitive configuration through APIs or audit logs.
+    pub const REDACTED: &'static str = "***REDACTED***";
+
     /// Converts a storage string into an API-facing value for `value_type`.
-    pub fn from_storage(value_type: ConfigValueType, value: String) -> Result<Self> {
+    pub fn from_storage(value_type: impl Into<ConfigValueType>, value: String) -> Result<Self> {
+        let value_type = value_type.into();
         if !value_type.is_string_list() {
             return Ok(Self::String(value));
         }
 
         let items = serde_json::from_str::<Vec<String>>(&value)?;
         Ok(Self::StringArray(items))
+    }
+
+    /// Converts a storage string into an API-facing value and falls back to an empty value on
+    /// malformed stored data.
+    ///
+    /// Products should still validate writes strictly. This helper is for read/presentation paths
+    /// where a single bad database row should not break the entire admin config page.
+    pub fn from_storage_lossy(
+        value_type: impl Into<ConfigValueType>,
+        value: String,
+        on_invalid: impl FnOnce(&ConfigCoreError),
+    ) -> Self {
+        let value_type = value_type.into();
+        match Self::from_storage(value_type, value) {
+            Ok(value) => value,
+            Err(error) => {
+                on_invalid(&error);
+                Self::empty_for_type(value_type)
+            }
+        }
+    }
+
+    /// Builds a value suitable for presentation in an API response.
+    ///
+    /// Sensitive values are always represented as [`ConfigValue::String`] containing
+    /// [`ConfigValue::REDACTED`]. Non-sensitive values are parsed from storage with lossy fallback
+    /// so admin UI list endpoints can keep rendering even if an older row contains malformed JSON.
+    pub fn for_presentation(
+        value_type: impl Into<ConfigValueType>,
+        value: String,
+        is_sensitive: bool,
+        on_invalid: impl FnOnce(&ConfigCoreError),
+    ) -> Self {
+        if is_sensitive {
+            Self::redacted()
+        } else {
+            Self::from_storage_lossy(value_type, value, on_invalid)
+        }
+    }
+
+    /// Returns the canonical redacted API value.
+    pub fn redacted() -> Self {
+        Self::String(Self::REDACTED.to_string())
+    }
+
+    /// Returns the empty API value appropriate for a declared value type.
+    pub fn empty_for_type(value_type: impl Into<ConfigValueType>) -> Self {
+        if value_type.into().is_string_list() {
+            Self::StringArray(Vec::new())
+        } else {
+            Self::String(String::new())
+        }
     }
 
     /// Returns whether this value is logically empty.
@@ -201,7 +258,8 @@ impl ConfigValue {
     }
 
     /// Converts an API-facing value into a storage string for `value_type`.
-    pub fn to_storage_for_type(&self, value_type: ConfigValueType) -> Result<String> {
+    pub fn to_storage_for_type(&self, value_type: impl Into<ConfigValueType>) -> Result<String> {
+        let value_type = value_type.into();
         match (value_type, self) {
             (
                 ConfigValueType::StringArray | ConfigValueType::StringEnumSet,
@@ -492,6 +550,30 @@ mod tests {
             r#"["a","b"]"#
         );
         assert!(array.to_storage_for_type(ConfigValueType::String).is_err());
+    }
+
+    #[test]
+    fn config_value_presentation_redacts_and_falls_back_lossily() {
+        let mut saw_error = false;
+        let value = ConfigValue::for_presentation(
+            ConfigValueType::StringArray,
+            "not json".to_string(),
+            false,
+            |_| saw_error = true,
+        );
+        assert!(saw_error);
+        assert_eq!(value, ConfigValue::StringArray(Vec::new()));
+
+        let value = ConfigValue::for_presentation(
+            ConfigValueType::StringArray,
+            r#"["secret"]"#.to_string(),
+            true,
+            |_| unreachable!("redacted values should not parse storage"),
+        );
+        assert_eq!(
+            value,
+            ConfigValue::String(ConfigValue::REDACTED.to_string())
+        );
     }
 
     #[test]

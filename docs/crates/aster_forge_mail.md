@@ -433,4 +433,4 @@ Forge 测试覆盖：
 
 ## 参考项目
 
-- AsterYggdrasil：模板 code、payload enum、审计、SeaORM repository 和 `MailSender` 留在产品代码里，而 dispatch stats、投递失败 decision、重试策略、截断、`mark_sent` 重试、模板 registry、placeholder 渲染和 HTML/text 转换走 Forge。
+- AsterYggdrasil：模板 code、payload enum、审计和 SeaORM repository 留在产品代码里；sender、dispatch stats、投递失败 decision、重试策略、截断、`mark_sent` 重试、模板 registry、placeholder 渲染和 HTML/text 转换走 Forge。

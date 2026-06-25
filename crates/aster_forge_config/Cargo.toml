@@ -10,6 +10,7 @@ publish = false
 
 [features]
 default = []
+openapi = ["dep:utoipa"]
 redis = ["dep:redis"]
 
 [dependencies]
@@ -22,3 +23,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
+utoipa = { workspace = true, optional = true }
