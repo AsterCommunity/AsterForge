@@ -17,6 +17,7 @@
     )
 )]
 
+pub mod avatar;
 pub mod bool_like;
 pub mod fs;
 pub mod html;

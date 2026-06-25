@@ -50,15 +50,30 @@ aster_forge_config = {
 - `ConfigValue`：API-facing 配置值，当前支持 scalar string 和 string array。
 - `ConfigValueType`：存储值类型，包括 `string`、`multiline`、`string_array`、`string_enum`、`string_enum_set`、`number`、`boolean`。
 - `parse_single_string_enum_selection()`：解析 `string_enum`，并兼容历史单元素 JSON array。
+- `parse_string_enum_set_selection()` / `normalize_string_enum_set_selection()`：解析和规范化 `string_enum_set`。
 - `parse_string_array_config_value()`：解析配置存储中的 JSON string array，让产品侧继续负责后续 URL、域名、枚举等业务规范化。
 - `ConfigSource`：`system` / `custom` 来源。
 - `ConfigVisibility`：`private` / `public` / `authenticated` 可见性。
 - `StoredConfig`：产品数据库行转换后的 Forge 存储模型。
 - `AsyncRuntimeConfig` / `AsyncConfigSnapshot`：基于 `tokio::sync::RwLock` 的 async 配置快照和 reload diff。
 - `SyncRuntimeConfig` / `SyncConfigSnapshot`：基于标准库 `RwLock` 的同步热读配置快照。
-- `read_positive_u64` / `read_bounded_u64` / `read_positive_i32` / `read_positive_usize` / `read_non_negative_u64` / `read_bool`：产品无关的 runtime 配置读取 helper。
+- `read_positive_u64` / `read_positive_u32` / `read_bounded_u64` / `read_bounded_u8` / `read_positive_i32` / `read_positive_usize` / `read_non_negative_u64` / `read_finite_f32` / `read_bool`：产品无关的 runtime 配置读取 helper。
 - `ConfigChangeNotifier`：reload 通知抽象。
 - `ConfigReloadMessage`：跨进程 reload 信号载荷。
+
+### avatar
+
+主要 API：
+
+- `aster_forge_config::avatar::DEFAULT_GRAVATAR_BASE_URL`
+- `aster_forge_config::avatar::normalize_gravatar_base_url_config_value(value)`
+- `aster_forge_config::avatar::gravatar_base_url_or_default(value)`
+
+这组 helper 负责 Gravatar 配置值的写入校验和运行时默认值回退。`normalize_gravatar_base_url_config_value`
+接受空值并回退默认地址，非空值必须是没有 query/fragment 的 HTTP(S) base URL。
+`gravatar_base_url_or_default` 用于运行时读取，空值回退默认值并去掉尾部斜杠。
+
+产品侧仍然负责头像来源策略、上传头像路由、缓存头、可用尺寸，以及是否启用 Gravatar。
 
 ## Registry 边界
 
@@ -188,6 +203,48 @@ assert_eq!(profile, PreviewProfile::Quality);
 
 Forge 只处理“标量字符串或单元素字符串数组”这层兼容格式。具体枚举值、默认值、错误映射和业务含义仍然留在产品 normalizer。
 
+### String Enum Set 解析
+
+`string_enum_set` 配置值应该存成 JSON string array。产品侧仍然拥有具体 enum、默认集合和业务含义，Forge 只统一解析、unknown 检查、duplicate 检查，以及按权威 enum 顺序生成稳定存储值。
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditAction {
+    ConfigUpdate,
+    UserLogin,
+}
+
+const ALL_ACTIONS: &[AuditAction] = &[AuditAction::ConfigUpdate, AuditAction::UserLogin];
+
+fn parse_action(value: &str) -> Option<AuditAction> {
+    match value {
+        "config_update" => Some(AuditAction::ConfigUpdate),
+        "user_login" => Some(AuditAction::UserLogin),
+        _ => None,
+    }
+}
+
+fn action_name(action: AuditAction) -> &'static str {
+    match action {
+        AuditAction::ConfigUpdate => "config_update",
+        AuditAction::UserLogin => "user_login",
+    }
+}
+
+let normalized = aster_forge_config::normalize_string_enum_set_selection(
+    r#"["user_login","config_update"]"#,
+    "audit_log_recorded_actions",
+    "audit action",
+    ALL_ACTIONS,
+    parse_action,
+    action_name,
+)?;
+
+assert_eq!(normalized, vec!["config_update", "user_login"]);
+```
+
+如果产品运行时需要保留请求顺序，例如构建诊断信息，可以使用 `parse_string_enum_set_selection()`。如果产品要写回配置存储，优先使用 `normalize_string_enum_set_selection()`，保证 API 输入顺序不会造成无意义 diff。
+
 ### String Array 解析
 
 `string_array` 和 `string_enum_set` 的结构化校验由 `validate_storage_value()` 统一处理。如果产品 normalizer 需要先解析数组，再对每一项做 URL、域名、枚举或路径规范化，可以直接使用 `parse_string_array_config_value()`：
@@ -236,16 +293,30 @@ pub fn background_task_dispatch_interval_secs(runtime_config: &RuntimeConfig) ->
 当前提供：
 
 - `parse_bool_like_value(value)`：解析 `true/false`、`1/0`、`yes/no`、`on/off`。
+- `parse_strict_bool_value(value)`：只解析 `true/false`，适合不允许历史 bool-like 输入的配置项。
 - `parse_positive_u64(value)`：解析正整数。
+- `parse_positive_u32(value)`：解析正 `u32`。
 - `parse_non_negative_u64(value)`：解析非负整数。
 - `parse_bounded_u64(value, min, max)`：解析闭区间内的 `u64`。
+- `parse_bounded_u8(value, min, max)`：解析闭区间内的 `u8`。
 - `parse_positive_i32(value)`：解析正 `i32`。
+- `parse_finite_f32(value)`：解析有限 `f32`，拒绝 `NaN` 和无穷大。
+- `normalize_bool_config_value(key, value)`：把 bool-like 输入规范化为 `true` / `false` 存储值。
+- `normalize_strict_bool_config_value(key, value)`：把严格 `true/false` 输入规范化为存储值，拒绝 `yes/on/1` 等兼容写法。
 - `normalize_positive_u64_config_value(key, value)`：用于配置更新时规范化正整数存储值。
+- `normalize_non_negative_u64_config_value(key, value)`：用于配置更新时规范化非负整数存储值。
+- `normalize_bounded_u64_config_value(key, value, min, max)`：用于配置更新时规范化闭区间内的 `u64` 存储值。
+- `normalize_positive_u32_config_value(key, value)`：用于配置更新时规范化正 `u32` 存储值。
+- `normalize_bounded_u8_config_value(key, value, min, max)`：用于配置更新时规范化闭区间内的 `u8` 存储值。
+- `normalize_finite_f32_config_value(key, value)`：用于配置更新时规范化有限 `f32` 存储值。
 - `read_positive_u64(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
+- `read_positive_u32(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 - `read_non_negative_u64(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 - `read_bounded_u64(lookup, key, default, min, max)`：非法、缺失或超出闭区间时返回默认值并记录 warning。
+- `read_bounded_u8(lookup, key, default, min, max)`：非法、缺失或超出闭区间时返回默认值并记录 warning。
 - `read_positive_i32(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 - `read_positive_usize(lookup, key, default)`：非法、缺失或超过 `usize` 时返回默认值。
+- `read_finite_f32(lookup, key, default)`：非法、缺失、`NaN` 或无穷大时返回默认值并记录 warning。
 - `read_bool(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 
 这些 helper 接收 `ConfigValueLookup`，所以产品可以传 `RuntimeConfig`、`SyncConfigSnapshot`、`HashMap<String, String>`、`BTreeMap<String, String>`，或者一个 `Fn(&str) -> Option<String>` 闭包。闭包适合把“临时覆盖值 + runtime snapshot”叠在一起读取，例如管理 API 预览某个策略时不必写一次性 adapter struct。

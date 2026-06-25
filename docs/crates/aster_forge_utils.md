@@ -5,6 +5,7 @@
 ## 适用场景
 
 - boolean-like 字符串解析。
+- Gravatar hash 和 URL 拼接。
 - best-effort 临时文件和目录清理。
 - HTML 和 inline script 占位符 escaping。
 - UUID 和 token 生成。
@@ -19,6 +20,7 @@
 不适合放在这里的内容：
 
 - 产品配置结构。
+- 配置值 normalizer 和运行时默认值读取，应该用 `aster_forge_config`。
 - 文件名校验，应该用 `aster_forge_validation`。
 - object key 校验，应该用 `aster_forge_storage_core`。
 - API pagination，应该用 `aster_forge_api`。
@@ -33,6 +35,20 @@ aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge" }
 当前没有 feature flag。
 
 ## 模块
+
+### avatar
+
+主要 API：
+
+- `gravatar_hash(email)`
+- `gravatar_url(email, size, base_url)`
+
+`gravatar_hash` 会 trim、lowercase 邮箱后计算 Gravatar 使用的 MD5 hex。`gravatar_url`
+拼出 Aster 服务当前统一使用的公开 URL 形状：`{base}/{hash}?d=identicon&s={size}&r=g`。
+
+Gravatar base URL 的配置写入校验和默认值回退在 `aster_forge_config` 中，别放回
+`utils`。产品侧仍然负责用户头像来源策略、上传头像路由、缓存头、可用尺寸，以及是否启用
+Gravatar。
 
 ### bool_like
 

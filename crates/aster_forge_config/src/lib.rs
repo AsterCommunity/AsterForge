@@ -19,6 +19,7 @@
     )
 )]
 
+pub mod avatar;
 mod error;
 mod notification;
 mod registry;
@@ -39,13 +40,19 @@ pub use registry::{
 pub use runtime::{
     AsyncConfigSnapshot, AsyncConfigStore, AsyncRuntimeConfig, RuntimeConfigChange,
     RuntimeConfigRecord, StoredConfig, SyncConfigSnapshot, SyncRuntimeConfig,
-    normalize_positive_u64_config_value, parse_bool_like_value, parse_bounded_u64,
-    parse_non_negative_u64, parse_positive_i32, parse_positive_u64, read_bool, read_bounded_u64,
-    read_non_negative_u64, read_positive_i32, read_positive_u64, read_positive_usize,
+    normalize_bool_config_value, normalize_bounded_u8_config_value,
+    normalize_bounded_u64_config_value, normalize_finite_f32_config_value,
+    normalize_non_negative_u64_config_value, normalize_positive_u32_config_value,
+    normalize_positive_u64_config_value, normalize_strict_bool_config_value, parse_bool_like_value,
+    parse_bounded_u8, parse_bounded_u64, parse_finite_f32, parse_non_negative_u64,
+    parse_positive_i32, parse_positive_u32, parse_positive_u64, parse_strict_bool_value, read_bool,
+    read_bounded_u8, read_bounded_u64, read_finite_f32, read_non_negative_u64, read_positive_i32,
+    read_positive_u32, read_positive_u64, read_positive_usize,
 };
 pub use value::{
     ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility,
-    parse_single_string_enum_selection, parse_string_array_config_value, validate_storage_value,
+    normalize_string_enum_set_selection, parse_single_string_enum_selection,
+    parse_string_array_config_value, parse_string_enum_set_selection, validate_storage_value,
 };
 
 /// Builds a static [`ConfigRegistry`] from a list of [`ConfigDefinition`] items.

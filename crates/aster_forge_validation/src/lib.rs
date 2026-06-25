@@ -1,8 +1,9 @@
 //! Shared validation helpers for Aster services.
 //!
-//! The crate collects validation routines that were previously repeated in service code, starting
-//! with email and filename handling. It keeps validation errors as plain messages so API layers and
-//! domain services can decide how to present or translate them.
+//! The crate collects validation routines that were previously repeated in service code, including
+//! display text, frontend asset URLs, email handling, and filename handling. It keeps validation
+//! errors as plain messages so API layers and domain services can decide how to present or translate
+//! them.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
@@ -16,8 +17,12 @@
     )
 )]
 
+/// Display text and public asset URL validation helpers.
+pub mod display;
 /// Email validation and normalization helpers.
 pub mod email;
+/// Email allow/block list normalization and matching helpers.
+pub mod email_policy;
 /// File and folder name validation helpers.
 pub mod filename;
 

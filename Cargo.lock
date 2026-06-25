@@ -541,6 +541,7 @@ dependencies = [
 name = "aster_forge_config"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_utils",
  "async-trait",
  "futures",
  "redis",
@@ -618,6 +619,7 @@ name = "aster_forge_mail"
 version = "0.1.0"
 dependencies = [
  "aster_forge_utils",
+ "aster_forge_validation",
  "serde",
  "tokio",
  "tracing",
@@ -685,6 +687,7 @@ version = "0.1.0"
 dependencies = [
  "http 1.4.2",
  "ipnet",
+ "md-5",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

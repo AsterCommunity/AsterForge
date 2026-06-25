@@ -4,6 +4,7 @@
 
 当前这个 crate 主要覆盖各服务里重复出现的 outbox 投递机制：
 
+- SMTP / sender / 模板配置值的产品无关规范化；
 - 投递计数统计；
 - 重试延迟策略；
 - 投递错误截断；
@@ -19,16 +20,64 @@
 - 产品希望在 SMTP 已接受邮件后，对 `mark_sent` 做共享重试。
 - 产品希望复用 `MailRecipient` / `MailMessage` 这类不带发送语义的数据模型。
 - 产品希望用注册式方式维护模板变量，并复用 HTML escape、placeholder 替换和 text fallback 生成。
+- 产品希望复用 SMTP host/port、sender address/name、mail security、模板 subject/body 的规范化规则。
 
 不适合放在这里的内容：
 
 - 产品模板和模板 code。
+- 产品配置 key 和默认值。
 - 审计动作。
 - 用户 ID 或用户上下文。
 - runtime 配置 key。
 - 具体 SeaORM repository。
 - 具体 `MailSender` trait、SMTP transport、测试 sender。
 - 具体 payload enum、业务 URL 生成和本地化文案。
+
+## Config Normalization
+
+模块：`aster_forge_mail::config`
+
+主要类型和函数：
+
+- `MailConfigError`
+- `MailConfigResult<T>`
+- `parse_smtp_port(value)`
+- `normalize_smtp_host_config_value(value)`
+- `normalize_smtp_port_config_value(value)`
+- `normalize_mail_address_config_value(value)`
+- `normalize_mail_name_config_value(value)`
+- `normalize_mail_security_config_value(value)`
+- `normalize_mail_template_subject_config_value(key, value)`
+- `normalize_mail_template_body_config_value(key, value)`
+- `MAIL_TEMPLATE_MAX_SUBJECT_LEN`
+- `MAIL_TEMPLATE_MAX_BODY_LEN`
+
+这些 helper 只处理产品无关的存储值规范化：
+
+- SMTP host 会 trim、转小写，空值表示未配置，非空值不能包含空白字符。
+- SMTP port 必须是 `1..=65535` 的整数。
+- sender address 会 trim、转小写，空值表示未配置，非空值必须符合 Aster 轻量 email 规则。
+- sender name 会 trim，最长 128 字符。
+- mail security 接受 `true/false`、`1/0`、`yes/no`、`on/off`，存储为 `true` / `false`。
+- template subject 会 trim，不能为空，不能包含换行，最长 255 字符。
+- template body 会把 CRLF/CR 规范化成 LF，不能为空，最长 64 KiB。
+
+产品侧仍然负责：
+
+- 配置 key、默认值、敏感标记和前端 schema；
+- runtime settings struct；
+- 是否允许未配置 SMTP；
+- SMTP transport；
+- `MailConfigError` 到产品 API 错误码的映射。
+
+示例：
+
+```rust
+pub fn normalize_mail_security_config_value(value: &str) -> Result<String> {
+    aster_forge_mail::normalize_mail_security_config_value(value)
+        .map_err(|error| AsterError::validation_error(error.to_string()))
+}
+```
 
 ## Cargo
 

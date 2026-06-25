@@ -330,13 +330,98 @@ pub fn parse_single_string_enum_selection<T>(
     })
 }
 
+/// Parses a string enum set from a JSON array of strings.
+///
+/// Product crates still own the concrete enum, canonical names, allowed values,
+/// and default set. Forge only handles the shared storage shape and duplicate
+/// detection so every service reports consistent malformed enum-set config.
+pub fn parse_string_enum_set_selection<T>(
+    value: &str,
+    key: &str,
+    item_name: &str,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<T>>
+where
+    T: Copy + Eq,
+{
+    let values = parse_string_array_config_value(value, key)?;
+    let mut selected = Vec::with_capacity(values.len());
+
+    for raw in values {
+        let Some(item) = parse(&raw) else {
+            return Err(ConfigCoreError::invalid_value(format!(
+                "unknown {item_name} '{raw}' in {key}"
+            )));
+        };
+        if selected.contains(&item) {
+            return Err(ConfigCoreError::invalid_value(format!(
+                "duplicate {item_name} '{raw}' in {key}"
+            )));
+        }
+        selected.push(item);
+    }
+
+    Ok(selected)
+}
+
+/// Parses and normalizes a string enum set into authoritative order.
+///
+/// This is useful for `string_enum_set` config values whose storage order should
+/// stay stable regardless of the order provided by an API request. The returned
+/// values are the canonical storage strings from `display`.
+pub fn normalize_string_enum_set_selection<T>(
+    value: &str,
+    key: &str,
+    item_name: &str,
+    authoritative_order: &[T],
+    parse: impl Fn(&str) -> Option<T>,
+    display: impl Fn(T) -> &'static str,
+) -> Result<Vec<&'static str>>
+where
+    T: Copy + Eq,
+{
+    let selected = parse_string_enum_set_selection(value, key, item_name, parse)?;
+    Ok(authoritative_order
+        .iter()
+        .copied()
+        .filter(|item| selected.contains(item))
+        .map(display)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility,
-        parse_single_string_enum_selection, parse_string_array_config_value,
-        validate_storage_value,
+        normalize_string_enum_set_selection, parse_single_string_enum_selection,
+        parse_string_array_config_value, parse_string_enum_set_selection, validate_storage_value,
     };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TestEnum {
+        Fast,
+        Balanced,
+        Quality,
+    }
+
+    const TEST_ENUMS: &[TestEnum] = &[TestEnum::Fast, TestEnum::Balanced, TestEnum::Quality];
+
+    fn parse_test_enum(value: &str) -> Option<TestEnum> {
+        match value {
+            "fast" => Some(TestEnum::Fast),
+            "balanced" => Some(TestEnum::Balanced),
+            "quality" => Some(TestEnum::Quality),
+            _ => None,
+        }
+    }
+
+    fn display_test_enum(value: TestEnum) -> &'static str {
+        match value {
+            TestEnum::Fast => "fast",
+            TestEnum::Balanced => "balanced",
+            TestEnum::Quality => "quality",
+        }
+    }
 
     #[test]
     fn value_type_round_trips_storage_names() {
@@ -490,5 +575,65 @@ mod tests {
         );
         assert!(parse_string_array_config_value(r#""a""#, "domains").is_err());
         assert!(parse_string_array_config_value(r#"[1]"#, "domains").is_err());
+    }
+
+    #[test]
+    fn string_enum_set_selection_rejects_unknown_and_duplicate_values() {
+        assert_eq!(
+            parse_string_enum_set_selection(
+                r#"["quality","fast"]"#,
+                "preview_profiles",
+                "preview profile",
+                parse_test_enum,
+            )
+            .unwrap(),
+            vec![TestEnum::Quality, TestEnum::Fast]
+        );
+        assert!(
+            parse_string_enum_set_selection(
+                r#"["fast","unknown"]"#,
+                "preview_profiles",
+                "preview profile",
+                parse_test_enum,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_string_enum_set_selection(
+                r#"["fast","fast"]"#,
+                "preview_profiles",
+                "preview profile",
+                parse_test_enum,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn string_enum_set_selection_normalizes_to_authoritative_order() {
+        assert_eq!(
+            normalize_string_enum_set_selection(
+                r#"["quality","fast"]"#,
+                "preview_profiles",
+                "preview profile",
+                TEST_ENUMS,
+                parse_test_enum,
+                display_test_enum,
+            )
+            .unwrap(),
+            vec!["fast", "quality"]
+        );
+        assert_eq!(
+            normalize_string_enum_set_selection(
+                r#"[]"#,
+                "preview_profiles",
+                "preview profile",
+                TEST_ENUMS,
+                parse_test_enum,
+                display_test_enum,
+            )
+            .unwrap(),
+            Vec::<&'static str>::new()
+        );
     }
 }

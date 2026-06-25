@@ -504,9 +504,24 @@ pub fn parse_bool_like_value(value: &str) -> Option<bool> {
     }
 }
 
+/// Parses a strict `true`/`false` runtime configuration value.
+pub fn parse_strict_bool_value(value: &str) -> Option<bool> {
+    match value.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
 /// Parses a positive `u64` runtime configuration value.
 pub fn parse_positive_u64(value: &str) -> Option<u64> {
     let parsed = value.trim().parse::<u64>().ok()?;
+    (parsed > 0).then_some(parsed)
+}
+
+/// Parses a positive `u32` runtime configuration value.
+pub fn parse_positive_u32(value: &str) -> Option<u32> {
+    let parsed = value.trim().parse::<u32>().ok()?;
     (parsed > 0).then_some(parsed)
 }
 
@@ -521,10 +536,22 @@ pub fn parse_bounded_u64(value: &str, min: u64, max: u64) -> Option<u64> {
     (min..=max).contains(&parsed).then_some(parsed)
 }
 
+/// Parses a `u8` runtime configuration value within an inclusive range.
+pub fn parse_bounded_u8(value: &str, min: u8, max: u8) -> Option<u8> {
+    let parsed = value.trim().parse::<u8>().ok()?;
+    (min..=max).contains(&parsed).then_some(parsed)
+}
+
 /// Parses a positive `i32` runtime configuration value.
 pub fn parse_positive_i32(value: &str) -> Option<i32> {
     let parsed = value.trim().parse::<i32>().ok()?;
     (parsed > 0).then_some(parsed)
+}
+
+/// Parses a finite `f32` runtime configuration value.
+pub fn parse_finite_f32(value: &str) -> Option<f32> {
+    let parsed = value.trim().parse::<f32>().ok()?;
+    parsed.is_finite().then_some(parsed)
 }
 
 /// Normalizes a positive integer runtime configuration value for storage.
@@ -535,6 +562,74 @@ pub fn normalize_positive_u64_config_value(key: &str, value: &str) -> Result<Str
     Ok(parsed.to_string())
 }
 
+/// Normalizes a non-negative integer runtime configuration value for storage.
+pub fn normalize_non_negative_u64_config_value(key: &str, value: &str) -> Result<String> {
+    let parsed = parse_non_negative_u64(value).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be a non-negative integer"))
+    })?;
+    Ok(parsed.to_string())
+}
+
+/// Normalizes a bounded `u64` runtime configuration value for storage.
+pub fn normalize_bounded_u64_config_value(
+    key: &str,
+    value: &str,
+    min: u64,
+    max: u64,
+) -> Result<String> {
+    let parsed = parse_bounded_u64(value, min, max).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be between {min} and {max}"))
+    })?;
+    Ok(parsed.to_string())
+}
+
+/// Normalizes a bool-like runtime configuration value for storage.
+///
+/// Accepted input forms match [`parse_bool_like_value`]. The stored value is
+/// always the canonical string `true` or `false`.
+pub fn normalize_bool_config_value(key: &str, value: &str) -> Result<String> {
+    let parsed = parse_bool_like_value(value).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be 'true' or 'false'"))
+    })?;
+    Ok(if parsed { "true" } else { "false" }.to_string())
+}
+
+/// Normalizes a strict `true`/`false` runtime configuration value for storage.
+pub fn normalize_strict_bool_config_value(key: &str, value: &str) -> Result<String> {
+    let parsed = parse_strict_bool_value(value).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be 'true' or 'false'"))
+    })?;
+    Ok(if parsed { "true" } else { "false" }.to_string())
+}
+
+/// Normalizes a positive `u32` runtime configuration value for storage.
+pub fn normalize_positive_u32_config_value(key: &str, value: &str) -> Result<String> {
+    let parsed = parse_positive_u32(value).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be a positive integer"))
+    })?;
+    Ok(parsed.to_string())
+}
+
+/// Normalizes a bounded `u8` runtime configuration value for storage.
+pub fn normalize_bounded_u8_config_value(
+    key: &str,
+    value: &str,
+    min: u8,
+    max: u8,
+) -> Result<String> {
+    let parsed = parse_bounded_u8(value, min, max).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be between {min} and {max}"))
+    })?;
+    Ok(parsed.to_string())
+}
+
+/// Normalizes a finite `f32` runtime configuration value for storage.
+pub fn normalize_finite_f32_config_value(key: &str, value: &str) -> Result<String> {
+    let parsed = parse_finite_f32(value)
+        .ok_or_else(|| ConfigCoreError::invalid_value(format!("{key} must be a finite number")))?;
+    Ok(parsed.to_string())
+}
+
 /// Reads a positive `u64` from a runtime configuration lookup.
 pub fn read_positive_u64<L>(lookup: &L, key: &str, default: u64) -> u64
 where
@@ -542,6 +637,23 @@ where
 {
     match lookup.get_config_value(key) {
         Some(raw) => match parse_positive_u64(&raw) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(key, value = %raw, "invalid runtime config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a positive `u32` from a runtime configuration lookup.
+pub fn read_positive_u32<L>(lookup: &L, key: &str, default: u32) -> u32
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_positive_u32(&raw) {
             Some(value) => value,
             None => {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
@@ -592,6 +704,29 @@ where
     }
 }
 
+/// Reads a bounded `u8` from a runtime configuration lookup.
+pub fn read_bounded_u8<L>(lookup: &L, key: &str, default: u8, min: u8, max: u8) -> u8
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_bounded_u8(&raw, min, max) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    key,
+                    value = %raw,
+                    min,
+                    max,
+                    "invalid runtime config; using default"
+                );
+                default
+            }
+        },
+        None => default,
+    }
+}
+
 /// Reads a positive `i32` from a runtime configuration lookup.
 pub fn read_positive_i32<L>(lookup: &L, key: &str, default: i32) -> i32
 where
@@ -599,6 +734,23 @@ where
 {
     match lookup.get_config_value(key) {
         Some(raw) => match parse_positive_i32(&raw) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(key, value = %raw, "invalid runtime config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a finite `f32` from a runtime configuration lookup.
+pub fn read_finite_f32<L>(lookup: &L, key: &str, default: f32) -> f32
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_finite_f32(&raw) {
             Some(value) => value,
             None => {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
@@ -647,9 +799,14 @@ mod tests {
 
     use super::{
         AsyncConfigStore, AsyncRuntimeConfig, RuntimeConfigChange, StoredConfig, SyncRuntimeConfig,
-        normalize_positive_u64_config_value, parse_bool_like_value, parse_bounded_u64,
-        parse_non_negative_u64, parse_positive_i32, parse_positive_u64, read_bool,
-        read_bounded_u64, read_non_negative_u64, read_positive_i32, read_positive_u64,
+        normalize_bool_config_value, normalize_bounded_u8_config_value,
+        normalize_bounded_u64_config_value, normalize_finite_f32_config_value,
+        normalize_non_negative_u64_config_value, normalize_positive_u32_config_value,
+        normalize_positive_u64_config_value, normalize_strict_bool_config_value,
+        parse_bool_like_value, parse_bounded_u8, parse_bounded_u64, parse_finite_f32,
+        parse_non_negative_u64, parse_positive_i32, parse_positive_u32, parse_positive_u64,
+        parse_strict_bool_value, read_bool, read_bounded_u8, read_bounded_u64, read_finite_f32,
+        read_non_negative_u64, read_positive_i32, read_positive_u32, read_positive_u64,
         read_positive_usize,
     };
     use crate::{ConfigSource, ConfigValueType, ConfigVisibility, Result};
@@ -764,15 +921,25 @@ mod tests {
         assert_eq!(parse_bool_like_value(" yes "), Some(true));
         assert_eq!(parse_bool_like_value("off"), Some(false));
         assert_eq!(parse_bool_like_value("maybe"), None);
+        assert_eq!(parse_strict_bool_value(" true "), Some(true));
+        assert_eq!(parse_strict_bool_value("false"), Some(false));
+        assert_eq!(parse_strict_bool_value("yes"), None);
         assert_eq!(parse_positive_u64("42"), Some(42));
         assert_eq!(parse_positive_u64("0"), None);
+        assert_eq!(parse_positive_u32("42"), Some(42));
+        assert_eq!(parse_positive_u32("4294967296"), None);
         assert_eq!(parse_non_negative_u64("0"), Some(0));
         assert_eq!(parse_non_negative_u64("-1"), None);
         assert_eq!(parse_bounded_u64("5", 4, 8), Some(5));
         assert_eq!(parse_bounded_u64("3", 4, 8), None);
         assert_eq!(parse_bounded_u64("9", 4, 8), None);
+        assert_eq!(parse_bounded_u8("4", 1, 4), Some(4));
+        assert_eq!(parse_bounded_u8("5", 1, 4), None);
         assert_eq!(parse_positive_i32("12"), Some(12));
         assert_eq!(parse_positive_i32("2147483648"), None);
+        assert_eq!(parse_finite_f32("1.5"), Some(1.5));
+        assert_eq!(parse_finite_f32("NaN"), None);
+        assert_eq!(parse_finite_f32("inf"), None);
     }
 
     #[test]
@@ -783,18 +950,26 @@ mod tests {
             ("bool".to_string(), "on".to_string()),
             ("bad".to_string(), "nope".to_string()),
             ("bounded".to_string(), "7".to_string()),
+            ("bounded_u8".to_string(), "4".to_string()),
             ("out_of_range".to_string(), "12".to_string()),
             ("too_large_i32".to_string(), "2147483648".to_string()),
+            ("finite".to_string(), "2.5".to_string()),
+            ("nan".to_string(), "NaN".to_string()),
         ]);
 
         assert_eq!(read_positive_u64(&lookup, "positive", 1), 5);
+        assert_eq!(read_positive_u32(&lookup, "positive", 1), 5);
         assert_eq!(read_positive_u64(&lookup, "zero", 1), 1);
         assert_eq!(read_non_negative_u64(&lookup, "zero", 9), 0);
         assert_eq!(read_bounded_u64(&lookup, "bounded", 1, 4, 8), 7);
+        assert_eq!(read_bounded_u8(&lookup, "bounded_u8", 1, 1, 4), 4);
         assert_eq!(read_bounded_u64(&lookup, "out_of_range", 1, 4, 8), 1);
+        assert_eq!(read_bounded_u8(&lookup, "out_of_range", 1, 1, 4), 1);
         assert!(read_bool(&lookup, "bool", false));
         assert!(read_bool(&lookup, "bad", true));
         assert_eq!(read_positive_i32(&lookup, "too_large_i32", 3), 3);
+        assert_eq!(read_finite_f32(&lookup, "finite", 1.0), 2.5);
+        assert_eq!(read_finite_f32(&lookup, "nan", 1.0), 1.0);
         assert_eq!(read_positive_usize(&lookup, "positive", 1), 5);
     }
 
@@ -806,5 +981,48 @@ mod tests {
         );
         assert!(normalize_positive_u64_config_value("interval", "0").is_err());
         assert!(normalize_positive_u64_config_value("interval", "abc").is_err());
+    }
+
+    #[test]
+    fn numeric_normalizers_trim_and_reject_invalid_values() {
+        assert_eq!(
+            normalize_bool_config_value("enabled", " yes ").unwrap(),
+            "true"
+        );
+        assert_eq!(
+            normalize_bool_config_value("enabled", "OFF").unwrap(),
+            "false"
+        );
+        assert!(normalize_bool_config_value("enabled", "sometimes").is_err());
+        assert_eq!(
+            normalize_strict_bool_config_value("strict_enabled", " true ").unwrap(),
+            "true"
+        );
+        assert!(normalize_strict_bool_config_value("strict_enabled", "yes").is_err());
+        assert_eq!(
+            normalize_positive_u32_config_value("width", " 430 ").unwrap(),
+            "430"
+        );
+        assert!(normalize_positive_u32_config_value("width", "0").is_err());
+        assert_eq!(
+            normalize_non_negative_u64_config_value("max_age", " 0 ").unwrap(),
+            "0"
+        );
+        assert!(normalize_non_negative_u64_config_value("max_age", "-1").is_err());
+        assert_eq!(
+            normalize_bounded_u64_config_value("length", "5", 4, 8).unwrap(),
+            "5"
+        );
+        assert!(normalize_bounded_u64_config_value("length", "9", 4, 8).is_err());
+        assert_eq!(
+            normalize_bounded_u8_config_value("supersampling", "4", 1, 4).unwrap(),
+            "4"
+        );
+        assert!(normalize_bounded_u8_config_value("supersampling", "5", 1, 4).is_err());
+        assert_eq!(
+            normalize_finite_f32_config_value("scale", " 11.5 ").unwrap(),
+            "11.5"
+        );
+        assert!(normalize_finite_f32_config_value("scale", "NaN").is_err());
     }
 }
