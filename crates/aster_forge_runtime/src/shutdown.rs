@@ -8,6 +8,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type ShutdownPhaseFn = dyn FnMut() -> ShutdownFuture + Send;
 
@@ -83,6 +86,15 @@ impl ShutdownReport {
     /// Returns whether any phase failed or timed out.
     pub fn has_failures(&self) -> bool {
         self.phases.iter().any(|phase| phase.status.is_failure())
+    }
+}
+
+/// Logs the aggregate result of a shutdown run.
+pub fn log_shutdown_report(report: &ShutdownReport) {
+    if report.has_failures() {
+        tracing::warn!("shutdown completed with one or more failed phases");
+    } else {
+        tracing::info!("shutdown complete");
     }
 }
 
@@ -193,6 +205,28 @@ pub async fn wait_for_termination_signal() -> Result<TerminationSignal, RuntimeS
     Ok(signal)
 }
 
+/// Spawns a task that waits for a termination signal, cancels `shutdown_token`,
+/// and then runs `on_signal`.
+///
+/// This keeps product entrypoints from duplicating the same signal-listener
+/// task while leaving the actual server stop primitive product-specific.
+pub fn spawn_termination_signal_handler<F, Fut>(
+    shutdown_token: CancellationToken,
+    on_signal: F,
+) -> JoinHandle<()>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        if let Err(error) = wait_for_termination_signal().await {
+            tracing::error!(%error, "shutdown signal listener failed");
+        }
+        shutdown_token.cancel();
+        on_signal().await;
+    })
+}
+
 #[cfg(unix)]
 async fn wait_for_signal_impl() -> Result<TerminationSignal, RuntimeSignalError> {
     use tokio::signal::unix::{SignalKind, signal};
@@ -246,6 +280,25 @@ mod tests {
             ShutdownPhaseStatus::Failed("flush failed".to_string())
         );
         assert_eq!(report.phases[2].status, ShutdownPhaseStatus::Succeeded);
+    }
+
+    #[test]
+    fn shutdown_report_logger_accepts_success_and_failure_reports() {
+        super::log_shutdown_report(&super::ShutdownReport::new(vec![
+            super::ShutdownPhaseReport {
+                name: "tasks",
+                status: ShutdownPhaseStatus::Succeeded,
+                duration: Duration::from_millis(1),
+            },
+        ]));
+
+        super::log_shutdown_report(&super::ShutdownReport::new(vec![
+            super::ShutdownPhaseReport {
+                name: "database",
+                status: ShutdownPhaseStatus::Failed("close failed".to_string()),
+                duration: Duration::from_millis(1),
+            },
+        ]));
     }
 
     #[tokio::test]

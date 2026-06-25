@@ -6,10 +6,14 @@
 
 - 统一组件健康报告模型。
 - 用注册表并发执行健康检查，并处理 scope、超时和框架级失败。
+- 用 Actix 风格的轻量 registry 注册健康检查。
+- 在需要组件目录、依赖关系或 shutdown phase 时，用 component registry 描述运行时子系统。
 - 记录 startup phase 的执行结果、耗时和失败策略。
 - 创建短命 runtime 临时目录。
 - 收集 shutdown phase 的执行顺序、耗时和错误。
 - 等待 `SIGINT` / `SIGTERM` / `Ctrl+C`。
+- 为产品入口提供 signal-to-cancel 和 shutdown report logging 这类小型 lifecycle helper。
+- 用 `ServiceLifecycle` 收掉多 Actix 产品重复的 signal、server await 和 after-stop 收尾流程。
 - 为 runtime 副作用队列提供通用的内存缓冲、批量 flush、延迟 flush 和溢出直写机制。
 
 不适合放在这里的内容：
@@ -21,6 +25,98 @@
 - 具体数据库、缓存、邮件或存储的业务检查。
 - 产品 shutdown 顺序里的业务副作用。
 - 产品审计、邮件、任务等具体实体和 repository 写入语义。
+
+## Runtime Component Registry
+
+模块：`aster_forge_runtime::component`
+
+主要类型：
+
+- `RuntimeComponentRegistry`
+- `RuntimeComponentBuilder`
+- `RuntimeComponentDescriptor`
+- `RuntimeComponentKind`
+- `RuntimeShutdownDescriptor`
+
+`RuntimeComponentRegistry` 是组件元数据和 lifecycle hook 的组合注册表。它的目标不是接管产品 `AppState`，也不是替产品创建数据库、缓存、存储或邮件资源。它只让子系统用统一方式声明：
+
+- 组件名称和类型。
+- 组件依赖。
+- 组件拥有的 health checks。
+- 组件拥有的 shutdown phase。
+
+它不是健康检查的默认入口。只跑 `/health/ready` 或 runtime health task 时，优先用下面的 `HealthCheckRegistry`，避免为了执行探针而创建完整组件目录。只有需要 admin 组件目录、依赖关系展示、health 和 shutdown 绑定到同一个 component descriptor 时，才使用 `RuntimeComponentRegistry`。
+
+推荐接入方式和 Actix Web 的 route registration 一样：子系统暴露一个 `configure_runtime_components` 函数，调用方只负责 `.configure(...)`。
+
+```rust
+use aster_forge_runtime::{
+    HealthCheckOptions, HealthCheckScopes, RuntimeComponentKind, RuntimeComponentRegistry,
+};
+
+pub fn configure_runtime_components(registry: &mut RuntimeComponentRegistry, state: &AppState) {
+    let reader_db = state.reader_db().clone();
+
+    registry
+        .component("database")
+        .kind(RuntimeComponentKind::Database)
+        .health_with_options(
+            "database",
+            HealthCheckOptions::required(Some(std::time::Duration::from_secs(5)))
+                .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
+            move || {
+                let reader_db = reader_db.clone();
+                async move { database_health_check(&reader_db).await }
+            },
+        );
+}
+```
+
+需要组件目录时，产品入口统一组合这些子系统：
+
+```rust
+let mut registry = RuntimeComponentRegistry::configured(|registry| {
+    health_service::configure_runtime_components(registry, state);
+    storage_runtime::configure_runtime_components(registry, state);
+    task_runtime::configure_runtime_components(registry, state);
+});
+
+let diagnostics = registry
+    .run_health(aster_forge_runtime::HealthCheckScope::Diagnostics)
+    .await;
+```
+
+shutdown 也走同一个注册模型。普通 phase 使用 `shutdown()`；如果 phase 需要消费数据库句柄、后台任务集合这类只能关闭一次的资源，优先使用 `shutdown_once()`，让 Forge 处理 `Option<T>::take()` 这类机械层：
+
+```rust
+pub fn configure_runtime_components(
+    registry: &mut RuntimeComponentRegistry,
+    db_handles: DbHandles,
+) {
+    let mut db_handles = Some(db_handles);
+
+    registry
+        .component("database")
+        .kind(RuntimeComponentKind::Database)
+        .shutdown_once(
+            "database_connections",
+            None,
+            db_handles,
+            |db_handles| async move {
+                db_handles.close().await.map_err(|error| error.to_string())?;
+                Ok(())
+            },
+        );
+}
+```
+
+边界约定：
+
+- Forge 负责 registry、descriptor、health/shutdown 机械层。
+- 产品侧负责资源创建、`AppState` 组合、业务 startup 顺序、审计和 API 响应格式。
+- 子系统不要自己创建根 registry；只暴露 `configure_runtime_components`。
+- 产品入口也尽量只创建一次 registry，然后链式调用各子系统 configure。
+- 健康检查的普通执行路径不要为了 descriptors 强行绕到 component registry。
 
 ## Cargo
 
@@ -80,6 +176,8 @@ Forge 只提供健康报告模型和聚合规则：
 - 聚合成 `SystemHealthReport`。
 - 通过 `descriptors()` / `descriptors_for_scope()` 暴露注册信息，方便 admin UI、诊断 API 或 metrics catalog 展示。
 
+推荐接入方式同样是 Actix 风格：子系统提供 `register_*_health_check` 或 `configure_health_checks`，入口侧用 `HealthCheckRegistry::configured(...)` 组合。
+
 `HealthCheckRequirement` 用来区分框架级失败语义：
 
 - `Required`：超时或 panic 视为 `Unhealthy`。
@@ -127,13 +225,16 @@ use aster_forge_runtime::{
     HealthComponentReport,
 };
 
-let mut registry = HealthCheckRegistry::new();
-registry.register_with_options(
-    "database",
-    HealthCheckOptions::required(Some(Duration::from_secs(5)))
-        .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
-    || async { HealthComponentReport::healthy("database", "database ping succeeded") },
-);
+fn configure_health_checks(registry: &mut HealthCheckRegistry) {
+    registry.register_with_options(
+        "database",
+        HealthCheckOptions::required(Some(Duration::from_secs(5)))
+            .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
+        || async { HealthComponentReport::healthy("database", "database ping succeeded") },
+    );
+}
+
+let registry = HealthCheckRegistry::configured(configure_health_checks);
 
 let report = registry.run_scope(HealthCheckScope::Diagnostics).await;
 assert_eq!(report.summary(), "database healthy");
@@ -386,12 +487,14 @@ let work_dir = temp_dir.path();
 主要类型和函数：
 
 - `wait_for_termination_signal()`
+- `spawn_termination_signal_handler()`
 - `TerminationSignal`
 - `RuntimeSignalError`
 - `ShutdownCoordinator`
 - `ShutdownReport`
 - `ShutdownPhaseReport`
 - `ShutdownPhaseStatus`
+- `log_shutdown_report()`
 
 ### 终止信号
 
@@ -402,6 +505,60 @@ let work_dir = temp_dir.path();
 - 非 Unix 平台上的 `Ctrl+C`
 
 它只做信号等待和共享日志，不替产品决定 shutdown 顺序。
+
+`spawn_termination_signal_handler()` 是产品入口的薄 helper：它等待终止信号，取消产品传入的 `CancellationToken`，然后执行产品提供的 stop 回调。Forge 不依赖 Actix，也不直接停止 HTTP server；Yggdrasil 这类产品仍然把 `server.handle().stop(true)` 作为回调传进去。
+
+推荐产品入口保持中间态：`main.rs` 只调用产品自己的 `runtime::entrypoint::run()`，entrypoint 里组合 config、startup、Actix app、background tasks 和业务 shutdown。Forge 只承载重复的 signal/cancel/report 机械层。
+
+```rust
+let shutdown_token = tokio_util::sync::CancellationToken::new();
+let server = build_product_server(shutdown_token.clone())?;
+let handle = server.handle();
+
+let _signal_task = aster_forge_runtime::spawn_termination_signal_handler(
+    shutdown_token,
+    move || async move {
+        handle.stop(true).await;
+    },
+);
+
+let server_result = server.await;
+product_shutdown().await;
+server_result
+```
+
+### ServiceLifecycle
+
+`ServiceLifecycle` 是比 Actix server builder 更低一层的中间态抽象。它不依赖 Actix，也不创建 `App`、`HttpServer` 或产品 `AppState`。它只负责多个 Actix 产品已经重复的入口流程：
+
+- 启动 termination signal handler。
+- 收到信号后取消共享 `CancellationToken`。
+- 执行产品传入的 stop callback，例如 `server.handle().stop(true)`。
+- 等待产品 server future 结束。
+- 执行产品传入的 after-stop callback，例如记录 shutdown audit、停止后台任务、关闭 DB。
+- 返回原始 server future 的结果。
+
+推荐产品侧继续保留自己的 `runtime::entrypoint::run()`，并在其中构建 Actix app：
+
+```rust
+let shutdown_token = tokio_util::sync::CancellationToken::new();
+let server = build_product_server(shutdown_token.clone())?;
+let handle = server.handle();
+
+aster_forge_runtime::ServiceLifecycle::new(server, shutdown_token)
+    .run(
+        move || async move {
+            handle.stop(true).await;
+        },
+        move || async move {
+            record_server_shutdown().await;
+            perform_shutdown().await;
+        },
+    )
+    .await
+```
+
+这条边界适合 AsterYggdrasil 和 AsterDrive 的当前形态：两个产品都需要 Actix、background tasks、audit shutdown 和 DB close，但 CLI、primary/follower、路由和 state 差异还很大，不应该提前抽成 Forge AppState builder。
 
 ### Shutdown 协调器
 
@@ -420,6 +577,7 @@ let work_dir = temp_dir.path();
 - `TimedOut`
 
 `ShutdownReport` 会保留 phase 执行顺序，并提供 `has_failures()` 方便上层日志判断。
+如果产品只需要统一记录最终结果，可以直接调用 `log_shutdown_report(&report)`。
 
 示例：
 

@@ -30,14 +30,26 @@ aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", defa
 
 ## 配置结构
 
+`CacheConfig` 可以直接嵌进产品启动配置结构：
+
+```rust
+#[derive(serde::Deserialize)]
+struct Config {
+    #[serde(default)]
+    cache: aster_forge_cache::CacheConfig,
+}
+```
+
 ```rust
 let config = aster_forge_cache::CacheConfig {
     backend: "redis".to_string(),
     redis_url: "redis://127.0.0.1/".to_string(),
-    default_ttl: 300,
+    default_ttl: 3600,
 };
 let cache = aster_forge_cache::create_cache(&config).await;
 ```
+
+默认配置使用 `memory` backend、空 `redis_url` 和 3600 秒 TTL，和 Aster 产品配置文件里的历史默认值保持一致。
 
 `create_cache()` 返回 `Arc<dyn CacheBackend>`。Redis 初始化失败时会记录 warn 并回退到 memory backend。
 

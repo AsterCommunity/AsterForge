@@ -17,7 +17,7 @@ aster_forge_utils = { path = "../aster_forge_utils" }
 futures.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "signal", "time"] }
+tokio = { workspace = true, features = ["fs", "rt", "signal", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 utoipa = { workspace = true, optional = true }

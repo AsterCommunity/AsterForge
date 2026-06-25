@@ -541,6 +541,33 @@ impl HealthCheckRegistry {
         Self::default()
     }
 
+    /// Creates a registry and applies one registration function.
+    ///
+    /// This is the lightweight path for product code that only needs to run
+    /// health probes. Use [`RuntimeComponentRegistry`](crate::RuntimeComponentRegistry)
+    /// only when the caller also needs component metadata or shutdown phases.
+    pub fn configured<F>(configure: F) -> Self
+    where
+        F: FnOnce(&mut Self),
+    {
+        let mut registry = Self::new();
+        registry.configure(configure);
+        registry
+    }
+
+    /// Applies one registration function and returns the registry.
+    ///
+    /// The shape intentionally mirrors Actix Web's `configure` pattern, so
+    /// subsystem modules can expose small registration functions without owning
+    /// the root registry.
+    pub fn configure<F>(&mut self, configure: F) -> &mut Self
+    where
+        F: FnOnce(&mut Self),
+    {
+        configure(self);
+        self
+    }
+
     /// Registers a health check with full options.
     ///
     /// `name` is also used for timeout and panic reports. The check future
@@ -1080,6 +1107,40 @@ mod tests {
             "system health check did not run any components"
         );
         assert_eq!(report.issue_details(), "");
+    }
+
+    #[tokio::test]
+    async fn health_check_registry_applies_configure_function() {
+        let registry = HealthCheckRegistry::configured(|registry| {
+            registry
+                .register_with_options(
+                    "database",
+                    HealthCheckOptions::required(None)
+                        .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
+                    || async { HealthComponentReport::healthy("database", "ok") },
+                )
+                .configure(|registry| {
+                    registry.register_with_options(
+                        "cache",
+                        HealthCheckOptions::optional(None)
+                            .with_scopes(HealthCheckScopes::diagnostics()),
+                        || async { HealthComponentReport::healthy("cache", "ok") },
+                    );
+                });
+        });
+
+        let readiness = registry.run_scope(HealthCheckScope::Readiness).await;
+        let diagnostics = registry.run_scope(HealthCheckScope::Diagnostics).await;
+
+        assert_eq!(readiness.components.len(), 1);
+        assert_eq!(readiness.components[0].name, "database");
+        assert_eq!(diagnostics.components.len(), 2);
+        assert_eq!(
+            registry
+                .descriptors_for_scope(HealthCheckScope::Readiness)
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

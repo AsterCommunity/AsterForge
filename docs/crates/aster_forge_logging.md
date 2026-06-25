@@ -34,18 +34,31 @@ aster_forge_logging = { git = "https://github.com/AsterCommunity/AsterForge" }
 - `LoggingInitResult`
 - `init_logging(config)`
 
-典型接入：
+`LoggingConfig` 可以直接嵌进产品的启动配置结构：
+
+```rust
+#[derive(serde::Deserialize)]
+struct Config {
+    #[serde(default)]
+    logging: aster_forge_logging::LoggingConfig,
+}
+```
+
+典型初始化：
 
 ```rust
 let logging = aster_forge_logging::init_logging(&aster_forge_logging::LoggingConfig {
     level: "info".to_string(),
     format: "text".to_string(),
-    file_enabled: true,
-    file_dir: "logs".into(),
+    file: "logs/aster.log".to_string(),
+    enable_rotation: true,
+    max_backups: 5,
 });
 ```
 
-`LoggingInitResult` 持有 guard，产品 runtime state 需要保存它，不能初始化完立刻 drop。你小子要是 drop 了 guard，再问为什么文件日志丢行，那就是自己找骂。
+`file` 为空字符串时输出到 stdout。`format` 为 `"json"` 时输出 JSON，其他值使用 text formatter。`RUST_LOG` 会覆盖 `level`，并通过 `LoggingInitResult::warning` 返回提示。
+
+`LoggingInitResult` 持有 guard，产品 entrypoint 必须保存它到进程结束，不能初始化完立刻 drop。
 
 ## JSON 日志
 

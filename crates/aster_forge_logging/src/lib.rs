@@ -3,8 +3,8 @@
 //! This crate provides the complete logging initialization behavior used by the application
 //! repositories: stdout or file output, optional daily rotation, bounded retained log files,
 //! `RUST_LOG` precedence over configured levels, text or JSON formatting, debug-build file and line
-//! annotations, and a non-blocking writer guard. Applications keep their own configuration structs
-//! and map them into [`LoggingConfig`].
+//! annotations, and a non-blocking writer guard. Applications can use [`LoggingConfig`] directly
+//! in their deployment configuration schema.
 #![cfg_attr(
     not(test),
     deny(
@@ -30,29 +30,52 @@ const DEFAULT_JSON_FORMAT: &str = "json";
 const DEFAULT_LOG_FILENAME: &str = "aster.log";
 
 /// Logging initialization options.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct LoggingConfig {
     /// Tracing filter directive used when `RUST_LOG` is not set.
+    #[serde(default = "LoggingConfig::default_level")]
     pub level: String,
     /// Output format. `"json"` enables JSON logs; every other value uses text formatting.
+    #[serde(default = "LoggingConfig::default_format")]
     pub format: String,
     /// Log file path. Empty values write to stdout.
+    #[serde(default)]
     pub file: String,
     /// Enables daily rolling files when `file` is non-empty.
+    #[serde(default = "LoggingConfig::default_enable_rotation")]
     pub enable_rotation: bool,
     /// Maximum number of rotated log files to retain.
+    #[serde(default = "LoggingConfig::default_max_backups")]
     pub max_backups: u32,
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            level: "info".to_string(),
-            format: DEFAULT_TEXT_FORMAT.to_string(),
+            level: Self::default_level(),
+            format: Self::default_format(),
             file: String::new(),
-            enable_rotation: true,
-            max_backups: 5,
+            enable_rotation: Self::default_enable_rotation(),
+            max_backups: Self::default_max_backups(),
         }
+    }
+}
+
+impl LoggingConfig {
+    fn default_level() -> String {
+        "info".to_string()
+    }
+
+    fn default_format() -> String {
+        DEFAULT_TEXT_FORMAT.to_string()
+    }
+
+    const fn default_enable_rotation() -> bool {
+        true
+    }
+
+    const fn default_max_backups() -> u32 {
+        5
     }
 }
 
@@ -224,6 +247,14 @@ mod tests {
         });
 
         assert!(warning.is_none());
+    }
+
+    #[test]
+    fn logging_config_deserializes_missing_fields_with_defaults() {
+        let config: LoggingConfig =
+            serde_json::from_str("{}").expect("empty logging config should use field defaults");
+
+        assert_eq!(config, LoggingConfig::default());
     }
 
     #[test]

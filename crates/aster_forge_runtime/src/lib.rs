@@ -19,20 +19,28 @@
 )]
 
 pub mod buffered;
+pub mod component;
 pub mod health;
+pub mod lifecycle;
 pub mod shutdown;
 pub mod startup;
 
 pub use buffered::{BufferedBatchConfig, BufferedBatchWriter};
+pub use component::{
+    RuntimeComponentBuilder, RuntimeComponentDescriptor, RuntimeComponentKind,
+    RuntimeComponentRegistry, RuntimeShutdownDescriptor,
+};
 pub use health::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckRegistryBuilder,
     HealthCheckRequirement, HealthCheckScope, HealthCheckScopes, HealthComponentDetail,
     HealthComponentDetailValue, HealthComponentReport, HealthMetricsRecorder, HealthStatus,
     SystemHealthReport,
 };
+pub use lifecycle::ServiceLifecycle;
 pub use shutdown::{
     RuntimeSignalError, ShutdownCoordinator, ShutdownPhaseReport, ShutdownPhaseStatus,
-    ShutdownReport, TerminationSignal, wait_for_termination_signal,
+    ShutdownReport, TerminationSignal, log_shutdown_report, spawn_termination_signal_handler,
+    wait_for_termination_signal,
 };
 pub use startup::{
     RuntimeTempDirError, StartupCoordinator, StartupPhaseFailurePolicy, StartupPhaseOutcome,

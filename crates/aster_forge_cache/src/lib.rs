@@ -65,24 +65,40 @@ impl From<redis::RedisError> for CacheError {
     }
 }
 
+const DEFAULT_CACHE_BACKEND: &str = "memory";
+const DEFAULT_CACHE_TTL_SECS: u64 = 3600;
+
 /// Configuration used to construct a cache backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct CacheConfig {
     /// Backend name. Currently `memory` and `redis` are recognized.
+    #[serde(default = "CacheConfig::default_backend")]
     pub backend: String,
     /// Redis connection URL used when `backend` is `redis`.
+    #[serde(default)]
     pub redis_url: String,
     /// Default time-to-live, in seconds, for entries that do not specify an explicit TTL.
+    #[serde(default = "CacheConfig::default_ttl")]
     pub default_ttl: u64,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            backend: "memory".to_string(),
-            redis_url: "redis://127.0.0.1/".to_string(),
-            default_ttl: 300,
+            backend: Self::default_backend(),
+            redis_url: String::new(),
+            default_ttl: Self::default_ttl(),
         }
+    }
+}
+
+impl CacheConfig {
+    fn default_backend() -> String {
+        DEFAULT_CACHE_BACKEND.to_string()
+    }
+
+    const fn default_ttl() -> u64 {
+        DEFAULT_CACHE_TTL_SECS
     }
 }
 
@@ -208,8 +224,16 @@ mod tests {
         let config = CacheConfig::default();
 
         assert_eq!(config.backend, "memory");
-        assert_eq!(config.redis_url, "redis://127.0.0.1/");
-        assert_eq!(config.default_ttl, 300);
+        assert_eq!(config.redis_url, "");
+        assert_eq!(config.default_ttl, 3600);
+    }
+
+    #[test]
+    fn cache_config_deserializes_missing_fields_with_defaults() {
+        let config: CacheConfig =
+            serde_json::from_str("{}").expect("empty cache config should use field defaults");
+
+        assert_eq!(config, CacheConfig::default());
     }
 
     #[tokio::test]

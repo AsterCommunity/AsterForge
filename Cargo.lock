@@ -610,6 +610,8 @@ dependencies = [
 name = "aster_forge_logging"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tracing-appender",
  "tracing-subscriber",
 ]
