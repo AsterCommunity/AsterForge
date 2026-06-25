@@ -5,15 +5,25 @@
 //! health checks and shutdown phases without duplicating central dispatch
 //! tables. Product crates still own resource construction, application state
 //! assembly, business-specific startup ordering, and how reports are exposed.
+//!
+//! Component dependencies are enforced by [`RuntimeComponentRegistry`] when it
+//! runs component-owned shutdown phases. Lower-level coordinators such as
+//! [`crate::ShutdownCoordinator`] remain simple ordered executors for callers
+//! that already have a fixed sequence.
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use crate::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckScope,
-    HealthComponentReport, ShutdownCoordinator, ShutdownReport, StartupCoordinator,
-    StartupPhaseFailurePolicy, StartupReport, SystemHealthReport,
+    HealthComponentReport, ShutdownPhaseReport, ShutdownPhaseStatus, ShutdownReport,
+    StartupCoordinator, StartupPhaseFailurePolicy, StartupReport, SystemHealthReport,
 };
+
+type RuntimeShutdownFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+type RuntimeShutdownPhaseFn = dyn FnMut() -> RuntimeShutdownFuture + Send;
 
 /// Function exported by a product subsystem to register runtime components.
 pub type RuntimeComponentRegistrar = fn(&mut RuntimeComponentRegistry);
@@ -177,13 +187,39 @@ impl RuntimeComponentDescriptor {
     }
 }
 
+/// Component dependency graph validation error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RuntimeComponentGraphError {
+    /// A component depends on a component that was never registered.
+    #[error("runtime component '{component}' depends on missing component '{dependency}'")]
+    MissingDependency {
+        /// Component declaring the dependency.
+        component: &'static str,
+        /// Missing dependency component name.
+        dependency: &'static str,
+    },
+    /// Component dependencies contain a cycle.
+    #[error("runtime component dependency cycle detected: {cycle}")]
+    Cycle {
+        /// Human-readable cycle path.
+        cycle: String,
+    },
+}
+
+struct RuntimeComponentShutdownPhase {
+    component_name: &'static str,
+    phase_name: &'static str,
+    timeout: Option<Duration>,
+    phase: Box<RuntimeShutdownPhaseFn>,
+}
+
 /// Registry for runtime component metadata and lifecycle hooks.
 #[derive(Default)]
 pub struct RuntimeComponentRegistry {
     components: Vec<RuntimeComponentDescriptor>,
     startup: StartupCoordinator,
     health: HealthCheckRegistry,
-    shutdown: ShutdownCoordinator,
+    shutdown: Vec<RuntimeComponentShutdownPhase>,
 }
 
 impl RuntimeComponentRegistry {
@@ -448,9 +484,206 @@ impl RuntimeComponentRegistry {
         self.startup.run().await
     }
 
-    /// Runs registered shutdown phases.
+    /// Validates that the component dependency graph is resolvable.
+    pub fn validate(&self) -> Result<(), RuntimeComponentGraphError> {
+        let descriptor_by_name = self
+            .components
+            .iter()
+            .map(|component| (component.name, component))
+            .collect::<HashMap<_, _>>();
+
+        for component in &self.components {
+            for dependency in &component.dependencies {
+                if !descriptor_by_name.contains_key(dependency) {
+                    return Err(RuntimeComponentGraphError::MissingDependency {
+                        component: component.name,
+                        dependency,
+                    });
+                }
+            }
+        }
+
+        let mut visiting = Vec::new();
+        let mut visited = HashSet::new();
+        for component in &self.components {
+            self.validate_component_dependencies(
+                component.name,
+                &descriptor_by_name,
+                &mut visiting,
+                &mut visited,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_component_dependencies(
+        &self,
+        component_name: &'static str,
+        descriptor_by_name: &HashMap<&'static str, &RuntimeComponentDescriptor>,
+        visiting: &mut Vec<&'static str>,
+        visited: &mut HashSet<&'static str>,
+    ) -> Result<(), RuntimeComponentGraphError> {
+        if visited.contains(component_name) {
+            return Ok(());
+        }
+        if let Some(position) = visiting
+            .iter()
+            .position(|visiting_name| *visiting_name == component_name)
+        {
+            let mut cycle = visiting[position..].to_vec();
+            cycle.push(component_name);
+            return Err(RuntimeComponentGraphError::Cycle {
+                cycle: cycle.join(" -> "),
+            });
+        }
+
+        visiting.push(component_name);
+        if let Some(descriptor) = descriptor_by_name.get(component_name) {
+            for dependency in &descriptor.dependencies {
+                self.validate_component_dependencies(
+                    dependency,
+                    descriptor_by_name,
+                    visiting,
+                    visited,
+                )?;
+            }
+        }
+        visiting.pop();
+        visited.insert(component_name);
+        Ok(())
+    }
+
+    /// Runs registered shutdown phases in component dependency order.
+    ///
+    /// A component's dependencies run before that component when both sides
+    /// have shutdown phases. Dependencies without shutdown phases are kept as
+    /// descriptor metadata and do not block execution. Cycles are reported as
+    /// warnings and the registry still makes best-effort progress without
+    /// executing a phase more than once.
     pub async fn shutdown(&mut self) -> ShutdownReport {
-        self.shutdown.run().await
+        let mut reports = Vec::with_capacity(self.shutdown.len());
+        for index in self.shutdown_order() {
+            let registered = &mut self.shutdown[index];
+            tracing::info!(phase = registered.phase_name, "starting shutdown phase");
+            let started_at = std::time::Instant::now();
+            let future = (registered.phase)();
+            let status = match registered.timeout {
+                Some(timeout) => match tokio::time::timeout(timeout, future).await {
+                    Ok(Ok(())) => ShutdownPhaseStatus::Succeeded,
+                    Ok(Err(error)) => ShutdownPhaseStatus::Failed(error),
+                    Err(_) => ShutdownPhaseStatus::TimedOut,
+                },
+                None => match future.await {
+                    Ok(()) => ShutdownPhaseStatus::Succeeded,
+                    Err(error) => ShutdownPhaseStatus::Failed(error),
+                },
+            };
+            let duration = started_at.elapsed();
+            match &status {
+                ShutdownPhaseStatus::Succeeded => {
+                    tracing::info!(
+                        phase = registered.phase_name,
+                        ?duration,
+                        "shutdown phase completed"
+                    );
+                }
+                ShutdownPhaseStatus::Failed(error) => {
+                    tracing::error!(
+                        phase = registered.phase_name,
+                        ?duration,
+                        %error,
+                        "shutdown phase failed"
+                    );
+                }
+                ShutdownPhaseStatus::TimedOut => {
+                    tracing::error!(
+                        phase = registered.phase_name,
+                        ?duration,
+                        "shutdown phase timed out"
+                    );
+                }
+            }
+            reports.push(ShutdownPhaseReport {
+                name: registered.phase_name,
+                status,
+                duration,
+            });
+        }
+
+        ShutdownReport::new(reports)
+    }
+
+    fn shutdown_order(&self) -> Vec<usize> {
+        let phase_by_component = self
+            .shutdown
+            .iter()
+            .enumerate()
+            .map(|(index, phase)| (phase.component_name, index))
+            .collect::<HashMap<_, _>>();
+        let descriptor_by_name = self
+            .components
+            .iter()
+            .map(|component| (component.name, component))
+            .collect::<HashMap<_, _>>();
+        let mut visiting = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut ordered = Vec::with_capacity(self.shutdown.len());
+
+        for phase in &self.shutdown {
+            self.push_shutdown_component_order(
+                phase.component_name,
+                &phase_by_component,
+                &descriptor_by_name,
+                &mut visiting,
+                &mut visited,
+                &mut ordered,
+            );
+        }
+
+        ordered
+    }
+
+    fn push_shutdown_component_order(
+        &self,
+        component_name: &'static str,
+        phase_by_component: &HashMap<&'static str, usize>,
+        descriptor_by_name: &HashMap<&'static str, &RuntimeComponentDescriptor>,
+        visiting: &mut HashSet<&'static str>,
+        visited: &mut HashSet<&'static str>,
+        ordered: &mut Vec<usize>,
+    ) {
+        if visited.contains(component_name) {
+            return;
+        }
+        if !visiting.insert(component_name) {
+            tracing::warn!(
+                component = component_name,
+                "runtime component dependency cycle detected during shutdown ordering"
+            );
+            return;
+        }
+
+        if let Some(descriptor) = descriptor_by_name.get(component_name) {
+            for dependency in &descriptor.dependencies {
+                if phase_by_component.contains_key(dependency) {
+                    self.push_shutdown_component_order(
+                        dependency,
+                        phase_by_component,
+                        descriptor_by_name,
+                        visiting,
+                        visited,
+                        ordered,
+                    );
+                }
+            }
+        }
+
+        visiting.remove(component_name);
+        visited.insert(component_name);
+        if let Some(index) = phase_by_component.get(component_name) {
+            ordered.push(*index);
+        }
     }
 
     /// Returns how many components are registered.
@@ -556,13 +789,19 @@ impl RuntimeComponentBuilder<'_> {
         &mut self,
         phase_name: &'static str,
         timeout: Option<Duration>,
-        phase: F,
+        mut phase: F,
     ) -> &mut Self
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), String>> + Send + 'static,
     {
-        self.registry.shutdown.phase(phase_name, timeout, phase);
+        let component_name = self.descriptor_mut().name;
+        self.registry.shutdown.push(RuntimeComponentShutdownPhase {
+            component_name,
+            phase_name,
+            timeout,
+            phase: Box::new(move || Box::pin(phase())),
+        });
         self.descriptor_mut().shutdown = Some(RuntimeShutdownDescriptor {
             phase_name,
             timeout,
@@ -755,20 +994,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registry_runs_shutdown_phases_in_registration_order() {
+    async fn registry_runs_shutdown_phases_in_dependency_order() {
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut registry = RuntimeComponentRegistry::new();
 
-        registry.component_shutdown("tasks", RuntimeComponentKind::Tasks, "tasks", None, {
-            let order = Arc::clone(&order);
-            move || {
-                let order = Arc::clone(&order);
-                async move {
-                    order.lock().unwrap().push("tasks");
-                    Ok(())
-                }
-            }
-        });
         registry
             .component("database")
             .kind(RuntimeComponentKind::Database)
@@ -783,6 +1012,16 @@ mod tests {
                     }
                 }
             });
+        registry.component_shutdown("tasks", RuntimeComponentKind::Tasks, "tasks", None, {
+            let order = Arc::clone(&order);
+            move || {
+                let order = Arc::clone(&order);
+                async move {
+                    order.lock().unwrap().push("tasks");
+                    Ok(())
+                }
+            }
+        });
 
         let report = registry.shutdown().await;
 
@@ -800,6 +1039,181 @@ mod tests {
                 .dependencies,
             vec!["tasks"]
         );
+    }
+
+    #[tokio::test]
+    async fn registry_runs_deep_shutdown_graph_before_dependents() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::new();
+
+        for (component, kind, dependencies) in [
+            (
+                "database",
+                RuntimeComponentKind::Database,
+                &["audit_manager"][..],
+            ),
+            (
+                "audit_manager",
+                RuntimeComponentKind::Product,
+                &["audit_logs"][..],
+            ),
+            (
+                "audit_logs",
+                RuntimeComponentKind::Product,
+                &["mail_outbox"][..],
+            ),
+            (
+                "mail_outbox",
+                RuntimeComponentKind::Mail,
+                &["background_tasks"][..],
+            ),
+            ("background_tasks", RuntimeComponentKind::Tasks, &[][..]),
+        ] {
+            registry
+                .component(component)
+                .kind(kind)
+                .depends_on_all(dependencies)
+                .shutdown(component, None, {
+                    let order = Arc::clone(&order);
+                    move || {
+                        let order = Arc::clone(&order);
+                        async move {
+                            order.lock().unwrap().push(component);
+                            Ok(())
+                        }
+                    }
+                });
+        }
+
+        let report = registry.shutdown().await;
+
+        assert!(!report.has_failures());
+        assert_eq!(
+            order.lock().unwrap().as_slice(),
+            [
+                "background_tasks",
+                "mail_outbox",
+                "audit_logs",
+                "audit_manager",
+                "database"
+            ]
+        );
+        assert_eq!(
+            report
+                .phases
+                .iter()
+                .map(|phase| phase.name)
+                .collect::<Vec<_>>(),
+            vec![
+                "background_tasks",
+                "mail_outbox",
+                "audit_logs",
+                "audit_manager",
+                "database"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_ignores_shutdown_dependencies_without_shutdown_phase() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::new();
+
+        registry
+            .component("cache")
+            .kind(RuntimeComponentKind::Cache);
+        registry
+            .component("database")
+            .kind(RuntimeComponentKind::Database)
+            .depends_on("cache")
+            .shutdown("database", None, {
+                let order = Arc::clone(&order);
+                move || {
+                    let order = Arc::clone(&order);
+                    async move {
+                        order.lock().unwrap().push("database");
+                        Ok(())
+                    }
+                }
+            });
+
+        let report = registry.shutdown().await;
+
+        assert!(!report.has_failures());
+        assert_eq!(order.lock().unwrap().as_slice(), ["database"]);
+        assert_eq!(report.phases.len(), 1);
+        assert_eq!(report.phases[0].name, "database");
+    }
+
+    #[test]
+    fn registry_validate_rejects_missing_component_dependencies() {
+        let mut registry = RuntimeComponentRegistry::new();
+        registry
+            .component("database")
+            .kind(RuntimeComponentKind::Database)
+            .depends_on("cache");
+
+        let error = registry
+            .validate()
+            .expect_err("missing dependency should fail validation");
+
+        assert_eq!(
+            error,
+            crate::RuntimeComponentGraphError::MissingDependency {
+                component: "database",
+                dependency: "cache"
+            }
+        );
+    }
+
+    #[test]
+    fn registry_validate_rejects_dependency_cycles() {
+        let mut registry = RuntimeComponentRegistry::new();
+        registry.component("database").depends_on("audit");
+        registry.component("audit").depends_on("database");
+
+        let error = registry
+            .validate()
+            .expect_err("dependency cycle should fail validation");
+
+        assert_eq!(
+            error,
+            crate::RuntimeComponentGraphError::Cycle {
+                cycle: "database -> audit -> database".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_shutdown_dependency_cycle_does_not_repeat_phases() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::new();
+
+        for (component, dependency) in [("database", "audit"), ("audit", "database")] {
+            registry
+                .component(component)
+                .kind(RuntimeComponentKind::Product)
+                .depends_on(dependency)
+                .shutdown(component, None, {
+                    let order = Arc::clone(&order);
+                    move || {
+                        let order = Arc::clone(&order);
+                        async move {
+                            order.lock().unwrap().push(component);
+                            Ok(())
+                        }
+                    }
+                });
+        }
+
+        let report = registry.shutdown().await;
+        let order = order.lock().unwrap();
+
+        assert!(!report.has_failures());
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&"database"));
+        assert!(order.contains(&"audit"));
+        assert_eq!(report.phases.len(), 2);
     }
 
     #[tokio::test]

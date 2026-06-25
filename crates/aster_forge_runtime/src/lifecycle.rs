@@ -175,6 +175,12 @@ pub enum AsterRuntimeError {
     /// More than one service component was registered.
     #[error("runtime only supports one service component")]
     DuplicateService,
+    /// Runtime component dependencies cannot be resolved.
+    #[error("runtime component graph is invalid: {source}")]
+    ComponentGraph {
+        /// Underlying component graph validation error.
+        source: crate::RuntimeComponentGraphError,
+    },
     /// A required startup phase aborted runtime startup.
     #[error("runtime startup aborted by a required component phase")]
     Startup {
@@ -292,6 +298,9 @@ impl<S> AsterRuntimeBuilder<S> {
         for component in self.components {
             component(&mut registry);
         }
+        registry
+            .validate()
+            .map_err(|source| AsterRuntimeError::ComponentGraph { source })?;
 
         Ok(AsterRuntime {
             service: service.service,
@@ -448,5 +457,33 @@ mod tests {
             .build();
 
         assert!(matches!(result, Err(AsterRuntimeError::DuplicateService)));
+    }
+
+    #[test]
+    fn aster_runtime_rejects_invalid_component_graph() {
+        let result = AsterRuntime::builder()
+            .component(RuntimeServiceComponent::new(
+                "http",
+                RuntimeComponentKind::Core,
+                async {},
+                Default::default(),
+                || async {},
+            ))
+            .component(crate::runtime_component(
+                |registry: &mut RuntimeComponentRegistry| {
+                    registry.component("database").depends_on("missing");
+                },
+            ))
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(AsterRuntimeError::ComponentGraph {
+                source: crate::RuntimeComponentGraphError::MissingDependency {
+                    component: "database",
+                    dependency: "missing"
+                }
+            })
+        ));
     }
 }

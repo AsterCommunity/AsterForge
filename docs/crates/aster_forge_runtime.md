@@ -36,6 +36,7 @@
 - `RuntimeComponentBuilder`
 - `RuntimeComponentBundle`
 - `RuntimeComponentDescriptor`
+- `RuntimeComponentGraphError`
 - `RuntimeComponentKind`
 - `RuntimeComponentRegistrar`
 - `RuntimeComponentStateRegistrar`
@@ -195,6 +196,18 @@ pub fn register_database_shutdown(
 }
 ```
 
+`RuntimeComponentRegistry::shutdown()` 会按 component dependency graph 执行 shutdown phase，而不是按注册顺序执行。依赖组件会先于依赖它的组件执行；没有 shutdown phase 的依赖只作为 descriptor metadata，不会阻塞低层 registry shutdown。`AsterRuntime::builder().build()` 会先调用 `RuntimeComponentRegistry::validate()`，因此产品入口里的缺失依赖和依赖环会作为 `AsterRuntimeError::ComponentGraph` 失败，而不是带着错误图进入生产。
+
+```text
+background_tasks
+mail_outbox    -> depends_on background_tasks
+audit_logs     -> depends_on mail_outbox
+audit_manager  -> depends_on audit_logs
+database       -> depends_on background_tasks, mail_outbox, audit_manager
+```
+
+上面的图即使按 `database, audit_manager, audit_logs, mail_outbox, background_tasks` 的顺序注册，shutdown 仍会按 `background_tasks -> mail_outbox -> audit_logs -> audit_manager -> database` 执行。产品侧不应该再把注册顺序当成 shutdown 正确性的来源。
+
 如果不需要链式添加依赖，可以直接使用 registry shortcut：
 
 ```rust
@@ -218,6 +231,7 @@ registry.component_shutdown_once(
 - 子系统不要自己创建根 registry；只暴露 `configure_runtime_components`。
 - 产品入口也尽量只创建一次 registry，然后链式调用各子系统 configure。
 - 如果健康检查已经是产品 runtime component 的一部分，优先走 `RuntimeComponentRegistry`，这样 admin 组件目录、readiness、diagnostics 和 shutdown descriptor 使用同一份注册来源。
+- `RuntimeComponentRegistry::validate()` 适合在产品自己的启动测试里单独调用；真实 `AsterRuntime` build 会自动校验。
 
 ## Cargo
 
@@ -241,8 +255,9 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 - service component；
 - termination signal 后的 service stop hook；
-- service stop 后、组件 shutdown 前的业务 hook；
 - runtime component registration；
+- component graph validation；
+- dependency-aware component shutdown；
 - shutdown report logging。
 
 推荐的产品入口形态：
@@ -250,14 +265,10 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```rust
 AsterRuntime::builder()
     .component(http_component(server, shutdown_token))
-    .before_shutdown(move || {
-        let state = state.clone();
-        async move {
-            record_server_shutdown(state.get_ref()).await;
-        }
-    })
-    .component(database_component(db_handles))
     .component(task_component(background_tasks))
+    .component(mail_outbox_component(mail_outbox_resources))
+    .component(audit_component(audit_resources))
+    .component(database_component(db_handles))
     .run()
     .await?;
 ```
@@ -290,7 +301,7 @@ pub fn database_component(db_handles: DbHandles) -> RuntimeComponentBundleRegist
 }
 ```
 
-这就是 Forge runtime 的目标形态：产品入口只声明“有哪些组件”，组件自己把 health、startup、task、shutdown 和 descriptor 注册进 Forge registry。Forge 不替产品创建资源，也不把业务 shutdown 顺序藏在框架默认值里。
+这就是 Forge runtime 的目标形态：产品入口只声明“有哪些组件”，组件自己把 health、startup、task、shutdown 和 descriptor 注册进 Forge registry。记录 server shutdown audit、drain mail outbox、flush audit manager、close database 这类生命周期动作应该属于各自 component，不应该散落在入口的裸 `before_shutdown` hook 里。Forge 不替产品创建资源，也不把业务 shutdown 动作藏在框架默认值里。
 
 ## 健康检查
 
@@ -645,7 +656,7 @@ let work_dir = temp_dir.path();
 - runtime config reload。
 - cache/storage/mail 初始化。
 - audit manager 初始化。
-- primary/follower mode 分支。
+- 产品专属启动状态准备。
 
 ## Shutdown
 
@@ -702,7 +713,7 @@ server_result
 - 收到信号后取消共享 `CancellationToken`。
 - 执行产品传入的 stop callback，例如 `server.handle().stop(true)`。
 - 等待产品 server future 结束。
-- 执行产品传入的 after-stop callback，例如记录 shutdown audit、停止后台任务、关闭 DB。
+- 执行产品传入的 after-stop callback，例如产品专属审计、停止后台任务、关闭 DB。
 - 返回原始 server future 的结果。
 
 推荐产品侧继续保留自己的 `runtime::entrypoint::run()`，并在其中构建 Actix app：
@@ -718,14 +729,14 @@ aster_forge_runtime::ServiceLifecycle::new(server, shutdown_token)
             handle.stop(true).await;
         },
         move || async move {
-            record_server_shutdown().await;
-            perform_shutdown().await;
+            record_product_shutdown_event().await;
+            perform_product_shutdown().await;
         },
     )
     .await
 ```
 
-这条边界适合 AsterYggdrasil 和 AsterDrive 的当前形态：两个产品都需要 Actix、background tasks、audit shutdown 和 DB close，但 CLI、primary/follower、路由和 state 差异还很大，不应该提前抽成 Forge AppState builder。
+这条边界适合还没有切到 `AsterRuntime` component 模式的产品入口：产品可以先复用 signal、server await 和 after-stop 机械层，再逐步把 background tasks、mail outbox、audit manager、database close 这些生命周期资源收进 component graph。已经采用 `AsterRuntime::builder()` 的入口应优先把 shutdown 动作放到 component 里，而不是继续堆叠裸 after-stop hook。
 
 ### Shutdown 协调器
 
@@ -745,6 +756,8 @@ aster_forge_runtime::ServiceLifecycle::new(server, shutdown_token)
 
 `ShutdownReport` 会保留 phase 执行顺序，并提供 `has_failures()` 方便上层日志判断。
 如果产品只需要统一记录最终结果，可以直接调用 `log_shutdown_report(&report)`。
+
+注意：`ShutdownCoordinator` 是低层顺序执行器，不解析 component dependency。需要组件目录、依赖校验和 dependency-aware shutdown 时，使用 `RuntimeComponentRegistry` 或 `AsterRuntime`。
 
 示例：
 
@@ -788,11 +801,12 @@ coordinator.phase("database", Some(Duration::from_secs(5)), move || {
 - 健康报告聚合。
 - 健康注册表的顺序执行和超时映射。
 - startup phase 的 required/optional 失败策略和有返回值 phase。
-- shutdown phase 顺序执行、超时和一次性句柄消费。
+- component graph 的缺失依赖、依赖环、dependency-aware shutdown 顺序。
+- shutdown coordinator 的顺序执行、超时和一次性句柄消费。
 - 终止信号标签。
 
-产品测试仍然应该覆盖自己的 startup 资源初始化、health probe 和 shutdown 顺序。
+产品测试仍然应该覆盖自己的 startup 资源初始化、health probe 和 component graph。产品入口如果使用 `AsterRuntime`，建议至少有一个测试覆盖注册出的 component 名称和关键依赖。
 
 ## 参考项目
 
-- AsterYggdrasil：使用 Forge 的 health registry、startup phase helper 和 shutdown coordinator，但数据库、cache、audit、primary/follower state 和后台任务收尾仍留在产品代码里。
+- AsterYggdrasil：使用 Forge 的 health registry、startup phase helper、`AsterRuntime` 和 dependency-aware component shutdown。数据库连接、cache health、mail outbox drain、audit manager flush、background task shutdown 的资源创建和业务语义仍留在产品代码里，但入口只注册 component。

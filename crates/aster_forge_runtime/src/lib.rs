@@ -28,9 +28,9 @@ pub mod startup;
 pub use buffered::{BufferedBatchConfig, BufferedBatchWriter};
 pub use component::{
     RuntimeComponentBuilder, RuntimeComponentBundle, RuntimeComponentDescriptor,
-    RuntimeComponentKind, RuntimeComponentRegistrar, RuntimeComponentRegistry,
-    RuntimeComponentStateRegistrar, RuntimeShutdownDescriptor, RuntimeStartupDescriptor,
-    RuntimeTaskDescriptor,
+    RuntimeComponentGraphError, RuntimeComponentKind, RuntimeComponentRegistrar,
+    RuntimeComponentRegistry, RuntimeComponentStateRegistrar, RuntimeShutdownDescriptor,
+    RuntimeStartupDescriptor, RuntimeTaskDescriptor,
 };
 pub use health::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckRegistryBuilder,

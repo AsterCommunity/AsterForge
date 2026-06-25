@@ -22,9 +22,9 @@
 
 ## What is AsterForge?
 
-AsterForge is the shared Rust crate workspace for Aster projects. It collects low-domain infrastructure such as API helpers, Actix middleware, cache backends, database utilities, runtime configuration primitives, external-auth building blocks, logging, metrics, task mechanics, storage helpers, and validation.
+AsterForge is the shared Rust crate workspace and runtime foundation for Aster projects. It collects low-domain infrastructure such as API helpers, Actix middleware, cache backends, database utilities, runtime configuration primitives, external-auth building blocks, logging, metrics, task mechanics, storage helpers, and validation.
 
-Forge is not an application framework. Product-specific code, SeaORM entities, migrations, permissions, business repositories, storage policies, task payloads, and user-facing API semantics should stay in the owning application repositories.
+Forge is not a product business framework. Product-specific code, SeaORM entities, migrations, permissions, business repositories, storage policies, task payloads, and user-facing API semantics should stay in the owning application repositories. Shared lifecycle mechanics, component registration, and runtime reporting belong in Forge when multiple Aster services need the same behavior.
 
 All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+`, edition 2024, and uses MIT license metadata.
 
