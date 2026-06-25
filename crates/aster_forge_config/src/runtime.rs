@@ -515,6 +515,12 @@ pub fn parse_non_negative_u64(value: &str) -> Option<u64> {
     value.trim().parse::<u64>().ok()
 }
 
+/// Parses a `u64` runtime configuration value within an inclusive range.
+pub fn parse_bounded_u64(value: &str, min: u64, max: u64) -> Option<u64> {
+    let parsed = value.trim().parse::<u64>().ok()?;
+    (min..=max).contains(&parsed).then_some(parsed)
+}
+
 /// Parses a positive `i32` runtime configuration value.
 pub fn parse_positive_i32(value: &str) -> Option<i32> {
     let parsed = value.trim().parse::<i32>().ok()?;
@@ -556,6 +562,29 @@ where
             Some(value) => value,
             None => {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a `u64` within an inclusive range from a runtime configuration lookup.
+pub fn read_bounded_u64<L>(lookup: &L, key: &str, default: u64, min: u64, max: u64) -> u64
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_bounded_u64(&raw, min, max) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    key,
+                    value = %raw,
+                    min,
+                    max,
+                    "invalid runtime config; using default"
+                );
                 default
             }
         },
@@ -618,9 +647,10 @@ mod tests {
 
     use super::{
         AsyncConfigStore, AsyncRuntimeConfig, RuntimeConfigChange, StoredConfig, SyncRuntimeConfig,
-        normalize_positive_u64_config_value, parse_bool_like_value, parse_non_negative_u64,
-        parse_positive_i32, parse_positive_u64, read_bool, read_non_negative_u64,
-        read_positive_i32, read_positive_u64, read_positive_usize,
+        normalize_positive_u64_config_value, parse_bool_like_value, parse_bounded_u64,
+        parse_non_negative_u64, parse_positive_i32, parse_positive_u64, read_bool,
+        read_bounded_u64, read_non_negative_u64, read_positive_i32, read_positive_u64,
+        read_positive_usize,
     };
     use crate::{ConfigSource, ConfigValueType, ConfigVisibility, Result};
 
@@ -738,6 +768,9 @@ mod tests {
         assert_eq!(parse_positive_u64("0"), None);
         assert_eq!(parse_non_negative_u64("0"), Some(0));
         assert_eq!(parse_non_negative_u64("-1"), None);
+        assert_eq!(parse_bounded_u64("5", 4, 8), Some(5));
+        assert_eq!(parse_bounded_u64("3", 4, 8), None);
+        assert_eq!(parse_bounded_u64("9", 4, 8), None);
         assert_eq!(parse_positive_i32("12"), Some(12));
         assert_eq!(parse_positive_i32("2147483648"), None);
     }
@@ -749,12 +782,16 @@ mod tests {
             ("zero".to_string(), "0".to_string()),
             ("bool".to_string(), "on".to_string()),
             ("bad".to_string(), "nope".to_string()),
+            ("bounded".to_string(), "7".to_string()),
+            ("out_of_range".to_string(), "12".to_string()),
             ("too_large_i32".to_string(), "2147483648".to_string()),
         ]);
 
         assert_eq!(read_positive_u64(&lookup, "positive", 1), 5);
         assert_eq!(read_positive_u64(&lookup, "zero", 1), 1);
         assert_eq!(read_non_negative_u64(&lookup, "zero", 9), 0);
+        assert_eq!(read_bounded_u64(&lookup, "bounded", 1, 4, 8), 7);
+        assert_eq!(read_bounded_u64(&lookup, "out_of_range", 1, 4, 8), 1);
         assert!(read_bool(&lookup, "bool", false));
         assert!(read_bool(&lookup, "bad", true));
         assert_eq!(read_positive_i32(&lookup, "too_large_i32", 3), 3);

@@ -90,6 +90,7 @@ export default withMermaid(
         { text: "首页", link: "/" },
         { text: "总览", link: "/guide/" },
         { text: "模块", link: "/crates/aster_forge_actix_middleware" },
+        { text: "Rustdoc", link: "https://forge.astercosm.com/crates/rustdoc/" },
         { text: `版本 ${version}`, link: "https://github.com/AsterCommunity/AsterForge" },
       ],
       sidebar: crateSidebar(),
@@ -121,6 +122,7 @@ export default withMermaid(
             { text: "Home", link: "/en/" },
             { text: "Guide", link: "/en/guide/" },
             { text: "Chinese crate docs", link: "/crates/aster_forge_actix_middleware" },
+            { text: "Rustdoc", link: "https://forge.astercosm.com/crates/rustdoc/" },
           ],
           sidebar: [
             {

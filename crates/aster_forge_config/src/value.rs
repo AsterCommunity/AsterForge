@@ -277,22 +277,65 @@ pub fn validate_storage_value(value_type: ConfigValueType, value: &str) -> Resul
             }
         }
         ConfigValueType::StringArray | ConfigValueType::StringEnumSet => {
-            serde_json::from_str::<Vec<String>>(trimmed).map_err(|error| {
-                ConfigCoreError::invalid_value(format!(
-                    "{} config must be a JSON array of strings: {error}",
-                    value_type.as_str()
-                ))
-            })?;
+            parse_string_array_config_value(trimmed, value_type.as_str())?;
         }
         ConfigValueType::String | ConfigValueType::StringEnum | ConfigValueType::Multiline => {}
     }
     Ok(())
 }
 
+/// Parses a JSON array of strings stored in a configuration value.
+///
+/// Product crates can use this before applying domain-specific normalization
+/// such as URL canonicalization, domain lower-casing, allow-list filtering, or
+/// duplicate removal. The `key` is only used to produce a precise validation
+/// error.
+pub fn parse_string_array_config_value(value: &str, key: &str) -> Result<Vec<String>> {
+    serde_json::from_str::<Vec<String>>(value.trim()).map_err(|error| {
+        ConfigCoreError::invalid_value(format!("{key} must be a JSON array of strings: {error}"))
+    })
+}
+
+/// Parses a single string enum value with legacy single-item array compatibility.
+///
+/// New `string_enum` config values should be stored as scalar strings. Some older Aster
+/// deployments stored single-select values as a JSON array with exactly one string because the UI
+/// previously treated them like enum sets. This helper keeps that migration-compatible shape in one
+/// place while product crates still own the concrete enum and accepted values.
+pub fn parse_single_string_enum_selection<T>(
+    value: &str,
+    key: &str,
+    allowed_values: &str,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<T> {
+    let trimmed = value.trim();
+    let selected = if trimmed.starts_with('[') {
+        let items = serde_json::from_str::<Vec<String>>(trimmed).map_err(|error| {
+            ConfigCoreError::invalid_value(format!(
+                "{key} must be a string enum or a legacy JSON array with exactly one value: {error}",
+            ))
+        })?;
+        let [item] = items.as_slice() else {
+            return Err(ConfigCoreError::invalid_value(format!(
+                "{key} must select exactly one value",
+            )));
+        };
+        item.clone()
+    } else {
+        trimmed.to_string()
+    };
+
+    parse(&selected).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be one of: {allowed_values}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility, validate_storage_value,
+        ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility,
+        parse_single_string_enum_selection, parse_string_array_config_value,
+        validate_storage_value,
     };
 
     #[test]
@@ -382,5 +425,70 @@ mod tests {
         assert!(validate_storage_value(ConfigValueType::String, "anything").is_ok());
         assert!(validate_storage_value(ConfigValueType::StringEnum, "anything").is_ok());
         assert!(validate_storage_value(ConfigValueType::Multiline, "line\nline").is_ok());
+    }
+
+    #[test]
+    fn single_string_enum_selection_accepts_scalar_and_legacy_single_array() {
+        let parse = |value: &str| match value {
+            "fast" | "quality" => Some(value.to_string()),
+            _ => None,
+        };
+
+        assert_eq!(
+            parse_single_string_enum_selection(
+                " fast ",
+                "preview_profile",
+                "fast or quality",
+                parse
+            )
+            .unwrap(),
+            "fast"
+        );
+        assert_eq!(
+            parse_single_string_enum_selection(
+                r#"["quality"]"#,
+                "preview_profile",
+                "fast or quality",
+                parse,
+            )
+            .unwrap(),
+            "quality"
+        );
+    }
+
+    #[test]
+    fn single_string_enum_selection_rejects_invalid_legacy_arrays_and_values() {
+        let parse = |value: &str| (value == "fast").then_some(value.to_string());
+
+        assert!(
+            parse_single_string_enum_selection(r#"[]"#, "preview_profile", "fast", parse).is_err()
+        );
+        assert!(
+            parse_single_string_enum_selection(
+                r#"["fast","quality"]"#,
+                "preview_profile",
+                "fast",
+                parse,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_single_string_enum_selection(r#"["unknown"]"#, "preview_profile", "fast", parse,)
+                .is_err()
+        );
+        assert!(
+            parse_single_string_enum_selection("unknown", "preview_profile", "fast", parse)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn string_array_config_value_parses_json_string_arrays() {
+        assert_eq!(
+            parse_string_array_config_value(r#"["a","b"]"#, "domains").unwrap(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(parse_string_array_config_value(r#""a""#, "domains").is_err());
+        assert!(parse_string_array_config_value(r#"[1]"#, "domains").is_err());
     }
 }

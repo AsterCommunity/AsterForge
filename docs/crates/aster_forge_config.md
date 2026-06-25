@@ -49,12 +49,14 @@ aster_forge_config = {
 - `ConfigRegistry`：配置定义注册表，负责 key 查找、结构验证、normalizer 调用、default seed 记录生成和 metadata overlay。
 - `ConfigValue`：API-facing 配置值，当前支持 scalar string 和 string array。
 - `ConfigValueType`：存储值类型，包括 `string`、`multiline`、`string_array`、`string_enum`、`string_enum_set`、`number`、`boolean`。
+- `parse_single_string_enum_selection()`：解析 `string_enum`，并兼容历史单元素 JSON array。
+- `parse_string_array_config_value()`：解析配置存储中的 JSON string array，让产品侧继续负责后续 URL、域名、枚举等业务规范化。
 - `ConfigSource`：`system` / `custom` 来源。
 - `ConfigVisibility`：`private` / `public` / `authenticated` 可见性。
 - `StoredConfig`：产品数据库行转换后的 Forge 存储模型。
 - `AsyncRuntimeConfig` / `AsyncConfigSnapshot`：基于 `tokio::sync::RwLock` 的 async 配置快照和 reload diff。
 - `SyncRuntimeConfig` / `SyncConfigSnapshot`：基于标准库 `RwLock` 的同步热读配置快照。
-- `read_positive_u64` / `read_positive_i32` / `read_positive_usize` / `read_non_negative_u64` / `read_bool`：产品无关的 runtime 配置读取 helper。
+- `read_positive_u64` / `read_bounded_u64` / `read_positive_i32` / `read_positive_usize` / `read_non_negative_u64` / `read_bool`：产品无关的 runtime 配置读取 helper。
 - `ConfigChangeNotifier`：reload 通知抽象。
 - `ConfigReloadMessage`：跨进程 reload 信号载荷。
 
@@ -154,6 +156,56 @@ for seed in CONFIG_REGISTRY.default_seed_records()? {
 
 custom key 不在 registry 中，通常按产品策略固定为 string 类型，并由产品自己决定 visibility 和权限边界。
 
+### String Enum 兼容解析
+
+新的 `string_enum` 配置值应该存成普通字符串，例如 `"quality"`。早期部分 Aster 配置页曾把单选枚举按
+enum set 写成 `["quality"]`，产品 normalizer 如果要兼容这类历史值，可以用
+`parse_single_string_enum_selection()`：
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewProfile {
+    Fast,
+    Quality,
+}
+
+fn parse_profile(value: &str) -> Option<PreviewProfile> {
+    match value {
+        "fast" => Some(PreviewProfile::Fast),
+        "quality" => Some(PreviewProfile::Quality),
+        _ => None,
+    }
+}
+
+let profile = aster_forge_config::parse_single_string_enum_selection(
+    r#"["quality"]"#,
+    "preview_profile",
+    "fast or quality",
+    parse_profile,
+)?;
+assert_eq!(profile, PreviewProfile::Quality);
+```
+
+Forge 只处理“标量字符串或单元素字符串数组”这层兼容格式。具体枚举值、默认值、错误映射和业务含义仍然留在产品 normalizer。
+
+### String Array 解析
+
+`string_array` 和 `string_enum_set` 的结构化校验由 `validate_storage_value()` 统一处理。如果产品 normalizer 需要先解析数组，再对每一项做 URL、域名、枚举或路径规范化，可以直接使用 `parse_string_array_config_value()`：
+
+```rust
+let values = aster_forge_config::parse_string_array_config_value(
+    r#"["https://example.com/api", "https://mirror.example.com/api"]"#,
+    "public_base_urls",
+)?;
+
+let normalized = values
+    .into_iter()
+    .map(|value| normalize_product_url(&value))
+    .collect::<Result<Vec<_>>>()?;
+```
+
+Forge 只保证输入必须是 JSON string array。数组项是否允许为空、是否去重、是否要求 HTTPS、是否支持 wildcard，都应该继续由产品 normalizer 决定。
+
 ## Runtime Config
 
 Forge 提供两条 runtime cache 路径：
@@ -186,15 +238,19 @@ pub fn background_task_dispatch_interval_secs(runtime_config: &RuntimeConfig) ->
 - `parse_bool_like_value(value)`：解析 `true/false`、`1/0`、`yes/no`、`on/off`。
 - `parse_positive_u64(value)`：解析正整数。
 - `parse_non_negative_u64(value)`：解析非负整数。
+- `parse_bounded_u64(value, min, max)`：解析闭区间内的 `u64`。
 - `parse_positive_i32(value)`：解析正 `i32`。
 - `normalize_positive_u64_config_value(key, value)`：用于配置更新时规范化正整数存储值。
 - `read_positive_u64(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 - `read_non_negative_u64(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
+- `read_bounded_u64(lookup, key, default, min, max)`：非法、缺失或超出闭区间时返回默认值并记录 warning。
 - `read_positive_i32(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 - `read_positive_usize(lookup, key, default)`：非法、缺失或超过 `usize` 时返回默认值。
 - `read_bool(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
 
-这些 helper 接收 `ConfigValueLookup`，所以产品可以传 `RuntimeConfig`、`SyncConfigSnapshot`、`HashMap<String, String>` 或自己的轻量 lookup。产品侧仍然保留：
+这些 helper 接收 `ConfigValueLookup`，所以产品可以传 `RuntimeConfig`、`SyncConfigSnapshot`、`HashMap<String, String>`、`BTreeMap<String, String>`，或者一个 `Fn(&str) -> Option<String>` 闭包。闭包适合把“临时覆盖值 + runtime snapshot”叠在一起读取，例如管理 API 预览某个策略时不必写一次性 adapter struct。
+
+产品侧仍然保留：
 
 - key 常量；
 - 默认值常量；

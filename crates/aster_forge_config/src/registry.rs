@@ -34,6 +34,15 @@ impl ConfigValueLookup for BTreeMap<String, String> {
     }
 }
 
+impl<F> ConfigValueLookup for F
+where
+    F: Fn(&str) -> Option<String>,
+{
+    fn get_config_value(&self, key: &str) -> Option<String> {
+        self(key)
+    }
+}
+
 /// Product-owned value normalizer.
 pub type ConfigNormalizer =
     fn(lookup: &dyn ConfigValueLookup, key: &str, value: &str) -> Result<String>;
@@ -417,6 +426,14 @@ mod tests {
                 .normalize_value(&failing_lookup, "dependent", "value")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn function_lookup_can_back_runtime_readers() {
+        let lookup = |key: &str| (key == "enabled").then_some("true".to_string());
+
+        assert_eq!(lookup.get_config_value("enabled"), Some("true".to_string()));
+        assert_eq!(lookup.get_config_value("missing"), None);
     }
 
     #[test]

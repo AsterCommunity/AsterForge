@@ -3,8 +3,8 @@
   "type": "module",
   "scripts": {
     "docs:dev": "vitepress dev",
-    "docs:build": "vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:build": "vitepress build && bun scripts/publish-rustdoc.mjs",
+    "docs:preview": "bun run docs:build && vitepress preview"
   },
   "devDependencies": {
     "mermaid": "^11.15.0",
