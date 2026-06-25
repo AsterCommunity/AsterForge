@@ -13,3 +13,4 @@ aster_forge_db = { path = "../aster_forge_db" }
 sea-orm.workspace = true
 thiserror.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true

@@ -18,11 +18,13 @@
 )]
 
 pub mod bool_like;
+pub mod fs;
 pub mod id;
 pub mod net;
 pub mod numbers;
 pub mod paths;
 pub mod raii;
+pub mod text;
 pub mod url;
 
 /// Result type returned by utility helpers.

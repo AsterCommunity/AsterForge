@@ -8,6 +8,12 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+default = []
+openapi = ["dep:utoipa"]
+
 [dependencies]
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
+utoipa = { workspace = true, optional = true }

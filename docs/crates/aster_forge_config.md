@@ -54,6 +54,7 @@ aster_forge_config = {
 - `StoredConfig`：产品数据库行转换后的 Forge 存储模型。
 - `AsyncRuntimeConfig` / `AsyncConfigSnapshot`：基于 `tokio::sync::RwLock` 的 async 配置快照和 reload diff。
 - `SyncRuntimeConfig` / `SyncConfigSnapshot`：基于标准库 `RwLock` 的同步热读配置快照。
+- `read_positive_u64` / `read_positive_i32` / `read_positive_usize` / `read_non_negative_u64` / `read_bool`：产品无关的 runtime 配置读取 helper。
 - `ConfigChangeNotifier`：reload 通知抽象。
 - `ConfigReloadMessage`：跨进程 reload 信号载荷。
 
@@ -165,6 +166,41 @@ Forge 提供两条 runtime cache 路径：
 两条路径都保持同一套 `requires_restart` 语义：如果 key 已经存在，之后收到 `requires_restart=true` 的热更新会被忽略，直到进程重启后通过完整 reload 加载新值。
 
 产品如果保留本地 runtime，也应该保持同样语义，避免配置在不同服务中表现不一致。
+
+### Runtime 读取 helper
+
+很多产品模块会有 `operations.rs` 这类 helper，用产品 key 和默认值读取运行时配置。Forge 不应该拥有这些 key，但可以统一“怎么读”：
+
+```rust
+pub fn background_task_dispatch_interval_secs(runtime_config: &RuntimeConfig) -> u64 {
+    aster_forge_config::read_positive_u64(
+        runtime_config,
+        BACKGROUND_TASK_DISPATCH_INTERVAL_SECS_KEY,
+        DEFAULT_BACKGROUND_TASK_DISPATCH_INTERVAL_SECS,
+    )
+}
+```
+
+当前提供：
+
+- `parse_bool_like_value(value)`：解析 `true/false`、`1/0`、`yes/no`、`on/off`。
+- `parse_positive_u64(value)`：解析正整数。
+- `parse_non_negative_u64(value)`：解析非负整数。
+- `parse_positive_i32(value)`：解析正 `i32`。
+- `normalize_positive_u64_config_value(key, value)`：用于配置更新时规范化正整数存储值。
+- `read_positive_u64(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
+- `read_non_negative_u64(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
+- `read_positive_i32(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
+- `read_positive_usize(lookup, key, default)`：非法、缺失或超过 `usize` 时返回默认值。
+- `read_bool(lookup, key, default)`：非法或缺失时返回默认值并记录 warning。
+
+这些 helper 接收 `ConfigValueLookup`，所以产品可以传 `RuntimeConfig`、`SyncConfigSnapshot`、`HashMap<String, String>` 或自己的轻量 lookup。产品侧仍然保留：
+
+- key 常量；
+- 默认值常量；
+- 上限/下限 clamp；
+- 复杂枚举或结构化配置解析；
+- 配置项对应的业务含义。
 
 ## Reload 通知
 

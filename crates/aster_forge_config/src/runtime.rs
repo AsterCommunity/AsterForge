@@ -14,7 +14,9 @@ use std::sync::{
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::{ConfigSource, ConfigValueLookup, ConfigValueType, ConfigVisibility, Result};
+use crate::{
+    ConfigCoreError, ConfigSource, ConfigValueLookup, ConfigValueType, ConfigVisibility, Result,
+};
 
 /// Stored representation of a configuration row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,7 +124,7 @@ where
     /// Parses a bool-like storage string for `key`.
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         let value = self.get(key)?;
-        parse_bool(value)
+        parse_bool_like_value(value)
     }
 
     /// Parses an i64 storage string for `key`.
@@ -202,7 +204,7 @@ impl AsyncConfigSnapshot {
     /// Parses a bool-like storage string for `key`.
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         let value = self.get(key)?;
-        parse_bool(value)
+        parse_bool_like_value(value)
     }
 
     /// Parses an i64 storage string for `key`.
@@ -493,11 +495,120 @@ where
     changes
 }
 
-fn parse_bool(value: &str) -> Option<bool> {
+/// Parses a bool-like runtime configuration value.
+pub fn parse_bool_like_value(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
         "false" | "0" | "no" | "off" => Some(false),
         _ => None,
+    }
+}
+
+/// Parses a positive `u64` runtime configuration value.
+pub fn parse_positive_u64(value: &str) -> Option<u64> {
+    let parsed = value.trim().parse::<u64>().ok()?;
+    (parsed > 0).then_some(parsed)
+}
+
+/// Parses a non-negative `u64` runtime configuration value.
+pub fn parse_non_negative_u64(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok()
+}
+
+/// Parses a positive `i32` runtime configuration value.
+pub fn parse_positive_i32(value: &str) -> Option<i32> {
+    let parsed = value.trim().parse::<i32>().ok()?;
+    (parsed > 0).then_some(parsed)
+}
+
+/// Normalizes a positive integer runtime configuration value for storage.
+pub fn normalize_positive_u64_config_value(key: &str, value: &str) -> Result<String> {
+    let parsed = parse_positive_u64(value).ok_or_else(|| {
+        ConfigCoreError::invalid_value(format!("{key} must be a positive integer"))
+    })?;
+    Ok(parsed.to_string())
+}
+
+/// Reads a positive `u64` from a runtime configuration lookup.
+pub fn read_positive_u64<L>(lookup: &L, key: &str, default: u64) -> u64
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_positive_u64(&raw) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(key, value = %raw, "invalid runtime config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a non-negative `u64` from a runtime configuration lookup.
+pub fn read_non_negative_u64<L>(lookup: &L, key: &str, default: u64) -> u64
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_non_negative_u64(&raw) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(key, value = %raw, "invalid runtime config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a positive `i32` from a runtime configuration lookup.
+pub fn read_positive_i32<L>(lookup: &L, key: &str, default: i32) -> i32
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_positive_i32(&raw) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(key, value = %raw, "invalid runtime config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a bool-like value from a runtime configuration lookup.
+pub fn read_bool<L>(lookup: &L, key: &str, default: bool) -> bool
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    match lookup.get_config_value(key) {
+        Some(raw) => match parse_bool_like_value(&raw) {
+            Some(value) => value,
+            None => {
+                tracing::warn!(key, value = %raw, "invalid runtime boolean config; using default");
+                default
+            }
+        },
+        None => default,
+    }
+}
+
+/// Reads a positive `usize` from a runtime configuration lookup.
+pub fn read_positive_usize<L>(lookup: &L, key: &str, default: usize) -> usize
+where
+    L: ConfigValueLookup + ?Sized,
+{
+    let default_u64 = u64::try_from(default).unwrap_or(u64::MAX);
+    match usize::try_from(read_positive_u64(lookup, key, default_u64)) {
+        Ok(value) => value,
+        Err(_) => {
+            tracing::warn!(key, "{key} exceeds usize; using default");
+            default
+        }
     }
 }
 
@@ -507,6 +618,9 @@ mod tests {
 
     use super::{
         AsyncConfigStore, AsyncRuntimeConfig, RuntimeConfigChange, StoredConfig, SyncRuntimeConfig,
+        normalize_positive_u64_config_value, parse_bool_like_value, parse_non_negative_u64,
+        parse_positive_i32, parse_positive_u64, read_bool, read_non_negative_u64,
+        read_positive_i32, read_positive_u64, read_positive_usize,
     };
     use crate::{ConfigSource, ConfigValueType, ConfigVisibility, Result};
 
@@ -613,5 +727,47 @@ mod tests {
 
         assert_eq!(change, None);
         assert_eq!(runtime_config.get("static_key").as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn runtime_value_parsers_accept_expected_shapes() {
+        assert_eq!(parse_bool_like_value(" yes "), Some(true));
+        assert_eq!(parse_bool_like_value("off"), Some(false));
+        assert_eq!(parse_bool_like_value("maybe"), None);
+        assert_eq!(parse_positive_u64("42"), Some(42));
+        assert_eq!(parse_positive_u64("0"), None);
+        assert_eq!(parse_non_negative_u64("0"), Some(0));
+        assert_eq!(parse_non_negative_u64("-1"), None);
+        assert_eq!(parse_positive_i32("12"), Some(12));
+        assert_eq!(parse_positive_i32("2147483648"), None);
+    }
+
+    #[test]
+    fn runtime_value_readers_use_defaults_for_invalid_values() {
+        let lookup = std::collections::HashMap::from([
+            ("positive".to_string(), "5".to_string()),
+            ("zero".to_string(), "0".to_string()),
+            ("bool".to_string(), "on".to_string()),
+            ("bad".to_string(), "nope".to_string()),
+            ("too_large_i32".to_string(), "2147483648".to_string()),
+        ]);
+
+        assert_eq!(read_positive_u64(&lookup, "positive", 1), 5);
+        assert_eq!(read_positive_u64(&lookup, "zero", 1), 1);
+        assert_eq!(read_non_negative_u64(&lookup, "zero", 9), 0);
+        assert!(read_bool(&lookup, "bool", false));
+        assert!(read_bool(&lookup, "bad", true));
+        assert_eq!(read_positive_i32(&lookup, "too_large_i32", 3), 3);
+        assert_eq!(read_positive_usize(&lookup, "positive", 1), 5);
+    }
+
+    #[test]
+    fn positive_u64_normalizer_trims_and_rejects_invalid_values() {
+        assert_eq!(
+            normalize_positive_u64_config_value("interval", " 60 ").unwrap(),
+            "60"
+        );
+        assert!(normalize_positive_u64_config_value("interval", "0").is_err());
+        assert!(normalize_positive_u64_config_value("interval", "abc").is_err());
     }
 }

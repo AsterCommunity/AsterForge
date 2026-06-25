@@ -4,6 +4,13 @@
 //! responsible for recording audit events, stopping background tasks, flushing
 //! buffers, and closing database or network handles in their preferred order.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
+
+type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+type ShutdownPhaseFn = dyn FnMut() -> ShutdownFuture + Send;
+
 /// Termination signal observed by the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminationSignal {
@@ -29,6 +36,151 @@ pub enum RuntimeSignalError {
     /// Failed to install or await a process signal handler.
     #[error("failed to install termination signal handler: {0}")]
     Install(String),
+}
+
+/// Final status for one shutdown phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShutdownPhaseStatus {
+    /// The phase completed successfully.
+    Succeeded,
+    /// The phase returned an error string.
+    Failed(String),
+    /// The phase exceeded its timeout.
+    TimedOut,
+}
+
+impl ShutdownPhaseStatus {
+    /// Returns whether this phase did not complete successfully.
+    pub const fn is_failure(&self) -> bool {
+        !matches!(self, Self::Succeeded)
+    }
+}
+
+/// Report for one executed shutdown phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShutdownPhaseReport {
+    /// Stable phase name.
+    pub name: &'static str,
+    /// Phase result.
+    pub status: ShutdownPhaseStatus,
+    /// Execution duration.
+    pub duration: Duration,
+}
+
+/// Aggregate report for a shutdown run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShutdownReport {
+    /// Phase reports in execution order.
+    pub phases: Vec<ShutdownPhaseReport>,
+}
+
+impl ShutdownReport {
+    /// Returns a report from phase entries.
+    pub fn new(phases: Vec<ShutdownPhaseReport>) -> Self {
+        Self { phases }
+    }
+
+    /// Returns whether any phase failed or timed out.
+    pub fn has_failures(&self) -> bool {
+        self.phases.iter().any(|phase| phase.status.is_failure())
+    }
+}
+
+struct RegisteredShutdownPhase {
+    name: &'static str,
+    timeout: Option<Duration>,
+    phase: Box<ShutdownPhaseFn>,
+}
+
+/// Ordered shutdown phase coordinator.
+///
+/// The coordinator owns phase ordering, timeout handling, duration collection,
+/// and error aggregation. Product crates provide the actual phase closures.
+/// Phases are `FnMut` so shutdown code can move owned handles into the
+/// coordinator and consume them exactly once during the shutdown run.
+#[derive(Default)]
+pub struct ShutdownCoordinator {
+    phases: Vec<RegisteredShutdownPhase>,
+}
+
+impl ShutdownCoordinator {
+    /// Creates an empty shutdown coordinator.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers a shutdown phase.
+    pub fn phase<F, Fut>(
+        &mut self,
+        name: &'static str,
+        timeout: Option<Duration>,
+        mut phase: F,
+    ) -> &mut Self
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        self.phases.push(RegisteredShutdownPhase {
+            name,
+            timeout,
+            phase: Box::new(move || Box::pin(phase())),
+        });
+        self
+    }
+
+    /// Runs phases sequentially and returns a report.
+    ///
+    /// Later phases still run when an earlier phase fails. This lets product
+    /// shutdown code make best-effort progress through independent resources.
+    pub async fn run(&mut self) -> ShutdownReport {
+        let mut reports = Vec::with_capacity(self.phases.len());
+
+        for phase in &mut self.phases {
+            tracing::info!(phase = phase.name, "starting shutdown phase");
+            let started_at = Instant::now();
+            let future = (phase.phase)();
+            let status = match phase.timeout {
+                Some(timeout) => match tokio::time::timeout(timeout, future).await {
+                    Ok(Ok(())) => ShutdownPhaseStatus::Succeeded,
+                    Ok(Err(error)) => ShutdownPhaseStatus::Failed(error),
+                    Err(_) => ShutdownPhaseStatus::TimedOut,
+                },
+                None => match future.await {
+                    Ok(()) => ShutdownPhaseStatus::Succeeded,
+                    Err(error) => ShutdownPhaseStatus::Failed(error),
+                },
+            };
+            let duration = started_at.elapsed();
+            match &status {
+                ShutdownPhaseStatus::Succeeded => {
+                    tracing::info!(phase = phase.name, ?duration, "shutdown phase completed");
+                }
+                ShutdownPhaseStatus::Failed(error) => {
+                    tracing::error!(phase = phase.name, ?duration, %error, "shutdown phase failed");
+                }
+                ShutdownPhaseStatus::TimedOut => {
+                    tracing::error!(phase = phase.name, ?duration, "shutdown phase timed out");
+                }
+            }
+            reports.push(ShutdownPhaseReport {
+                name: phase.name,
+                status,
+                duration,
+            });
+        }
+
+        ShutdownReport::new(reports)
+    }
+
+    /// Returns how many phases are registered.
+    pub fn len(&self) -> usize {
+        self.phases.len()
+    }
+
+    /// Returns whether no phases are registered.
+    pub fn is_empty(&self) -> bool {
+        self.phases.is_empty()
+    }
 }
 
 /// Waits until the process receives a termination signal.
@@ -66,11 +218,68 @@ async fn wait_for_signal_impl() -> Result<TerminationSignal, RuntimeSignalError>
 
 #[cfg(test)]
 mod tests {
-    use super::TerminationSignal;
+    use super::{ShutdownCoordinator, ShutdownPhaseStatus, TerminationSignal};
+    use std::time::Duration;
 
     #[test]
     fn termination_signal_reports_stable_labels() {
         assert_eq!(TerminationSignal::Interrupt.as_str(), "SIGINT");
         assert_eq!(TerminationSignal::Terminate.as_str(), "SIGTERM");
+    }
+
+    #[tokio::test]
+    async fn shutdown_coordinator_runs_all_phases_in_order() {
+        let mut coordinator = ShutdownCoordinator::new();
+        coordinator
+            .phase("tasks", None, || async { Ok(()) })
+            .phase("audit", None, || async { Err("flush failed".to_string()) })
+            .phase("db", None, || async { Ok(()) });
+
+        let report = coordinator.run().await;
+
+        assert_eq!(coordinator.len(), 3);
+        assert!(report.has_failures());
+        assert_eq!(report.phases[0].name, "tasks");
+        assert_eq!(report.phases[0].status, ShutdownPhaseStatus::Succeeded);
+        assert_eq!(
+            report.phases[1].status,
+            ShutdownPhaseStatus::Failed("flush failed".to_string())
+        );
+        assert_eq!(report.phases[2].status, ShutdownPhaseStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn shutdown_coordinator_reports_timeouts() {
+        let mut coordinator = ShutdownCoordinator::new();
+        coordinator.phase("slow", Some(Duration::from_millis(1)), || async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(())
+        });
+
+        let report = coordinator.run().await;
+
+        assert!(report.has_failures());
+        assert_eq!(report.phases[0].status, ShutdownPhaseStatus::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn shutdown_coordinator_supports_consumed_phase_handles() {
+        let mut coordinator = ShutdownCoordinator::new();
+        let mut owned_handle = Some("resource");
+        coordinator.phase("owned", None, move || {
+            let handle = owned_handle.take();
+            async move {
+                if handle == Some("resource") {
+                    Ok(())
+                } else {
+                    Err("resource already consumed".to_string())
+                }
+            }
+        });
+
+        let report = coordinator.run().await;
+
+        assert!(!report.has_failures());
+        assert_eq!(report.phases[0].status, ShutdownPhaseStatus::Succeeded);
     }
 }

@@ -39,6 +39,9 @@ pub use registry::{
 pub use runtime::{
     AsyncConfigSnapshot, AsyncConfigStore, AsyncRuntimeConfig, RuntimeConfigChange,
     RuntimeConfigRecord, StoredConfig, SyncConfigSnapshot, SyncRuntimeConfig,
+    normalize_positive_u64_config_value, parse_bool_like_value, parse_non_negative_u64,
+    parse_positive_i32, parse_positive_u64, read_bool, read_non_negative_u64, read_positive_i32,
+    read_positive_u64, read_positive_usize,
 };
 pub use value::{
     ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility, validate_storage_value,

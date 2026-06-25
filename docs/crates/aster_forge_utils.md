@@ -5,11 +5,13 @@
 ## 适用场景
 
 - boolean-like 字符串解析。
+- best-effort 临时文件和目录清理。
 - UUID 和 token 生成。
 - 网络地址和 trusted proxy 解析。
 - 安全数值转换。
 - 路径渲染和运行时临时目录路径。
 - RAII 临时文件/目录清理。
+- UTF-8 安全截断和字符数量统计。
 - URL 解析、origin/base URL 规范化。
 - public-site origin 列表解析和 origin/path 拼接。
 
@@ -34,6 +36,21 @@ aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge" }
 ### bool_like
 
 `parse_bool_like(value)` 支持常见布尔字符串。适合环境变量和兼容配置读取。
+
+### fs
+
+主要 API：
+
+- `cleanup_temp_file(path)`
+- `cleanup_temp_dir(path)`
+- `cleanup_runtime_temp_root(temp_root)`
+
+这些 helper 面向临时文件和临时目录的 best-effort 清理：缺失文件/目录会被忽略，其他失败记录
+warn 日志但不返回错误。`cleanup_temp_dir` 会对 `DirectoryNotEmpty` 做短暂重试，覆盖 macOS
+Spotlight/Finder 或文件监听器在删除过程中短暂写入目录的情况。
+
+不要把它们用于需要事务语义、用户可见错误或存储驱动一致性的删除操作；那些场景应该保留产品侧
+显式错误处理。
 
 ### id
 
@@ -80,6 +97,20 @@ aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge" }
 ### raii
 
 `TempFileGuard` 和 `TempDirGuard` 用于测试或临时流程失败时自动清理。长期资源生命周期不要靠 RAII guard 偷偷控制，产品服务应该显式管理。
+
+### text
+
+主要 API：
+
+- `char_count(value)`
+- `truncate_utf8_to_max_bytes(value, max_bytes)`
+
+`char_count` 统计的是 Unicode scalar value，不是 grapheme cluster。它适合现有 Aster
+服务里“最多 N 个 `chars()`”这种规则；如果产品要按用户感知字符处理，需要在产品侧另设
+Unicode segmentation 策略。
+
+`truncate_utf8_to_max_bytes` 用于保守的字节限制，例如文件名、任务展示名、外部错误摘要等。
+它不会截断到非法 UTF-8 边界。
 
 ### url
 

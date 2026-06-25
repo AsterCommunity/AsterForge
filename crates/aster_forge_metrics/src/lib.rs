@@ -99,6 +99,34 @@ impl NoopMetrics {
     }
 }
 
+/// Initializes a concrete metrics backend or falls back to [`NoopMetrics`].
+///
+/// Product crates own concrete exporters and feature flags. This helper only centralizes the
+/// common startup mechanics used by Aster services: try to initialize the product metrics backend,
+/// return the concrete recorder on success, and keep startup working with a no-op recorder on
+/// initialization failure.
+pub fn init_metrics_or_noop<I, B, E, R>(init_metrics: I, build_recorder: B) -> SharedMetricsRecorder
+where
+    I: FnOnce() -> std::result::Result<(), E>,
+    B: FnOnce() -> R,
+    E: std::fmt::Display,
+    R: MetricsRecorder + 'static,
+{
+    match init_metrics() {
+        Ok(()) => {
+            tracing::info!("metrics backend initialized");
+            Arc::new(build_recorder())
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to initialize metrics backend; using noop metrics"
+            );
+            NoopMetrics::arc()
+        }
+    }
+}
+
 /// Kind of metric described by a subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
@@ -259,6 +287,19 @@ mod tests {
     use super::*;
     use aster_forge_db::DbMetricsRecorder;
 
+    #[derive(Default)]
+    struct EnabledMetrics;
+
+    impl aster_forge_db::DbMetricsRecorder for EnabledMetrics {
+        fn enabled(&self) -> bool {
+            true
+        }
+
+        fn record_db_query(&self, _info: &sea_orm::metric::Info<'_>) {}
+    }
+
+    impl MetricsRecorder for EnabledMetrics {}
+
     struct HttpSubsystem;
 
     impl MetricsSubsystem for HttpSubsystem {
@@ -292,6 +333,20 @@ mod tests {
                 .system_metrics_updater_task(CancellationToken::new())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn init_metrics_or_noop_returns_concrete_recorder_after_successful_init() {
+        let recorder = init_metrics_or_noop(|| Ok::<(), &'static str>(()), || EnabledMetrics);
+
+        assert!(recorder.enabled());
+    }
+
+    #[test]
+    fn init_metrics_or_noop_returns_noop_recorder_after_failed_init() {
+        let recorder = init_metrics_or_noop(|| Err::<(), _>("registry failed"), || EnabledMetrics);
+
+        assert!(!recorder.enabled());
     }
 
     #[test]

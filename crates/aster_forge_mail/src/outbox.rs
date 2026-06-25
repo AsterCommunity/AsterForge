@@ -50,6 +50,27 @@ pub struct MailOutboxRetryPolicy {
     pub max_error_len: usize,
 }
 
+/// Decision returned after a mail delivery attempt fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MailOutboxDeliveryFailureDecision {
+    /// The row exhausted delivery attempts and should be moved to a terminal failure state.
+    PermanentFailure {
+        /// Attempt count that should be persisted on the outbox row.
+        attempt_count: i32,
+        /// Truncated delivery error safe for storage.
+        error_message: String,
+    },
+    /// The row should be scheduled for another delivery attempt.
+    Retry {
+        /// Attempt count that should be persisted on the outbox row.
+        attempt_count: i32,
+        /// Delay before the next delivery attempt, in seconds.
+        retry_delay_secs: i64,
+        /// Truncated delivery error safe for storage.
+        error_message: String,
+    },
+}
+
 impl MailOutboxRetryPolicy {
     /// Creates a retry policy.
     pub const fn new(max_attempts: i32, max_error_len: usize) -> Self {
@@ -72,6 +93,30 @@ impl MailOutboxRetryPolicy {
     /// Truncates a delivery error according to this policy.
     pub fn truncate_error(&self, error: &str) -> String {
         truncate_error(error, self.max_error_len)
+    }
+
+    /// Classifies a failed delivery attempt.
+    ///
+    /// `attempt_count` should be the post-delivery attempt count that the
+    /// product crate will persist on the outbox row.
+    pub fn delivery_failure_decision(
+        &self,
+        attempt_count: i32,
+        error: impl AsRef<str>,
+    ) -> MailOutboxDeliveryFailureDecision {
+        let error_message = self.truncate_error(error.as_ref());
+        if self.should_permanently_fail(attempt_count) {
+            MailOutboxDeliveryFailureDecision::PermanentFailure {
+                attempt_count,
+                error_message,
+            }
+        } else {
+            MailOutboxDeliveryFailureDecision::Retry {
+                attempt_count,
+                retry_delay_secs: self.retry_delay_secs(attempt_count),
+                error_message,
+            }
+        }
     }
 }
 
@@ -193,6 +238,27 @@ mod tests {
         assert_eq!(policy.retry_delay_secs(4), 300);
         assert_eq!(policy.retry_delay_secs(5), 900);
         assert_eq!(retry_delay_secs(99), 1800);
+    }
+
+    #[test]
+    fn retry_policy_classifies_delivery_failures() {
+        let policy = MailOutboxRetryPolicy::new(2, 3);
+
+        assert_eq!(
+            policy.delivery_failure_decision(1, "abcdef"),
+            super::MailOutboxDeliveryFailureDecision::Retry {
+                attempt_count: 1,
+                retry_delay_secs: 5,
+                error_message: "abc".to_string(),
+            }
+        );
+        assert_eq!(
+            policy.delivery_failure_decision(2, "abcdef"),
+            super::MailOutboxDeliveryFailureDecision::PermanentFailure {
+                attempt_count: 2,
+                error_message: "abc".to_string(),
+            }
+        );
     }
 
     #[test]

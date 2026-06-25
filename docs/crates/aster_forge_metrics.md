@@ -32,6 +32,7 @@ aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
 - `MetricsRecorder`
 - `SharedMetricsRecorder`
 - `NoopMetrics`
+- `init_metrics_or_noop`
 
 `MetricsRecorder` 包含数据库、HTTP、后台任务、外部系统等通用记录入口。产品可以实现自己的 recorder，把这些调用映射到实际后端。
 
@@ -40,6 +41,26 @@ aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```rust
 let metrics = aster_forge_metrics::NoopMetrics::arc();
 ```
+
+启动时如果产品侧有真实 metrics backend，可以把 feature 边界留在产品仓库，只把“失败后降级
+noop”的机械逻辑交给 Forge：
+
+```rust
+fn create_metrics_recorder() -> aster_forge_metrics::SharedMetricsRecorder {
+    #[cfg(feature = "metrics")]
+    {
+        return aster_forge_metrics::init_metrics_or_noop(
+            crate::metrics::init_metrics,
+            || crate::metrics::PrometheusMetricsRecorder,
+        );
+    }
+
+    aster_forge_metrics::NoopMetrics::arc()
+}
+```
+
+这里 Forge 不持有 Prometheus registry，也不定义产品 metric namespace；产品只把“初始化函数”和
+“recorder 构造器”传进来。
 
 ## 指标注册
 

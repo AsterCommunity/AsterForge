@@ -4,43 +4,19 @@
 //! the shared directory layout and cleanup behavior in Forge while products keep ownership of when
 //! a task is allowed to create or delete artifacts.
 
-use std::io::ErrorKind;
-use std::time::Duration;
-
 use crate::{Result, TaskCoreError, TaskLease};
-
-const CLEANUP_RETRY_ATTEMPTS: usize = 3;
-const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Cleans a temporary directory tree, logging failures instead of returning them.
 ///
 /// Missing directories are accepted. `DirectoryNotEmpty` is retried because some platforms and
 /// filesystem watchers can briefly create files while a recursive removal is in progress.
 pub async fn cleanup_temp_dir(path: &str) {
-    for _ in 0..CLEANUP_RETRY_ATTEMPTS {
-        match tokio::fs::remove_dir_all(path).await {
-            Ok(()) => return,
-            Err(error) if error.kind() == ErrorKind::NotFound => return,
-            Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {
-                tokio::time::sleep(CLEANUP_RETRY_DELAY).await;
-            }
-            Err(error) => {
-                tracing::warn!(path, error = %error, "failed to cleanup temp dir");
-                return;
-            }
-        }
-    }
-
-    if let Err(error) = tokio::fs::remove_dir_all(path).await
-        && error.kind() != ErrorKind::NotFound
-    {
-        tracing::warn!(path, error = %error, "failed to cleanup temp dir");
-    }
+    aster_forge_utils::fs::cleanup_temp_dir(path).await;
 }
 
 /// Cleans the short-lived runtime temporary directory under `temp_root`.
 pub async fn cleanup_runtime_temp_root(temp_root: &str) {
-    cleanup_temp_dir(&aster_forge_utils::paths::runtime_temp_dir(temp_root)).await;
+    aster_forge_utils::fs::cleanup_runtime_temp_root(temp_root).await;
 }
 
 /// Prepares the token-scoped temporary directory for one claimed task lease.

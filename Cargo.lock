@@ -616,8 +616,10 @@ dependencies = [
 name = "aster_forge_mail"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "tokio",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
@@ -628,6 +630,7 @@ dependencies = [
  "sea-orm",
  "thiserror 2.0.18",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -641,6 +644,7 @@ dependencies = [
 name = "aster_forge_runtime"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_utils",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

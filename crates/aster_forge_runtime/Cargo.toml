@@ -9,6 +9,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+aster_forge_utils = { path = "../aster_forge_utils" }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["fs", "signal", "time"] }
 tracing.workspace = true

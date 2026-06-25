@@ -13,6 +13,7 @@ http.workspace = true
 ipnet.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "time"] }
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
