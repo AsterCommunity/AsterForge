@@ -8,9 +8,19 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+default = []
+openapi = ["dep:utoipa"]
+
 [dependencies]
 aster_forge_utils = { path = "../aster_forge_utils" }
+futures.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "signal", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
+utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

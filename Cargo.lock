@@ -649,10 +649,14 @@ name = "aster_forge_runtime"
 version = "0.1.0"
 dependencies = [
  "aster_forge_utils",
+ "futures",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]

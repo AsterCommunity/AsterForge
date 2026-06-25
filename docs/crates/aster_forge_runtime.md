@@ -5,7 +5,7 @@
 ## 适用场景
 
 - 统一组件健康报告模型。
-- 用注册表顺序执行健康检查，并处理超时。
+- 用注册表并发执行健康检查，并处理 scope、超时和框架级失败。
 - 记录 startup phase 的执行结果、耗时和失败策略。
 - 创建短命 runtime 临时目录。
 - 收集 shutdown phase 的执行顺序、耗时和错误。
@@ -37,9 +37,16 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 - `HealthStatus`
 - `HealthComponentReport`
+- `HealthComponentDetail`
 - `SystemHealthReport`
-- `HealthCheckCriticality`
+- `HealthCheckDescriptor`
+- `HealthCheckOptions`
+- `HealthCheckRequirement`
+- `HealthCheckScope`
+- `HealthCheckScopes`
 - `HealthCheckRegistry`
+- `HealthCheckRegistryBuilder`
+- `HealthMetricsRecorder`
 
 ### 报告模型
 
@@ -48,47 +55,164 @@ Forge 只提供健康报告模型和聚合规则：
 - `Healthy`、`Degraded`、`Unhealthy` 三种状态。
 - 通过 `HealthStatus::as_str()` 提供稳定的 wire value。
 - `HealthComponentReport::healthy()` / `degraded()` / `unhealthy()` 构造单个组件报告。
+- `HealthComponentReport::with_duration()` 可以附加产品侧已经测得的耗时；如果未设置，registry 会填入实际执行耗时。
+- `HealthComponentReport::with_detail()` 可以附加 typed 结构化诊断信息，例如 cache backend、storage driver、queue depth、latency。
+- `HealthComponentReport::detail()` 可以按 key 读取 typed 诊断值。
+- `HealthComponentReport::duration_seconds()` 把组件耗时转成 metrics 友好的秒数。
 - `SystemHealthReport::status()` 返回最差状态。
 - `SystemHealthReport::has_issues()` 判断是否有问题。
+- `SystemHealthReport::duration_seconds()` 把整体耗时转成 metrics 友好的秒数。
 - `SystemHealthReport::summary()` 生成简洁的运维摘要。
 - `SystemHealthReport::details()` 生成所有组件的诊断明细。
 - `SystemHealthReport::issue_summary()` 只汇总 degraded/unhealthy 组件。
 - `SystemHealthReport::issue_details()` 只输出 degraded/unhealthy 组件明细。
+- `SystemHealthReport::record_metrics()` 通过产品提供的 `HealthMetricsRecorder` 桥接 metrics backend。
 
 ### 注册式运行器
 
 `HealthCheckRegistry` 负责：
 
-- 按注册顺序执行健康检查。
+- 并发执行健康检查。
+- 按注册顺序返回组件报告。
+- 按 `HealthCheckScope` 选择 liveness、readiness 或 diagnostics 检查。
 - 对每个检查应用独立超时。
-- 将超时映射成组件报告。
+- 将超时和 panic 映射成组件报告。
 - 聚合成 `SystemHealthReport`。
+- 通过 `descriptors()` / `descriptors_for_scope()` 暴露注册信息，方便 admin UI、诊断 API 或 metrics catalog 展示。
 
-`HealthCheckCriticality` 用来区分超时语义：
+`HealthCheckRequirement` 用来区分框架级失败语义：
 
-- `Critical`：超时视为 `Unhealthy`。
-- `NonCritical`：超时视为 `Degraded`。
+- `Required`：超时或 panic 视为 `Unhealthy`。
+- `Optional`：超时或 panic 视为 `Degraded`。
 
-产品 crate 仍然自己决定要检查哪些组件。比如 Yggdrasil 会在产品服务里注册 database 和 cache 探针，然后把返回值交给 Forge 的报告模型。
+`HealthCheckOptions` 是推荐的新注册入口：
+
+- `HealthCheckOptions::required(timeout)`：关键组件，失败影响 readiness 或整体健康。
+- `HealthCheckOptions::optional(timeout)`：可选组件，失败通常表示降级。
+- `.with_scopes(HealthCheckScopes::readiness_and_diagnostics())`：声明检查在哪些视图里执行。
+
+如果多个检查共享 timeout 或 scope，可以用 `HealthCheckRegistryBuilder`：
+
+```rust
+use aster_forge_runtime::{
+    HealthCheckRegistryBuilder, HealthCheckScopes, HealthComponentReport,
+};
+
+let mut builder = HealthCheckRegistryBuilder::new()
+    .default_timeout(Some(std::time::Duration::from_secs(5)))
+    .default_scopes(HealthCheckScopes::diagnostics());
+
+builder.register_required("database", || async {
+    HealthComponentReport::healthy("database", "database ping succeeded")
+});
+
+let registry = builder.build();
+```
+
+常见 scope 约定：
+
+- `Liveness`：只判断进程是否活着，通常不做数据库、缓存、外部服务探测。
+- `Readiness`：判断实例能否接收流量，例如 database ping。
+- `Diagnostics`：完整运维诊断，例如 database、cache、storage、mail、tasks。
+
+产品 crate 仍然自己决定要检查哪些组件。比如 Yggdrasil 在产品服务里注册 database 和 cache 探针，`/health/ready` 执行 `Readiness` scope，runtime health task 执行 `Diagnostics` scope，然后把返回值交给 Forge 的报告模型。
 
 示例：
 
 ```rust
-use aster_forge_runtime::{HealthCheckCriticality, HealthCheckRegistry, HealthComponentReport};
+use std::time::Duration;
+
+use aster_forge_runtime::{
+    HealthCheckOptions, HealthCheckRegistry, HealthCheckScope, HealthCheckScopes,
+    HealthComponentReport,
+};
 
 let mut registry = HealthCheckRegistry::new();
-registry.register(
+registry.register_with_options(
     "database",
-    HealthCheckCriticality::Critical,
-    None,
+    HealthCheckOptions::required(Some(Duration::from_secs(5)))
+        .with_scopes(HealthCheckScopes::readiness_and_diagnostics()),
     || async { HealthComponentReport::healthy("database", "database ping succeeded") },
 );
 
-let report = registry.run().await;
+let report = registry.run_scope(HealthCheckScope::Diagnostics).await;
 assert_eq!(report.summary(), "database healthy");
 ```
 
-产品侧把 health report 映射到 task outcome、HTTP response 或 admin DTO 时，优先使用这些投影 helper。比如 Drive 和 Yggdrasil 的 runtime health task 都可以用 `issue_summary()` / `issue_details()` 把异常组件写进失败记录，同时保留产品自己的 task result 类型。
+产品侧把 health report 映射到 task outcome、HTTP response 或 admin DTO 时，优先使用这些投影 helper。比如 Drive 和 Yggdrasil 的 runtime health task 都可以用 `issue_summary()` / `issue_details()` 把异常组件写进失败记录，同时保留产品自己的 task result 类型。结构化 component details 应该继续透传到产品 task/admin DTO，避免 cache backend、storage driver、queue depth 这类诊断值只停留在日志里。
+
+### Typed Detail Schema
+
+`HealthComponentDetail` 是 Forge 提供的公共 schema，产品侧不要再复制一套 detail value 类型。推荐做法是产品 DTO 直接使用 `Vec<aster_forge_runtime::HealthComponentDetail>`，只在产品侧保留自己的 component/status 外壳。
+
+当前支持的 `HealthComponentDetailValue`：
+
+- `Text(String)`：backend、driver、region、mode 等文本值。
+- `Integer(i64)`：允许负数的计数或偏移。
+- `Unsigned(u64)`：queue depth、pending count、retry count 等非负数。
+- `Boolean(bool)`：开关、fallback active 等布尔状态。
+- `DurationMillis(u64)`：latency、lag、age、timeout 等耗时，单位固定为毫秒。
+
+序列化后的 JSON 形状稳定，方便 admin UI 按类型展示：
+
+```json
+[
+  { "key": "backend", "value": { "type": "text", "value": "redis" } },
+  { "key": "queue_depth", "value": { "type": "unsigned", "value": 12 } },
+  { "key": "latency", "value": { "type": "duration_millis", "value": 42 } }
+]
+```
+
+产品侧如果需要展示文本，可以用 `HealthComponentDetailValue::display_value()`。如果需要按类型渲染，应直接 match `HealthComponentDetailValue`，不要解析字符串。
+
+### Metrics Bridge
+
+Forge 不直接依赖具体 metrics backend。产品侧可以给自己的 recorder 或 adapter 实现 `HealthMetricsRecorder`：
+
+```rust
+use aster_forge_runtime::{
+    HealthComponentReport, HealthMetricsRecorder, HealthStatus, SystemHealthReport,
+};
+
+struct ProductHealthMetrics<'a>(&'a ProductMetrics);
+
+impl HealthMetricsRecorder for ProductHealthMetrics<'_> {
+    fn record_health_report(
+        &self,
+        scope: &'static str,
+        status: HealthStatus,
+        duration_seconds: f64,
+    ) {
+        self.0.record_health_report(scope, status.as_str(), duration_seconds);
+    }
+
+    fn record_health_component(
+        &self,
+        scope: &'static str,
+        component: &HealthComponentReport,
+        duration_seconds: f64,
+    ) {
+        self.0.record_health_component(
+            scope,
+            component.name,
+            component.status.as_str(),
+            duration_seconds,
+        );
+    }
+}
+
+let report = SystemHealthReport::new(Vec::new());
+report.record_metrics("diagnostics", &ProductHealthMetrics(metrics));
+```
+
+这样 Forge 只定义稳定的 health report/metrics 语义，Prometheus、OpenTelemetry、Noop recorder、feature flag 和 label 策略仍然留在产品仓库。
+
+Yggdrasil 的接入方式是让 `PrometheusMetricsRecorder` 同时实现 `aster_forge_runtime::HealthMetricsRecorder`，并在 health service 完成 `Readiness` 或 `Diagnostics` scope 后调用 `SystemHealthReport::record_metrics()`。Prometheus 指标保持低基数：
+
+- `health_report_status{scope}`：aggregate status，`healthy=0`、`degraded=1`、`unhealthy=2`。
+- `health_report_duration_seconds{scope,status}`：aggregate health run duration。
+- `health_component_status{scope,component}`：component status，`healthy=0`、`degraded=1`、`unhealthy=2`。
+- `health_component_duration_seconds{scope,component,status}`：component check duration。
 
 ## Buffered Batch Writer
 

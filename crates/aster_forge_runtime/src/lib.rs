@@ -25,7 +25,9 @@ pub mod startup;
 
 pub use buffered::{BufferedBatchConfig, BufferedBatchWriter};
 pub use health::{
-    HealthCheckCriticality, HealthCheckRegistry, HealthComponentReport, HealthStatus,
+    HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckRegistryBuilder,
+    HealthCheckRequirement, HealthCheckScope, HealthCheckScopes, HealthComponentDetail,
+    HealthComponentDetailValue, HealthComponentReport, HealthMetricsRecorder, HealthStatus,
     SystemHealthReport,
 };
 pub use shutdown::{

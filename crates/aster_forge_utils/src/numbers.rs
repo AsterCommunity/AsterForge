@@ -65,6 +65,11 @@ pub fn u128_to_u64(value: u128, value_name: &str) -> Result<u64> {
     })
 }
 
+/// Converts `u128` to `u64`, saturating values above `u64::MAX`.
+pub fn u128_to_u64_saturating(value: u128) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 /// Converts seconds represented as `f64` to rounded milliseconds.
 pub fn f64_seconds_to_u64_millis(seconds: f64, value_name: &str) -> Result<u64> {
     if !seconds.is_finite() {
@@ -255,6 +260,13 @@ mod tests {
 
         let err = u128_to_u64(u128::from(u64::MAX) + 1, "size").unwrap_err();
         assert!(matches!(err, UtilsError::NumericConversion(_)));
+    }
+
+    #[test]
+    fn u128_to_u64_saturating_clamps_overflow() {
+        assert_eq!(u128_to_u64_saturating(0), 0);
+        assert_eq!(u128_to_u64_saturating(u128::from(u64::MAX)), u64::MAX);
+        assert_eq!(u128_to_u64_saturating(u128::from(u64::MAX) + 1), u64::MAX);
     }
 
     #[test]
