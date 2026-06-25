@@ -613,6 +613,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_mail"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aster_forge_metrics"
 version = "0.1.0"
 dependencies = [
@@ -627,6 +635,15 @@ name = "aster_forge_panic"
 version = "0.1.0"
 dependencies = [
  "chrono",
+]
+
+[[package]]
+name = "aster_forge_runtime"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
