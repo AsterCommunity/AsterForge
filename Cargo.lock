@@ -569,6 +569,7 @@ dependencies = [
 name = "aster_forge_db"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_mail",
  "aster_forge_runtime",
  "aster_forge_tasks",
  "async-trait",
@@ -631,6 +632,7 @@ dependencies = [
  "aster_forge_validation",
  "async-trait",
  "lettre",
+ "sea-orm",
  "serde",
  "tokio",
  "tracing",

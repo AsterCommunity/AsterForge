@@ -1,12 +1,13 @@
 # aster_forge_mail
 
-`aster_forge_mail` 提供产品无关的邮件基础机械层。它不拥有 SMTP 配置 key、产品模板、用户上下文、审计记录或数据库实体。
+`aster_forge_mail` 提供产品无关的邮件基础机械层。它拥有 Aster 产品共享的邮件状态、模板 code 和投递控制流，但不拥有 SMTP 配置 key、产品模板 payload、用户上下文、审计记录或数据库实体。
 
 当前这个 crate 主要覆盖各服务里重复出现的 outbox 投递机制：
 
 - SMTP / sender / 模板配置值的产品无关规范化；
 - SMTP runtime settings 模型、默认端口和 readiness 判定；
 - 投递计数统计；
+- 共享 Aster `MailTemplateCode`、`MailOutboxStatus` 和 `StoredMailPayload`；
 - 重试延迟策略；
 - 投递错误截断；
 - SMTP 成功后对 `mark_sent` 的最佳努力重试。
@@ -28,7 +29,7 @@
 
 不适合放在这里的内容：
 
-- 产品模板和模板 code。
+- 产品模板 payload、渲染逻辑和本地化文案。
 - 产品配置 key 和默认值。
 - 审计动作。
 - 用户 ID 或用户上下文。
@@ -148,6 +149,9 @@ fn map_mail_delivery_error(error: aster_forge_mail::MailDeliveryError) -> AsterE
 主要类型和函数：
 
 - `DispatchStats`
+- `MailTemplateCode`
+- `MailOutboxStatus`
+- `StoredMailPayload`
 - `MailOutboxDispatchConfig`
 - `MailOutboxDispatchRow`
 - `MailOutboxRetryPolicy`
@@ -159,6 +163,11 @@ fn map_mail_delivery_error(error: aster_forge_mail::MailDeliveryError) -> AsterE
 - `retry_delay_secs(attempt_count)`
 - `truncate_error(error, max_len)`
 - `retry_mark_sent(id, retry_delays_ms, mark_sent)`
+
+`MailTemplateCode` 只标准化当前 Aster 产品共享的持久化模板 code，例如
+`password_reset`、`external_auth_email_verification` 和 `user_invitation`。产品仍然维护自己的
+payload enum、模板文件、链接构造、变量列表和渲染分支。共享数据库 schema 给
+`template_code` 预留 64 字节；新增共享模板 code 时要保持稳定、snake_case，并避免超过这个长度。
 
 ### 统计和策略
 

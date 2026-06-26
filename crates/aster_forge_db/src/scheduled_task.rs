@@ -1,8 +1,9 @@
 //! Database-backed scheduled task catalog and claim store.
 //!
 //! Scheduled task rows persist product runtime schedules across process restarts and coordinate
-//! due-work claims across service instances. Forge owns the table contract and the atomic claim
-//! rules; product crates still own task names, intervals, execution bodies, and outcome records.
+//! due-work claims across service instances. `aster_forge_tasks` owns the public scheduling DTOs
+//! and runner trait; this module only supplies the SeaORM table contract and store implementation.
+//! Product crates still own task names, intervals, execution bodies, and outcome records.
 
 use std::time::Duration;
 
@@ -17,6 +18,10 @@ use sea_orm::{
 };
 
 use crate::DbError;
+use aster_forge_tasks::{
+    ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,
+    ScheduledTaskCompletion,
+};
 
 /// Scheduled task table name.
 pub const SCHEDULED_TASKS_TABLE: &str = "scheduled_tasks";
@@ -232,64 +237,6 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-/// One scheduled task entry registered by a product runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScheduledTaskCatalogEntry<'a> {
-    /// Product namespace.
-    pub namespace: &'a str,
-    /// Stable task wire name.
-    pub task_name: &'a str,
-    /// Operator-facing display name.
-    pub display_name: &'a str,
-    /// First due timestamp used when inserting a new catalog row.
-    pub first_run_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Request to atomically claim one due scheduled task firing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScheduledTaskClaimRequest<'a> {
-    /// Product namespace.
-    pub namespace: &'a str,
-    /// Stable task wire name.
-    pub task_name: &'a str,
-    /// Process-unique runtime owner id.
-    pub owner_id: &'a str,
-    /// Current timestamp.
-    pub now: chrono::DateTime<chrono::Utc>,
-    /// Claim TTL. Another runtime may reclaim after this duration.
-    pub claim_ttl: Duration,
-}
-
-/// Claimed scheduled task firing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScheduledTaskClaim {
-    /// Stable row identifier.
-    pub task_id: String,
-    /// Product namespace.
-    pub namespace: String,
-    /// Stable task wire name.
-    pub task_name: String,
-    /// Runtime owner id that owns this claim.
-    pub owner_id: String,
-    /// Due timestamp that was claimed.
-    pub scheduled_at: chrono::DateTime<chrono::Utc>,
-    /// Claim acquisition timestamp.
-    pub claimed_at: chrono::DateTime<chrono::Utc>,
-    /// Claim expiry timestamp.
-    pub claim_expires_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Completion update for a claimed scheduled task.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScheduledTaskCompletion {
-    /// Claimed firing to complete.
-    pub claim: ScheduledTaskClaim,
-    /// Runtime completion timestamp.
-    pub finished_at: chrono::DateTime<chrono::Utc>,
-    /// Next due timestamp after this completion.
-    pub next_run_at: chrono::DateTime<chrono::Utc>,
-}
-
 /// SeaORM-backed scheduled task store.
 #[derive(Clone)]
 pub struct ScheduledTaskDbStore {
@@ -302,61 +249,23 @@ impl aster_forge_tasks::ScheduledTaskStore for ScheduledTaskDbStore {
 
     async fn ensure_scheduled_task(
         &self,
-        entry: aster_forge_tasks::ScheduledTaskCatalogEntry<'_>,
+        entry: ScheduledTaskCatalogEntry<'_>,
     ) -> std::result::Result<(), Self::Error> {
-        self.ensure_task(ScheduledTaskCatalogEntry {
-            namespace: entry.namespace,
-            task_name: entry.task_name,
-            display_name: entry.display_name,
-            first_run_at: entry.first_run_at,
-        })
-        .await
-        .map(|_| ())
+        self.ensure_task(entry).await.map(|_| ())
     }
 
     async fn claim_scheduled_task(
         &self,
-        request: aster_forge_tasks::ScheduledTaskClaimRequest<'_>,
-    ) -> std::result::Result<Option<aster_forge_tasks::ScheduledTaskClaim>, Self::Error> {
-        self.claim_due(ScheduledTaskClaimRequest {
-            namespace: request.namespace,
-            task_name: request.task_name,
-            owner_id: request.owner_id,
-            now: request.now,
-            claim_ttl: request.claim_ttl,
-        })
-        .await
-        .map(|claim| {
-            claim.map(|claim| aster_forge_tasks::ScheduledTaskClaim {
-                task_id: claim.task_id,
-                namespace: claim.namespace,
-                task_name: claim.task_name,
-                owner_id: claim.owner_id,
-                scheduled_at: claim.scheduled_at,
-                claimed_at: claim.claimed_at,
-                claim_expires_at: claim.claim_expires_at,
-            })
-        })
+        request: ScheduledTaskClaimRequest<'_>,
+    ) -> std::result::Result<Option<ScheduledTaskClaim>, Self::Error> {
+        self.claim_due(request).await
     }
 
     async fn complete_scheduled_task(
         &self,
-        completion: aster_forge_tasks::ScheduledTaskCompletion,
+        completion: ScheduledTaskCompletion,
     ) -> std::result::Result<bool, Self::Error> {
-        self.complete_claim(ScheduledTaskCompletion {
-            claim: ScheduledTaskClaim {
-                task_id: completion.claim.task_id,
-                namespace: completion.claim.namespace,
-                task_name: completion.claim.task_name,
-                owner_id: completion.claim.owner_id,
-                scheduled_at: completion.claim.scheduled_at,
-                claimed_at: completion.claim.claimed_at,
-                claim_expires_at: completion.claim.claim_expires_at,
-            },
-            finished_at: completion.finished_at,
-            next_run_at: completion.next_run_at,
-        })
-        .await
+        self.complete_claim(completion).await
     }
 }
 
@@ -465,7 +374,7 @@ async fn claim_due(
     if existing.next_run_at > request.now {
         return Ok(None);
     }
-    if is_claim_held_by_other_owner(&existing, request.owner_id, request.now) {
+    if is_claim_fresh(&existing, request.now) {
         return Ok(None);
     }
 
@@ -474,7 +383,6 @@ async fn claim_due(
         .checked_add_signed(chrono_duration_from_std(request.claim_ttl)?)
         .ok_or_else(|| DbError::non_retryable("scheduled task claim expiry overflow"))?;
     let claim_available = Condition::any()
-        .add(Column::ClaimOwnerId.eq(request.owner_id))
         .add(Column::ClaimOwnerId.is_null())
         .add(Column::ClaimExpiresAt.is_null())
         .add(Column::ClaimExpiresAt.lte(request.now));
@@ -513,6 +421,7 @@ async fn complete_claim(
     db: &DatabaseConnection,
     completion: ScheduledTaskCompletion,
 ) -> crate::Result<bool> {
+    validate_completion(&completion)?;
     let update = Entity::update_many()
         .col_expr(Column::NextRunAt, Expr::value(completion.next_run_at))
         .col_expr(Column::ClaimOwnerId, Expr::value(Option::<String>::None))
@@ -535,15 +444,10 @@ async fn complete_claim(
     Ok(update.rows_affected == 1)
 }
 
-fn is_claim_held_by_other_owner(
-    model: &Model,
-    owner_id: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
+fn is_claim_fresh(model: &Model, now: chrono::DateTime<chrono::Utc>) -> bool {
     matches!(
         (&model.claim_owner_id, model.claim_expires_at),
-        (Some(existing_owner), Some(expires_at))
-            if existing_owner != owner_id && expires_at > now
+        (Some(_), Some(expires_at)) if expires_at > now
     )
 }
 
@@ -594,7 +498,22 @@ fn validate_claim_request(request: ScheduledTaskClaimRequest<'_>) -> crate::Resu
         "scheduled task name",
         request.task_name,
         SCHEDULED_TASK_NAME_MAX_LEN,
-    )
+    )?;
+    if request.claim_ttl.is_zero() {
+        return Err(DbError::non_retryable(
+            "scheduled task claim TTL must not be zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_completion(completion: &ScheduledTaskCompletion) -> crate::Result<()> {
+    if completion.next_run_at <= completion.claim.scheduled_at {
+        return Err(DbError::non_retryable(
+            "scheduled task next run must be after the claimed scheduled time",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_non_empty(name: &str, value: &str) -> crate::Result<()> {
@@ -642,6 +561,23 @@ mod tests {
         ScheduledTaskDbStore::new(db)
     }
 
+    async fn sqlite_store_from_builders() -> ScheduledTaskDbStore {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("sqlite memory database should connect");
+        let backend = db.get_database_backend();
+        db.execute(&create_scheduled_tasks_table(backend))
+            .await
+            .expect("scheduled tasks table builder should execute");
+        db.execute(&create_scheduled_tasks_namespace_name_unique_index())
+            .await
+            .expect("scheduled tasks unique index builder should execute");
+        db.execute(&create_scheduled_tasks_next_run_index())
+            .await
+            .expect("scheduled tasks due index builder should execute");
+        ScheduledTaskDbStore::new(db)
+    }
+
     fn create_table_sql(backend: DatabaseBackend) -> String {
         let table = create_scheduled_tasks_table(backend);
         match backend {
@@ -680,6 +616,43 @@ mod tests {
 
         let postgres_sql = create_table_sql(DatabaseBackend::Postgres);
         assert!(postgres_sql.contains("\"next_run_at\" timestamp with time zone NOT NULL"));
+    }
+
+    #[tokio::test]
+    async fn scheduled_tasks_builders_execute_on_sqlite() {
+        let store = sqlite_store_from_builders().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+
+        let inserted = store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert with builder-created schema");
+
+        assert_eq!(inserted.task_id, "aster_yggdrasil:audit-cleanup");
+    }
+
+    #[tokio::test]
+    async fn ensure_task_rejects_invalid_catalog_values() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+
+        let empty = store
+            .ensure_task(ScheduledTaskCatalogEntry {
+                namespace: " ",
+                ..entry(now)
+            })
+            .await
+            .expect_err("empty namespace should be rejected");
+        assert!(empty.to_string().contains("must not be empty"));
+
+        let too_long = store
+            .ensure_task(ScheduledTaskCatalogEntry {
+                task_name: "x".repeat(129).as_str(),
+                ..entry(now)
+            })
+            .await
+            .expect_err("long task name should be rejected");
+        assert!(too_long.to_string().contains("at most 128 bytes"));
     }
 
     #[tokio::test]
@@ -755,6 +728,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claim_due_blocks_duplicate_fresh_claim_from_same_owner() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+
+        let first = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("first claim should query")
+            .expect("task should be due");
+        assert_eq!(first.owner_id, "runtime-a");
+
+        let duplicate = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now: now + ChronoDuration::seconds(1),
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("duplicate claim should query");
+        assert!(duplicate.is_none());
+    }
+
+    #[tokio::test]
+    async fn claim_due_skips_not_due_and_rejects_zero_ttl() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now + ChronoDuration::minutes(5)))
+            .await
+            .expect("scheduled task should insert");
+
+        let not_due = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("not-due claim check should succeed");
+        assert!(not_due.is_none());
+
+        let zero_ttl = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::ZERO,
+            })
+            .await
+            .expect_err("zero TTL should be rejected");
+        assert!(zero_ttl.to_string().contains("must not be zero"));
+    }
+
+    #[tokio::test]
     async fn completing_claim_advances_next_run_and_clears_claim() {
         let store = sqlite_store().await;
         let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
@@ -797,5 +839,84 @@ mod tests {
             .await
             .expect("claim check should succeed");
         assert!(second.is_none());
+    }
+
+    #[tokio::test]
+    async fn complete_claim_requires_matching_owner_and_claim_timestamp() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+        let claim = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim should succeed")
+            .expect("task should be due");
+
+        let mut wrong_owner = claim.clone();
+        wrong_owner.owner_id = "runtime-b".to_string();
+        assert!(
+            !store
+                .complete_claim(ScheduledTaskCompletion {
+                    claim: wrong_owner,
+                    finished_at: now + ChronoDuration::seconds(5),
+                    next_run_at: now + ChronoDuration::hours(1),
+                })
+                .await
+                .expect("wrong owner completion should query")
+        );
+
+        let mut wrong_claim_time = claim;
+        wrong_claim_time.claimed_at += ChronoDuration::seconds(1);
+        assert!(
+            !store
+                .complete_claim(ScheduledTaskCompletion {
+                    claim: wrong_claim_time,
+                    finished_at: now + ChronoDuration::seconds(5),
+                    next_run_at: now + ChronoDuration::hours(1),
+                })
+                .await
+                .expect("wrong claim timestamp completion should query")
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_claim_rejects_next_run_that_does_not_advance_schedule() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+        let claim = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim should succeed")
+            .expect("task should be due");
+
+        let error = store
+            .complete_claim(ScheduledTaskCompletion {
+                claim,
+                finished_at: now + ChronoDuration::seconds(5),
+                next_run_at: now,
+            })
+            .await
+            .expect_err("non-advancing next run should be rejected");
+
+        assert!(error.to_string().contains("must be after"));
     }
 }

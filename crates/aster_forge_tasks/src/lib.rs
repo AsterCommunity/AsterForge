@@ -71,13 +71,14 @@ pub use runtime::{
     BackgroundTaskDispatchBackoff, BackgroundTaskDispatchIteration, BackgroundTaskDispatchTrigger,
     BackgroundTasks, PeriodicTask, RecordedTaskHooks, effective_dispatch_base_interval,
     effective_dispatch_max_interval, effective_jitter_cap, periodic_sleep_duration,
-    run_dispatch_worker, run_periodic_task, run_recorded_task_iteration,
+    run_dispatch_worker, run_leased_background_tasks, run_periodic_task,
+    run_recorded_task_iteration,
 };
 pub use runtime_metadata::{RegisteredRuntimeTaskKind, RuntimeTaskDefinition, RuntimeTaskName};
 pub use schedule::{
     ScheduledPeriodicTask, ScheduledTaskCatalogEntry, ScheduledTaskClaim,
-    ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
-    run_scheduled_periodic_task,
+    ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskRegistrar, ScheduledTaskStore,
+    next_scheduled_run_at, run_scheduled_periodic_task,
 };
 pub use spec::{
     BackgroundTaskSpec, ErasedBackgroundTaskSpec, TaskProcessFuture, TaskSpecAdapter,

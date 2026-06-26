@@ -3,6 +3,11 @@
 use std::future::Future;
 use std::time::Duration;
 
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+#[cfg(all(debug_assertions, feature = "openapi"))]
+use utoipa::ToSchema;
+
 /// Default maximum stored delivery error length.
 pub const DEFAULT_ERROR_MAX_LEN: usize = 1024;
 
@@ -12,6 +17,122 @@ pub const DEFAULT_ERROR_MAX_LEN: usize = 1024;
 /// window for transient database failures after SMTP has already accepted the
 /// message.
 pub const DEFAULT_MARK_SENT_RETRY_DELAYS_MS: &[u64] = &[0, 100, 500, 2_000, 5_000];
+
+/// Built-in Aster mail template code.
+///
+/// These are the shared account/auth mail templates used by current Aster
+/// services. Products may still maintain their own template payload enum and
+/// renderer; this type only standardizes the persisted template code for the
+/// common catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(64))")]
+#[serde(rename_all = "snake_case")]
+pub enum MailTemplateCode {
+    /// Account registration activation message.
+    #[sea_orm(string_value = "register_activation")]
+    RegisterActivation,
+    /// Confirmation message for changing a contact address.
+    #[sea_orm(string_value = "contact_change_confirmation")]
+    ContactChangeConfirmation,
+    /// Password reset message.
+    #[sea_orm(string_value = "password_reset")]
+    PasswordReset,
+    /// Password reset notice message.
+    #[sea_orm(string_value = "password_reset_notice")]
+    PasswordResetNotice,
+    /// Contact change notice message.
+    #[sea_orm(string_value = "contact_change_notice")]
+    ContactChangeNotice,
+    /// External auth email verification message.
+    #[sea_orm(string_value = "external_auth_email_verification")]
+    ExternalAuthEmailVerification,
+    /// Login email code message.
+    #[sea_orm(string_value = "login_email_code")]
+    LoginEmailCode,
+    /// User invitation message.
+    #[sea_orm(string_value = "user_invitation")]
+    UserInvitation,
+}
+
+impl MailTemplateCode {
+    /// Returns the stable persisted template code.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RegisterActivation => "register_activation",
+            Self::ContactChangeConfirmation => "contact_change_confirmation",
+            Self::PasswordReset => "password_reset",
+            Self::PasswordResetNotice => "password_reset_notice",
+            Self::ContactChangeNotice => "contact_change_notice",
+            Self::ExternalAuthEmailVerification => "external_auth_email_verification",
+            Self::LoginEmailCode => "login_email_code",
+            Self::UserInvitation => "user_invitation",
+        }
+    }
+}
+
+/// Raw JSON payload stored in `mail_outbox.payload_json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, DeriveValueType)]
+pub struct StoredMailPayload(pub String);
+
+impl StoredMailPayload {
+    /// Payload value persisted after terminal delivery, so sensitive template
+    /// variables do not remain in the outbox row.
+    pub const CLEARED_JSON: &str = "{}";
+
+    /// Creates the cleared payload marker.
+    pub fn cleared() -> Self {
+        Self(Self::CLEARED_JSON.to_string())
+    }
+}
+
+impl AsRef<str> for StoredMailPayload {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for StoredMailPayload {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<StoredMailPayload> for String {
+    fn from(value: StoredMailPayload) -> Self {
+        value.0
+    }
+}
+
+/// Persistent mail outbox row status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
+#[serde(rename_all = "snake_case")]
+pub enum MailOutboxStatus {
+    /// Row is waiting for first delivery attempt.
+    #[sea_orm(string_value = "pending")]
+    Pending,
+    /// Row is claimed by a dispatcher.
+    #[sea_orm(string_value = "processing")]
+    Processing,
+    /// Row is waiting for another delivery attempt.
+    #[sea_orm(string_value = "retry")]
+    Retry,
+    /// Row was delivered and marked sent.
+    #[sea_orm(string_value = "sent")]
+    Sent,
+    /// Row exhausted retry policy.
+    #[sea_orm(string_value = "failed")]
+    Failed,
+}
+
+impl MailOutboxStatus {
+    /// Returns whether the status is terminal.
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Sent | Self::Failed)
+    }
+}
 
 /// Aggregate counters returned by an outbox dispatch or drain pass.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -455,8 +576,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_ERROR_MAX_LEN, DispatchStats, MailOutboxRetryPolicy, retry_delay_secs,
-        retry_mark_sent, truncate_error,
+        DEFAULT_ERROR_MAX_LEN, DispatchStats, MailOutboxRetryPolicy, MailOutboxStatus,
+        MailTemplateCode, StoredMailPayload, retry_delay_secs, retry_mark_sent, truncate_error,
     };
     use std::sync::{
         Arc,
@@ -530,6 +651,77 @@ mod tests {
     fn truncate_error_preserves_utf8_boundaries() {
         let value = "界".repeat(4);
         assert_eq!(truncate_error(&value, 3), "界界界");
+    }
+
+    #[test]
+    fn mail_template_code_exposes_stable_storage_names() {
+        assert_eq!(
+            MailTemplateCode::RegisterActivation.as_str(),
+            "register_activation"
+        );
+        assert_eq!(
+            MailTemplateCode::ContactChangeConfirmation.as_str(),
+            "contact_change_confirmation"
+        );
+        assert_eq!(MailTemplateCode::PasswordReset.as_str(), "password_reset");
+        assert_eq!(
+            MailTemplateCode::PasswordResetNotice.as_str(),
+            "password_reset_notice"
+        );
+        assert_eq!(
+            MailTemplateCode::ContactChangeNotice.as_str(),
+            "contact_change_notice"
+        );
+        assert_eq!(
+            MailTemplateCode::ExternalAuthEmailVerification.as_str(),
+            "external_auth_email_verification"
+        );
+        assert_eq!(
+            MailTemplateCode::LoginEmailCode.as_str(),
+            "login_email_code"
+        );
+        assert_eq!(MailTemplateCode::UserInvitation.as_str(), "user_invitation");
+    }
+
+    #[test]
+    fn mail_template_code_storage_names_fit_shared_schema() {
+        let codes = [
+            MailTemplateCode::RegisterActivation,
+            MailTemplateCode::ContactChangeConfirmation,
+            MailTemplateCode::PasswordReset,
+            MailTemplateCode::PasswordResetNotice,
+            MailTemplateCode::ContactChangeNotice,
+            MailTemplateCode::ExternalAuthEmailVerification,
+            MailTemplateCode::LoginEmailCode,
+            MailTemplateCode::UserInvitation,
+        ];
+
+        for code in codes {
+            assert!(
+                code.as_str().len() <= 64,
+                "mail template code `{}` exceeds shared schema length",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn stored_mail_payload_helpers_preserve_raw_json() {
+        let payload = StoredMailPayload::from("{\"token\":\"abc\"}".to_string());
+        assert_eq!(payload.as_ref(), "{\"token\":\"abc\"}");
+
+        let raw: String = payload.into();
+        assert_eq!(raw, "{\"token\":\"abc\"}");
+        assert_eq!(StoredMailPayload::cleared().as_ref(), "{}");
+    }
+
+    #[test]
+    fn mail_outbox_status_terminal_states_are_explicit() {
+        assert!(!MailOutboxStatus::Pending.is_terminal());
+        assert!(!MailOutboxStatus::Processing.is_terminal());
+        assert!(!MailOutboxStatus::Retry.is_terminal());
+        assert!(MailOutboxStatus::Sent.is_terminal());
+        assert!(MailOutboxStatus::Failed.is_terminal());
     }
 
     #[tokio::test]

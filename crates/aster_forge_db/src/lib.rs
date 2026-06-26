@@ -19,6 +19,7 @@
 
 mod component;
 pub mod connection;
+pub mod mail_outbox;
 pub mod pagination;
 pub mod retry;
 pub mod runtime_lease;
@@ -37,6 +38,17 @@ pub use connection::{
     DatabaseConfig, DbHandles, DbMetricsRecorder, NoopDbMetrics, SharedDbMetricsRecorder, connect,
     connect_reader_for_writer, connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
+pub use mail_outbox::{
+    MAIL_OUTBOX_ATTEMPT_COUNT_COLUMN, MAIL_OUTBOX_CREATED_AT_COLUMN, MAIL_OUTBOX_ID_COLUMN,
+    MAIL_OUTBOX_LAST_ERROR_COLUMN, MAIL_OUTBOX_NEXT_ATTEMPT_AT_COLUMN,
+    MAIL_OUTBOX_PAYLOAD_JSON_COLUMN, MAIL_OUTBOX_PROCESSING_STARTED_AT_COLUMN,
+    MAIL_OUTBOX_SENT_AT_COLUMN, MAIL_OUTBOX_STATUS_COLUMN, MAIL_OUTBOX_TABLE,
+    MAIL_OUTBOX_TEMPLATE_CODE_COLUMN, MAIL_OUTBOX_TO_ADDRESS_COLUMN, MAIL_OUTBOX_TO_NAME_COLUMN,
+    MAIL_OUTBOX_UPDATED_AT_COLUMN, MailOutboxCreate, MailOutboxDbStore,
+    create_mail_outbox_due_index, create_mail_outbox_processing_index, create_mail_outbox_row,
+    create_mail_outbox_sent_at_index, create_mail_outbox_table, drop_mail_outbox_due_index,
+    drop_mail_outbox_processing_index, drop_mail_outbox_sent_at_index, drop_mail_outbox_table,
+};
 pub use runtime_lease::{
     RUNTIME_LEASE_CREATED_AT_COLUMN, RUNTIME_LEASE_EXPIRES_AT_COLUMN, RUNTIME_LEASE_ID_COLUMN,
     RUNTIME_LEASE_LAST_RENEWED_AT_COLUMN, RUNTIME_LEASE_OWNER_ID_COLUMN,
@@ -48,8 +60,7 @@ pub use scheduled_task::{
     SCHEDULED_TASK_CREATED_AT_COLUMN, SCHEDULED_TASK_DISPLAY_NAME_COLUMN, SCHEDULED_TASK_ID_COLUMN,
     SCHEDULED_TASK_LAST_CLAIMED_AT_COLUMN, SCHEDULED_TASK_LAST_FINISHED_AT_COLUMN,
     SCHEDULED_TASK_NAME_COLUMN, SCHEDULED_TASK_NAMESPACE_COLUMN, SCHEDULED_TASK_NEXT_RUN_AT_COLUMN,
-    SCHEDULED_TASK_UPDATED_AT_COLUMN, SCHEDULED_TASKS_TABLE, ScheduledTaskCatalogEntry,
-    ScheduledTaskClaim, ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskDbStore,
+    SCHEDULED_TASK_UPDATED_AT_COLUMN, SCHEDULED_TASKS_TABLE, ScheduledTaskDbStore,
     create_scheduled_tasks_namespace_name_unique_index, create_scheduled_tasks_next_run_index,
     create_scheduled_tasks_table, drop_scheduled_tasks_namespace_name_unique_index,
     drop_scheduled_tasks_next_run_index, drop_scheduled_tasks_table,

@@ -15,7 +15,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::runtime::panic_payload_message;
-use crate::{RecordedTaskHooks, periodic_sleep_duration};
+use crate::{
+    BackgroundTasks, RecordedTaskHooks, RegisteredRuntimeTaskKind, periodic_sleep_duration,
+};
 
 /// One scheduled runtime task entry registered by a product runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +130,106 @@ pub struct ScheduledPeriodicTask<Name, State, Store, IntervalFn, TaskFn, PanicFn
     pub hooks: RecordedTaskHooks<TaskFn, PanicFn, RecordFn>,
 }
 
+/// Registers multiple scheduled runtime tasks with shared runner context.
+///
+/// Products usually have a group of scheduled tasks that all share the same
+/// namespace, owner id, claim TTL, shutdown token, state, store, panic mapping,
+/// and outcome recorder. This registrar lets product runtime code register each
+/// task with one line while Forge assembles the full [`ScheduledPeriodicTask`]
+/// runner for every entry.
+pub struct ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Outcome> {
+    tasks: &'a mut BackgroundTasks,
+    namespace: &'static str,
+    owner_id: String,
+    claim_ttl: Duration,
+    shutdown_token: CancellationToken,
+    state: State,
+    store: Store,
+    panic_outcome: PanicFn,
+    record_outcome: RecordFn,
+    _name: std::marker::PhantomData<Name>,
+    _outcome: std::marker::PhantomData<Outcome>,
+}
+
+impl<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+    ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+{
+    /// Creates a scheduled task registrar from shared runner context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        tasks: &'a mut BackgroundTasks,
+        namespace: &'static str,
+        owner_id: impl Into<String>,
+        claim_ttl: Duration,
+        shutdown_token: CancellationToken,
+        state: State,
+        store: Store,
+        panic_outcome: PanicFn,
+        record_outcome: RecordFn,
+    ) -> Self {
+        Self {
+            tasks,
+            namespace,
+            owner_id: owner_id.into(),
+            claim_ttl,
+            shutdown_token,
+            state,
+            store,
+            panic_outcome,
+            record_outcome,
+            _name: std::marker::PhantomData,
+            _outcome: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+    ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+where
+    Name: RegisteredRuntimeTaskKind + Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
+    Store: ScheduledTaskStore,
+    PanicFn: Clone + Fn(String) -> Outcome + Send + Sync + 'static,
+    RecordFn: Clone + Send + Sync + 'static,
+    Outcome: Send + 'static,
+{
+    /// Registers one scheduled runtime task.
+    pub fn register<IntervalFn, TaskFn, TaskFut, RecordFut>(
+        &mut self,
+        name: Name,
+        interval_fn: IntervalFn,
+        jitter_cap: Option<Duration>,
+        task_fn: TaskFn,
+    ) where
+        IntervalFn: Fn(&State) -> Duration + Send + Sync + 'static,
+        TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
+        TaskFut: Future<Output = Outcome> + Send + 'static,
+        RecordFn:
+            Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut,
+        RecordFut: Future<Output = ()> + Send + 'static,
+    {
+        self.tasks
+            .push(run_scheduled_periodic_task(ScheduledPeriodicTask {
+                name,
+                namespace: self.namespace,
+                task_name: name.as_str(),
+                display_name: name.display_name(),
+                owner_id: self.owner_id.clone(),
+                claim_ttl: self.claim_ttl,
+                interval_fn,
+                jitter_cap,
+                shutdown_token: self.shutdown_token.clone(),
+                state: self.state.clone(),
+                store: self.store.clone(),
+                hooks: RecordedTaskHooks::new(
+                    task_fn,
+                    self.panic_outcome.clone(),
+                    self.record_outcome.clone(),
+                ),
+            }));
+    }
+}
+
 /// Runs a scheduled periodic task until shutdown.
 ///
 /// Unlike [`crate::run_periodic_task`], this runner first claims a due catalog row. If the row is
@@ -153,13 +255,13 @@ pub async fn run_scheduled_periodic_task<
     Store: ScheduledTaskStore,
     IntervalFn: Fn(&State) -> Duration + Send + Sync + 'static,
     TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
-    TaskFut: Future<Output = Outcome> + Send,
+    TaskFut: Future<Output = Outcome> + Send + 'static,
     PanicFn: Fn(String) -> Outcome + Send + Sync + 'static,
     RecordFn: Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut
         + Send
         + Sync
         + 'static,
-    RecordFut: Future<Output = ()> + Send,
+    RecordFut: Future<Output = ()> + Send + 'static,
     Outcome: Send + 'static,
 {
     if task.shutdown_token.is_cancelled() {
@@ -208,13 +310,13 @@ async fn run_scheduled_periodic_iteration<
     Store: ScheduledTaskStore,
     IntervalFn: Fn(&State) -> Duration + Send + Sync + 'static,
     TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
-    TaskFut: Future<Output = Outcome> + Send,
+    TaskFut: Future<Output = Outcome> + Send + 'static,
     PanicFn: Fn(String) -> Outcome + Send + Sync + 'static,
     RecordFn: Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut
         + Send
         + Sync
         + 'static,
-    RecordFut: Future<Output = ()> + Send,
+    RecordFut: Future<Output = ()> + Send + 'static,
     Outcome: Send + 'static,
 {
     let now = Utc::now();
@@ -276,15 +378,24 @@ async fn run_scheduled_periodic_iteration<
     };
     let finished_at = Utc::now();
 
-    (task.hooks.record_outcome)(
+    let record_result = std::panic::AssertUnwindSafe((task.hooks.record_outcome)(
         task.state.clone(),
         task.name,
         claim.clone(),
         started_at,
         finished_at,
         outcome,
-    )
+    ))
+    .catch_unwind()
     .await;
+    if let Err(panic) = record_result {
+        let panic_message = panic_payload_message(&panic);
+        tracing::error!(
+            task.name = task.task_name,
+            "scheduled task outcome recorder panicked: {panic_message}"
+        );
+        return;
+    }
 
     let Some(next_run_at) = next_scheduled_run_at(finished_at, (task.interval_fn)(&task.state))
     else {
@@ -333,6 +444,7 @@ pub fn next_scheduled_run_at(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
@@ -349,6 +461,7 @@ mod tests {
     #[derive(Clone)]
     struct MemoryScheduleStore {
         calls: Arc<AtomicUsize>,
+        completions: Arc<AtomicUsize>,
     }
 
     fn test_interval(_: &()) -> std::time::Duration {
@@ -392,7 +505,15 @@ mod tests {
         ) -> Result<bool, Self::Error> {
             assert_eq!(completion.claim.task_name, "cleanup");
             assert!(completion.next_run_at >= completion.finished_at);
+            self.completions.fetch_add(1, Ordering::SeqCst);
             Ok(true)
+        }
+    }
+
+    fn memory_store() -> MemoryScheduleStore {
+        MemoryScheduleStore {
+            calls: Arc::new(AtomicUsize::new(0)),
+            completions: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -401,6 +522,8 @@ mod tests {
         let shutdown = CancellationToken::new();
         let ran = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::new(AtomicUsize::new(0));
+        let store = memory_store();
+        let completions = store.completions.clone();
         let ran_for_task = ran.clone();
         let recorded_for_hook = recorded.clone();
         let shutdown_for_hook = shutdown.clone();
@@ -416,9 +539,7 @@ mod tests {
             jitter_cap: None,
             shutdown_token: shutdown.clone(),
             state: (),
-            store: MemoryScheduleStore {
-                calls: Arc::new(AtomicUsize::new(0)),
-            },
+            store,
             hooks: RecordedTaskHooks::new(
                 move |()| {
                     let ran = ran_for_task.clone();
@@ -444,6 +565,97 @@ mod tests {
 
         assert_eq!(ran.load(Ordering::SeqCst), 1);
         assert_eq!(recorded.load(Ordering::SeqCst), 1);
+        assert_eq!(completions.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn scheduled_periodic_task_records_panic_outcome_and_completes_claim() {
+        let shutdown = CancellationToken::new();
+        let store = memory_store();
+        let completions = store.completions.clone();
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let recorded_for_hook = recorded.clone();
+        let shutdown_for_hook = shutdown.clone();
+
+        run_scheduled_periodic_task(ScheduledPeriodicTask {
+            name: "cleanup",
+            namespace: "aster_test",
+            task_name: "cleanup",
+            display_name: "Cleanup",
+            owner_id: "runtime-a".to_string(),
+            claim_ttl: std::time::Duration::from_secs(30),
+            interval_fn: test_interval,
+            jitter_cap: None,
+            shutdown_token: shutdown.clone(),
+            state: (),
+            store,
+            hooks: RecordedTaskHooks::new(
+                move |()| async move {
+                    panic!("scheduled body failed");
+                    #[allow(unreachable_code)]
+                    "ok".to_string()
+                },
+                |message| format!("panic:{message}"),
+                move |(), _name, _claim, _started_at, _finished_at, outcome| {
+                    let recorded = recorded_for_hook.clone();
+                    let shutdown = shutdown_for_hook.clone();
+                    async move {
+                        recorded
+                            .lock()
+                            .expect("recorded outcomes should lock")
+                            .push(outcome);
+                        shutdown.cancel();
+                    }
+                },
+            ),
+        })
+        .await;
+
+        assert_eq!(
+            recorded
+                .lock()
+                .expect("recorded outcomes should lock")
+                .as_slice(),
+            ["panic:scheduled body failed"]
+        );
+        assert_eq!(completions.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn scheduled_periodic_task_does_not_complete_claim_when_recorder_panics() {
+        let shutdown = CancellationToken::new();
+        let store = memory_store();
+        let completions = store.completions.clone();
+
+        run_scheduled_periodic_task(ScheduledPeriodicTask {
+            name: "cleanup",
+            namespace: "aster_test",
+            task_name: "cleanup",
+            display_name: "Cleanup",
+            owner_id: "runtime-a".to_string(),
+            claim_ttl: std::time::Duration::from_secs(30),
+            interval_fn: test_interval,
+            jitter_cap: None,
+            shutdown_token: shutdown.clone(),
+            state: (),
+            store,
+            hooks: RecordedTaskHooks::new(
+                move |()| {
+                    let shutdown = shutdown.clone();
+                    async move {
+                        shutdown.cancel();
+                        "ok"
+                    }
+                },
+                |_| "panic",
+                move |(), _name, _claim, _started_at, _finished_at, _outcome| async move {
+                    panic!("record failed");
+                },
+            ),
+        })
+        .await;
+
+        assert_eq!(completions.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -207,6 +207,34 @@ impl Default for BackgroundTasks {
     }
 }
 
+/// Runs a singleton background task group behind a Forge runtime lease.
+///
+/// This helper keeps the repeated product glue in one place: acquire a
+/// process-level singleton lease, start a [`BackgroundTasks`] group with the
+/// lease-scoped shutdown token, and shut that group down when the lease is lost
+/// or the process is terminating. Products still own the lease id, lease store,
+/// worker list, and runtime owner id.
+pub async fn run_leased_background_tasks<Store, StartFn>(
+    store: Store,
+    config: aster_forge_runtime::RuntimeLeaseConfig,
+    shutdown_token: CancellationToken,
+    start_background_tasks: StartFn,
+) where
+    Store: aster_forge_runtime::RuntimeLeaseStore,
+    StartFn: FnMut(CancellationToken) -> BackgroundTasks + Send,
+{
+    aster_forge_runtime::run_runtime_lease_supervisor(
+        store,
+        config,
+        shutdown_token,
+        start_background_tasks,
+        |background_tasks| async move {
+            background_tasks.shutdown().await;
+        },
+    )
+    .await;
+}
+
 /// Product callbacks used by panic-protected recorded task iterations.
 pub struct RecordedTaskHooks<TaskFn, PanicFn, RecordFn> {
     /// Runs the product task body.
@@ -507,7 +535,11 @@ mod tests {
         BACKGROUND_TASK_DISPATCH_ERROR_BACKOFF_CAP, BackgroundTaskDispatchBackoff,
         BackgroundTaskDispatchIteration, BackgroundTaskDispatchTrigger, BackgroundTasks,
         PeriodicTask, RecordedTaskHooks, effective_jitter_cap, periodic_sleep_duration,
-        run_dispatch_worker, run_periodic_task, run_recorded_task_iteration,
+        run_dispatch_worker, run_leased_background_tasks, run_periodic_task,
+        run_recorded_task_iteration,
+    };
+    use aster_forge_runtime::{
+        RuntimeLeaseAcquire, RuntimeLeaseClaim, RuntimeLeaseConfig, RuntimeLeaseStore,
     };
     use std::time::Duration;
 
@@ -593,6 +625,85 @@ mod tests {
             .expect("background worker should report shutdown");
 
         tasks.shutdown().await;
+    }
+
+    #[derive(Clone)]
+    struct AlwaysAcquireLeaseStore;
+
+    #[async_trait::async_trait]
+    impl RuntimeLeaseStore for AlwaysAcquireLeaseStore {
+        type Error = std::convert::Infallible;
+
+        async fn try_acquire(
+            &self,
+            _claim: RuntimeLeaseClaim<'_>,
+        ) -> Result<RuntimeLeaseAcquire, Self::Error> {
+            Ok(RuntimeLeaseAcquire::Acquired)
+        }
+
+        async fn renew(
+            &self,
+            _lease_id: &str,
+            _owner_id: &str,
+            _now: DateTime<Utc>,
+            _expires_at: DateTime<Utc>,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+
+        async fn release(&self, _lease_id: &str, _owner_id: &str) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn leased_background_tasks_shutdown_stops_owned_worker_group() {
+        let shutdown_token = CancellationToken::new();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (stopped_tx, stopped_rx) = oneshot::channel();
+        let started_tx = Arc::new(std::sync::Mutex::new(Some(started_tx)));
+        let stopped_tx = Arc::new(std::sync::Mutex::new(Some(stopped_tx)));
+        let handle = tokio::spawn(run_leased_background_tasks(
+            AlwaysAcquireLeaseStore,
+            RuntimeLeaseConfig::new("test.background", "runtime-a")
+                .ttl(Duration::from_millis(100))
+                .renew_interval(Duration::from_millis(10)),
+            shutdown_token.clone(),
+            move |leased_shutdown_token| {
+                let mut tasks = BackgroundTasks::with_shutdown_token(leased_shutdown_token.clone());
+                let started_tx = started_tx.clone();
+                let stopped_tx = stopped_tx.clone();
+                tasks.push(async move {
+                    if let Some(started_tx) = started_tx
+                        .lock()
+                        .expect("test sender mutex should not be poisoned")
+                        .take()
+                    {
+                        let _ = started_tx.send(());
+                    }
+                    leased_shutdown_token.cancelled().await;
+                    if let Some(stopped_tx) = stopped_tx
+                        .lock()
+                        .expect("test sender mutex should not be poisoned")
+                        .take()
+                    {
+                        let _ = stopped_tx.send(());
+                    }
+                });
+                tasks
+            },
+        ));
+
+        tokio::time::timeout(Duration::from_millis(100), started_rx)
+            .await
+            .expect("leased worker should start")
+            .expect("leased worker should report startup");
+        shutdown_token.cancel();
+        tokio::time::timeout(Duration::from_millis(100), stopped_rx)
+            .await
+            .expect("leased worker should observe shutdown")
+            .expect("leased worker should report shutdown");
+        handle.await.expect("lease supervisor should stop cleanly");
     }
 
     #[tokio::test]
