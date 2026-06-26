@@ -9,24 +9,39 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::{ConfigCoreError, Result};
+#[cfg(feature = "sea-orm")]
+use sea_orm::entity::prelude::*;
 
 /// Supported system configuration value types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "sea-orm", derive(EnumIter, DeriveActiveEnum))]
+#[cfg_attr(
+    feature = "sea-orm",
+    sea_orm(rs_type = "String", db_type = "String(StringLen::N(32))")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigValueType {
     /// A single-line string.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "string"))]
     String,
     /// A multi-line string.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "multiline"))]
     Multiline,
     /// A JSON array of strings.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "string_array"))]
     StringArray,
     /// One value selected from a known string enum.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "string_enum"))]
     StringEnum,
     /// A JSON array of values selected from a known string enum.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "string_enum_set"))]
     StringEnumSet,
     /// A numeric value stored as a string.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "number"))]
     Number,
     /// A boolean value stored as a string.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "boolean"))]
     Boolean,
 }
 
@@ -87,12 +102,20 @@ impl fmt::Display for ConfigValueType {
 
 /// Origin of a stored configuration value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "sea-orm", derive(EnumIter, DeriveActiveEnum))]
+#[cfg_attr(
+    feature = "sea-orm",
+    sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigSource {
     /// Value is defined by the product registry.
     #[default]
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "system"))]
     System,
     /// Value is user-defined and not backed by a product registry entry.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "custom"))]
     Custom,
 }
 
@@ -123,14 +146,23 @@ impl fmt::Display for ConfigSource {
 
 /// Consumer visibility for a stored configuration value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "sea-orm", derive(EnumIter, DeriveActiveEnum))]
+#[cfg_attr(
+    feature = "sea-orm",
+    sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigVisibility {
     /// Only backend code and privileged APIs may see the value.
     #[default]
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "private"))]
     Private,
     /// Anonymous clients may see the value.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "public"))]
     Public,
     /// Authenticated clients may see the value.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "authenticated"))]
     Authenticated,
 }
 

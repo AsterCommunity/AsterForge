@@ -647,9 +647,11 @@ pub use redis_transport::{RedisConfigChangeNotifier, RedisConfigReloadListener};
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "redis-pubsub"))]
+    use super::CONFIG_SYNC_BACKEND_REDIS;
     use super::{
-        CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigChangeEvent,
-        ConfigChangeNotifier, ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,
+        CONFIG_SYNC_BACKEND_DISABLED, ConfigChangeEvent, ConfigChangeNotifier,
+        ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,
         ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime, InMemoryConfigNotifier,
         SharedConfigChangeNotifier, build_config_sync_runtime, default_config_sync_topic,
         handle_config_reload_notification, redis_channel_from_topic, run_config_reload_worker,

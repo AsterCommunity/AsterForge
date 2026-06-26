@@ -12,12 +12,14 @@ publish = false
 default = []
 openapi = ["dep:utoipa"]
 redis-pubsub = ["dep:redis"]
+sea-orm = ["dep:sea-orm"]
 
 [dependencies]
 async-trait.workspace = true
 aster_forge_utils = { path = "../aster_forge_utils" }
 futures.workspace = true
 redis = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
