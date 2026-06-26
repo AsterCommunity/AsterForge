@@ -195,7 +195,10 @@ pub fn register_database_shutdown(
     registry
         .component("database")
         .kind(RuntimeComponentKind::Database)
-        .depends_on_all(&["background_tasks", "audit_logs"])
+        .depends_on_all(&[
+            aster_forge_tasks::BACKGROUND_TASKS_COMPONENT,
+            aster_forge_audit::AUDIT_LOGS_COMPONENT,
+        ])
         .shutdown_once(
             "database_connections",
             None,

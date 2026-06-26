@@ -15,6 +15,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{ConfigCoreError, Result};
 
+/// Disabled config-sync backend name.
+pub const CONFIG_SYNC_BACKEND_DISABLED: &str = "disabled";
+/// Redis pub/sub config-sync backend name.
+pub const CONFIG_SYNC_BACKEND_REDIS: &str = "redis";
+
 /// Source that emitted a configuration reload notification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,7 +186,7 @@ impl Default for ConfigSyncConfig {
 impl ConfigSyncConfig {
     /// Returns the default disabled backend name.
     pub fn default_backend() -> String {
-        "disabled".to_string()
+        CONFIG_SYNC_BACKEND_DISABLED.to_string()
     }
 
     /// Returns the default logical reload topic.
@@ -219,7 +224,9 @@ pub fn build_config_sync_runtime(
         "" | "disabled" | "none" => Ok(ConfigSyncRuntime::disabled_with_runtime_id(
             namespace, runtime_id,
         )),
-        "redis" => build_redis_config_sync_runtime(config, namespace, runtime_id, &topic),
+        CONFIG_SYNC_BACKEND_REDIS => {
+            build_redis_config_sync_runtime(config, namespace, runtime_id, &topic)
+        }
         backend => Err(ConfigCoreError::invalid_value(format!(
             "unsupported config_sync.backend '{backend}'"
         ))),
@@ -641,11 +648,11 @@ pub use redis_transport::{RedisConfigChangeNotifier, RedisConfigReloadListener};
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigChangeEvent, ConfigChangeNotifier, ConfigNotificationSource, ConfigReloadDecision,
-        ConfigReloadMessage, ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime,
-        InMemoryConfigNotifier, SharedConfigChangeNotifier, build_config_sync_runtime,
-        default_config_sync_topic, handle_config_reload_notification, redis_channel_from_topic,
-        run_config_reload_worker,
+        CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigChangeEvent,
+        ConfigChangeNotifier, ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,
+        ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime, InMemoryConfigNotifier,
+        SharedConfigChangeNotifier, build_config_sync_runtime, default_config_sync_topic,
+        handle_config_reload_notification, redis_channel_from_topic, run_config_reload_worker,
     };
     use crate::ConfigCoreError;
     use std::sync::{
@@ -707,7 +714,7 @@ mod tests {
         let config = ConfigSyncConfig::default();
 
         assert!(!config.enabled());
-        assert_eq!(config.backend, "disabled");
+        assert_eq!(config.backend, CONFIG_SYNC_BACKEND_DISABLED);
         assert_eq!(config.endpoint, "");
         assert_eq!(config.topic, "aster.config_reload");
     }
@@ -763,7 +770,7 @@ mod tests {
     fn redis_config_sync_backend_requires_feature() {
         let result = build_config_sync_runtime(
             &ConfigSyncConfig {
-                backend: "redis".to_string(),
+                backend: CONFIG_SYNC_BACKEND_REDIS.to_string(),
                 endpoint: "redis://127.0.0.1:6379/0".to_string(),
                 ..ConfigSyncConfig::default()
             },

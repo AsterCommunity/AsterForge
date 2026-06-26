@@ -395,6 +395,8 @@ notifier.publish_reload(message).await?;
 
 如果产品需要完整订阅循环，优先使用：
 
+- `CONFIG_SYNC_BACKEND_DISABLED`
+- `CONFIG_SYNC_BACKEND_REDIS`
 - `ConfigSyncConfig`
 - `ConfigSyncRuntime`
 - `build_config_sync_runtime(config, namespace)`
@@ -407,6 +409,8 @@ notifier.publish_reload(message).await?;
 1. 启动时调用 `build_config_sync_runtime(&config.config_sync, "aster_product")`。
 2. 本地配置写入成功后调用 `runtime.publish_reload(keys, ConfigNotificationSource::Api).await`。
 3. 后台任务中调用 `runtime.run_reload_subscription(shutdown, reload_callback).await`，其中 `reload_callback` 从产品自己的权威存储重新加载配置。
+
+产品侧如果需要构造静态配置或测试数据，优先使用 `CONFIG_SYNC_BACKEND_DISABLED` 和 `CONFIG_SYNC_BACKEND_REDIS`，不要在各仓库散写 backend 字符串。
 
 底层 `ConfigReloadWorkerConfig`、`handle_config_reload_notification()` 和 `run_config_reload_worker()` 仍然保留给特殊运行器或测试使用；普通产品不应该自己拼 reload message、notifier subscribe、namespace 过滤或 backend match。
 

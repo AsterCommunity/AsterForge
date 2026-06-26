@@ -1,25 +1,32 @@
 # AGENTS.md
 
-本文件给在 AsterForge 仓库工作的 agent 使用。先看清楚项目边界再动手，别一上来就把业务逻辑塞进共享 crate，后面拆起来会很烦。
+本文件给在 AsterForge 仓库工作的 agent 使用。先看清楚项目边界再动手。Forge 现在不是重复函数收纳箱，而是 Aster 产品共用的运行时地基；但这不等于可以把业务逻辑塞进共享 crate，后面拆起来会很烦。
 
 ## 项目定位
 
-AsterForge 是 Aster 项目的共享 Rust crate workspace，用来沉淀跨项目复用的基础设施机制。
+AsterForge 是 Aster 项目的共享 Rust crate workspace 和产品无关运行时内核，用来沉淀跨项目复用的基础设施机制、component lifecycle、共享 schema/store、后台任务运行机制、配置同步、cache backend、mail outbox、audit log 机械层和健康/关闭报告。
 
-它不是应用框架，也不是 AsterDrive / AsterYggdrasil 的业务层搬运仓库。
+它正在向 Aster 产品公共 framework foundation 演进，但不是 AsterDrive / AsterYggdrasil 的业务层搬运仓库。产品仓库仍然拥有业务语义，Forge 拥有可复用机械层。
 
 Forge 应该承载：
 
-- API helper、分页、cursor、排序等产品无关结构。
+- `AsterRuntime`、runtime component registry、health check、startup/shutdown phase、signal handling 等生命周期内核。
+- API helper、分页、cursor、排序、OpenAPI 宏等产品无关结构。
 - 缓存、数据库连接、事务、重试、指标、日志、panic hook 等基础设施机制。
-- 后台任务 lease、heartbeat、dispatch、runtime、step 状态等通用机械流程。
+- runtime leases、scheduled task catalog、mail outbox、audit logs 等产品无关数据库 schema、index builder 和 store。
+- 后台任务 lease、heartbeat、dispatch、runtime、step 状态、scheduled task due-run claim 等通用机械流程。
+- mail sender、outbox dispatch、retry decision、template catalog 等产品无关邮件机制。
+- audit runtime component、audit log write/query/count/delete 等产品无关审计机械层。
 - 配置 registry、结构化值转换、runtime snapshot、reload notification 等运行时配置内核。
 - validation、crypto、storage key、S3 endpoint normalization 等可复用工具。
 
 Forge 不应该承载：
 
-- 产品数据库实体、SeaORM migration、repository SQL。
-- 用户、团队、权限、审计、业务状态机。
+- 产品业务实体、产品 API DTO、产品 permission model、用户/团队/组织规则。
+- 产品历史 migration。新 migration 可以调用 Forge schema builders，但不要把产品 migration ownership 迁进 Forge。
+- 产品业务 repository SQL。Forge 可以承接产品无关 store/query 机械层，例如 audit cursor query、mail outbox claim、scheduled task claim。
+- 产品 audit action enum、detail schema、presentation、权限和业务统计口径。
+- 产品业务状态机。
 - 产品 API 错误文案、状态码、本地化、前端展示策略。
 - AsterDrive 或 AsterYggdrasil 的具体任务 kind、payload/result、存储策略、外部认证账号绑定规则。
 - “为了看起来统一”而没有语义价值的薄封装。
@@ -31,6 +38,7 @@ Forge 不应该承载：
 1. 先读入口文档：
    - `README.md`
    - `docs/guide/index.md`
+   - `docs/guide/new-project-integration.md`
    - `docs/guide/integration-principles.md`
    - `docs/guide/reference-projects.md`
 
@@ -54,11 +62,12 @@ Forge 不应该承载：
 
 ## 接入与替换工作流
 
-当任务是“接入 Forge”“替换现有函数”“抽公共模块”时，必须先整理替换关系，再改代码。
+当任务是“接入 Forge”“替换现有函数”“抽公共模块”时，必须先整理替换关系，再改代码。现在不要只问“有没有重复函数”，还要问能不能把 component、schema builder、store、runner、registry、query 机械层一起收进 Forge。
 
 替换前至少确认：
 
-- 现有函数解决的是共享机制，还是产品语义。
+- 现有函数/模块解决的是共享机制，还是产品语义。
+- 是否应该只抽函数，还是应该抽完整机制：component、schema/index builder、store、runner、registry、hook、测试模型。
 - Forge 中是否已有等价 API。
 - Forge API 的错误类型应该在哪一层映射成产品错误。
 - 产品侧是否需要保留 adapter、trait impl、metrics、audit、permission check。
@@ -67,7 +76,7 @@ Forge 不应该承载：
 建议在动手前列出这四列：
 
 ```text
-旧函数/旧模块 -> Forge API -> 产品侧保留职责 -> 必测行为
+旧函数/旧模块 -> Forge API/组件/schema/store -> 产品侧保留职责 -> 必测行为
 ```
 
 如果旧函数只是无意义薄封装，例如只调用 Forge API、不映射错误、不注入配置、不记录指标、不表达产品语义，就删掉薄封装，直接使用 Forge API。
@@ -76,25 +85,27 @@ Forge 不应该承载：
 
 ## 代码边界规则
 
-- 共享机制放 Forge，产品语义留产品仓库。
+- 共享机制和产品无关 runtime foundation 放 Forge，产品语义留产品仓库。
 - Forge 错误类型只表达基础设施或机制失败；产品 API 层自己决定状态码、文案和错误 envelope。
 - trait 适配显式写在产品侧，不要靠隐藏全局状态或产品 crate 反向依赖 Forge 内部实现。
 - 不要为了减少几行代码引入全局 singleton、隐式 registry 或产品不可测试的静态状态。
 - 不要让 `aster_forge_api` 依赖 Actix、Axum 或具体产品实体。
-- 不要让 `aster_forge_db` 持有产品 migration、entity 或 repository query。
+- `aster_forge_db` 可以拥有产品无关基础设施表和 store，例如 runtime leases、scheduled tasks、mail outbox、audit logs；不要让它持有产品业务 entity、产品历史 migration 或业务 repository query。
 - 不要让 `aster_forge_tasks` 定义产品 task kind、payload/result、管理 API 或具体任务实现。
 - 不要让 `aster_forge_config` 定义产品配置 key、category、i18n 文案、管理 API 或业务 normalizer。
 - 不要把 Drive/Yggdrasil 的业务枚举、权限规则、审计字段复制到 Forge。
 
 ## Crate 使用导向
 
-优先按风险从低到高接入：
+优先按产品地基顺序接入，不再把 Forge 当零散工具箱：
 
-- 小工具：`aster_forge_validation`、`aster_forge_utils`、`aster_forge_api`、`aster_forge_crypto`、`aster_forge_file_classification`、`aster_forge_storage_core`。
-- 生命周期基础设施：`aster_forge_logging`、`aster_forge_metrics`、`aster_forge_panic`、`aster_forge_alloc`。
-- 高影响运行时模块：`aster_forge_cache`、`aster_forge_db`、`aster_forge_config`、`aster_forge_external_auth`、`aster_forge_tasks`。
+- 入口地基：`aster_forge_runtime`、`aster_forge_logging`、`aster_forge_metrics`、`aster_forge_panic`、`aster_forge_alloc`。
+- 数据和协调：`aster_forge_db`、`aster_forge_cache`、`aster_forge_config`。
+- 后台机制：`aster_forge_tasks`、`aster_forge_mail`、`aster_forge_audit`。
+- Web/API：`aster_forge_api`、`aster_forge_api_docs_macros`、`aster_forge_actix_middleware`、`aster_forge_external_auth`。
+- 工具和存储基础：`aster_forge_validation`、`aster_forge_utils`、`aster_forge_crypto`、`aster_forge_file_classification`、`aster_forge_storage_core`。
 
-高影响模块接入时必须更谨慎，因为它们会影响启动、关闭、错误处理、并发、测试隔离和数据一致性。
+高影响模块接入时必须更谨慎，因为它们会影响启动、关闭、错误处理、并发、测试隔离和数据一致性。优先追求最终形态，不保留没有边界价值的兼容 facade。
 
 ## 文档同步规则
 
@@ -104,6 +115,7 @@ Forge 不应该承载：
 - 适用场景。
 - Cargo feature / 接入方式。
 - 最小接入示例。
+- 新项目接入形态或 runtime component 形态。
 - 错误边界。
 - 测试要求。
 - 参考项目。
@@ -137,6 +149,7 @@ cargo fmt --all
 - 只改纯函数 helper：跑相关 crate 测试，必要时跑 workspace check。
 - 改 public API 或 feature：跑相关 crate 的默认 feature 和目标 feature 编译。
 - 改任务、配置、缓存、数据库、外部认证：至少跑相关 crate 测试和 `cargo check --workspace`，风险高时跑 `cargo test --workspace`。
+- 改 runtime component、schema/store、task/mail/audit/config/cache 这类地基：相关 crate test/clippy 必跑；如果接了 Yggdrasil，也要用本地 patch 跑 Yggdrasil 对应测试。
 
 接入高影响模块时，测试至少覆盖：
 
@@ -165,3 +178,5 @@ cargo fmt --all
 - 除非明确要求，不主动写长篇使用说明；但 public API 变化要维护 crate 文档。
 
 如果一个功能看起来“可以抽”，但抽出来会让产品仓库失去自己的业务边界，那就先别抽。
+
+如果一个功能已经明显是多个产品共享的 runtime/component/schema/store 机械层，不要只抽一个小函数糊弄过去。把公共内核收完整，产品侧只留下明确的业务边界。

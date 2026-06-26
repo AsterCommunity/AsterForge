@@ -19,12 +19,17 @@
     )
 )]
 
+mod component;
 pub mod config;
 pub mod message;
 pub mod outbox;
 pub mod sender;
 pub mod template;
 
+pub use component::{
+    MAIL_OUTBOX_COMPONENT, MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE, mail_outbox_component,
+    register_mail_outbox_shutdown,
+};
 pub use config::{
     DEFAULT_MAIL_SECURITY, DEFAULT_MAIL_SMTP_PORT, MAIL_TEMPLATE_MAX_BODY_LEN,
     MAIL_TEMPLATE_MAX_SUBJECT_LEN, MailConfigError, MailConfigResult, MailRuntimeSettings,

@@ -17,6 +17,7 @@
     )
 )]
 
+pub mod audit_log;
 mod component;
 pub mod connection;
 pub mod mail_outbox;
@@ -28,6 +29,30 @@ pub mod search_query;
 pub mod sort;
 pub mod transaction;
 
+pub use audit_log::{
+    AUDIT_LOG_ACTION_COLUMN, AUDIT_LOG_ACTION_CREATED_ID_INDEX,
+    AUDIT_LOG_ACTION_CREATED_USER_INDEX, AUDIT_LOG_ACTION_INDEX, AUDIT_LOG_CREATED_AT_COLUMN,
+    AUDIT_LOG_CREATED_AT_INDEX, AUDIT_LOG_CREATED_ID_INDEX, AUDIT_LOG_DETAILS_COLUMN,
+    AUDIT_LOG_ENTITY_ID_COLUMN, AUDIT_LOG_ENTITY_NAME_COLUMN, AUDIT_LOG_ENTITY_TYPE_COLUMN,
+    AUDIT_LOG_ENTITY_TYPE_CREATED_ID_INDEX, AUDIT_LOG_ID_COLUMN, AUDIT_LOG_IP_ADDRESS_COLUMN,
+    AUDIT_LOG_USER_AGENT_COLUMN, AUDIT_LOG_USER_CREATED_ID_INDEX, AUDIT_LOG_USER_ID_COLUMN,
+    AUDIT_LOG_USER_ID_INDEX, AUDIT_LOGS_TABLE, AuditLogCreate, AuditLogCursorSlice,
+    AuditLogDbStore, AuditLogQuery, count_audit_logs_created_between,
+    count_audit_logs_created_between_with_actions,
+    count_distinct_audit_log_users_created_between_with_actions, create_audit_log_requests,
+    create_audit_log_row, create_audit_log_rows, create_audit_logs_action_created_id_index,
+    create_audit_logs_action_created_user_index, create_audit_logs_action_index,
+    create_audit_logs_base_indexes, create_audit_logs_created_at_index,
+    create_audit_logs_created_id_index, create_audit_logs_entity_type_created_id_index,
+    create_audit_logs_query_indexes, create_audit_logs_table,
+    create_audit_logs_user_created_id_index, create_audit_logs_user_id_index,
+    delete_audit_logs_before, drop_audit_logs_action_created_id_index,
+    drop_audit_logs_action_created_user_index, drop_audit_logs_action_index,
+    drop_audit_logs_created_at_index, drop_audit_logs_created_id_index,
+    drop_audit_logs_entity_type_created_id_index, drop_audit_logs_index, drop_audit_logs_table,
+    drop_audit_logs_user_created_id_index, drop_audit_logs_user_id_index,
+    find_audit_logs_with_filters_cursor,
+};
 pub use component::{
     DATABASE_COMPONENT, DATABASE_CONNECTIONS_SHUTDOWN_PHASE, DATABASE_HEALTH_CHECK,
     DATABASE_HEALTH_CHECK_TIMEOUT, DatabaseRuntimeComponent, check_database_component,

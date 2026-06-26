@@ -7,6 +7,7 @@
 //! `aster_forge_db`.
 
 use std::future::Future;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -130,14 +131,174 @@ pub struct ScheduledPeriodicTask<Name, State, Store, IntervalFn, TaskFn, PanicFn
     pub hooks: RecordedTaskHooks<TaskFn, PanicFn, RecordFn>,
 }
 
-/// Registers multiple scheduled runtime tasks with shared runner context.
+/// Configuration for a leased group of scheduled runtime tasks.
 ///
-/// Products usually have a group of scheduled tasks that all share the same
-/// namespace, owner id, claim TTL, shutdown token, state, store, panic mapping,
-/// and outcome recorder. This registrar lets product runtime code register each
-/// task with one line while Forge assembles the full [`ScheduledPeriodicTask`]
-/// runner for every entry.
-pub struct ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Outcome> {
+/// This is the high-level entrypoint for multi-instance Aster services. Forge
+/// generates the process owner id, supervises the runtime lease, creates the
+/// lease-scoped [`BackgroundTasks`] group, and wires every declared scheduled
+/// task into the shared catalog store. Product code only declares singleton
+/// workers and scheduled task bodies through [`ScheduledRuntimeTaskGroup`].
+#[derive(Clone)]
+pub struct LeasedScheduledRuntimeConfig<
+    Name,
+    Outcome,
+    State,
+    LeaseStore,
+    ScheduleStore,
+    PanicFn,
+    RecordFn,
+> {
+    namespace: &'static str,
+    lease_id: String,
+    lease_store: LeaseStore,
+    schedule_store: ScheduleStore,
+    claim_ttl: Duration,
+    lease_ttl: Duration,
+    lease_renew_interval: Duration,
+    lease_standby_retry_interval: Duration,
+    state: State,
+    panic_outcome: PanicFn,
+    record_outcome: RecordFn,
+    _name: PhantomData<fn() -> Name>,
+    _outcome: PhantomData<fn() -> Outcome>,
+}
+
+impl<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
+    LeasedScheduledRuntimeConfig<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
+{
+    /// Creates configuration for one leased scheduled runtime task group.
+    pub fn new<RecordFut>(
+        namespace: &'static str,
+        lease_id: impl Into<String>,
+        lease_store: LeaseStore,
+        schedule_store: ScheduleStore,
+        state: State,
+        panic_outcome: PanicFn,
+        record_outcome: RecordFn,
+    ) -> Self
+    where
+        PanicFn: Fn(String) -> Outcome,
+        RecordFn:
+            Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut,
+        RecordFut: Future<Output = ()> + Send + 'static,
+    {
+        Self {
+            namespace,
+            lease_id: lease_id.into(),
+            lease_store,
+            schedule_store,
+            claim_ttl: Duration::from_secs(120),
+            lease_ttl: aster_forge_runtime::DEFAULT_RUNTIME_LEASE_TTL,
+            lease_renew_interval: Duration::from_secs(10),
+            lease_standby_retry_interval: aster_forge_runtime::DEFAULT_RUNTIME_LEASE_RETRY_INTERVAL,
+            state,
+            panic_outcome,
+            record_outcome,
+            _name: PhantomData,
+            _outcome: PhantomData,
+        }
+    }
+
+    /// Sets the scheduled task claim TTL.
+    pub const fn claim_ttl(mut self, claim_ttl: Duration) -> Self {
+        self.claim_ttl = claim_ttl;
+        self
+    }
+
+    /// Sets the runtime lease TTL.
+    pub const fn lease_ttl(mut self, lease_ttl: Duration) -> Self {
+        self.lease_ttl = lease_ttl;
+        self
+    }
+
+    /// Sets the runtime lease renewal interval for the active owner.
+    pub const fn lease_renew_interval(mut self, lease_renew_interval: Duration) -> Self {
+        self.lease_renew_interval = lease_renew_interval;
+        self
+    }
+
+    /// Sets the standby retry interval while another process owns the lease.
+    pub const fn lease_standby_retry_interval(
+        mut self,
+        lease_standby_retry_interval: Duration,
+    ) -> Self {
+        self.lease_standby_retry_interval = lease_standby_retry_interval;
+        self
+    }
+
+    /// Runs this configured leased scheduled runtime group until shutdown.
+    ///
+    /// Prefer this method at product entrypoints because it keeps the call
+    /// shaped like a component declaration: configure shared resources once,
+    /// then declare workers and scheduled tasks in the closure.
+    pub async fn run<ConfigureFn>(self, shutdown_token: CancellationToken, configure: ConfigureFn)
+    where
+        Name: RegisteredRuntimeTaskKind + Send + Sync + 'static,
+        State: Clone + Send + Sync + 'static,
+        LeaseStore: aster_forge_runtime::RuntimeLeaseStore,
+        ScheduleStore: ScheduledTaskStore,
+        ConfigureFn: for<'a> FnMut(
+                &mut ScheduledRuntimeTaskGroup<
+                    'a,
+                    Name,
+                    State,
+                    ScheduleStore,
+                    PanicFn,
+                    RecordFn,
+                    Outcome,
+                >,
+            ) + Send
+            + 'static,
+        PanicFn: Clone + Fn(String) -> Outcome + Send + Sync + 'static,
+        RecordFn: Clone + Send + Sync + 'static,
+        Outcome: Send + 'static,
+    {
+        run_leased_scheduled_runtime_tasks(self, shutdown_token, configure).await;
+    }
+
+    fn into_parts(
+        self,
+    ) -> LeasedScheduledRuntimeParts<State, LeaseStore, ScheduleStore, PanicFn, RecordFn> {
+        let owner_id = aster_forge_runtime::new_runtime_lease_owner_id();
+        let lease_config =
+            aster_forge_runtime::RuntimeLeaseConfig::new(self.lease_id, owner_id.clone())
+                .ttl(self.lease_ttl)
+                .renew_interval(self.lease_renew_interval)
+                .standby_retry_interval(self.lease_standby_retry_interval);
+        LeasedScheduledRuntimeParts {
+            namespace: self.namespace,
+            owner_id,
+            lease_store: self.lease_store,
+            schedule_store: self.schedule_store,
+            claim_ttl: self.claim_ttl,
+            state: self.state,
+            panic_outcome: self.panic_outcome,
+            record_outcome: self.record_outcome,
+            lease_config,
+        }
+    }
+}
+
+struct LeasedScheduledRuntimeParts<State, LeaseStore, ScheduleStore, PanicFn, RecordFn> {
+    namespace: &'static str,
+    owner_id: String,
+    lease_store: LeaseStore,
+    schedule_store: ScheduleStore,
+    claim_ttl: Duration,
+    state: State,
+    panic_outcome: PanicFn,
+    record_outcome: RecordFn,
+    lease_config: aster_forge_runtime::RuntimeLeaseConfig,
+}
+
+/// Lease-scoped task group used by product registration closures.
+///
+/// A value of this type exists only while Forge is building the worker group
+/// for one lease acquisition. Use [`Self::worker`] for singleton workers that
+/// should run only on the active owner, and [`Self::scheduled`] for tasks that
+/// should additionally coordinate each firing through the scheduled task
+/// catalog.
+pub struct ScheduledRuntimeTaskGroup<'a, Name, State, Store, PanicFn, RecordFn, Outcome> {
     tasks: &'a mut BackgroundTasks,
     namespace: &'static str,
     owner_id: String,
@@ -152,39 +313,33 @@ pub struct ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Out
 }
 
 impl<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
-    ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+    ScheduledRuntimeTaskGroup<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+where
+    State: Clone + Send + Sync + 'static,
 {
-    /// Creates a scheduled task registrar from shared runner context.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        tasks: &'a mut BackgroundTasks,
-        namespace: &'static str,
-        owner_id: impl Into<String>,
-        claim_ttl: Duration,
-        shutdown_token: CancellationToken,
-        state: State,
-        store: Store,
-        panic_outcome: PanicFn,
-        record_outcome: RecordFn,
-    ) -> Self {
-        Self {
-            tasks,
-            namespace,
-            owner_id: owner_id.into(),
-            claim_ttl,
-            shutdown_token,
-            state,
-            store,
-            panic_outcome,
-            record_outcome,
-            _name: std::marker::PhantomData,
-            _outcome: std::marker::PhantomData,
-        }
+    /// Spawns one lease-scoped singleton worker into this group.
+    pub fn worker<WorkerFn, WorkerFut>(&mut self, worker: WorkerFn)
+    where
+        WorkerFn: FnOnce(CancellationToken, State) -> WorkerFut,
+        WorkerFut: Future<Output = ()> + Send + 'static,
+    {
+        self.tasks
+            .push(worker(self.shutdown_token.clone(), self.state.clone()));
+    }
+
+    /// Returns a clone of the lease-scoped shutdown token.
+    pub fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown_token.clone()
+    }
+
+    /// Returns a clone of the product runtime state.
+    pub fn state(&self) -> State {
+        self.state.clone()
     }
 }
 
 impl<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
-    ScheduledTaskRegistrar<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+    ScheduledRuntimeTaskGroup<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
 where
     Name: RegisteredRuntimeTaskKind + Send + Sync + 'static,
     State: Clone + Send + Sync + 'static,
@@ -193,8 +348,8 @@ where
     RecordFn: Clone + Send + Sync + 'static,
     Outcome: Send + 'static,
 {
-    /// Registers one scheduled runtime task.
-    pub fn register<IntervalFn, TaskFn, TaskFut, RecordFut>(
+    /// Registers one scheduled runtime task in the lease-scoped worker group.
+    pub fn scheduled<IntervalFn, TaskFn, TaskFut, RecordFut>(
         &mut self,
         name: Name,
         interval_fn: IntervalFn,
@@ -228,6 +383,97 @@ where
                 ),
             }));
     }
+}
+
+/// Runs a lease-supervised scheduled runtime task group until shutdown.
+///
+/// Forge owns the lifecycle glue: owner id generation, runtime lease
+/// supervision, lease-scoped shutdown token creation, scheduled task catalog
+/// registration, and graceful worker shutdown. Product code supplies the
+/// runtime config and a closure that declares workers and scheduled tasks.
+async fn run_leased_scheduled_runtime_tasks<
+    Name,
+    Outcome,
+    State,
+    LeaseStore,
+    ScheduleStore,
+    ConfigureFn,
+    PanicFn,
+    RecordFn,
+>(
+    config: LeasedScheduledRuntimeConfig<
+        Name,
+        Outcome,
+        State,
+        LeaseStore,
+        ScheduleStore,
+        PanicFn,
+        RecordFn,
+    >,
+    shutdown_token: CancellationToken,
+    mut configure: ConfigureFn,
+) where
+    Name: RegisteredRuntimeTaskKind + Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
+    LeaseStore: aster_forge_runtime::RuntimeLeaseStore,
+    ScheduleStore: ScheduledTaskStore,
+    ConfigureFn: for<'a> FnMut(
+            &mut ScheduledRuntimeTaskGroup<
+                'a,
+                Name,
+                State,
+                ScheduleStore,
+                PanicFn,
+                RecordFn,
+                Outcome,
+            >,
+        ) + Send
+        + 'static,
+    PanicFn: Clone + Fn(String) -> Outcome + Send + Sync + 'static,
+    RecordFn: Clone + Send + Sync + 'static,
+    Outcome: Send + 'static,
+{
+    let parts = config.into_parts();
+    let LeasedScheduledRuntimeParts {
+        namespace,
+        owner_id,
+        lease_store,
+        schedule_store,
+        claim_ttl,
+        state,
+        panic_outcome,
+        record_outcome,
+        lease_config,
+    } = parts;
+
+    aster_forge_runtime::run_runtime_lease_supervisor(
+        lease_store,
+        lease_config,
+        shutdown_token,
+        move |leased_shutdown_token| {
+            let mut tasks = BackgroundTasks::with_shutdown_token(leased_shutdown_token);
+            let group_shutdown_token = tasks.shutdown_token();
+            let mut group = ScheduledRuntimeTaskGroup {
+                tasks: &mut tasks,
+                namespace,
+                owner_id: owner_id.clone(),
+                claim_ttl,
+                shutdown_token: group_shutdown_token,
+                state: state.clone(),
+                store: schedule_store.clone(),
+                panic_outcome: panic_outcome.clone(),
+                record_outcome: record_outcome.clone(),
+                _name: std::marker::PhantomData,
+                _outcome: std::marker::PhantomData,
+            };
+            configure(&mut group);
+            tasks
+        },
+        |background_tasks| async move {
+            background_tasks.shutdown().await;
+        },
+    )
+    .await;
 }
 
 /// Runs a scheduled periodic task until shutdown.
@@ -452,11 +698,12 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        ScheduledPeriodicTask, ScheduledTaskCatalogEntry, ScheduledTaskClaim,
-        ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskStore,
-        next_scheduled_run_at, run_scheduled_periodic_task,
+        LeasedScheduledRuntimeConfig, ScheduledPeriodicTask, ScheduledRuntimeTaskGroup,
+        ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,
+        ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
+        run_scheduled_periodic_task,
     };
-    use crate::RecordedTaskHooks;
+    use crate::{RecordedTaskHooks, RegisteredRuntimeTaskKind};
 
     #[derive(Clone)]
     struct MemoryScheduleStore {
@@ -466,6 +713,68 @@ mod tests {
 
     fn test_interval(_: &()) -> std::time::Duration {
         std::time::Duration::from_secs(60)
+    }
+
+    #[derive(Clone)]
+    struct AlwaysAcquireLeaseStore {
+        acquired: Arc<AtomicUsize>,
+        released: Arc<AtomicUsize>,
+    }
+
+    impl AlwaysAcquireLeaseStore {
+        fn new() -> Self {
+            Self {
+                acquired: Arc::new(AtomicUsize::new(0)),
+                released: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl aster_forge_runtime::RuntimeLeaseStore for AlwaysAcquireLeaseStore {
+        type Error = String;
+
+        async fn try_acquire(
+            &self,
+            _claim: aster_forge_runtime::RuntimeLeaseClaim<'_>,
+        ) -> Result<aster_forge_runtime::RuntimeLeaseAcquire, Self::Error> {
+            self.acquired.fetch_add(1, Ordering::SeqCst);
+            Ok(aster_forge_runtime::RuntimeLeaseAcquire::Acquired)
+        }
+
+        async fn renew(
+            &self,
+            _lease_id: &str,
+            _owner_id: &str,
+            _now: chrono::DateTime<Utc>,
+            _expires_at: chrono::DateTime<Utc>,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+
+        async fn release(&self, _lease_id: &str, _owner_id: &str) -> Result<(), Self::Error> {
+            self.released.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TestRuntimeTask {
+        Cleanup,
+    }
+
+    impl RegisteredRuntimeTaskKind for TestRuntimeTask {
+        fn as_str(self) -> &'static str {
+            "cleanup"
+        }
+
+        fn display_name(self) -> &'static str {
+            "Cleanup"
+        }
+
+        fn from_wire_value(value: &str) -> Option<Self> {
+            (value == "cleanup").then_some(Self::Cleanup)
+        }
     }
 
     #[async_trait]
@@ -549,7 +858,12 @@ mod tests {
                     }
                 },
                 |_| "panic",
-                move |(), _name, claim: ScheduledTaskClaim, _started_at, _finished_at, outcome| {
+                move |(),
+                      _name: &str,
+                      claim: ScheduledTaskClaim,
+                      _started_at,
+                      _finished_at,
+                      outcome| {
                     let recorded = recorded_for_hook.clone();
                     let shutdown = shutdown_for_hook.clone();
                     async move {
@@ -656,6 +970,83 @@ mod tests {
         .await;
 
         assert_eq!(completions.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn leased_scheduled_runtime_group_runs_worker_and_scheduled_task() {
+        let lease_store = AlwaysAcquireLeaseStore::new();
+        let acquired = lease_store.acquired.clone();
+        let released = lease_store.released.clone();
+        let schedule_store = memory_store();
+        let completions = schedule_store.completions.clone();
+        let worker_runs = Arc::new(AtomicUsize::new(0));
+        let scheduled_runs = Arc::new(AtomicUsize::new(0));
+        let recorded_runs = Arc::new(AtomicUsize::new(0));
+        let shutdown = CancellationToken::new();
+        let config = LeasedScheduledRuntimeConfig::new(
+            "aster_test",
+            "aster_test.background",
+            lease_store,
+            schedule_store,
+            (),
+            |_| "panic",
+            {
+                let recorded_runs = recorded_runs.clone();
+                let shutdown = shutdown.clone();
+                move |(), _name, claim: ScheduledTaskClaim, _started_at, _finished_at, outcome| {
+                    let recorded_runs = recorded_runs.clone();
+                    let shutdown = shutdown.clone();
+                    async move {
+                        assert_eq!(claim.task_name, "cleanup");
+                        assert_eq!(outcome, "ok");
+                        recorded_runs.fetch_add(1, Ordering::SeqCst);
+                        shutdown.cancel();
+                    }
+                }
+            },
+        )
+        .claim_ttl(std::time::Duration::from_secs(30))
+        .lease_ttl(std::time::Duration::from_secs(30))
+        .lease_renew_interval(std::time::Duration::from_secs(10))
+        .lease_standby_retry_interval(std::time::Duration::from_secs(5));
+        let worker_runs_for_group = worker_runs.clone();
+        let scheduled_runs_for_group = scheduled_runs.clone();
+
+        config
+            .run(
+                shutdown.clone(),
+                move |group: &mut ScheduledRuntimeTaskGroup<
+                    '_,
+                    TestRuntimeTask,
+                    (),
+                    _,
+                    _,
+                    _,
+                    &'static str,
+                >| {
+                    let worker_runs = worker_runs_for_group.clone();
+                    group.worker(move |shutdown_token, ()| async move {
+                        worker_runs.fetch_add(1, Ordering::SeqCst);
+                        shutdown_token.cancelled().await;
+                    });
+                    let scheduled_runs = scheduled_runs_for_group.clone();
+                    group.scheduled(TestRuntimeTask::Cleanup, test_interval, None, move |()| {
+                        let scheduled_runs = scheduled_runs.clone();
+                        async move {
+                            scheduled_runs.fetch_add(1, Ordering::SeqCst);
+                            "ok"
+                        }
+                    });
+                },
+            )
+            .await;
+
+        assert_eq!(acquired.load(Ordering::SeqCst), 1);
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+        assert_eq!(worker_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduled_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(recorded_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(completions.load(Ordering::SeqCst), 1);
     }
 
     #[test]

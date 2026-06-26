@@ -1,0 +1,16 @@
+[package]
+name = "aster_forge_audit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+aster_forge_mail = { path = "../aster_forge_mail" }
+aster_forge_runtime = { path = "../aster_forge_runtime" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

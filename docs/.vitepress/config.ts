@@ -29,6 +29,7 @@ const cratePages = [
   ["Alloc", "/crates/aster_forge_alloc"],
   ["API", "/crates/aster_forge_api"],
   ["API docs macros", "/crates/aster_forge_api_docs_macros"],
+  ["Audit", "/crates/aster_forge_audit"],
   ["Cache", "/crates/aster_forge_cache"],
   ["Config", "/crates/aster_forge_config"],
   ["Crypto", "/crates/aster_forge_crypto"],
@@ -52,6 +53,7 @@ function crateSidebar() {
       text: "开始",
       items: [
         { text: "总览", link: "/guide/" },
+        { text: "新项目接入", link: "/guide/new-project-integration" },
         { text: "接入原则", link: "/guide/integration-principles" },
         { text: "参考项目", link: "/guide/reference-projects" },
       ],

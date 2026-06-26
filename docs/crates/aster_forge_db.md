@@ -1,6 +1,6 @@
 # aster_forge_db
 
-`aster_forge_db` 提供 SeaORM 相关的共享基础设施：数据库连接、连接关闭、查询重试、分页构造、搜索 query 处理、排序 helper、事务封装、runtime lease 数据库 store 和 scheduled task catalog 数据库 store。
+`aster_forge_db` 提供 SeaORM 相关的共享基础设施：数据库连接、连接关闭、查询重试、分页构造、搜索 query 处理、排序 helper、事务封装、runtime lease 数据库 store、scheduled task catalog 数据库 store、mail outbox store 和 audit log store。
 
 ## 适用场景
 
@@ -12,6 +12,7 @@
 - 多实例 runtime lease 的默认数据库表和 store。
 - 多实例 scheduled task catalog 的默认数据库表和 store。
 - mail outbox 的默认数据库表、索引和 dispatch store。
+- audit logs 的默认数据库表、索引和基础写入/统计 store。
 
 不适合放在这里的内容：
 
@@ -147,6 +148,143 @@ claim 语义：
 
 推荐配合 `background_tasks.dedupe_key` 使用。`scheduled_tasks` 解决“谁跑这一次计划触发”，`background_tasks.dedupe_key` 解决“这一次触发最多写一条历史/业务任务 row”。
 
+## Audit Logs
+
+模块：`audit_log`
+
+`AuditLogDbStore` 提供 Aster 产品通用的 audit log 表结构、索引 builder、基础写入、cursor 查询、统计和删除 helper。产品仍然负责 typed action enum、detail schema、权限、展示和统计口径。
+
+表结构由 Forge 维护：
+
+```text
+audit_logs
+  id            primary key
+  user_id       actor user id, system events use 0
+  action        stable action wire value, varchar(64)
+  entity_type   target entity type, varchar(64)
+  entity_id     optional target entity id
+  entity_name   optional target display name
+  details       optional product-owned JSON text
+  ip_address    optional client IP
+  user_agent    optional user-agent
+  created_at
+```
+
+新产品 migration crate 不应该复制列定义，直接调用 Forge builder：
+
+```rust
+manager
+    .create_table(aster_forge_db::create_audit_logs_table(
+        manager.get_database_backend(),
+    ))
+    .await?;
+
+for index in aster_forge_db::create_audit_logs_base_indexes() {
+    manager.create_index(index).await?;
+}
+
+for index in aster_forge_db::create_audit_logs_query_indexes() {
+    manager.create_index(index).await?;
+}
+```
+
+base indexes 覆盖普通时间、action、user 查询：
+
+- `idx_audit_logs_created_at`
+- `idx_audit_logs_action`
+- `idx_audit_logs_user_id`
+
+query indexes 覆盖 Aster 管理后台常见 cursor/aggregation 查询：
+
+- `idx_audit_logs_action_created_user`
+- `idx_audit_logs_created_id`
+- `idx_audit_logs_user_created_id`
+- `idx_audit_logs_action_created_id`
+- `idx_audit_logs_entity_type_created_id`
+
+down migration 可以直接用命名 drop builder：
+
+```rust
+manager
+    .drop_index(aster_forge_db::drop_audit_logs_entity_type_created_id_index())
+    .await?;
+manager
+    .drop_index(aster_forge_db::drop_audit_logs_action_created_id_index())
+    .await?;
+manager
+    .drop_index(aster_forge_db::drop_audit_logs_user_created_id_index())
+    .await?;
+manager
+    .drop_index(aster_forge_db::drop_audit_logs_created_id_index())
+    .await?;
+manager
+    .drop_index(aster_forge_db::drop_audit_logs_action_created_user_index())
+    .await?;
+manager
+    .drop_table(aster_forge_db::drop_audit_logs_table())
+    .await?;
+```
+
+运行时写入：
+
+```rust
+let store = aster_forge_db::AuditLogDbStore::new(writer_db.clone());
+
+store
+    .create(aster_forge_db::AuditLogCreate {
+        user_id: ctx.user_id,
+        action: action.as_str().to_string(),
+        entity_type: entity_type.as_str().to_string(),
+        entity_id,
+        entity_name: entity_name.map(ToOwned::to_owned),
+        details: details.map(|value| value.to_string()),
+        ip_address: ctx.ip_address.clone(),
+        user_agent: ctx.user_agent.clone(),
+        created_at: chrono::Utc::now(),
+    })
+    .await?;
+```
+
+批量写入优先用 `create_many_requests(...)` 或 `create_audit_log_requests(...)`。如果产品为了 API schema 仍保留自己的 typed SeaORM entity，也不要再复制通用 insert/batch insert 和 cursor query 逻辑；读写可以统一落到 Forge 的 string-action model，再在产品边界把 action string 转回 typed enum。
+
+通用查询：
+
+```rust
+let page = store
+    .find_with_filters_cursor(aster_forge_db::AuditLogQuery {
+        user_id: filters.user_id,
+        action: filters.action.as_deref(),
+        entity_type: filters.entity_type.as_deref(),
+        entity_id: filters.entity_id,
+        after: filters.after,
+        before: filters.before,
+        limit,
+        cursor,
+    })
+    .await?;
+```
+
+`AuditLogQuery` 固定按 `(created_at, id)` 倒序 cursor 查询，并把 `limit` 限制在 `1..=200`。这样 account/admin audit log 列表不需要在每个产品里重复写 cursor 条件。
+
+store 负责：
+
+- 校验 `user_id >= 0`。
+- 校验 `action`、`entity_type` 非空且不超过 64 字节。
+- 校验 `entity_name`、`ip_address`、`user_agent` 长度。
+- 单条和批量插入。
+- 通用 cursor filter 查询。
+- `[start, end)` 时间范围统计。
+- action 范围统计。
+- action 范围内 distinct positive user 统计。
+- retention 删除。
+
+产品侧仍然负责：
+
+- `AuditAction` enum、group 和 action allowlist。
+- detail JSON schema、脱敏和序列化。
+- admin/account API 的权限过滤和 presentation。
+- 统计口径，比如哪些 action 算登录活跃、Yggdrasil API 调用或管理操作。
+
 ## Mail Outbox
 
 模块：`mail_outbox`
@@ -249,8 +387,8 @@ aster_forge_runtime::AsterRuntime::builder()
         db_handles,
         &[
             aster_forge_tasks::BACKGROUND_TASKS_COMPONENT,
-            "mail_outbox",
-            "audit_manager",
+            aster_forge_mail::MAIL_OUTBOX_COMPONENT,
+            aster_forge_audit::AUDIT_MANAGER_COMPONENT,
         ],
     ));
 ```

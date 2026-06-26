@@ -76,9 +76,10 @@ pub use runtime::{
 };
 pub use runtime_metadata::{RegisteredRuntimeTaskKind, RuntimeTaskDefinition, RuntimeTaskName};
 pub use schedule::{
-    ScheduledPeriodicTask, ScheduledTaskCatalogEntry, ScheduledTaskClaim,
-    ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskRegistrar, ScheduledTaskStore,
-    next_scheduled_run_at, run_scheduled_periodic_task,
+    LeasedScheduledRuntimeConfig, ScheduledPeriodicTask, ScheduledRuntimeTaskGroup,
+    ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,
+    ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
+    run_scheduled_periodic_task,
 };
 pub use spec::{
     BackgroundTaskSpec, ErasedBackgroundTaskSpec, TaskProcessFuture, TaskSpecAdapter,

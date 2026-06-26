@@ -521,6 +521,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_audit"
+version = "0.1.0"
+dependencies = [
+ "aster_forge_mail",
+ "aster_forge_runtime",
+ "tokio",
+]
+
+[[package]]
 name = "aster_forge_cache"
 version = "0.1.0"
 dependencies = [
@@ -628,6 +637,8 @@ dependencies = [
 name = "aster_forge_mail"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_runtime",
+ "aster_forge_tasks",
  "aster_forge_utils",
  "aster_forge_validation",
  "async-trait",

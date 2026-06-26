@@ -290,26 +290,56 @@ manager
     .await?;
 ```
 
-产品 runtime 侧只注册任务本身：
+产品 runtime 侧优先使用 `LeasedScheduledRuntimeConfig::new(...).run(...)`。这个入口同时承接：
+
+- process-level runtime lease；
+- lease-scoped `BackgroundTasks` group；
+- process-unique owner id；
+- scheduled task catalog store；
+- scheduled task claim TTL；
+- task panic 映射；
+- task outcome record hook；
+- 失去 lease 或进程 shutdown 时的整组 worker 关闭。
+
+产品侧只声明常驻 singleton worker 和 scheduled task 列表：
 
 ```rust
-tasks.push(aster_forge_tasks::run_scheduled_periodic_task(
-    aster_forge_tasks::ScheduledPeriodicTask {
-        name: SystemRuntimeTaskKind::AuditCleanup,
-        namespace: "aster_yggdrasil",
-        task_name: SystemRuntimeTaskKind::AuditCleanup.as_str(),
-        display_name: SystemRuntimeTaskKind::AuditCleanup.display_name(),
-        owner_id: runtime_owner_id,
-        claim_ttl: Duration::from_secs(120),
-        interval_fn: audit_cleanup_interval,
-        jitter_cap: Some(Duration::from_secs(30)),
-        shutdown_token,
-        state,
-        store: aster_forge_db::ScheduledTaskDbStore::new(db),
-        hooks,
-    },
-));
+let config = aster_forge_tasks::LeasedScheduledRuntimeConfig::new(
+    "aster_yggdrasil",
+    "aster_yggdrasil.background_tasks",
+    aster_forge_db::RuntimeLeaseDbStore::new(writer_db.clone()),
+    aster_forge_db::ScheduledTaskDbStore::new(writer_db.clone()),
+    state,
+    |panic_message| RuntimeTaskRunOutcome::failed(Some("Task panicked".to_string()), panic_message),
+    record_scheduled_task_outcome,
+)
+.claim_ttl(Duration::from_secs(120))
+.lease_ttl(Duration::from_secs(30))
+.lease_renew_interval(Duration::from_secs(10))
+.lease_standby_retry_interval(Duration::from_secs(5));
+
+config
+    .run(shutdown_token, |runtime| {
+        runtime.worker(spawn_background_task_dispatcher);
+        runtime.scheduled(
+            SystemRuntimeTaskKind::MailOutboxDispatch,
+            mail_outbox_dispatch_interval,
+            None,
+            run_mail_outbox_dispatch,
+        );
+        runtime.scheduled(
+            SystemRuntimeTaskKind::AuditCleanup,
+            maintenance_cleanup_interval,
+            Some(Duration::from_secs(30)),
+            run_audit_cleanup,
+        );
+    })
+    .await;
 ```
+
+`runtime.worker(...)` 适合后台 task dispatcher 这类只需要 runtime lease、不需要 scheduled catalog row 的常驻 worker。`runtime.scheduled(...)` 适合 mail outbox dispatch、audit cleanup、health check 这类固定周期任务。
+
+`run_scheduled_periodic_task` 是低阶 primitive，只有在产品已经自己管理 runtime lease 和 `BackgroundTasks` group 时才应该直接用。常规产品入口不要手写 owner id、lease supervisor、scheduled task registrar 这类 glue。
 
 这张表不替代产品的 `background_tasks` 表。推荐分工是：
 

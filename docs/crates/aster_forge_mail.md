@@ -241,6 +241,46 @@ impl aster_forge_mail::MailOutboxDispatchRow for mail_outbox::Model {
 
 `drain_mail_outbox` 负责多轮调用产品提供的 dispatch 函数，直到没有 row 被 claim，或者达到 `drain_max_rounds`。
 
+### Runtime Component
+
+模块：`aster_forge_mail::component`
+
+如果产品已经使用 `aster_forge_runtime::AsterRuntime` component 模式，mail outbox 的 shutdown graph 不应该在产品侧重复写。Forge 提供标准组件：
+
+- `MAIL_OUTBOX_COMPONENT`：`mail_outbox`
+- `MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE`：`mail_outbox_drain`
+- `mail_outbox_component(resources, drain)`
+- `register_mail_outbox_shutdown(registry, resources, drain)`
+
+标准依赖关系是：
+
+```text
+background_tasks -> mail_outbox -> database
+```
+
+也就是先停止后台 worker，再 drain 已 claim / 可 claim 的邮件 outbox，最后关闭数据库连接。产品仍然提供资源和 drain callback：
+
+```rust
+pub fn mail_outbox_component(
+    resources: MailOutboxRuntimeResources,
+) -> RuntimeComponentBundleRegistration<
+    aster_forge_runtime::ShutdownResourceComponent<MailOutboxRuntimeResources>,
+> {
+    aster_forge_mail::mail_outbox_component(resources, |resources| async move {
+        product_mail_outbox::drain_with(
+            &resources.db,
+            &resources.runtime_config,
+            &resources.mail_sender,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+```
+
+产品侧不要再手写 `"mail_outbox"`、`"mail_outbox_drain"` 和 `background_tasks` 依赖。需要声明数据库 shutdown 依赖时，使用 `aster_forge_mail::MAIL_OUTBOX_COMPONENT`。
+
 ### mark_sent 重试
 
 `retry_mark_sent` 缩小了一个典型窗口：SMTP 已成功，但数据库行仍然是 `Processing`。

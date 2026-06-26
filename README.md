@@ -5,9 +5,9 @@
 <h1 align="center">AsterForge</h1>
 
 <p align="center">
-  Shared Rust infrastructure crates for Aster services.
+  Shared runtime foundation and infrastructure kernel for Aster services.
   <br />
-  Product-neutral mechanisms extracted from AsterDrive, AsterYggdrasil, and future Aster projects.
+  Product-neutral components, schemas, stores, and lifecycle mechanics for AsterDrive, AsterYggdrasil, and future Aster projects.
 </p>
 
 <p align="center">
@@ -22,9 +22,24 @@
 
 ## What is AsterForge?
 
-AsterForge is the shared Rust crate workspace and runtime foundation for Aster projects. It collects low-domain infrastructure such as API helpers, Actix middleware, cache backends, database utilities, runtime configuration primitives, external-auth building blocks, logging, metrics, task mechanics, storage helpers, and validation.
+AsterForge is the shared runtime foundation for Aster products. It is no longer just a place for duplicated helper functions; it is the product-neutral infrastructure kernel that Aster services plug into for lifecycle, component registration, health reporting, shutdown ordering, configuration reload, cache backends, database-owned infrastructure tables, mail outbox dispatch, audit log mechanics, scheduled tasks, runtime leases, logging, metrics, panic handling, API helpers, Actix middleware, external-auth connectors, storage key helpers, and validation.
 
-Forge is not a product business framework. Product-specific code, SeaORM entities, migrations, permissions, business repositories, storage policies, task payloads, and user-facing API semantics should stay in the owning application repositories. Shared lifecycle mechanics, component registration, and runtime reporting belong in Forge when multiple Aster services need the same behavior.
+Forge is not a product business framework. Product-specific code, permissions, user-facing API semantics, product entities, task payloads/results, audit action enums, presentation rules, and business repositories should stay in the owning application repositories. Product-neutral runtime mechanics, common database schemas/stores, component graph contracts, retry/claim/lease rules, and cross-process coordination belong in Forge when multiple Aster services need the same behavior.
+
+The target shape for new products is a thin product entrypoint:
+
+```rust
+aster_forge_runtime::AsterRuntime::builder()
+    .component(http_component(...))
+    .component(database_component(...))
+    .component(background_task_component(...))
+    .component(mail_outbox_component(...))
+    .component(audit_component(...))
+    .run()
+    .await?;
+```
+
+Product code still owns resource creation and business semantics; Forge owns the reusable lifecycle and persistence mechanics behind those components.
 
 All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+`, edition 2024, and uses MIT license metadata.
 
@@ -32,25 +47,28 @@ All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94
 
 | Area | Crates |
 | --- | --- |
-| API and web | [`aster_forge_api`](docs/crates/aster_forge_api.md), [`aster_forge_api_docs_macros`](docs/crates/aster_forge_api_docs_macros.md), [`aster_forge_actix_middleware`](docs/crates/aster_forge_actix_middleware.md), [`aster_forge_external_auth`](docs/crates/aster_forge_external_auth.md) |
-| Runtime | [`aster_forge_alloc`](docs/crates/aster_forge_alloc.md), [`aster_forge_config`](docs/crates/aster_forge_config.md), [`aster_forge_logging`](docs/crates/aster_forge_logging.md), [`aster_forge_metrics`](docs/crates/aster_forge_metrics.md), [`aster_forge_panic`](docs/crates/aster_forge_panic.md) |
-| Data and tasks | [`aster_forge_cache`](docs/crates/aster_forge_cache.md), [`aster_forge_db`](docs/crates/aster_forge_db.md), [`aster_forge_storage_core`](docs/crates/aster_forge_storage_core.md), [`aster_forge_tasks`](docs/crates/aster_forge_tasks.md) |
-| Utilities | [`aster_forge_crypto`](docs/crates/aster_forge_crypto.md), [`aster_forge_file_classification`](docs/crates/aster_forge_file_classification.md), [`aster_forge_utils`](docs/crates/aster_forge_utils.md), [`aster_forge_validation`](docs/crates/aster_forge_validation.md) |
+| Runtime kernel | [`aster_forge_runtime`](docs/crates/aster_forge_runtime.md), [`aster_forge_config`](docs/crates/aster_forge_config.md), [`aster_forge_logging`](docs/crates/aster_forge_logging.md), [`aster_forge_metrics`](docs/crates/aster_forge_metrics.md), [`aster_forge_panic`](docs/crates/aster_forge_panic.md), [`aster_forge_alloc`](docs/crates/aster_forge_alloc.md) |
+| Web and API | [`aster_forge_api`](docs/crates/aster_forge_api.md), [`aster_forge_api_docs_macros`](docs/crates/aster_forge_api_docs_macros.md), [`aster_forge_actix_middleware`](docs/crates/aster_forge_actix_middleware.md), [`aster_forge_external_auth`](docs/crates/aster_forge_external_auth.md) |
+| Data, coordination, and background work | [`aster_forge_db`](docs/crates/aster_forge_db.md), [`aster_forge_cache`](docs/crates/aster_forge_cache.md), [`aster_forge_tasks`](docs/crates/aster_forge_tasks.md), [`aster_forge_mail`](docs/crates/aster_forge_mail.md), [`aster_forge_audit`](docs/crates/aster_forge_audit.md) |
+| Storage and domain-neutral helpers | [`aster_forge_storage_core`](docs/crates/aster_forge_storage_core.md), [`aster_forge_file_classification`](docs/crates/aster_forge_file_classification.md) |
+| Utilities | [`aster_forge_crypto`](docs/crates/aster_forge_crypto.md), [`aster_forge_utils`](docs/crates/aster_forge_utils.md), [`aster_forge_validation`](docs/crates/aster_forge_validation.md) |
 
 ## Integration rules
 
-- Keep product models, permissions, repositories, migrations, and user-facing errors in the product repository.
+- Keep product permissions, user-facing errors, business repositories, API semantics, task payloads/results, audit actions/details, and presentation rules in the product repository.
+- Use Forge-owned schema/store builders for product-neutral infrastructure tables such as runtime leases, scheduled tasks, mail outbox, and audit logs.
+- Register runtime subsystems through Forge components instead of hand-writing shutdown order in product entrypoints.
 - Map Forge errors at the product service boundary.
-- Write explicit product-side adapters for persistence, metrics, runtime config, and policy decisions.
-- Start with small helper crates, then adopt lifecycle and runtime crates once integration tests cover the boundary.
+- Write explicit product-side adapters for metrics, runtime config, permission, audit presentation, and policy decisions.
 - Use AsterDrive and AsterYggdrasil as references, not as reasons to move business logic into Forge.
 
-See [`docs/guide/integration-principles.md`](docs/guide/integration-principles.md) for the detailed rules.
+See [`docs/guide/new-project-integration.md`](docs/guide/new-project-integration.md) for the target new-product shape and [`docs/guide/integration-principles.md`](docs/guide/integration-principles.md) for the detailed boundary rules.
 
 ## Documentation
 
 - [Documentation site](https://forge.astercosm.com/)
 - [Chinese guide](docs/guide/index.md)
+- [New project integration guide](docs/guide/new-project-integration.md)
 - [English overview](docs/en/index.md)
 - [Crate reference pages](docs/crates/aster_forge_actix_middleware.md)
 - [Reference projects](docs/guide/reference-projects.md)
