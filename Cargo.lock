@@ -524,6 +524,7 @@ dependencies = [
 name = "aster_forge_cache"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_runtime",
  "async-trait",
  "dashmap",
  "futures",
@@ -549,6 +550,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "utoipa",
 ]
@@ -567,6 +569,10 @@ dependencies = [
 name = "aster_forge_db"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_runtime",
+ "aster_forge_tasks",
+ "async-trait",
+ "chrono",
  "rand 0.10.1",
  "sea-orm",
  "thiserror 2.0.18",
@@ -654,6 +660,8 @@ name = "aster_forge_runtime"
 version = "0.1.0"
 dependencies = [
  "aster_forge_utils",
+ "async-trait",
+ "chrono",
  "futures",
  "serde",
  "serde_json",
@@ -676,6 +684,7 @@ dependencies = [
 name = "aster_forge_tasks"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_runtime",
  "aster_forge_utils",
  "async-trait",
  "chrono",

@@ -15,6 +15,7 @@
 - 为产品入口提供 signal-to-cancel 和 shutdown report logging 这类小型 lifecycle helper。
 - 用 `ServiceLifecycle` 收掉多 Actix 产品重复的 signal、server await 和 after-stop 收尾流程。
 - 为 runtime 副作用队列提供通用的内存缓冲、批量 flush、延迟 flush 和溢出直写机制。
+- 用 runtime lease supervisor 管理多实例 singleton worker group。
 
 不适合放在这里的内容：
 
@@ -25,6 +26,44 @@
 - 具体数据库、缓存、邮件或存储的业务检查。
 - 产品 shutdown 顺序里的业务副作用。
 - 产品审计、邮件、任务等具体实体和 repository 写入语义。
+
+## Runtime Lease
+
+模块：`aster_forge_runtime::lease`
+
+Runtime lease 解决的是“多个服务实例里，哪个实例可以启动某一组 singleton 后台循环”。它不是任务 processing lease，也不是任务去重键：
+
+```text
+runtime_leases        -> 哪个进程拥有某个 runtime worker group
+background_tasks      -> 具体有哪些任务和任务执行结果
+task processing lease -> 哪个 worker 正在执行某一条任务
+task dedupe key       -> 同一个计划触发点只能创建一条任务
+```
+
+典型 singleton group 包括 background task dispatcher、mail outbox dispatch、system health refresh，以及 session、token、audit、task artifact cleanup 等周期维护任务。每个实例都可以启动 supervisor，但只有拿到 lease 的实例会启动 worker group；其他实例 standby 并按间隔重试。
+
+```rust
+let lease_config = aster_forge_runtime::RuntimeLeaseConfig::new(
+    "aster_yggdrasil.background_tasks",
+    aster_forge_runtime::new_runtime_lease_owner_id(),
+)
+.ttl(std::time::Duration::from_secs(30))
+.renew_interval(std::time::Duration::from_secs(10))
+.standby_retry_interval(std::time::Duration::from_secs(5));
+
+aster_forge_runtime::run_runtime_lease_supervisor(
+    lease_store,
+    lease_config,
+    shutdown_token,
+    |leased_shutdown| spawn_singleton_background_tasks(leased_shutdown),
+    |tasks| async move {
+        tasks.shutdown().await;
+    },
+)
+.await;
+```
+
+`RuntimeLeaseStore` 是存储抽象。数据库产品优先使用 `aster_forge_db::RuntimeLeaseDbStore` 和 `aster_forge_db::create_runtime_leases_table(...)`；如果未来某个产品需要 etcd、Redis 或其他协调后端，只需要实现同一个 trait。
 
 ## Runtime Component Registry
 
@@ -107,61 +146,34 @@ let mut registry = RuntimeComponentRegistry::from_state_registrars(state, &[
 ]);
 ```
 
-如果子系统拥有 shutdown-only 资源，例如 database handles 或 background tasks，优先做成 bundle：
+如果子系统拥有 shutdown-only 资源，例如 outbox drain handle、audit flush guard 或产品自定义 manager，优先使用 `shutdown_resource_component_after()`。产品仍然提供资源和 shutdown closure，Forge 负责组件 boilerplate、依赖声明和 once-only 资源消费：
 
 ```rust
-struct ShutdownComponents {
-    background_tasks: BackgroundTasks,
-    db_handles: DbHandles,
-}
-
-impl RuntimeComponentBundle for ShutdownComponents {
-    fn register(self, registry: &mut RuntimeComponentRegistry) {
-        registry.component_shutdown_once(
-            "background_tasks",
-            RuntimeComponentKind::Tasks,
-            "background_tasks",
-            None,
-            self.background_tasks,
-            |background_tasks| async move {
-                background_tasks.shutdown().await;
-                Ok(())
-            },
-        );
-
-        registry
-            .component("database")
-            .kind(RuntimeComponentKind::Database)
-            .depends_on("background_tasks")
-            .shutdown_once(
-                "database_connections",
-                None,
-                self.db_handles,
-                |db_handles| async move {
-                    db_handles.close().await.map_err(|error| error.to_string())?;
-                    Ok(())
-                },
-            );
-    }
-}
-
-let mut registry = RuntimeComponentRegistry::configured_with_bundle(
-    ShutdownComponents {
-        background_tasks,
-        db_handles,
+let mail_outbox = aster_forge_runtime::shutdown_resource_component_after(
+    "mail_outbox",
+    RuntimeComponentKind::Mail,
+    "mail_outbox_drain",
+    &[aster_forge_tasks::BACKGROUND_TASKS_COMPONENT],
+    resources,
+    |resources| async move {
+        drain_mail_outbox(resources).await.map_err(|error| error.to_string())
     },
 );
 ```
 
-entrypoint 里可以直接运行 bundle shutdown，这样注册发生在产品入口附近：
+更专门的公共 crate 可以在此基础上继续提供领域组件，例如：
+
+- `aster_forge_tasks::background_task_component_with_descriptors(...)`
+- `aster_forge_db::database_component_after(...)`
+
+entrypoint 里可以直接注册这些 component：
 
 ```rust
-let shutdown_components = ShutdownComponents {
-    background_tasks,
-    db_handles,
-};
-let report = RuntimeComponentRegistry::shutdown_bundle(shutdown_components).await;
-log_shutdown_report(&report);
+AsterRuntime::builder()
+    .component(http_component)
+    .component(aster_forge_tasks::background_task_component_with_descriptors(...))
+    .component(mail_outbox)
+    .component(aster_forge_db::database_component_after(...));
 ```
 
 如果入口要组合多个资源包，可以用 tuple bundle：
@@ -263,12 +275,11 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge" }
 推荐的产品入口形态：
 
 ```rust
+let product_components = product_runtime_components(state, shutdown_token.clone());
+
 AsterRuntime::builder()
     .component(http_component(server, shutdown_token))
-    .component(task_component(background_tasks))
-    .component(mail_outbox_component(mail_outbox_resources))
-    .component(audit_component(audit_resources))
-    .component(database_component(db_handles))
+    .component(product_components)
     .run()
     .await?;
 ```
@@ -300,6 +311,28 @@ pub fn database_component(db_handles: DbHandles) -> RuntimeComponentBundleRegist
     runtime_component(DatabaseComponents::new(db_handles))
 }
 ```
+
+如果产品有多个带资源的子系统，建议在产品仓库再做一层 product bundle，而不是让入口手动拆 `AppState`：
+
+```rust
+pub struct ProductRuntimeComponents {
+    background_tasks: BackgroundTasks,
+    db_handles: DbHandles,
+    mail_outbox_resources: MailOutboxRuntimeResources,
+    audit_resources: AuditRuntimeResources,
+}
+
+impl RuntimeComponentBundle for ProductRuntimeComponents {
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        task_component(self.background_tasks).register(registry);
+        mail_outbox_component(self.mail_outbox_resources).register(registry);
+        audit_component(self.audit_resources).register(registry);
+        database_component(self.db_handles).register(registry);
+    }
+}
+```
+
+这样入口只表达“HTTP + 产品组件包”，业务 shutdown 顺序仍然留在产品侧模块，Forge 只负责 registry、依赖校验和执行。
 
 这就是 Forge runtime 的目标形态：产品入口只声明“有哪些组件”，组件自己把 health、startup、task、shutdown 和 descriptor 注册进 Forge registry。记录 server shutdown audit、drain mail outbox、flush audit manager、close database 这类生命周期动作应该属于各自 component，不应该散落在入口的裸 `before_shutdown` hook 里。Forge 不替产品创建资源，也不把业务 shutdown 动作藏在框架默认值里。
 

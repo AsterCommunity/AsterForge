@@ -21,6 +21,7 @@
 pub mod buffered;
 pub mod component;
 pub mod health;
+pub mod lease;
 pub mod lifecycle;
 pub mod shutdown;
 pub mod startup;
@@ -38,10 +39,16 @@ pub use health::{
     HealthComponentDetailValue, HealthComponentReport, HealthMetricsRecorder, HealthStatus,
     SystemHealthReport,
 };
+pub use lease::{
+    DEFAULT_RUNTIME_LEASE_RETRY_INTERVAL, DEFAULT_RUNTIME_LEASE_TTL, RuntimeLeaseAcquire,
+    RuntimeLeaseClaim, RuntimeLeaseConfig, RuntimeLeaseOwner, RuntimeLeaseStore,
+    new_runtime_lease_owner_id, run_runtime_lease_supervisor,
+};
 pub use lifecycle::{
     AsterRuntime, AsterRuntimeBuilder, AsterRuntimeComponent, AsterRuntimeError,
     RuntimeComponentBundleRegistration, RuntimeServiceComponent, ServiceLifecycle,
-    runtime_component,
+    ShutdownResourceComponent, runtime_component, shutdown_resource_component,
+    shutdown_resource_component_after,
 };
 pub use shutdown::{
     RuntimeSignalError, ShutdownCoordinator, ShutdownPhaseReport, ShutdownPhaseStatus,

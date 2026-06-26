@@ -11,7 +11,7 @@ publish = false
 [features]
 default = []
 openapi = ["dep:utoipa"]
-redis = ["dep:redis"]
+redis-pubsub = ["dep:redis"]
 
 [dependencies]
 async-trait.workspace = true
@@ -22,5 +22,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
 tracing.workspace = true
 utoipa = { workspace = true, optional = true }

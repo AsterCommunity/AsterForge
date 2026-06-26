@@ -9,6 +9,10 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+aster_forge_runtime = { path = "../aster_forge_runtime" }
+aster_forge_tasks = { path = "../aster_forge_tasks" }
+async-trait.workspace = true
+chrono = { workspace = true, features = ["clock"] }
 rand.workspace = true
 sea-orm.workspace = true
 thiserror.workspace = true

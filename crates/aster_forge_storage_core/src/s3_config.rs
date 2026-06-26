@@ -43,6 +43,12 @@ pub fn normalize_s3_endpoint_and_bucket(
         });
     }
 
+    if endpoint.contains('#') {
+        return Err(S3ConfigError::InvalidEndpoint(format!(
+            "S3 endpoint must not include a fragment: '{endpoint}'"
+        )));
+    }
+
     let uri: Uri = endpoint.parse().map_err(|_| {
         S3ConfigError::InvalidEndpoint(format!("invalid S3 endpoint URL: '{endpoint}'"))
     })?;
@@ -62,12 +68,18 @@ pub fn normalize_s3_endpoint_and_bucket(
         S3ConfigError::InvalidEndpoint(format!("S3 endpoint must include a hostname: '{endpoint}'"))
     })?;
 
+    if uri.query().is_some() {
+        return Err(S3ConfigError::InvalidEndpoint(format!(
+            "S3 endpoint must not include a query string: '{endpoint}'"
+        )));
+    }
+
     if bucket.is_empty() {
         return Err(S3ConfigError::MissingBucket);
     }
 
     Ok(NormalizedS3Config {
-        endpoint: endpoint.to_string(),
+        endpoint: endpoint.trim_end_matches('/').to_string(),
         bucket,
     })
 }
@@ -84,6 +96,15 @@ mod tests {
 
         assert_eq!(normalized.endpoint, "https://s3.example.com/custom/path");
         assert_eq!(normalized.bucket, "archive");
+    }
+
+    #[test]
+    fn trims_trailing_endpoint_slashes() {
+        let normalized =
+            normalize_s3_endpoint_and_bucket("https://s3.example.com/custom/path/", "archive")
+                .expect("normalized S3 config");
+
+        assert_eq!(normalized.endpoint, "https://s3.example.com/custom/path");
     }
 
     #[test]
@@ -116,6 +137,14 @@ mod tests {
         ));
         assert!(matches!(
             normalize_s3_endpoint_and_bucket("https:///missing-host", "archive"),
+            Err(S3ConfigError::InvalidEndpoint(_))
+        ));
+        assert!(matches!(
+            normalize_s3_endpoint_and_bucket("https://s3.example.com?x=1", "archive"),
+            Err(S3ConfigError::InvalidEndpoint(_))
+        ));
+        assert!(matches!(
+            normalize_s3_endpoint_and_bucket("https://s3.example.com/root#fragment", "archive"),
             Err(S3ConfigError::InvalidEndpoint(_))
         ));
     }

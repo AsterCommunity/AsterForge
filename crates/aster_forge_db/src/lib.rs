@@ -17,16 +17,42 @@
     )
 )]
 
+mod component;
 pub mod connection;
 pub mod pagination;
 pub mod retry;
+pub mod runtime_lease;
+pub mod scheduled_task;
 pub mod search_query;
 pub mod sort;
 pub mod transaction;
 
+pub use component::{
+    DATABASE_COMPONENT, DATABASE_CONNECTIONS_SHUTDOWN_PHASE, DATABASE_HEALTH_CHECK,
+    DATABASE_HEALTH_CHECK_TIMEOUT, DatabaseRuntimeComponent, check_database_component,
+    database_component, database_component_after, database_health_options, ping_database,
+    register_database_health_check, register_database_shutdown,
+};
 pub use connection::{
     DatabaseConfig, DbHandles, DbMetricsRecorder, NoopDbMetrics, SharedDbMetricsRecorder, connect,
     connect_reader_for_writer, connect_reader_for_writer_with_metrics, connect_with_metrics,
+};
+pub use runtime_lease::{
+    RUNTIME_LEASE_CREATED_AT_COLUMN, RUNTIME_LEASE_EXPIRES_AT_COLUMN, RUNTIME_LEASE_ID_COLUMN,
+    RUNTIME_LEASE_LAST_RENEWED_AT_COLUMN, RUNTIME_LEASE_OWNER_ID_COLUMN,
+    RUNTIME_LEASE_UPDATED_AT_COLUMN, RUNTIME_LEASES_TABLE, RuntimeLeaseDbStore,
+    create_runtime_leases_table, drop_runtime_leases_table,
+};
+pub use scheduled_task::{
+    SCHEDULED_TASK_CLAIM_EXPIRES_AT_COLUMN, SCHEDULED_TASK_CLAIM_OWNER_ID_COLUMN,
+    SCHEDULED_TASK_CREATED_AT_COLUMN, SCHEDULED_TASK_DISPLAY_NAME_COLUMN, SCHEDULED_TASK_ID_COLUMN,
+    SCHEDULED_TASK_LAST_CLAIMED_AT_COLUMN, SCHEDULED_TASK_LAST_FINISHED_AT_COLUMN,
+    SCHEDULED_TASK_NAME_COLUMN, SCHEDULED_TASK_NAMESPACE_COLUMN, SCHEDULED_TASK_NEXT_RUN_AT_COLUMN,
+    SCHEDULED_TASK_UPDATED_AT_COLUMN, SCHEDULED_TASKS_TABLE, ScheduledTaskCatalogEntry,
+    ScheduledTaskClaim, ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskDbStore,
+    create_scheduled_tasks_namespace_name_unique_index, create_scheduled_tasks_next_run_index,
+    create_scheduled_tasks_table, drop_scheduled_tasks_namespace_name_unique_index,
+    drop_scheduled_tasks_next_run_index, drop_scheduled_tasks_table,
 };
 
 /// Result type returned by database helpers.

@@ -31,12 +31,12 @@ aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge" }
 可选 feature：
 
 - `openapi`：在 debug + openapi 构建下为公共 API 类型派生 `utoipa::ToSchema`。
-- `redis`：启用 `RedisConfigChangeNotifier` 和 `RedisConfigReloadListener`。
+- `redis-pubsub`：启用 `RedisConfigChangeNotifier` 和 `RedisConfigReloadListener`，只用于跨进程 reload 通知，不表示配置值存储在 Redis。
 
 ```toml
 aster_forge_config = {
   git = "https://github.com/AsterCommunity/AsterForge",
-  features = ["redis"]
+  features = ["redis-pubsub"]
 }
 ```
 
@@ -379,7 +379,7 @@ pub fn background_task_dispatch_interval_secs(runtime_config: &RuntimeConfig) ->
 ```rust
 let message = ConfigReloadMessage::new(
     "aster_yggdrasil",
-    node_id,
+    runtime_id,
     ["site_name"],
     ConfigNotificationSource::Api,
 );
@@ -388,10 +388,30 @@ notifier.publish_reload(message).await?;
 
 收到通知的进程应该从权威存储重新加载配置，而不是信任消息里的旧值。这个设计避免 pub/sub 丢包、乱序或 stale payload 直接覆盖本地快照。
 
-Redis feature 下可以用：
+`redis-pubsub` feature 下可以用：
 
 - `RedisConfigChangeNotifier`
 - `RedisConfigReloadListener`
+
+如果产品需要完整订阅循环，优先使用：
+
+- `ConfigSyncConfig`
+- `ConfigSyncRuntime`
+- `build_config_sync_runtime(config, namespace)`
+- `ConfigReloadWorkerConfig`
+- `handle_config_reload_notification()`
+- `run_config_reload_worker()`
+
+常规产品接入应该直接持有 `ConfigSyncRuntime`。它把 namespace、进程级 runtime ID、backend notifier、reload 发布和订阅 worker 绑定在一起，产品侧只需要：
+
+1. 启动时调用 `build_config_sync_runtime(&config.config_sync, "aster_product")`。
+2. 本地配置写入成功后调用 `runtime.publish_reload(keys, ConfigNotificationSource::Api).await`。
+3. 后台任务中调用 `runtime.run_reload_subscription(shutdown, reload_callback).await`，其中 `reload_callback` 从产品自己的权威存储重新加载配置。
+
+底层 `ConfigReloadWorkerConfig`、`handle_config_reload_notification()` 和 `run_config_reload_worker()` 仍然保留给特殊运行器或测试使用；普通产品不应该自己拼 reload message、notifier subscribe、namespace 过滤或 backend match。
+
+这组 API 负责统一静态 config shape、backend factory、runtime ID 生成、namespace/topic 默认值、过滤 namespace、忽略本进程发出的消息、调用产品传入的 reload 回调，并在一次 reload 失败后继续监听后续通知。
+Forge 不假设 transport 只能是 Redis；后续 RabbitMQ、NATS 或其他 broker 可以实现同一个 `ConfigChangeNotifier` 边界，并接入 `build_config_sync_runtime()` 的 backend 分支。
 
 ## 错误边界
 

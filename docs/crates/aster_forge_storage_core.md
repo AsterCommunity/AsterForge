@@ -62,21 +62,22 @@ aster_forge_storage_core = { git = "https://github.com/AsterCommunity/AsterForge
 
 主要 API：
 
-- `normalize_s3_endpoint_and_bucket(endpoint, bucket, force_path_style)`
+- `normalize_s3_endpoint_and_bucket(endpoint, bucket)`
 - `NormalizedS3Config`
 - `S3ConfigError`
 
-这个 helper 处理 S3-compatible 服务的常见差异：
+这个 helper 处理 S3-compatible 服务的基础连接字段：
 
-- endpoint 是否已经带 bucket。
-- path-style 和 virtual-host style。
-- endpoint URL 规范化。
-- bucket 为空或冲突时的错误。
+- endpoint 为空时允许使用 provider 默认端点，但 bucket 仍然必填。
+- endpoint 必须是 `http://` 或 `https://`，并且必须包含 host。
+- endpoint 会去掉尾部 `/`，并拒绝 query string / fragment。
+- bucket 会 trim，空值返回 `S3ConfigError::MissingBucket`。
 
 产品侧仍然负责：
 
 - access key / secret key 来源。
 - region 默认值。
+- path-style / virtual-host style。
 - TLS 和代理配置。
 - driver 初始化和健康检查。
 

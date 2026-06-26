@@ -20,6 +20,8 @@ use crate::{
 type RuntimeHookFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type RuntimeHook = Box<dyn FnOnce() -> RuntimeHookFuture + Send>;
 type RuntimeComponentRegistration = Box<dyn FnOnce(&mut RuntimeComponentRegistry) + Send>;
+type ShutdownResourceFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+type ShutdownResourceFn<T> = Box<dyn FnOnce(T) -> ShutdownResourceFuture + Send>;
 
 fn empty_runtime_hook() -> RuntimeHook {
     Box::new(|| Box::pin(async {}))
@@ -117,6 +119,114 @@ pub struct RuntimeComponentBundleRegistration<B> {
 /// Adapts a [`RuntimeComponentBundle`] for [`AsterRuntimeBuilder::component`].
 pub const fn runtime_component<B>(bundle: B) -> RuntimeComponentBundleRegistration<B> {
     RuntimeComponentBundleRegistration { bundle }
+}
+
+/// Runtime component for one shutdown-only owned resource.
+///
+/// This adapter is useful for product-owned resources whose lifecycle is
+/// otherwise simple: declare a component, optional dependencies, and a shutdown
+/// phase that consumes the resource exactly once. Product crates still own the
+/// resource type and the shutdown closure; Forge owns the component boilerplate.
+pub struct ShutdownResourceComponent<T> {
+    component_name: &'static str,
+    kind: RuntimeComponentKind,
+    phase_name: &'static str,
+    dependencies: &'static [&'static str],
+    resource: T,
+    shutdown: ShutdownResourceFn<T>,
+}
+
+impl<T> ShutdownResourceComponent<T> {
+    /// Creates a shutdown-only resource component.
+    pub fn new<F, Fut>(
+        component_name: &'static str,
+        kind: RuntimeComponentKind,
+        phase_name: &'static str,
+        resource: T,
+        shutdown: F,
+    ) -> Self
+    where
+        F: FnOnce(T) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        Self {
+            component_name,
+            kind,
+            phase_name,
+            dependencies: &[],
+            resource,
+            shutdown: Box::new(move |resource| Box::pin(shutdown(resource))),
+        }
+    }
+
+    /// Declares components that must shut down before this resource.
+    pub const fn depends_on_all(mut self, dependencies: &'static [&'static str]) -> Self {
+        self.dependencies = dependencies;
+        self
+    }
+}
+
+impl<T> RuntimeComponentBundle for ShutdownResourceComponent<T>
+where
+    T: Send + 'static,
+{
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        let Self {
+            component_name,
+            kind,
+            phase_name,
+            dependencies,
+            resource,
+            shutdown,
+        } = self;
+        registry
+            .component(component_name)
+            .kind(kind)
+            .depends_on_all(dependencies)
+            .shutdown_once(phase_name, None, resource, shutdown);
+    }
+}
+
+/// Creates a shutdown-only resource component registration.
+pub fn shutdown_resource_component<T, F, Fut>(
+    component_name: &'static str,
+    kind: RuntimeComponentKind,
+    phase_name: &'static str,
+    resource: T,
+    shutdown: F,
+) -> RuntimeComponentBundleRegistration<ShutdownResourceComponent<T>>
+where
+    T: Send + 'static,
+    F: FnOnce(T) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), String>> + Send + 'static,
+{
+    runtime_component(ShutdownResourceComponent::new(
+        component_name,
+        kind,
+        phase_name,
+        resource,
+        shutdown,
+    ))
+}
+
+/// Creates a shutdown-only resource component registration with dependencies.
+pub fn shutdown_resource_component_after<T, F, Fut>(
+    component_name: &'static str,
+    kind: RuntimeComponentKind,
+    phase_name: &'static str,
+    dependencies: &'static [&'static str],
+    resource: T,
+    shutdown: F,
+) -> RuntimeComponentBundleRegistration<ShutdownResourceComponent<T>>
+where
+    T: Send + 'static,
+    F: FnOnce(T) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), String>> + Send + 'static,
+{
+    runtime_component(
+        ShutdownResourceComponent::new(component_name, kind, phase_name, resource, shutdown)
+            .depends_on_all(dependencies),
+    )
 }
 
 impl<S, Service> AsterRuntimeComponent<S> for RuntimeServiceComponent<Service> {
@@ -485,5 +595,33 @@ mod tests {
                 }
             })
         ));
+    }
+
+    #[test]
+    fn shutdown_resource_component_registers_dependencies_and_shutdown() {
+        let registry = RuntimeComponentRegistry::configured(|registry| {
+            crate::shutdown_resource_component_after(
+                "mail_outbox",
+                RuntimeComponentKind::Mail,
+                "mail_outbox_drain",
+                &["background_tasks"],
+                42_u8,
+                |_| async { Ok(()) },
+            )
+            .register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor("mail_outbox")
+            .expect("shutdown resource component should be registered");
+        assert_eq!(descriptor.kind, RuntimeComponentKind::Mail);
+        assert_eq!(descriptor.dependencies, vec!["background_tasks"]);
+        assert_eq!(
+            descriptor
+                .shutdown
+                .expect("shutdown phase should be registered")
+                .phase_name,
+            "mail_outbox_drain"
+        );
     }
 }

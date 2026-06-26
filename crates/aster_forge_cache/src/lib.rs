@@ -16,6 +16,7 @@
     )
 )]
 
+mod health;
 #[cfg(feature = "memory")]
 mod memory;
 #[cfg(feature = "redis")]
@@ -27,6 +28,10 @@ use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 
+pub use health::{
+    CACHE_COMPONENT, CACHE_HEALTH_CHECK, CACHE_HEALTH_CHECK_TIMEOUT, cache_health_options,
+    check_cache_component, register_cache_health_check,
+};
 #[cfg(feature = "memory")]
 pub use memory::MemoryCache;
 #[cfg(feature = "redis")]

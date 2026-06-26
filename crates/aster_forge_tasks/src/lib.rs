@@ -20,6 +20,8 @@
     )
 )]
 
+mod component;
+mod dedupe;
 mod dispatch;
 mod error;
 mod execution;
@@ -29,10 +31,19 @@ mod registry;
 mod retry;
 mod runtime;
 mod runtime_metadata;
+mod schedule;
 mod spec;
 mod steps;
 mod temp;
 
+pub use component::{
+    BACKGROUND_TASKS_COMPONENT, BACKGROUND_TASKS_SHUTDOWN_PHASE, BackgroundTaskRuntimeComponent,
+    BackgroundTaskRuntimeDefinitionsComponent, BackgroundTaskRuntimeDescriptor,
+    background_task_component, background_task_component_with_definitions,
+    background_task_component_with_descriptors, register_background_task_definitions,
+    register_background_task_descriptors, register_background_tasks_shutdown,
+};
+pub use dedupe::{TASK_DEDUPE_KEY_MAX_LEN, TaskDedupeKey, scheduled_task_dedupe_key};
 pub use dispatch::{
     ClaimableTaskRecord, ClaimedTask, DispatchStats, TaskClaimCandidate, TaskClaimStore,
     TaskDispatchOutcome, TaskLaneConfig, available_lane_capacity, claim_due_for_lane,
@@ -63,6 +74,11 @@ pub use runtime::{
     run_dispatch_worker, run_periodic_task, run_recorded_task_iteration,
 };
 pub use runtime_metadata::{RegisteredRuntimeTaskKind, RuntimeTaskDefinition, RuntimeTaskName};
+pub use schedule::{
+    ScheduledPeriodicTask, ScheduledTaskCatalogEntry, ScheduledTaskClaim,
+    ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
+    run_scheduled_periodic_task,
+};
 pub use spec::{
     BackgroundTaskSpec, ErasedBackgroundTaskSpec, TaskProcessFuture, TaskSpecAdapter,
     decode_payload_as, decode_result_as, serialize_payload, serialize_result,

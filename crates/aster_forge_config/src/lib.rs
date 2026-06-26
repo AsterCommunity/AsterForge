@@ -29,9 +29,12 @@ mod value;
 pub use error::{ConfigCoreError, Result};
 pub use notification::{
     ConfigChangeEvent, ConfigChangeNotifier, ConfigNotification, ConfigNotificationSource,
-    ConfigReloadMessage, InMemoryConfigNotifier,
+    ConfigReloadDecision, ConfigReloadMessage, ConfigReloadWorkerConfig, ConfigSyncConfig,
+    ConfigSyncRuntime, InMemoryConfigNotifier, SharedConfigChangeNotifier,
+    build_config_sync_runtime, default_config_sync_topic, handle_config_reload_notification,
+    run_config_reload_worker,
 };
-#[cfg(feature = "redis")]
+#[cfg(feature = "redis-pubsub")]
 pub use notification::{RedisConfigChangeNotifier, RedisConfigReloadListener};
 pub use registry::{
     ConfigDefinition, ConfigDependencyValidator, ConfigNormalizer, ConfigRegistry,

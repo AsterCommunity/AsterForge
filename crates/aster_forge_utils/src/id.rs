@@ -93,6 +93,15 @@ pub fn new_short_token() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
+/// Generates an ephemeral runtime instance identifier.
+///
+/// Runtime IDs are process-level identifiers for ownership and notification
+/// echo filtering. They are intentionally not stable business IDs or
+/// deployment node names.
+pub fn new_runtime_id() -> String {
+    format!("runtime-{}", new_short_token())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +277,16 @@ mod tests {
         assert_eq!(token.len(), 32);
         assert!(!token.contains('-'));
         assert!(Uuid::parse_str(&token).is_ok());
+    }
+
+    #[test]
+    fn new_runtime_id_uses_runtime_prefix_and_uuid_entropy() {
+        let runtime_id = new_runtime_id();
+        let token = runtime_id
+            .strip_prefix("runtime-")
+            .expect("runtime id should use runtime prefix");
+
+        assert_eq!(token.len(), 32);
+        assert!(Uuid::parse_str(token).is_ok());
     }
 }

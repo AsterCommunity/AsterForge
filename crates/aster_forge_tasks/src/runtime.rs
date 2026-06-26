@@ -480,7 +480,7 @@ pub fn effective_dispatch_max_interval(
     max_interval.max(base_interval)
 }
 
-fn panic_payload_message(panic: &Box<dyn Any + Send>) -> String {
+pub(crate) fn panic_payload_message(panic: &Box<dyn Any + Send>) -> String {
     if let Some(message) = panic.downcast_ref::<&str>() {
         (*message).to_string()
     } else if let Some(message) = panic.downcast_ref::<String>() {
