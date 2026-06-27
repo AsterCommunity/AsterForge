@@ -11,15 +11,21 @@ publish = false
 [features]
 default = []
 openapi = ["dep:utoipa"]
+persistence = ["dep:sea-orm"]
+runtime-component = [
+    "dep:aster_forge_runtime",
+    "dep:aster_forge_tasks",
+    "aster_forge_tasks/runtime-component",
+]
 
 [dependencies]
-aster_forge_runtime = { path = "../aster_forge_runtime" }
-aster_forge_tasks = { path = "../aster_forge_tasks" }
+aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
+aster_forge_tasks = { path = "../aster_forge_tasks", default-features = false, optional = true }
 aster_forge_utils = { path = "../aster_forge_utils" }
 aster_forge_validation = { path = "../aster_forge_validation" }
 async-trait.workspace = true
 lettre.workspace = true
-sea-orm.workspace = true
+sea-orm = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true

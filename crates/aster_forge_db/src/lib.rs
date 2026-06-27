@@ -17,19 +17,26 @@
     )
 )]
 
+#[cfg(feature = "audit-log")]
 pub mod audit_log;
+#[cfg(feature = "runtime-component")]
 mod component;
 pub mod connection;
+#[cfg(feature = "mail-outbox")]
 pub mod mail_outbox;
 pub mod pagination;
 pub mod retry;
+#[cfg(feature = "runtime-lease")]
 pub mod runtime_lease;
+#[cfg(feature = "scheduled-task")]
 pub mod scheduled_task;
 pub mod search_query;
 pub mod sort;
+#[cfg(feature = "system-config")]
 pub mod system_config;
 pub mod transaction;
 
+#[cfg(feature = "audit-log")]
 pub use audit_log::{
     AUDIT_LOG_ACTION_COLUMN, AUDIT_LOG_ACTION_CREATED_ID_INDEX,
     AUDIT_LOG_ACTION_CREATED_USER_INDEX, AUDIT_LOG_ACTION_INDEX, AUDIT_LOG_CREATED_AT_COLUMN,
@@ -54,6 +61,7 @@ pub use audit_log::{
     drop_audit_logs_user_created_id_index, drop_audit_logs_user_id_index,
     find_audit_logs_with_filters_cursor,
 };
+#[cfg(feature = "runtime-component")]
 pub use component::{
     DATABASE_COMPONENT, DATABASE_CONNECTIONS_SHUTDOWN_PHASE, DATABASE_HEALTH_CHECK,
     DATABASE_HEALTH_CHECK_TIMEOUT, DatabaseHealthComponent, DatabaseRuntimeComponent,
@@ -61,9 +69,10 @@ pub use component::{
     database_health_component, database_health_options, ping_database,
 };
 pub use connection::{
-    DatabaseConfig, DbHandles, DbMetricsRecorder, NoopDbMetrics, SharedDbMetricsRecorder, connect,
-    connect_reader_for_writer, connect_reader_for_writer_with_metrics, connect_with_metrics,
+    DatabaseConfig, DbHandles, connect, connect_reader_for_writer,
+    connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
+#[cfg(feature = "mail-outbox")]
 pub use mail_outbox::{
     MAIL_OUTBOX_ATTEMPT_COUNT_COLUMN, MAIL_OUTBOX_CREATED_AT_COLUMN, MAIL_OUTBOX_ID_COLUMN,
     MAIL_OUTBOX_LAST_ERROR_COLUMN, MAIL_OUTBOX_NEXT_ATTEMPT_AT_COLUMN,
@@ -75,12 +84,14 @@ pub use mail_outbox::{
     create_mail_outbox_sent_at_index, create_mail_outbox_table, drop_mail_outbox_due_index,
     drop_mail_outbox_processing_index, drop_mail_outbox_sent_at_index, drop_mail_outbox_table,
 };
+#[cfg(feature = "runtime-lease")]
 pub use runtime_lease::{
     RUNTIME_LEASE_CREATED_AT_COLUMN, RUNTIME_LEASE_EXPIRES_AT_COLUMN, RUNTIME_LEASE_ID_COLUMN,
     RUNTIME_LEASE_LAST_RENEWED_AT_COLUMN, RUNTIME_LEASE_OWNER_ID_COLUMN,
     RUNTIME_LEASE_UPDATED_AT_COLUMN, RUNTIME_LEASES_TABLE, RuntimeLeaseDbStore,
     create_runtime_leases_table, drop_runtime_leases_table,
 };
+#[cfg(feature = "scheduled-task")]
 pub use scheduled_task::{
     SCHEDULED_TASK_CLAIM_EXPIRES_AT_COLUMN, SCHEDULED_TASK_CLAIM_OWNER_ID_COLUMN,
     SCHEDULED_TASK_CREATED_AT_COLUMN, SCHEDULED_TASK_DISPLAY_NAME_COLUMN, SCHEDULED_TASK_ID_COLUMN,
@@ -91,10 +102,12 @@ pub use scheduled_task::{
     create_scheduled_tasks_table, drop_scheduled_tasks_namespace_name_unique_index,
     drop_scheduled_tasks_next_run_index, drop_scheduled_tasks_table,
 };
+#[cfg(feature = "system-config")]
 pub use system_config::{
     PresentedSystemConfig, SystemConfigCursorSlice, SystemConfigDbBinding, SystemConfigDbStore,
     SystemConfigUpsert, present_system_config,
 };
+#[cfg(feature = "system-config")]
 pub use system_config::{
     SYSTEM_CONFIG_CATEGORY_COLUMN, SYSTEM_CONFIG_DESCRIPTION_COLUMN, SYSTEM_CONFIG_ID_COLUMN,
     SYSTEM_CONFIG_IS_SENSITIVE_COLUMN, SYSTEM_CONFIG_KEY_COLUMN, SYSTEM_CONFIG_KEY_UNIQUE_INDEX,

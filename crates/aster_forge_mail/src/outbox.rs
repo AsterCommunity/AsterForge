@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::time::Duration;
 
+#[cfg(feature = "persistence")]
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 #[cfg(all(debug_assertions, feature = "openapi"))]
@@ -24,34 +25,50 @@ pub const DEFAULT_MARK_SENT_RETRY_DELAYS_MS: &[u64] = &[0, 100, 500, 2_000, 5_00
 /// services. Products may still maintain their own template payload enum and
 /// renderer; this type only standardizes the persisted template code for the
 /// common catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "persistence", derive(EnumIter, DeriveActiveEnum))]
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(64))")]
+#[cfg_attr(
+    feature = "persistence",
+    sea_orm(rs_type = "String", db_type = "String(StringLen::N(64))")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MailTemplateCode {
     /// Account registration activation message.
-    #[sea_orm(string_value = "register_activation")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "register_activation"))]
     RegisterActivation,
     /// Confirmation message for changing a contact address.
-    #[sea_orm(string_value = "contact_change_confirmation")]
+    #[cfg_attr(
+        feature = "persistence",
+        sea_orm(string_value = "contact_change_confirmation")
+    )]
     ContactChangeConfirmation,
     /// Password reset message.
-    #[sea_orm(string_value = "password_reset")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "password_reset"))]
     PasswordReset,
     /// Password reset notice message.
-    #[sea_orm(string_value = "password_reset_notice")]
+    #[cfg_attr(
+        feature = "persistence",
+        sea_orm(string_value = "password_reset_notice")
+    )]
     PasswordResetNotice,
     /// Contact change notice message.
-    #[sea_orm(string_value = "contact_change_notice")]
+    #[cfg_attr(
+        feature = "persistence",
+        sea_orm(string_value = "contact_change_notice")
+    )]
     ContactChangeNotice,
     /// External auth email verification message.
-    #[sea_orm(string_value = "external_auth_email_verification")]
+    #[cfg_attr(
+        feature = "persistence",
+        sea_orm(string_value = "external_auth_email_verification")
+    )]
     ExternalAuthEmailVerification,
     /// Login email code message.
-    #[sea_orm(string_value = "login_email_code")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "login_email_code"))]
     LoginEmailCode,
     /// User invitation message.
-    #[sea_orm(string_value = "user_invitation")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "user_invitation"))]
     UserInvitation,
 }
 
@@ -72,7 +89,8 @@ impl MailTemplateCode {
 }
 
 /// Raw JSON payload stored in `mail_outbox.payload_json`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, DeriveValueType)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "persistence", derive(DeriveValueType))]
 pub struct StoredMailPayload(pub String);
 
 impl StoredMailPayload {
@@ -105,25 +123,29 @@ impl From<StoredMailPayload> for String {
 }
 
 /// Persistent mail outbox row status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "persistence", derive(EnumIter, DeriveActiveEnum))]
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(ToSchema))]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")]
+#[cfg_attr(
+    feature = "persistence",
+    sea_orm(rs_type = "String", db_type = "String(StringLen::N(16))")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MailOutboxStatus {
     /// Row is waiting for first delivery attempt.
-    #[sea_orm(string_value = "pending")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "pending"))]
     Pending,
     /// Row is claimed by a dispatcher.
-    #[sea_orm(string_value = "processing")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "processing"))]
     Processing,
     /// Row is waiting for another delivery attempt.
-    #[sea_orm(string_value = "retry")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "retry"))]
     Retry,
     /// Row was delivered and marked sent.
-    #[sea_orm(string_value = "sent")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "sent"))]
     Sent,
     /// Row exhausted retry policy.
-    #[sea_orm(string_value = "failed")]
+    #[cfg_attr(feature = "persistence", sea_orm(string_value = "failed"))]
     Failed,
 }
 

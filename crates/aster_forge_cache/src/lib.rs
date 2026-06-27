@@ -16,6 +16,7 @@
     )
 )]
 
+#[cfg(feature = "runtime-component")]
 mod health;
 #[cfg(feature = "memory")]
 mod memory;
@@ -26,8 +27,10 @@ mod reservation;
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
+#[cfg(feature = "memory")]
 use std::sync::Arc;
 
+#[cfg(feature = "runtime-component")]
 pub use health::{
     CACHE_COMPONENT, CACHE_HEALTH_CHECK, CACHE_HEALTH_CHECK_TIMEOUT, CacheHealthComponent,
     cache_health_component, cache_health_options, check_cache_component,
@@ -107,6 +110,7 @@ impl CacheConfig {
     }
 }
 
+#[cfg(feature = "redis")]
 fn redis_backend_target(endpoint: &str) -> String {
     let Some((scheme, rest)) = endpoint.split_once("://") else {
         return "configured".to_string();
@@ -190,6 +194,7 @@ impl CacheExt for dyn CacheBackend {
 }
 
 /// Creates a cache backend from configuration.
+#[cfg(feature = "memory")]
 pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
     match config.backend.as_str() {
         #[cfg(feature = "redis")]
@@ -220,7 +225,7 @@ fn create_memory_cache(default_ttl: u64) -> Arc<dyn CacheBackend> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheConfig, CacheError, create_cache, redis_backend_target};
+    use super::{CacheConfig, CacheError};
 
     #[test]
     fn cache_config_default_uses_memory_backend() {
@@ -263,9 +268,10 @@ mod tests {
         assert_eq!(config.default_ttl, 30);
     }
 
+    #[cfg(feature = "memory")]
     #[tokio::test]
     async fn create_cache_uses_memory_for_unknown_backend() {
-        let cache = create_cache(&CacheConfig {
+        let cache = super::create_cache(&CacheConfig {
             backend: "unknown".to_string(),
             endpoint: "redis://127.0.0.1/".to_string(),
             default_ttl: 5,
@@ -276,26 +282,32 @@ mod tests {
         cache.health_check().await.expect("memory cache is healthy");
     }
 
+    #[cfg(feature = "redis")]
     #[test]
     fn redis_backend_target_strips_credentials() {
         assert_eq!(
-            redis_backend_target("redis://user:secret@example.com:6379/0"),
+            super::redis_backend_target("redis://user:secret@example.com:6379/0"),
             "redis://example.com:6379"
         );
     }
 
+    #[cfg(feature = "redis")]
     #[test]
     fn redis_backend_target_keeps_host_without_credentials() {
         assert_eq!(
-            redis_backend_target("rediss://cache.internal:6380/1"),
+            super::redis_backend_target("rediss://cache.internal:6380/1"),
             "rediss://cache.internal:6380"
         );
     }
 
+    #[cfg(feature = "redis")]
     #[test]
     fn redis_backend_target_handles_malformed_or_empty_hosts() {
-        assert_eq!(redis_backend_target("not-a-url"), "configured");
-        assert_eq!(redis_backend_target("redis:///0"), "redis://configured");
+        assert_eq!(super::redis_backend_target("not-a-url"), "configured");
+        assert_eq!(
+            super::redis_backend_target("redis:///0"),
+            "redis://configured"
+        );
     }
 
     #[test]

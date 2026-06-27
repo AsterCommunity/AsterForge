@@ -20,6 +20,7 @@
     )
 )]
 
+#[cfg(feature = "runtime-component")]
 mod component;
 mod dedupe;
 mod dispatch;
@@ -29,17 +30,25 @@ mod heartbeat;
 mod lease;
 mod registry;
 mod retry;
+#[cfg(feature = "runtime")]
 mod runtime;
 mod runtime_metadata;
+#[cfg(feature = "runtime")]
 mod schedule;
 mod spec;
 mod steps;
 mod temp;
 
+/// Stable component name used for background task workers.
+pub const BACKGROUND_TASKS_COMPONENT: &str = "background_tasks";
+
+#[cfg(feature = "runtime-component")]
 pub use component::{
-    BACKGROUND_TASKS_COMPONENT, BACKGROUND_TASKS_SHUTDOWN_PHASE, BackgroundTaskRuntimeComponent,
-    BackgroundTaskRuntimeDefinitionsComponent, background_task_component,
-    background_task_component_with_definitions,
+    BACKGROUND_TASKS_SHUTDOWN_PHASE, BackgroundTaskRuntimeComponent,
+    BackgroundTaskRuntimeComponentFromShutdown, BackgroundTaskRuntimeDefinitionsComponent,
+    BackgroundTaskRuntimeDefinitionsComponentFromShutdown, background_task_component,
+    background_task_component_from_shutdown, background_task_component_with_definitions,
+    background_task_component_with_definitions_from_shutdown,
 };
 pub use dedupe::{TASK_DEDUPE_KEY_MAX_LEN, TaskDedupeKey, scheduled_task_dedupe_key};
 pub use dispatch::{
@@ -64,6 +73,7 @@ pub use lease::{
 };
 pub use registry::TaskRecord;
 pub use retry::{TaskRetryClass, default_task_retry_delay_secs};
+#[cfg(feature = "runtime")]
 pub use runtime::{
     BACKGROUND_TASK_DISPATCH_ERROR_BACKOFF_CAP, BACKGROUND_TASK_SHUTDOWN_GRACE,
     BackgroundTaskDispatchBackoff, BackgroundTaskDispatchIteration, BackgroundTaskDispatchTrigger,
@@ -73,6 +83,7 @@ pub use runtime::{
     run_recorded_task_iteration,
 };
 pub use runtime_metadata::{RegisteredRuntimeTaskKind, RuntimeTaskDefinition, RuntimeTaskName};
+#[cfg(feature = "runtime")]
 pub use schedule::{
     LeasedScheduledRuntimeConfig, ScheduledPeriodicTask, ScheduledRuntimeTaskGroup,
     ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,

@@ -34,28 +34,40 @@ src/
 
 ```toml
 [dependencies]
-aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_middleware" }
+aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_middleware", features = ["metrics"] }
 aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
 aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_audit" }
-aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_cache", features = ["memory"] }
+aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_cache", features = ["memory", "runtime-component"] }
 aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_config" }
-aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db" }
+aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db", features = ["all"] }
 aster_forge_logging = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_logging" }
-aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_mail" }
+aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_mail", features = ["persistence", "runtime-component"] }
 aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_metrics" }
 aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_panic" }
 aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_runtime" }
-aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks" }
+aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks", features = ["runtime-component"] }
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
 aster_forge_validation = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_validation" }
 ```
 
 按需开启 feature：
 
-- cache 后端：`aster_forge_cache` 的 `memory`、`redis`。
+- cache 后端：`aster_forge_cache` 默认只启用 `memory`；需要 Redis 时显式启用 `redis`，需要 runtime health 组件时显式启用 `runtime-component`。
 - config 同步：`aster_forge_config` 的 `redis-pubsub`。
+- task runtime：只用 retry、dedupe、steps、spec 时不需要 feature；需要 worker、scheduled task 或 runtime component 时启用 `aster_forge_tasks` 的 `runtime-component`。
 - external auth：`aster_forge_external_auth` 的 `github`、`google`、`microsoft`、`qq` 等连接器。
 - OpenAPI：产品自己的 `openapi` feature 再转发到 Forge crate。
+
+Feature 边界要保持显式。默认 feature 只应该带最小可用内核，不能因为某个产品接入方便就把 Redis、SeaORM 表、runtime worker、mail drain 或 OpenAPI schema 静默拖进来。
+
+| crate | 默认 feature | 常见显式 feature | 说明 |
+| --- | --- | --- | --- |
+| `aster_forge_actix_middleware` | 无 | `metrics` | CSRF、CORS、rate limit、request id 默认可用；HTTP metrics 需要显式启用。 |
+| `aster_forge_cache` | `memory` | `redis`, `runtime-component` | Redis 后端显式启用；runtime health component 单独启用。 |
+| `aster_forge_config` | 无 | `redis-pubsub`, `sea-orm`, `openapi` | 配置 reload 通知后端和数据库转换能力分开启用。 |
+| `aster_forge_db` | 无 | `all`, `audit-log`, `mail-outbox`, `runtime-component`, `runtime-lease`, `scheduled-task`, `system-config` | 连接、transaction、pagination 等基础能力默认可用；共享表/store 按需启用。 |
+| `aster_forge_mail` | 无 | `persistence`, `runtime-component`, `openapi` | sender/template 默认可用；SeaORM outbox model 和 runtime drain component 分开启用。 |
+| `aster_forge_tasks` | 无 | `runtime`, `runtime-component`, `openapi` | retry、dedupe、steps、spec 默认可用；worker/scheduled runtime 和 component factory 分开启用。 |
 
 ## main.rs 目标形态
 
@@ -92,10 +104,7 @@ pub fn audit_runtime_component(
     impl aster_forge_runtime::RuntimeComponentBundle,
 > {
     let resources = AuditRuntimeResources::from_state(state);
-    aster_forge_runtime::runtime_component((
-        audit_component(resources.clone()),
-        server_start_audit_component(resources),
-    ))
+    audit_component(resources)
 }
 ```
 
@@ -333,6 +342,30 @@ impl From<aster_forge_db::DbError> for ProductError {
 - cache：memory fallback、redis unavailable、delete/take/set-if-absent 原子语义。
 
 不要只测 happy path。Forge 是公共地基，产品越多，边界 bug 的成本越高。
+
+Forge 自身改 public API 或 feature split 后，至少跑一次 feature matrix smoke check，防止“默认 feature 可用”和“显式 feature 可用”被互相污染：
+
+```bash
+cargo check -p aster_forge_actix_middleware --no-default-features --all-targets
+cargo check -p aster_forge_actix_middleware --no-default-features --features metrics --all-targets
+cargo check -p aster_forge_cache --no-default-features --all-targets
+cargo check -p aster_forge_cache --no-default-features --features memory --all-targets
+cargo check -p aster_forge_cache --no-default-features --features redis --all-targets
+cargo check -p aster_forge_cache --no-default-features --features runtime-component --all-targets
+cargo check -p aster_forge_config --no-default-features --all-targets
+cargo check -p aster_forge_config --no-default-features --features redis-pubsub --all-targets
+cargo check -p aster_forge_db --no-default-features --all-targets
+cargo check -p aster_forge_db --no-default-features --features all --all-targets
+cargo check -p aster_forge_mail --no-default-features --all-targets
+cargo check -p aster_forge_mail --no-default-features --features persistence --all-targets
+cargo check -p aster_forge_mail --no-default-features --features runtime-component --all-targets
+cargo check -p aster_forge_tasks --no-default-features --all-targets
+cargo check -p aster_forge_tasks --no-default-features --features runtime --all-targets
+cargo check -p aster_forge_tasks --no-default-features --features runtime-component --all-targets
+cargo check --workspace --all-targets --all-features
+cargo test --workspace --all-targets --all-features
+cargo clippy --all-targets --all-features
+```
 
 ## 接入检查
 

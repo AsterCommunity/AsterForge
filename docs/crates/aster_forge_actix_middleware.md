@@ -9,7 +9,7 @@
 - 提供 CSRF token 和 request source 校验 helper。
 - 提供 runtime CORS middleware 的 Actix 机械层。
 - 提供可信代理真实 IP 提取和通用 keyed rate limiter。
-- 记录 Actix HTTP 请求指标。
+- 可选记录 Actix HTTP 请求指标。
 - 让 Drive、Yggdrasil 等 Actix 服务复用同一套 HTTP 基础行为。
 
 不适合放在这里的内容：
@@ -25,7 +25,13 @@
 aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-当前没有 feature flag。
+默认 feature 不启用 HTTP metrics middleware，适合只需要 CSRF、CORS、rate limit、request id 和 security headers 的产品。
+
+如果产品要使用 `aster_forge_actix_middleware::metrics::MetricsMiddleware`，需要显式开启：
+
+```toml
+aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", features = ["metrics"] }
+```
 
 ## Rate Limit
 

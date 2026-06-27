@@ -5,12 +5,15 @@
 //! stay aligned with production dependencies.
 
 use aster_forge_cache::{CacheConfig, CacheExt, create_cache};
+#[cfg(feature = "redis")]
 use std::sync::Arc;
+#[cfg(feature = "redis")]
 use testcontainers::{
     GenericImage,
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
 };
+#[cfg(feature = "redis")]
 use tokio::time::{Duration, Instant, sleep};
 
 fn cache_config(backend: &str, default_ttl: u64) -> CacheConfig {
@@ -21,6 +24,7 @@ fn cache_config(backend: &str, default_ttl: u64) -> CacheConfig {
     }
 }
 
+#[cfg(feature = "redis")]
 async fn wait_for_redis_cache(endpoint: String) -> Arc<dyn aster_forge_cache::CacheBackend> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let config = CacheConfig {
@@ -161,6 +165,7 @@ async fn test_memory_cache_zero_ttl_entries_expire_immediately() {
     );
 }
 
+#[cfg(feature = "redis")]
 #[tokio::test]
 async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
     let cache = create_cache(&CacheConfig {
@@ -177,6 +182,7 @@ async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
     assert_eq!(cache.get_bytes("fallback").await, Some(b"value".to_vec()));
 }
 
+#[cfg(feature = "redis")]
 #[tokio::test]
 async fn test_redis_cache_round_trips_against_real_redis_container() {
     let container = GenericImage::new("redis", "7-alpine")

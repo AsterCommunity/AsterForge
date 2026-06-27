@@ -9,12 +9,13 @@ authors.workspace = true
 publish = false
 
 [features]
-default = ["memory", "redis"]
+default = ["memory"]
 memory = []
 redis = ["memory", "dep:redis"]
+runtime-component = ["dep:aster_forge_runtime"]
 
 [dependencies]
-aster_forge_runtime = { path = "../aster_forge_runtime" }
+aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
 async-trait.workspace = true
 dashmap.workspace = true
 moka.workspace = true
@@ -28,3 +29,8 @@ tracing.workspace = true
 [dev-dependencies]
 futures.workspace = true
 testcontainers.workspace = true
+
+[[test]]
+name = "cache"
+path = "tests/cache.rs"
+required-features = ["memory"]

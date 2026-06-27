@@ -461,7 +461,27 @@ store 负责：
 aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-当前没有 feature flag。SeaORM backend feature 由 Forge workspace 统一启用。
+默认 feature 只提供连接、retry、pagination、search、sort 和 transaction 这类基础数据库工具。共享表和 runtime 组件按需开启：
+
+```toml
+aster_forge_db = {
+    git = "https://github.com/AsterCommunity/AsterForge",
+    features = [
+        "runtime-component",
+        "runtime-lease",
+        "scheduled-task",
+        "system-config",
+        "mail-outbox",
+        "audit-log",
+    ],
+}
+```
+
+需要完整 Aster 平台数据库机械层的产品可以使用：
+
+```toml
+aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", features = ["all"] }
+```
 
 ## 连接与关闭
 
@@ -469,8 +489,8 @@ aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 - `DatabaseConfig`
 - `DbHandles`
-- `DbMetricsRecorder`
-- `NoopDbMetrics`
+- `aster_forge_metrics::DbMetricsRecorder`
+- `aster_forge_metrics::NoopDbMetrics`
 
 典型接入：
 

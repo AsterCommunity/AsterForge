@@ -259,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn cache_health_component_registers_diagnostics_component() {
         let config = CacheConfig::default();
-        let cache = Arc::new(crate::MemoryCache::new(60)) as Arc<dyn CacheBackend>;
+        let cache = Arc::new(FakeCache::new("memory")) as Arc<dyn CacheBackend>;
 
         let mut registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
             aster_forge_runtime::RuntimeComponentBundle::register(

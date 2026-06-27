@@ -138,7 +138,7 @@ let mail_outbox = aster_forge_runtime::shutdown_resource_component_after(
 
 更专门的公共 crate 可以在此基础上继续提供领域组件，例如：
 
-- `aster_forge_tasks::background_task_component_with_definitions(...)`
+- `aster_forge_tasks::background_task_component_with_definitions_from_shutdown(...)`
 - `aster_forge_db::database_component_after(...)`
 
 entrypoint 里可以直接注册这些 component：
@@ -146,7 +146,10 @@ entrypoint 里可以直接注册这些 component：
 ```rust
 AsterRuntime::builder()
     .component(http_component)
-    .component(aster_forge_tasks::background_task_component_with_definitions(...))
+    .component(aster_forge_tasks::background_task_component_with_definitions_from_shutdown(
+        registered_runtime_tasks(),
+        |shutdown_token| spawn_runtime_background_tasks(state.clone(), shutdown_token),
+    ))
     .component(mail_outbox)
     .component(aster_forge_db::database_component_after(...));
 ```
@@ -204,7 +207,7 @@ registry.component_shutdown_once(
 );
 ```
 
-这些 shortcut 是给 shared crate 实现 component 时使用的低层 API。产品侧优先调用 `aster_forge_db::database_component_after(...)`、`aster_forge_tasks::background_task_component_with_definitions(...)` 这类领域 component factory，不要在入口里重复写 shutdown 注册逻辑。
+这些 shortcut 是给 shared crate 实现 component 时使用的低层 API。产品侧优先调用 `aster_forge_db::database_component_after(...)`、`aster_forge_tasks::background_task_component_with_definitions_from_shutdown(...)` 这类领域 component factory，不要在入口里重复写 shutdown 注册逻辑，也不要为了拿 runtime shutdown token 自己实现一层 `AsterRuntimeComponent`。
 
 边界约定：
 
@@ -313,10 +316,7 @@ pub fn mail_runtime_component(
 pub fn audit_runtime_component(
     state: &AppState,
 ) -> RuntimeComponentBundleRegistration<impl RuntimeComponentBundle> {
-    runtime_component((
-        audit_component(AuditRuntimeResources::from_state(state)),
-        server_start_audit_component(AuditRuntimeResources::from_state(state)),
-    ))
+    audit_component(AuditRuntimeResources::from_state(state))
 }
 ```
 

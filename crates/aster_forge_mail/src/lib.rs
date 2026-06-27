@@ -19,6 +19,7 @@
     )
 )]
 
+#[cfg(feature = "runtime-component")]
 mod component;
 pub mod config;
 pub mod message;
@@ -26,9 +27,11 @@ pub mod outbox;
 pub mod sender;
 pub mod template;
 
-pub use component::{
-    MAIL_OUTBOX_COMPONENT, MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE, mail_outbox_component,
-};
+/// Stable component name used for mail outbox lifecycle handling.
+pub const MAIL_OUTBOX_COMPONENT: &str = "mail_outbox";
+
+#[cfg(feature = "runtime-component")]
+pub use component::{MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE, mail_outbox_component};
 pub use config::{
     DEFAULT_MAIL_SECURITY, DEFAULT_MAIL_SMTP_PORT, MAIL_TEMPLATE_MAX_BODY_LEN,
     MAIL_TEMPLATE_MAX_SUBJECT_LEN, MailConfigError, MailConfigResult, MailRuntimeSettings,

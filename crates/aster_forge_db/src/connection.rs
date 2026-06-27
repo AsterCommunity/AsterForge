@@ -9,6 +9,10 @@ use crate::{DbError, Result, retry};
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, SqlxSqliteConnector};
 use std::sync::Arc;
 
+use aster_forge_metrics::{
+    DbMetricBackend, DbQueryKind, DbQueryMetric, NoopDbMetrics, SharedDbMetricsRecorder,
+};
+
 /// Database connection configuration.
 #[derive(Clone, Debug)]
 pub struct DatabaseConfig {
@@ -30,29 +34,6 @@ impl DatabaseConfig {
         }
     }
 }
-
-/// Minimal metrics hook used by database connection helpers.
-pub trait DbMetricsRecorder: Send + Sync {
-    /// Returns whether metrics are actively recorded.
-    fn enabled(&self) -> bool;
-    /// Records one SeaORM query metric callback.
-    fn record_db_query(&self, info: &sea_orm::metric::Info<'_>);
-}
-
-/// Metrics recorder that ignores every query.
-#[derive(Debug, Default)]
-pub struct NoopDbMetrics;
-
-impl DbMetricsRecorder for NoopDbMetrics {
-    fn enabled(&self) -> bool {
-        false
-    }
-
-    fn record_db_query(&self, _info: &sea_orm::metric::Info<'_>) {}
-}
-
-/// Shared trait object for database metrics recorders.
-pub type SharedDbMetricsRecorder = Arc<dyn DbMetricsRecorder>;
 
 /// Pair of writer and reader database handles.
 #[derive(Clone)]
@@ -303,14 +284,54 @@ fn install_db_metrics(db: &mut DatabaseConnection, metrics: SharedDbMetricsRecor
     }
 
     db.set_metric_callback(move |info| {
-        metrics.record_db_query(info);
+        metrics.record_db_query(&db_query_metric_from_sea_orm(info));
     });
+}
+
+fn db_metric_backend_from_sea_orm(backend: sea_orm::DbBackend) -> DbMetricBackend {
+    match backend {
+        sea_orm::DbBackend::Sqlite => DbMetricBackend::Sqlite,
+        sea_orm::DbBackend::MySql => DbMetricBackend::MySql,
+        sea_orm::DbBackend::Postgres => DbMetricBackend::Postgres,
+        _ => DbMetricBackend::Other,
+    }
+}
+
+fn db_query_kind_from_sql(sql: &str) -> DbQueryKind {
+    match sql
+        .trim_start()
+        .split_ascii_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "SELECT" => DbQueryKind::Select,
+        "INSERT" => DbQueryKind::Insert,
+        "UPDATE" => DbQueryKind::Update,
+        "DELETE" => DbQueryKind::Delete,
+        "WITH" => DbQueryKind::With,
+        "BEGIN" | "COMMIT" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" => DbQueryKind::Transaction,
+        "CREATE" | "ALTER" | "DROP" | "TRUNCATE" => DbQueryKind::Ddl,
+        "PRAGMA" => DbQueryKind::Pragma,
+        _ => DbQueryKind::Other,
+    }
+}
+
+fn db_query_metric_from_sea_orm(info: &sea_orm::metric::Info<'_>) -> DbQueryMetric {
+    DbQueryMetric::new(
+        db_metric_backend_from_sea_orm(info.statement.db_backend),
+        db_query_kind_from_sql(&info.statement.sql),
+        info.failed,
+        info.elapsed,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::normalize_database_url;
-    use crate::connection::{DatabaseConfig, NoopDbMetrics};
+    use crate::connection::DatabaseConfig;
+    use aster_forge_metrics::{DbQueryKind, NoopDbMetrics};
     use sea_orm::{ConnectionTrait, TransactionTrait};
     use std::sync::Arc;
 
@@ -372,6 +393,43 @@ mod tests {
             super::sqlite_reader_url("sqlite:///var/lib/asterdrive/app.db?mode=rwc&"),
             "sqlite:///var/lib/asterdrive/app.db?mode=ro"
         );
+    }
+
+    #[test]
+    fn db_query_kind_from_sql_matches_low_cardinality_labels() {
+        assert_eq!(
+            super::db_query_kind_from_sql(" SELECT 1"),
+            DbQueryKind::Select
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("insert into users values (1)"),
+            DbQueryKind::Insert
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("UPDATE users SET name = ?"),
+            DbQueryKind::Update
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("delete from users"),
+            DbQueryKind::Delete
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("WITH recent AS (SELECT 1) SELECT * FROM recent"),
+            DbQueryKind::With
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("BEGIN"),
+            DbQueryKind::Transaction
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("CREATE TABLE example (id integer)"),
+            DbQueryKind::Ddl
+        );
+        assert_eq!(
+            super::db_query_kind_from_sql("PRAGMA foreign_keys=ON"),
+            DbQueryKind::Pragma
+        );
+        assert_eq!(super::db_query_kind_from_sql("VACUUM"), DbQueryKind::Other);
     }
 
     #[tokio::test]

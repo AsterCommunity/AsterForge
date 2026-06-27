@@ -21,15 +21,143 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
+
+/// Normalized database backend label used by infrastructure metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbMetricBackend {
+    /// SQLite backend.
+    Sqlite,
+    /// MySQL backend.
+    MySql,
+    /// PostgreSQL backend.
+    Postgres,
+    /// A backend not recognized by this shared metrics surface.
+    Other,
+}
+
+impl DbMetricBackend {
+    /// Returns the stable label used for metrics exporters.
+    pub const fn as_label(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::MySql => "mysql",
+            Self::Postgres => "postgres",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Normalized database query kind used by infrastructure metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbQueryKind {
+    /// SELECT or read-like query.
+    Select,
+    /// INSERT query.
+    Insert,
+    /// UPDATE query.
+    Update,
+    /// DELETE query.
+    Delete,
+    /// Common table expression query.
+    With,
+    /// Transaction control statement.
+    Transaction,
+    /// Data definition statement.
+    Ddl,
+    /// SQLite PRAGMA statement.
+    Pragma,
+    /// Query kind that could not be classified cheaply.
+    Other,
+}
+
+impl DbQueryKind {
+    /// Returns the stable label used for metrics exporters.
+    pub const fn as_label(self) -> &'static str {
+        match self {
+            Self::Select => "select",
+            Self::Insert => "insert",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::With => "with",
+            Self::Transaction => "transaction",
+            Self::Ddl => "ddl",
+            Self::Pragma => "pragma",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Product-neutral database query metric emitted by database adapters.
+///
+/// This shape intentionally avoids exposing raw SQL to metrics recorders. Products should keep DB
+/// metrics low-cardinality and free of query parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DbQueryMetric {
+    /// Database backend that executed the query.
+    pub backend: DbMetricBackend,
+    /// Low-cardinality query kind.
+    pub kind: DbQueryKind,
+    /// Whether the query failed.
+    pub failed: bool,
+    /// Query duration observed by the database adapter.
+    pub elapsed: Duration,
+}
+
+impl DbQueryMetric {
+    /// Creates a database query metric.
+    pub const fn new(
+        backend: DbMetricBackend,
+        kind: DbQueryKind,
+        failed: bool,
+        elapsed: Duration,
+    ) -> Self {
+        Self {
+            backend,
+            kind,
+            failed,
+            elapsed,
+        }
+    }
+
+    /// Returns the stable status label.
+    pub const fn status_label(&self) -> &'static str {
+        if self.failed { "error" } else { "ok" }
+    }
+}
+
+/// Minimal metrics hook used by database connection helpers.
+pub trait DbMetricsRecorder: Send + Sync {
+    /// Returns whether metrics are actively recorded.
+    fn enabled(&self) -> bool;
+
+    /// Records one database query metric.
+    fn record_db_query(&self, metric: &DbQueryMetric);
+}
+
+/// Metrics recorder that ignores every database query.
+#[derive(Debug, Default)]
+pub struct NoopDbMetrics;
+
+impl DbMetricsRecorder for NoopDbMetrics {
+    fn enabled(&self) -> bool {
+        false
+    }
+
+    fn record_db_query(&self, _metric: &DbQueryMetric) {}
+}
+
+/// Shared trait object for database metrics recorders.
+pub type SharedDbMetricsRecorder = Arc<dyn DbMetricsRecorder>;
 
 /// Application-wide metrics recorder interface.
 ///
 /// Product crates should keep domain-specific metrics in extension traits or subsystem recorders.
 /// The methods here cover infrastructure signals that are shared by Aster services.
 #[allow(unused_variables)]
-pub trait MetricsRecorder: aster_forge_db::DbMetricsRecorder + Send + Sync {
+pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
     /// Records an HTTP request.
     fn record_http_request(&self, method: &str, route: &str, status: u16, duration_seconds: f64) {}
 
@@ -79,12 +207,12 @@ pub struct NoopMetrics;
 
 impl MetricsRecorder for NoopMetrics {}
 
-impl aster_forge_db::DbMetricsRecorder for NoopMetrics {
+impl DbMetricsRecorder for NoopMetrics {
     fn enabled(&self) -> bool {
         false
     }
 
-    fn record_db_query(&self, _info: &sea_orm::metric::Info<'_>) {}
+    fn record_db_query(&self, _metric: &DbQueryMetric) {}
 }
 
 impl NoopMetrics {
@@ -285,17 +413,16 @@ pub fn register_subsystems(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aster_forge_db::DbMetricsRecorder;
 
     #[derive(Default)]
     struct EnabledMetrics;
 
-    impl aster_forge_db::DbMetricsRecorder for EnabledMetrics {
+    impl DbMetricsRecorder for EnabledMetrics {
         fn enabled(&self) -> bool {
             true
         }
 
-        fn record_db_query(&self, _info: &sea_orm::metric::Info<'_>) {}
+        fn record_db_query(&self, _metric: &DbQueryMetric) {}
     }
 
     impl MetricsRecorder for EnabledMetrics {}
@@ -333,6 +460,40 @@ mod tests {
                 .system_metrics_updater_task(CancellationToken::new())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn database_metric_labels_are_stable() {
+        assert_eq!(DbMetricBackend::Sqlite.as_label(), "sqlite");
+        assert_eq!(DbMetricBackend::MySql.as_label(), "mysql");
+        assert_eq!(DbMetricBackend::Postgres.as_label(), "postgres");
+        assert_eq!(DbMetricBackend::Other.as_label(), "other");
+
+        assert_eq!(DbQueryKind::Select.as_label(), "select");
+        assert_eq!(DbQueryKind::Insert.as_label(), "insert");
+        assert_eq!(DbQueryKind::Update.as_label(), "update");
+        assert_eq!(DbQueryKind::Delete.as_label(), "delete");
+        assert_eq!(DbQueryKind::With.as_label(), "with");
+        assert_eq!(DbQueryKind::Transaction.as_label(), "transaction");
+        assert_eq!(DbQueryKind::Ddl.as_label(), "ddl");
+        assert_eq!(DbQueryKind::Pragma.as_label(), "pragma");
+        assert_eq!(DbQueryKind::Other.as_label(), "other");
+
+        let ok = DbQueryMetric::new(
+            DbMetricBackend::Sqlite,
+            DbQueryKind::Select,
+            false,
+            std::time::Duration::from_millis(3),
+        );
+        assert_eq!(ok.status_label(), "ok");
+
+        let failed = DbQueryMetric::new(
+            DbMetricBackend::Sqlite,
+            DbQueryKind::Select,
+            true,
+            std::time::Duration::from_millis(3),
+        );
+        assert_eq!(failed.status_label(), "error");
     }
 
     #[test]

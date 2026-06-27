@@ -35,13 +35,41 @@ pub const SERVER_SHUTDOWN_AUDIT_PHASE: &str = "server_shutdown_audit";
 /// Stable shutdown phase name for flushing the buffered audit manager.
 pub const AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE: &str = "audit_manager_flush";
 
-/// Creates the full audit runtime component bundle used by product entrypoints.
+/// Creates the full audit lifecycle component bundle used by product entrypoints.
 ///
 /// `resources` is product-defined. It commonly contains a database connection
-/// and runtime config snapshot. `record_server_shutdown` records the product's
-/// own server-shutdown audit entry. `flush_audit_manager` drains the product's
-/// buffered audit writer.
-pub fn audit_component<T, RecordFn, RecordFut, FlushFn, FlushFut>(
+/// and runtime config snapshot. `record_server_start` and `record_server_shutdown`
+/// record the product's own lifecycle audit entries. `flush_audit_manager` drains
+/// the product's buffered audit writer.
+pub fn audit_component<T, StartFn, StartFut, ShutdownFn, ShutdownFut, FlushFn, FlushFut>(
+    resources: T,
+    record_server_start: StartFn,
+    record_server_shutdown: ShutdownFn,
+    flush_audit_manager: FlushFn,
+) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle>
+where
+    T: Clone + Send + 'static,
+    StartFn: FnOnce(T) -> StartFut + Send + Sync + 'static,
+    StartFut: Future<Output = Result<(), String>> + Send + 'static,
+    ShutdownFn: FnOnce(T) -> ShutdownFut + Send + Sync + 'static,
+    ShutdownFut: Future<Output = Result<(), String>> + Send + 'static,
+    FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
+    FlushFut: Future<Output = Result<(), String>> + Send + 'static,
+{
+    let startup_resources = resources.clone();
+    runtime_component((
+        server_start_audit_component(startup_resources, record_server_start),
+        server_shutdown_audit_component(resources, record_server_shutdown),
+        audit_manager_component(flush_audit_manager),
+    ))
+}
+
+/// Creates the audit shutdown component bundle without the server-start phase.
+///
+/// Use this only when a product intentionally records server startup elsewhere.
+/// Normal Aster services should use [`audit_component`] so startup, shutdown,
+/// and manager flush share one lifecycle component.
+pub fn shutdown_audit_component<T, RecordFn, RecordFut, FlushFn, FlushFut>(
     resources: T,
     record_server_shutdown: RecordFn,
     flush_audit_manager: FlushFn,
@@ -149,6 +177,7 @@ mod tests {
         AUDIT_LOGS_COMPONENT, AUDIT_MANAGER_COMPONENT, AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE,
         SERVER_SHUTDOWN_AUDIT_PHASE, SERVER_START_AUDIT_PHASE, audit_component,
         audit_manager_component, server_shutdown_audit_component, server_start_audit_component,
+        shutdown_audit_component,
     };
 
     #[test]
@@ -224,13 +253,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn audit_component_runs_shutdown_record_before_manager_flush() {
+    async fn audit_component_registers_startup_shutdown_and_manager_flush() {
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let order_for_start = order.clone();
+        let order_for_record = order.clone();
+        let order_for_flush = order.clone();
+
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            audit_component(
+                (),
+                move |()| {
+                    let order = order_for_start.clone();
+                    async move {
+                        order
+                            .lock()
+                            .expect("audit component test order should lock")
+                            .push("start");
+                        Ok(())
+                    }
+                },
+                move |()| {
+                    let order = order_for_record.clone();
+                    async move {
+                        order
+                            .lock()
+                            .expect("audit component test order should lock")
+                            .push("record");
+                        Ok(())
+                    }
+                },
+                move |()| {
+                    let order = order_for_flush.clone();
+                    async move {
+                        order
+                            .lock()
+                            .expect("audit component test order should lock")
+                            .push("flush");
+                        Ok(())
+                    }
+                },
+            )
+            .register(registry);
+        });
+
+        let startup_report = registry.startup().await;
+        assert!(!startup_report.aborted());
+        let shutdown_report = registry.shutdown().await;
+
+        assert!(!shutdown_report.has_failures());
+        assert_eq!(
+            order
+                .lock()
+                .expect("audit component test order should lock")
+                .as_slice(),
+            ["start", "record", "flush"]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_audit_component_runs_shutdown_record_before_manager_flush() {
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
         let order_for_record = order.clone();
         let order_for_flush = order.clone();
 
-        let report =
-            aster_forge_runtime::RuntimeComponentRegistry::shutdown_bundle(audit_component(
+        let report = aster_forge_runtime::RuntimeComponentRegistry::shutdown_bundle(
+            shutdown_audit_component(
                 (),
                 move |()| {
                     let order = order_for_record.clone();
@@ -252,8 +339,9 @@ mod tests {
                         Ok(())
                     }
                 },
-            ))
-            .await;
+            ),
+        )
+        .await;
 
         assert!(!report.has_failures());
         assert_eq!(

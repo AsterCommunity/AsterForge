@@ -9,10 +9,11 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-aster_forge_config = { path = "../aster_forge_config", features = ["sea-orm"] }
-aster_forge_mail = { path = "../aster_forge_mail" }
-aster_forge_runtime = { path = "../aster_forge_runtime" }
-aster_forge_tasks = { path = "../aster_forge_tasks" }
+aster_forge_config = { path = "../aster_forge_config", features = ["sea-orm"], optional = true }
+aster_forge_mail = { path = "../aster_forge_mail", features = ["persistence"], optional = true }
+aster_forge_metrics = { path = "../aster_forge_metrics" }
+aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
+aster_forge_tasks = { path = "../aster_forge_tasks", default-features = false, optional = true }
 async-trait.workspace = true
 chrono = { workspace = true, features = ["clock"] }
 rand.workspace = true
@@ -20,6 +21,23 @@ sea-orm.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[features]
+default = []
+all = [
+    "audit-log",
+    "mail-outbox",
+    "runtime-component",
+    "runtime-lease",
+    "scheduled-task",
+    "system-config",
+]
+audit-log = []
+mail-outbox = ["dep:aster_forge_mail"]
+runtime-component = ["dep:aster_forge_runtime"]
+runtime-lease = ["dep:aster_forge_runtime"]
+scheduled-task = ["dep:aster_forge_tasks", "aster_forge_tasks/runtime"]
+system-config = ["dep:aster_forge_config"]
 
 [dev-dependencies]
 uuid.workspace = true

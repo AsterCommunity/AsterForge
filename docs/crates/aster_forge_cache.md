@@ -20,12 +20,22 @@
 默认 feature：
 
 - `memory`
-- `redis`
 
-按需禁用：
+可选 feature：
+
+- `redis`：启用 Redis backend。Redis backend 内部使用 memory fallback，所以会自动启用 `memory`。
+- `runtime-component`：启用 `cache_health_component(...)` 等 runtime health 组件。
+
+只使用内存缓存时：
 
 ```toml
 aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["memory"] }
+```
+
+使用 Redis 和标准 health component 时：
+
+```toml
+aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["redis", "runtime-component"] }
 ```
 
 ## 配置结构
@@ -87,6 +97,8 @@ Redis backend 有健康检查和 fallback circuit。产品侧应该决定：
 Forge 只负责后端机制，不负责产品可用性策略。
 
 ## 健康检查
+
+需要 Cargo feature：`runtime-component`。
 
 如果产品使用 `aster_forge_runtime::RuntimeComponentRegistry`，可以直接注册标准 cache diagnostics：
 

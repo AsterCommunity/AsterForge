@@ -10,8 +10,7 @@ use std::future::Future;
 
 use aster_forge_runtime::{RuntimeComponentBundleRegistration, RuntimeComponentKind};
 
-/// Stable component name used for mail outbox lifecycle handling.
-pub const MAIL_OUTBOX_COMPONENT: &str = "mail_outbox";
+use crate::MAIL_OUTBOX_COMPONENT;
 /// Stable shutdown phase name for mail outbox draining.
 pub const MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE: &str = "mail_outbox_drain";
 

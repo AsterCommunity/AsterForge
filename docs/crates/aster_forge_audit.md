@@ -44,10 +44,11 @@ audit_manager  -> depends_on audit_logs
 
 - `AUDIT_LOGS_COMPONENT`
 - `AUDIT_MANAGER_COMPONENT`
+- `SERVER_START_AUDIT_PHASE`
 - `SERVER_SHUTDOWN_AUDIT_PHASE`
 - `AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE`
 
-推荐产品侧只提供资源和两个 hook：
+推荐产品侧只提供资源和三个 hook：
 
 ```rust
 pub fn audit_component(
@@ -55,6 +56,10 @@ pub fn audit_component(
 ) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle> {
     aster_forge_audit::audit_component(
         resources,
+        |resources| async move {
+            record_server_start(&resources).await;
+            Ok(())
+        },
         |resources| async move {
             record_server_shutdown(&resources).await;
             Ok(())
@@ -67,11 +72,15 @@ pub fn audit_component(
 }
 ```
 
-`record_server_shutdown` 是产品语义，所以仍然留在产品仓库。Forge 只保证它在 `mail_outbox` drain 之后、`audit_manager` flush 之前执行。
+`record_server_start` 和 `record_server_shutdown` 是产品语义，所以仍然留在产品仓库。Forge 只保证 startup phase、shutdown phase 和 manager flush 使用同一套 lifecycle graph：server start 作为 required startup phase 执行；server shutdown 在 `mail_outbox` drain 之后、`audit_manager` flush 之前执行。
 
-如果产品需要拆开注册，也应该使用 `server_shutdown_audit_component(...)` 和
-`audit_manager_component(...)` 这两个 component factory，再由入口或产品聚合 component
-统一注册 bundle。不要在产品侧直接调用低层 registry 注册函数。
+`mail_outbox` 依赖使用 `aster_forge_mail::MAIL_OUTBOX_COMPONENT` 这个稳定组件名常量。这个常量不需要启用 mail 的 `runtime-component` feature；只有产品实际注册 mail outbox drain 组件时，才需要在 `aster_forge_mail` 上启用 `runtime-component`。
+
+常规产品入口应该直接使用 `audit_component(...)`，不要在产品侧手写 tuple 去拼
+`server_start_audit_component(...)`、`server_shutdown_audit_component(...)` 和
+`audit_manager_component(...)`。如果产品确实需要拆开注册，也应该使用这些 component
+factory，再由产品聚合 component 统一注册 bundle。不要在产品侧直接调用低层 registry
+注册函数。
 
 ## Database
 

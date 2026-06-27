@@ -11,9 +11,11 @@ publish = false
 [features]
 default = []
 openapi = ["dep:utoipa"]
+runtime = ["dep:aster_forge_runtime"]
+runtime-component = ["runtime"]
 
 [dependencies]
-aster_forge_runtime = { path = "../aster_forge_runtime" }
+aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
 aster_forge_utils = { path = "../aster_forge_utils" }
 async-trait.workspace = true
 chrono = { workspace = true, features = ["clock"] }

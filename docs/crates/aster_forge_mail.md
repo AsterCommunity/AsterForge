@@ -97,6 +97,22 @@ pub fn normalize_mail_security_config_value(value: &str) -> Result<String> {
 aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
+默认 feature 提供 sender、template、config normalizer 和产品无关 outbox dispatch 控制流。
+
+如果产品要把 `MailTemplateCode`、`MailOutboxStatus`、`StoredMailPayload` 作为 SeaORM 持久化类型使用，开启：
+
+```toml
+aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge", features = ["persistence"] }
+```
+
+如果产品要接入 `mail_outbox_component(...)`，开启：
+
+```toml
+aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge", features = ["runtime-component"] }
+```
+
+`runtime-component` 会启用 `aster_forge_runtime` 和 `aster_forge_tasks/runtime-component`，因为 mail outbox drain 的标准 shutdown 顺序依赖 `background_tasks`。
+
 ## Sender
 
 模块：`aster_forge_mail::sender`
@@ -244,6 +260,10 @@ impl aster_forge_mail::MailOutboxDispatchRow for mail_outbox::Model {
 ### Runtime Component
 
 模块：`aster_forge_mail::component`
+
+`MAIL_OUTBOX_COMPONENT` 是稳定组件名，默认 API 可用，方便 database、audit 等 crate 声明依赖而不启用 mail runtime 组件。
+
+`MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE` 和 `mail_outbox_component(...)` 需要 Cargo feature：`runtime-component`。
 
 如果产品已经使用 `aster_forge_runtime::AsterRuntime` component 模式，mail outbox 的 shutdown graph 不应该在产品侧重复写。Forge 提供标准组件：
 

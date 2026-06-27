@@ -5,7 +5,7 @@
 ## 适用场景
 
 - 统一服务内 metrics recorder trait。
-- 让 recorder 同时实现 `aster_forge_db::DbMetricsRecorder`。
+- 让 recorder 同时实现数据库查询、HTTP、后台任务和外部系统等通用 metrics hook。
 - 提供 `NoopMetrics` 给测试和不启用 metrics 的部署。
 - 让子系统通过 `MetricsSubsystem` 注册自己的 `MetricDescriptor`。
 
@@ -29,12 +29,20 @@ aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 核心类型：
 
+- `DbMetricBackend`
+- `DbQueryKind`
+- `DbQueryMetric`
+- `DbMetricsRecorder`
+- `SharedDbMetricsRecorder`
+- `NoopDbMetrics`
 - `MetricsRecorder`
 - `SharedMetricsRecorder`
 - `NoopMetrics`
 - `init_metrics_or_noop`
 
 `MetricsRecorder` 包含数据库、HTTP、后台任务、外部系统等通用记录入口。产品可以实现自己的 recorder，把这些调用映射到实际后端。
+
+数据库 query metrics 使用 `DbQueryMetric`，只包含 backend、低基数 query kind、status 和 elapsed duration。Forge 不把 SeaORM callback 类型或 SQL 全文暴露给 recorder；`aster_forge_db` 负责把 SeaORM metric callback 转成这个产品无关的结构。
 
 测试中推荐：
 

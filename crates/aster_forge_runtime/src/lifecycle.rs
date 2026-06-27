@@ -448,6 +448,15 @@ impl AsterRuntimeBuilder<()> {
 }
 
 impl<S> AsterRuntimeBuilder<S> {
+    /// Returns the runtime-owned shutdown token.
+    ///
+    /// This accessor is primarily for shared component crates that implement
+    /// [`AsterRuntimeComponent`] and need to spawn work using the same token the runtime cancels
+    /// when the process receives a termination signal.
+    pub fn shutdown_token(&self) -> &CancellationToken {
+        &self.shutdown_token
+    }
+
     /// Adds one runtime component.
     pub fn component<C>(self, component: C) -> C::Output
     where

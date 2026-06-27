@@ -154,12 +154,12 @@ mod tests {
         }
     }
 
-    impl aster_forge_db::DbMetricsRecorder for RecordingMetrics {
+    impl aster_forge_metrics::DbMetricsRecorder for RecordingMetrics {
         fn enabled(&self) -> bool {
             self.enabled
         }
 
-        fn record_db_query(&self, _info: &sea_orm::metric::Info<'_>) {}
+        fn record_db_query(&self, _metric: &aster_forge_metrics::DbQueryMetric) {}
     }
 
     impl MetricsRecorder for RecordingMetrics {

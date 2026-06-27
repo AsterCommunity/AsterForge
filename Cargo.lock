@@ -477,7 +477,6 @@ version = "0.1.0"
 dependencies = [
  "actix-governor",
  "actix-web",
- "aster_forge_db",
  "aster_forge_metrics",
  "aster_forge_utils",
  "base64 0.22.1",
@@ -581,6 +580,7 @@ version = "0.1.0"
 dependencies = [
  "aster_forge_config",
  "aster_forge_mail",
+ "aster_forge_metrics",
  "aster_forge_runtime",
  "aster_forge_tasks",
  "async-trait",
@@ -656,8 +656,6 @@ dependencies = [
 name = "aster_forge_metrics"
 version = "0.1.0"
 dependencies = [
- "aster_forge_db",
- "sea-orm",
  "thiserror 2.0.18",
  "tokio-util",
  "tracing",
