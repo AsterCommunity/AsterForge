@@ -7,9 +7,9 @@ import { withMermaid } from "vitepress-plugin-mermaid"
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SITE_URL = "https://forge.astercosm.com/"
 const ZH_SITE_DESCRIPTION =
-  "AsterForge 开发文档，覆盖共享 Rust crates 的模块边界、接入方式、功能开关、测试要求和参考项目。"
+  "AsterForge 开发文档，覆盖 Aster 产品共用运行时地基、component 接入、共享 schema/store、功能开关、测试要求和参考项目。"
 const EN_SITE_DESCRIPTION =
-  "AsterForge developer documentation for shared Rust crates, integration boundaries, feature flags, testing expectations, and reference projects."
+  "AsterForge developer documentation for the shared Aster runtime foundation, component integration, shared schemas/stores, feature flags, testing expectations, and reference projects."
 
 function getVersion(): string {
   try {

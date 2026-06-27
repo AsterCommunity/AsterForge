@@ -225,6 +225,45 @@ Forge 承接 outbox 状态机、dispatch loop、retry decision、sender trait、
 
 新项目应该让 `mail_outbox` 表和 claim/retry/sent/failed 状态机走 `aster_forge_db::MailOutboxDbStore`，不要自己再写 claimable 查询。
 
+推荐的 dispatch 边界是：Forge DB store 管状态机，产品只给模板渲染、发送和审计 hook。
+
+```rust
+pub async fn dispatch_due_with(
+    db: &sea_orm::DatabaseConnection,
+    runtime_config: &RuntimeConfig,
+    mail_sender: &std::sync::Arc<dyn aster_forge_mail::MailSender>,
+) -> Result<aster_forge_mail::DispatchStats> {
+    let store = aster_forge_db::MailOutboxDbStore::new(db.clone());
+
+    store
+        .dispatch_due(
+            &MAIL_OUTBOX_DISPATCH_CONFIG,
+            |row| async move { deliver_one(runtime_config, mail_sender, &row).await },
+            |context, attempt_count, subject| async move {
+                record_mail_sent_audit(db, runtime_config, context, attempt_count, subject).await;
+            },
+            |context, attempt_count, error_message| async move {
+                record_mail_failed_audit(
+                    db,
+                    runtime_config,
+                    context,
+                    attempt_count,
+                    error_message,
+                )
+                .await;
+            },
+        )
+        .await
+}
+```
+
+产品不要再自己拼 `list_claimable`、`try_claim`、`mark_sent`、`mark_retry`、`mark_failed`
+闭包。只有没有使用 Forge `mail_outbox` 表的产品，才直接接底层
+`aster_forge_mail::dispatch_mail_outbox(...)`。
+
+产品错误类型需要能从 `aster_forge_db::DbError` 转入，例如实现 `From<DbError>` 或在产品
+error module 里提供等价映射。邮件发送失败仍然保持产品错误语义，不要包装成数据库错误。
+
 ## Task 接入
 
 Forge 承接：

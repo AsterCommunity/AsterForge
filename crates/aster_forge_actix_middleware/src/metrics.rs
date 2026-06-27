@@ -14,7 +14,7 @@ use actix_web::{
 };
 use futures::future::{LocalBoxFuture, Ready, ok};
 
-use aster_forge_metrics::SharedMetricsRecorder;
+use aster_forge_metrics::{MetricsRecorder, SharedMetricsRecorder};
 
 /// Actix middleware that records request duration and status into the shared metrics recorder.
 pub struct MetricsMiddleware;
@@ -55,10 +55,7 @@ where
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let svc = self.service.clone();
-        let metrics = req
-            .app_data::<web::Data<SharedMetricsRecorder>>()
-            .map(|data| data.get_ref().clone())
-            .unwrap_or_else(aster_forge_metrics::NoopMetrics::arc);
+        let metrics = request_metrics(&req);
 
         if !metrics.enabled() {
             return Box::pin(async move { svc.call(req).await });
@@ -91,6 +88,16 @@ where
             }
         })
     }
+}
+
+fn request_metrics(req: &ServiceRequest) -> SharedMetricsRecorder {
+    if let Some(metrics) = req.app_data::<web::Data<dyn MetricsRecorder>>() {
+        return metrics.clone().into_inner();
+    }
+
+    req.app_data::<web::Data<SharedMetricsRecorder>>()
+        .map(|data| data.get_ref().clone())
+        .unwrap_or_else(aster_forge_metrics::NoopMetrics::arc)
 }
 
 fn route_label(req: &ServiceRequest) -> String {
@@ -225,6 +232,29 @@ mod tests {
         assert_eq!(records[0].route, "/api/v1/profiles/{id}");
         assert_eq!(records[0].status, 201);
         assert!(records[0].duration_seconds >= 0.0);
+    }
+
+    #[actix_web::test]
+    async fn middleware_accepts_single_arc_trait_object_app_data() {
+        let metrics = RecordingMetrics::enabled();
+        let shared = web::Data::<dyn MetricsRecorder>::from(metrics.shared());
+        let app =
+            actix_test::init_service(App::new().app_data(shared).wrap(MetricsMiddleware).route(
+                "/api/v1/profiles/{id}",
+                web::get().to(|| async { HttpResponse::Accepted().finish() }),
+            ))
+            .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/api/v1/profiles/42")
+            .to_request();
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 202);
+
+        let records = metrics.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].route, "/api/v1/profiles/{id}");
+        assert_eq!(records[0].status, 202);
     }
 
     #[actix_web::test]

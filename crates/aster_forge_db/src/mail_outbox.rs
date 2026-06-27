@@ -6,7 +6,9 @@
 //! rows. Products still own template rendering, audit records, and the business
 //! context that creates outbox rows.
 
-use chrono::{DateTime, Utc};
+use std::future::Future;
+
+use chrono::{DateTime, Duration, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
     Alias, ColumnDef, Index, IndexCreateStatement, IndexDropStatement, Table, TableCreateStatement,
@@ -20,7 +22,8 @@ use sea_orm::{
 
 use crate::DbError;
 use aster_forge_mail::{
-    MailOutboxDispatchRow, MailOutboxStatus, MailTemplateCode, StoredMailPayload,
+    DispatchStats, MailOutboxDispatchConfig, MailOutboxDispatchContext, MailOutboxDispatchRow,
+    MailOutboxStatus, MailTemplateCode, StoredMailPayload,
 };
 
 /// Mail outbox table name.
@@ -288,6 +291,10 @@ impl MailOutboxDispatchRow for Model {
     fn to_address(&self) -> &str {
         &self.to_address
     }
+
+    fn to_name(&self) -> Option<&str> {
+        self.to_name.as_deref()
+    }
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -379,6 +386,60 @@ impl MailOutboxDbStore {
     /// Counts pending or retry rows.
     pub async fn count_active(&self) -> crate::Result<u64> {
         count_active(&self.db).await
+    }
+
+    /// Runs one shared dispatch pass using the standard database-backed outbox mechanics.
+    ///
+    /// Forge owns list/claim/mark/retry/failure persistence for the shared `mail_outbox` table.
+    /// Products only provide rendering/delivery and audit hooks, which keeps every Aster service on
+    /// the same state machine without copying payload-heavy rows across persistence callbacks.
+    pub async fn dispatch_due<E, Deliver, DeliverFut, OnSent, OnSentFut, OnFailed, OnFailedFut>(
+        &self,
+        config: &MailOutboxDispatchConfig,
+        deliver: Deliver,
+        on_sent: OnSent,
+        on_failed: OnFailed,
+    ) -> std::result::Result<DispatchStats, E>
+    where
+        E: From<DbError> + std::fmt::Display,
+        Deliver: FnMut(Model) -> DeliverFut,
+        DeliverFut: Future<Output = std::result::Result<String, E>>,
+        OnSent: FnMut(MailOutboxDispatchContext, i32, String) -> OnSentFut,
+        OnSentFut: Future<Output = ()>,
+        OnFailed: FnMut(MailOutboxDispatchContext, i32, String) -> OnFailedFut,
+        OnFailedFut: Future<Output = ()>,
+    {
+        aster_forge_mail::dispatch_mail_outbox(
+            config,
+            |batch_size, stale_secs| async move {
+                let now = Utc::now();
+                let stale_before = now - Duration::seconds(stale_secs);
+                self.list_claimable(now, stale_before, batch_size)
+                    .await
+                    .map_err(E::from)
+            },
+            |id| async move {
+                let now = Utc::now();
+                let stale_before = now - Duration::seconds(config.processing_stale_secs);
+                self.try_claim(id, now, stale_before).await.map_err(E::from)
+            },
+            deliver,
+            |id, _attempt| async move { self.mark_sent(id, Utc::now()).await.map_err(E::from) },
+            |id, attempt_count, retry_delay_secs, error_message| async move {
+                let retry_at = Utc::now() + Duration::seconds(retry_delay_secs);
+                self.mark_retry(id, attempt_count, retry_at, &error_message)
+                    .await
+                    .map_err(E::from)
+            },
+            |id, attempt_count, error_message| async move {
+                self.mark_failed(id, attempt_count, Utc::now(), &error_message)
+                    .await
+                    .map_err(E::from)
+            },
+            on_sent,
+            on_failed,
+        )
+        .await
     }
 }
 
@@ -611,13 +672,21 @@ mod tests {
     use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, EntityTrait};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use super::{
         Entity, MailOutboxCreate, MailOutboxDbStore, create_mail_outbox_due_index,
         create_mail_outbox_processing_index, create_mail_outbox_sent_at_index,
         create_mail_outbox_table,
     };
-    use aster_forge_mail::{MailOutboxStatus, MailTemplateCode, StoredMailPayload};
+    use crate::DbError;
+    use aster_forge_mail::{
+        DEFAULT_ERROR_MAX_LEN, MailOutboxDispatchConfig, MailOutboxDispatchContext,
+        MailOutboxRetryPolicy, MailOutboxStatus, MailTemplateCode, StoredMailPayload,
+    };
 
     async fn sqlite_store() -> MailOutboxDbStore {
         let db = Database::connect("sqlite::memory:")
@@ -860,6 +929,115 @@ mod tests {
         assert_eq!(
             failed.payload_json.as_ref(),
             StoredMailPayload::CLEARED_JSON
+        );
+    }
+
+    #[tokio::test]
+    async fn mail_outbox_store_dispatch_due_marks_sent_and_reports_context() {
+        let store = sqlite_store().await;
+        let now = Utc::now();
+        let row = store
+            .create(create_request(now - ChronoDuration::seconds(5)))
+            .await
+            .expect("mail outbox row should insert");
+        let config = MailOutboxDispatchConfig::new(
+            20,
+            60,
+            1,
+            MailOutboxRetryPolicy::new(3, DEFAULT_ERROR_MAX_LEN),
+        );
+        let delivered_payload_len = Arc::new(AtomicUsize::new(0));
+        let delivered_payload_len_for_deliver = delivered_payload_len.clone();
+        let sent_context = Arc::new(Mutex::new(None::<MailOutboxDispatchContext>));
+        let sent_context_for_hook = sent_context.clone();
+
+        let stats = store
+            .dispatch_due(
+                &config,
+                move |row| {
+                    let delivered_payload_len = delivered_payload_len_for_deliver.clone();
+                    async move {
+                        delivered_payload_len
+                            .store(row.payload_json.as_ref().len(), Ordering::SeqCst);
+                        Ok::<_, DbError>("Sent subject".to_string())
+                    }
+                },
+                move |context, _attempt_count, _subject| {
+                    let sent_context = sent_context_for_hook.clone();
+                    async move {
+                        *sent_context
+                            .lock()
+                            .expect("sent context mutex should not be poisoned") = Some(context);
+                    }
+                },
+                |_context, _attempt_count, _error_message| async {},
+            )
+            .await
+            .expect("dispatch should succeed");
+
+        assert_eq!(stats.sent, 1);
+        assert_eq!(stats.claimed, 1);
+        assert_eq!(
+            delivered_payload_len.load(Ordering::SeqCst),
+            "{\"code\":\"123456\"}".len()
+        );
+        let context = sent_context
+            .lock()
+            .expect("sent context mutex should not be poisoned")
+            .clone()
+            .expect("sent hook should receive context");
+        assert_eq!(context.id, row.id);
+        assert_eq!(context.to_name.as_deref(), Some("Operator"));
+
+        let stored = Entity::find_by_id(row.id)
+            .one(&store.db)
+            .await
+            .expect("sent row should query")
+            .expect("sent row should exist");
+        assert_eq!(stored.status, MailOutboxStatus::Sent);
+        assert_eq!(
+            stored.payload_json.as_ref(),
+            StoredMailPayload::CLEARED_JSON
+        );
+    }
+
+    #[tokio::test]
+    async fn mail_outbox_store_dispatch_due_retries_delivery_errors() {
+        let store = sqlite_store().await;
+        let now = Utc::now();
+        let row = store
+            .create(create_request(now - ChronoDuration::seconds(5)))
+            .await
+            .expect("mail outbox row should insert");
+        let config = MailOutboxDispatchConfig::new(
+            20,
+            60,
+            1,
+            MailOutboxRetryPolicy::new(3, DEFAULT_ERROR_MAX_LEN),
+        );
+
+        let stats = store
+            .dispatch_due(
+                &config,
+                |_row| async { Err::<String, _>(DbError::non_retryable("smtp down")) },
+                |_context, _attempt_count, _subject| async {},
+                |_context, _attempt_count, _error_message| async {},
+            )
+            .await
+            .expect("dispatch should handle delivery failure as retry state");
+
+        assert_eq!(stats.claimed, 1);
+        assert_eq!(stats.retried, 1);
+        let stored = Entity::find_by_id(row.id)
+            .one(&store.db)
+            .await
+            .expect("retry row should query")
+            .expect("retry row should exist");
+        assert_eq!(stored.status, MailOutboxStatus::Retry);
+        assert_eq!(stored.attempt_count, 1);
+        assert_eq!(
+            stored.last_error.as_deref(),
+            Some("non-retryable error: smtp down")
         );
     }
 }

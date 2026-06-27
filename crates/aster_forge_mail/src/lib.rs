@@ -43,9 +43,9 @@ pub use config::{
 pub use message::{MailMessage, MailRecipient};
 pub use outbox::{
     DEFAULT_ERROR_MAX_LEN, DEFAULT_MARK_SENT_RETRY_DELAYS_MS, DispatchStats,
-    MailOutboxDeliveryFailureDecision, MailOutboxDispatchConfig, MailOutboxDispatchRow,
-    MailOutboxRetryPolicy, MailOutboxStatus, MailTemplateCode, StoredMailPayload,
-    dispatch_mail_outbox, drain_mail_outbox, retry_mark_sent, truncate_error,
+    MailOutboxDeliveryFailureDecision, MailOutboxDispatchConfig, MailOutboxDispatchContext,
+    MailOutboxDispatchRow, MailOutboxRetryPolicy, MailOutboxStatus, MailTemplateCode,
+    StoredMailPayload, dispatch_mail_outbox, drain_mail_outbox, retry_mark_sent, truncate_error,
 };
 pub use sender::{
     DEFAULT_SMTP_SEND_TIMEOUT_SECS, MailDeliveryError, MailSendResult, MailSender,

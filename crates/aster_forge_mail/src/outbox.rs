@@ -184,11 +184,37 @@ impl DispatchStats {
     }
 }
 
+/// Lightweight row metadata captured before a dispatcher consumes the concrete row.
+///
+/// Dispatch callbacks often need stable audit/log fields after the delivery callback has consumed
+/// the database row. Keeping those fields in this small context avoids cloning the full row, which
+/// may contain a large template payload or delivery error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailOutboxDispatchContext {
+    /// Stable row id.
+    pub id: i64,
+    /// Current delivery attempt count stored on the row before this dispatch attempt.
+    pub attempt_count: i32,
+    /// Stable product template code used for logs and audits.
+    pub template_code: String,
+    /// Recipient address used for logs and audits.
+    pub to_address: String,
+    /// Optional recipient display name used for audit records.
+    pub to_name: Option<String>,
+}
+
+impl MailOutboxDispatchContext {
+    /// Returns the attempt count after the current delivery attempt.
+    pub const fn delivery_attempt_count(&self) -> i32 {
+        self.attempt_count + 1
+    }
+}
+
 /// Minimal row metadata needed by the shared outbox dispatcher.
 ///
 /// Product crates keep their concrete database model and implement this trait on it so Forge can
 /// log and apply retry policy without knowing SeaORM entities or product-specific columns.
-pub trait MailOutboxDispatchRow: Clone {
+pub trait MailOutboxDispatchRow {
     /// Stable row id.
     fn id(&self) -> i64;
 
@@ -200,6 +226,22 @@ pub trait MailOutboxDispatchRow: Clone {
 
     /// Recipient address used for logs and audits.
     fn to_address(&self) -> &str;
+
+    /// Optional recipient display name used for audit records.
+    fn to_name(&self) -> Option<&str> {
+        None
+    }
+
+    /// Captures the small metadata set that remains useful after the concrete row is consumed.
+    fn dispatch_context(&self) -> MailOutboxDispatchContext {
+        MailOutboxDispatchContext {
+            id: self.id(),
+            attempt_count: self.attempt_count(),
+            template_code: self.template_code().to_string(),
+            to_address: self.to_address().to_string(),
+            to_name: self.to_name().map(str::to_string),
+        }
+    }
 }
 
 /// Configuration for the shared mail outbox dispatcher.
@@ -371,19 +413,19 @@ where
     E: std::fmt::Display,
     List: FnMut(u64, i64) -> ListFut,
     ListFut: Future<Output = Result<Vec<R>, E>>,
-    Claim: FnMut(R) -> ClaimFut,
+    Claim: FnMut(i64) -> ClaimFut,
     ClaimFut: Future<Output = Result<bool, E>>,
     Deliver: FnMut(R) -> DeliverFut,
     DeliverFut: Future<Output = Result<String, E>>,
     MarkSent: FnMut(i64, usize) -> MarkSentFut,
     MarkSentFut: Future<Output = Result<bool, E>>,
-    MarkRetry: FnMut(R, i32, i64, String) -> MarkRetryFut,
+    MarkRetry: FnMut(i64, i32, i64, String) -> MarkRetryFut,
     MarkRetryFut: Future<Output = Result<bool, E>>,
-    MarkFailed: FnMut(R, i32, String) -> MarkFailedFut,
+    MarkFailed: FnMut(i64, i32, String) -> MarkFailedFut,
     MarkFailedFut: Future<Output = Result<bool, E>>,
-    OnSent: FnMut(R, i32, String) -> OnSentFut,
+    OnSent: FnMut(MailOutboxDispatchContext, i32, String) -> OnSentFut,
     OnSentFut: Future<Output = ()>,
-    OnFailed: FnMut(R, i32, String) -> OnFailedFut,
+    OnFailed: FnMut(MailOutboxDispatchContext, i32, String) -> OnFailedFut,
     OnFailedFut: Future<Output = ()>,
 {
     let rows = list_claimable(config.batch_size, config.processing_stale_secs).await?;
@@ -396,10 +438,11 @@ where
     );
 
     for row in rows {
-        if !try_claim(row.clone()).await? {
+        let context = row.dispatch_context();
+        if !try_claim(context.id).await? {
             tracing::debug!(
-                mail_outbox_id = row.id(),
-                template_code = %row.template_code(),
+                mail_outbox_id = context.id,
+                template_code = %context.template_code,
                 "mail outbox claim skipped because row was already claimed"
             );
             continue;
@@ -407,39 +450,40 @@ where
 
         stats.claimed += 1;
         tracing::debug!(
-            mail_outbox_id = row.id(),
-            template_code = %row.template_code(),
-            attempt_count = row.attempt_count(),
+            mail_outbox_id = context.id,
+            template_code = %context.template_code,
+            attempt_count = context.attempt_count,
             "claimed mail outbox row"
         );
 
-        match deliver(row.clone()).await {
+        match deliver(row).await {
             Ok(subject) => {
                 tracing::debug!(
-                    mail_outbox_id = row.id(),
-                    template_code = %row.template_code(),
+                    mail_outbox_id = context.id,
+                    template_code = %context.template_code,
                     "mail outbox delivery succeeded"
                 );
-                match retry_mark_sent(row.id(), config.mark_sent_retry_delays_ms, &mut mark_sent)
+                match retry_mark_sent(context.id, config.mark_sent_retry_delays_ms, &mut mark_sent)
                     .await
                 {
                     Ok(true) => {
                         stats.sent += 1;
-                        on_sent(row.clone(), row.attempt_count() + 1, subject).await;
+                        let attempt_count = context.delivery_attempt_count();
+                        on_sent(context, attempt_count, subject).await;
                     }
                     Ok(false) => {
                         tracing::warn!(
-                            mail_outbox_id = row.id(),
-                            template_code = %row.template_code(),
-                            to = %row.to_address(),
+                            mail_outbox_id = context.id,
+                            template_code = %context.template_code,
+                            to = %context.to_address,
                             "mark_sent affected 0 rows after successful delivery; state will be rechecked"
                         );
                     }
                     Err(error) => {
                         tracing::error!(
-                            mail_outbox_id = row.id(),
-                            template_code = %row.template_code(),
-                            to = %row.to_address(),
+                            mail_outbox_id = context.id,
+                            template_code = %context.template_code,
+                            to = %context.to_address,
                             stale_secs = config.processing_stale_secs,
                             error = %error,
                             "CRITICAL: mail delivery succeeded but mark_sent failed after all retries; \
@@ -449,7 +493,7 @@ where
                 }
             }
             Err(error) => {
-                let attempt_count = row.attempt_count() + 1;
+                let attempt_count = context.delivery_attempt_count();
                 match config
                     .retry_policy
                     .delivery_failure_decision(attempt_count, error.to_string())
@@ -458,14 +502,14 @@ where
                         attempt_count,
                         error_message,
                     } => {
-                        if mark_failed(row.clone(), attempt_count, error_message.clone()).await? {
+                        if mark_failed(context.id, attempt_count, error_message.clone()).await? {
                             stats.failed += 1;
-                            on_failed(row.clone(), attempt_count, error_message.clone()).await;
+                            on_failed(context.clone(), attempt_count, error_message.clone()).await;
                         }
                         tracing::warn!(
-                            mail_outbox_id = row.id(),
-                            template_code = %row.template_code(),
-                            to = %row.to_address(),
+                            mail_outbox_id = context.id,
+                            template_code = %context.template_code,
+                            to = %context.to_address,
                             attempt_count,
                             error = %error_message,
                             "mail outbox delivery permanently failed"
@@ -477,7 +521,7 @@ where
                         error_message,
                     } => {
                         if mark_retry(
-                            row.clone(),
+                            context.id,
                             attempt_count,
                             retry_delay_secs,
                             error_message.clone(),
@@ -487,9 +531,9 @@ where
                             stats.retried += 1;
                         }
                         tracing::warn!(
-                            mail_outbox_id = row.id(),
-                            template_code = %row.template_code(),
-                            to = %row.to_address(),
+                            mail_outbox_id = context.id,
+                            template_code = %context.template_code,
+                            to = %context.to_address,
                             attempt_count,
                             retry_delay_secs,
                             error = %error_message,
@@ -598,8 +642,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_ERROR_MAX_LEN, DispatchStats, MailOutboxRetryPolicy, MailOutboxStatus,
-        MailTemplateCode, StoredMailPayload, retry_delay_secs, retry_mark_sent, truncate_error,
+        DEFAULT_ERROR_MAX_LEN, DispatchStats, MailOutboxDispatchConfig, MailOutboxDispatchContext,
+        MailOutboxDispatchRow, MailOutboxRetryPolicy, MailOutboxStatus, MailTemplateCode,
+        StoredMailPayload, dispatch_mail_outbox, retry_delay_secs, retry_mark_sent, truncate_error,
     };
     use std::sync::{
         Arc,
@@ -744,6 +789,110 @@ mod tests {
         assert!(!MailOutboxStatus::Retry.is_terminal());
         assert!(MailOutboxStatus::Sent.is_terminal());
         assert!(MailOutboxStatus::Failed.is_terminal());
+    }
+
+    #[derive(Debug)]
+    struct NonCloneDispatchRow {
+        id: i64,
+        attempt_count: i32,
+        template_code: String,
+        to_address: String,
+        to_name: Option<String>,
+        payload_json: String,
+    }
+
+    impl MailOutboxDispatchRow for NonCloneDispatchRow {
+        fn id(&self) -> i64 {
+            self.id
+        }
+
+        fn attempt_count(&self) -> i32 {
+            self.attempt_count
+        }
+
+        fn template_code(&self) -> &str {
+            &self.template_code
+        }
+
+        fn to_address(&self) -> &str {
+            &self.to_address
+        }
+
+        fn to_name(&self) -> Option<&str> {
+            self.to_name.as_deref()
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_mail_outbox_does_not_require_cloning_rows() {
+        let delivered_payload_len = Arc::new(AtomicUsize::new(0));
+        let delivered_payload_len_for_deliver = delivered_payload_len.clone();
+        let sent_context = Arc::new(std::sync::Mutex::new(None::<MailOutboxDispatchContext>));
+        let sent_context_for_hook = sent_context.clone();
+        let config = MailOutboxDispatchConfig::new(
+            20,
+            60,
+            1,
+            MailOutboxRetryPolicy::new(3, DEFAULT_ERROR_MAX_LEN),
+        );
+
+        let stats = dispatch_mail_outbox(
+            &config,
+            |_batch_size, _stale_secs| async {
+                Ok::<_, String>(vec![NonCloneDispatchRow {
+                    id: 7,
+                    attempt_count: 0,
+                    template_code: "login_email_code".to_string(),
+                    to_address: "operator@example.com".to_string(),
+                    to_name: Some("Operator".to_string()),
+                    payload_json: "x".repeat(4096),
+                }])
+            },
+            |id| async move { Ok::<_, String>(id == 7) },
+            move |row| {
+                let delivered_payload_len = delivered_payload_len_for_deliver.clone();
+                async move {
+                    delivered_payload_len.store(row.payload_json.len(), Ordering::SeqCst);
+                    Ok::<_, String>("Subject".to_string())
+                }
+            },
+            |_id, _attempt| async { Ok::<_, String>(true) },
+            |_id, _attempt_count, _retry_delay_secs, _error_message| async {
+                Ok::<_, String>(true)
+            },
+            |_id, _attempt_count, _error_message| async { Ok::<_, String>(true) },
+            move |context, _attempt_count, _subject| {
+                let sent_context = sent_context_for_hook.clone();
+                async move {
+                    *sent_context
+                        .lock()
+                        .expect("sent context mutex should not be poisoned") = Some(context);
+                }
+            },
+            |_context, _attempt_count, _error_message| async {},
+        )
+        .await
+        .expect("dispatch should succeed");
+
+        assert_eq!(
+            stats,
+            DispatchStats {
+                claimed: 1,
+                sent: 1,
+                retried: 0,
+                failed: 0,
+            }
+        );
+        assert_eq!(delivered_payload_len.load(Ordering::SeqCst), 4096);
+        let context = sent_context
+            .lock()
+            .expect("sent context mutex should not be poisoned")
+            .clone()
+            .expect("sent hook should receive context");
+        assert_eq!(context.id, 7);
+        assert_eq!(context.template_code, "login_email_code");
+        assert_eq!(context.to_address, "operator@example.com");
+        assert_eq!(context.to_name.as_deref(), Some("Operator"));
     }
 
     #[tokio::test]

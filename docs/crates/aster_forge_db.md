@@ -450,9 +450,16 @@ store 负责：
 - `mark_retry(...)` 更新 attempt、next attempt 和 last error。
 - `mark_failed(...)` 切到 failed，并清空 `payload_json`。
 - `count_active(...)` 统计 pending/retry row。
+- `dispatch_due(...)` 运行一轮标准 outbox dispatch，内部复用 shared claim/retry/sent/failed 状态机。
 
-产品 dispatch 仍然把 `MailOutboxDbStore` 传给 `aster_forge_mail::dispatch_mail_outbox(...)`，
-并提供 deliver/audit hook。不要在产品侧重复写 claim/retry/sent/failed 状态机。
+常规产品接入应该直接调用 `MailOutboxDbStore::dispatch_due(...)`，只提供：
+
+- `deliver(row)`：模板渲染和实际发送；
+- `on_sent(context, attempt_count, subject)`：发送成功后的产品审计；
+- `on_failed(context, attempt_count, error_message)`：永久失败后的产品审计。
+
+不要在产品侧重复写 claim/retry/sent/failed 状态机。只有当产品没有使用 Forge 的
+`mail_outbox` 表时，才需要直接接入 `aster_forge_mail::dispatch_mail_outbox(...)`。
 
 ## Cargo 接入
 

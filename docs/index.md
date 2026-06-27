@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: AsterForge
-  text: 共享 Rust crates 的开发与接入文档
-  tagline: 把 AsterDrive、AsterYggdrasil 和后续服务中的重复基础设施收敛到清晰、可测试、可组合的 crate。
+  text: Aster 产品共用的运行时地基
+  tagline: 把 AsterDrive、AsterYggdrasil 和后续服务中的生命周期、组件注册、数据库基础表、任务、邮件、审计、配置同步和中间件收敛到清晰、可测试、可组合的 Rust crates。
   actions:
     - theme: brand
       text: 开始接入
@@ -14,17 +14,32 @@ hero:
       link: /crates/aster_forge_actix_middleware
 
 features:
-  - title: 模块边界明确
-    details: Forge 只承载跨项目复用的底层机制，业务实体、权限规则、存储策略和产品流程继续留在产品仓库。
-  - title: 接入路径可追踪
-    details: 每个 crate 文档都列出适用场景、功能开关、最小接入方式、测试要求和 Drive/Yggdrasil 参考位置。
-  - title: 面向严格项目
-    details: 文档默认以 no unwrap/expect/panic 的服务代码为目标，要求调用方把 Forge 错误映射到产品错误边界。
+  - title: Runtime component 优先
+    details: 新产品入口应该是创建资源、注册 component、运行 AsterRuntime，而不是手写 task shutdown、mail drain、audit flush 和 db close。
+  - title: 公共状态机下沉
+    details: runtime lease、scheduled task、mail outbox、audit log、config sync 等产品无关状态机由 Forge 承接，产品侧只保留业务边界。
+  - title: 边界和 feature 显式
+    details: Redis、SeaORM 表、runtime worker、mail drain、OpenAPI 等能力按 feature 启用，产品错误、权限、展示和业务 repository 留在产品仓库。
 ---
 
 ## 文档范围
 
-AsterForge 是 Aster 项目的共享 crate 仓库。这里的文档面向接入方开发者，不是产品用户手册。
+AsterForge 是 Aster 项目的共享 Rust crate workspace 和产品无关运行时内核。这里的文档面向接入方开发者，不是产品用户手册，也不是把 AsterDrive 或 AsterYggdrasil 业务层搬进 Forge 的说明。
+
+常规接入目标是：
+
+```rust
+aster_forge_runtime::AsterRuntime::builder()
+    .component(http_component(...))
+    .component(database_component(...))
+    .component(background_task_component(...))
+    .component(mail_outbox_component(...))
+    .component(audit_component(...))
+    .run()
+    .await?;
+```
+
+产品仓库仍然拥有 `AppState`、API route、业务 service、权限、产品实体、migration、audit action/detail 和 task payload/result。Forge 拥有可复用的生命周期、schema builder、store、runner、registry、hook 和跨进程协调机制。
 
 当前覆盖的 crate 按字母顺序排列：
 
