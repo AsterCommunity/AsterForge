@@ -1,0 +1,38 @@
+# Static service configuration.
+#
+# Copy this file to data/config.toml for local deployment-specific values. Relative filesystem
+# paths and sqlite:// relative database paths are resolved from the config file directory.
+
+[server]
+host = "{{server_host}}"
+port = {{server_port}}
+workers = {{server_workers}}
+temp_dir = "{{server_temp_dir}}"
+
+[database]
+url = "{{database_url}}"
+pool_size = {{database_pool_size}}
+retry_count = {{database_retry_count}}
+
+[cache]
+# Supported backends in this template: "memory", "redis".
+backend = "{{cache_backend}}"
+# Redis example: "redis://127.0.0.1:6379/0".
+endpoint = "{{cache_endpoint}}"
+default_ttl = {{cache_default_ttl}}
+
+[config_sync]
+# Supported backends in this template: "disabled", "redis".
+backend = "{{config_sync_backend}}"
+# Redis pubsub example: "redis://127.0.0.1:6379/0".
+endpoint = "{{config_sync_endpoint}}"
+topic = "{{config_sync_topic}}"
+
+[logging]
+# level examples: "info", "debug", "warn", "error", "tower_http=debug,{{crate_name}}=debug".
+level = "{{logging_level}}"
+# format examples: "text", "json".
+format = "{{logging_format}}"
+file = "{{logging_file}}"
+enable_rotation = {{logging_enable_rotation}}
+max_backups = {{logging_max_backups}}

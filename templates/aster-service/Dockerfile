@@ -1,0 +1,56 @@
+# Stage 1: Build Rust binary
+FROM rust:1.94-alpine AS builder
+
+RUN apk add --no-cache build-base pkgconfig sqlite-dev curl
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock* ./
+COPY migration/ migration/
+
+# Pre-build dependencies as a cache layer. The command may fail before all template sources are
+# copied; dependency artifacts are still reused by the final build.
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && \
+    cargo build --release 2>/dev/null || true && \
+    rm -rf src
+
+COPY src/ src/
+COPY tests/ tests/
+
+ARG CARGO_FEATURES="metrics"
+ENV RUSTFLAGS="-C link-arg=-s"
+
+RUN cargo build --release --features "${CARGO_FEATURES}"
+
+# Stage 2: Alpine runtime
+FROM alpine:3.23
+
+RUN apk add --no-cache ca-certificates sqlite-libs wget && \
+    addgroup -S -g 10001 aster && \
+    adduser -S -D -H -u 10001 -G aster -s /sbin/nologin aster && \
+    mkdir -p /data && \
+    chown -R aster:aster /data
+
+LABEL maintainer="AptS:1547 <apts-1547@esaps.net>"
+LABEL org.opencontainers.image.title="{{project-name}}"
+LABEL org.opencontainers.image.description="{{package_description}}"
+LABEL org.opencontainers.image.source="https://github.com/AsterCommunity/AsterForge"
+LABEL org.opencontainers.image.license="MIT"
+
+COPY --from=builder /build/target/release/{{project-name}} /usr/local/bin/{{project-name}}
+COPY config.example.toml /config.example.toml
+
+VOLUME ["/data"]
+EXPOSE {{server_port}}
+
+WORKDIR /
+ENV ASTER__SERVER__HOST=0.0.0.0
+ENV ASTER__DATABASE__URL=sqlite:///data/{{project-name}}.db?mode=rwc
+ENV ASTER__SERVER__TEMP_DIR=/data/.tmp
+ENV ASTER__LOGGING__FILE=/data/{{project-name}}.log
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:{{server_port}}/readyz"]
+
+USER aster:aster
+
+ENTRYPOINT ["/usr/local/bin/{{project-name}}"]

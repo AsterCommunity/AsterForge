@@ -2,6 +2,37 @@
 
 这页给新的 Aster 产品项目使用。目标不是让产品代码变成 Forge 的从属模块，而是让新项目从第一天就复用同一套运行时、数据库、任务、邮件、审计、缓存、配置和错误边界，避免 Drive、Yggdrasil 过去那种重复实现慢慢分叉。
 
+## 使用模板生成
+
+Forge 提供 `cargo generate` 模板，适合新 Aster 服务从一开始就按 component 形态接入：
+
+```bash
+cargo generate --git https://github.com/AsterCommunity/AsterForge \
+  --path templates/aster-service \
+  --name aster_product_service
+```
+
+在 Forge 仓库本地开发时，也可以从仓库根目录直接生成：
+
+```bash
+cargo generate --path templates/aster-service \
+  --name aster_product_service \
+  --define server_port=3000 \
+  --define database_url="sqlite://aster_product_service.db?mode=rwc"
+```
+
+模板生成的是一个可编译的产品骨架，不是业务完整实现。它已经接好 `AsterRuntime`、Actix HTTP、database handles、migration crate、background task shutdown、mail outbox shutdown drain、audit lifecycle 和基础健康接口；产品侧仍然要补自己的产品表 migration、配置 registry、API、权限、audit action/detail、task payload/result 和邮件模板渲染。
+
+模板暴露的构建参数按 Yggdrasil 的静态配置分组：`server_host`、`server_port`、`server_workers`、`server_temp_dir`、`database_url`、`database_pool_size`、`database_retry_count`、`cache_backend`、`cache_endpoint`、`cache_default_ttl`、`config_sync_backend`、`config_sync_endpoint`、`config_sync_topic`、`logging_level`、`logging_format`、`logging_file`、`logging_enable_rotation`、`logging_max_backups`。生成后的 `AppConfig` 也保留这些分组，后续接入真实 config loader 时不需要再重排结构。
+
+生成后的 `migration` crate 默认创建 Forge 拥有的基础设施表：`runtime_leases`、`scheduled_tasks`、`system_config`、`mail_outbox`、`audit_logs`。产品表继续作为新的 migration module 加在产品仓库里，不要把业务实体迁进 Forge。
+
+生成项目不再使用单独的服务名占位符。运行时展示名、panic hook、健康接口和默认发信人显示名都从 Cargo metadata 读取：
+
+```rust
+env!("CARGO_PKG_NAME")
+```
+
 ## 推荐项目形状
 
 产品仓库仍然拥有自己的 `AppState`、配置加载、业务 service、API route、实体和 migration。Forge 负责共享机械层：
@@ -76,7 +107,11 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 ```rust
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    aster_forge_panic::install_panic_hook("aster_product");
+    aster_forge_panic::install_panic_hook(aster_forge_panic::PanicHookConfig::new(
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY"),
+    ));
     aster_forge_logging::init_tracing(&logging_config())
         .map_err(to_io_error)?;
 
@@ -84,7 +119,7 @@ async fn main() -> std::io::Result<()> {
     let state = actix_web::web::Data::new(state);
 
     aster_forge_runtime::AsterRuntime::builder()
-        .component(runtime::http::http_component(http_config(), state.clone()))?
+        .component(api::http::http_component(http_config(), state.clone()))?
         .component(tasks::runtime::background_tasks_component(state.clone()))
         .component(services::mail_outbox_service::runtime::mail_runtime_component(state.get_ref()))
         .component(services::audit_service::runtime::audit_runtime_component(state.get_ref()))

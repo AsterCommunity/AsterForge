@@ -1,0 +1,10 @@
+target
+.git
+data
+generated
+.github
+.cargo
+*.db
+*.db-shm
+*.db-wal
+crash.log

@@ -64,6 +64,19 @@ All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94
 
 See [`docs/guide/new-project-integration.md`](docs/guide/new-project-integration.md) for the target new-product shape and [`docs/guide/integration-principles.md`](docs/guide/integration-principles.md) for the detailed boundary rules.
 
+## Service template
+
+New Aster services can start from the bundled `cargo generate` template:
+
+```bash
+cargo generate --git https://github.com/AsterCommunity/AsterForge \
+  --path templates/aster-service \
+  --name aster_product_service \
+  --define server_port=3000
+```
+
+The template wires a thin product entrypoint to Forge runtime components, exposes Yggdrasil-style boot parameters for server/database/cache/config-sync/logging, includes a migration crate for Forge-owned infrastructure tables, and uses Cargo metadata such as `env!("CARGO_PKG_NAME")` for process, health, panic, and placeholder mail display names. Product repositories still own their business routes, product migrations, config registry, audit enums/details, task payloads/results, and mail template rendering.
+
 ## Documentation
 
 - [Documentation site](https://forge.astercosm.com/)
@@ -98,6 +111,7 @@ crates/                 Rust workspace crates
 docs/                   VitePress documentation site and crate reference pages
 developer-docs/         Compatibility entry points for developer documentation
 scripts/                Repository maintenance scripts
+templates/              cargo-generate templates for new Aster services
 ```
 
 ## License

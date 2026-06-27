@@ -1,0 +1,105 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+description = "{{package_description}}"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT"
+repository = ""
+
+[workspace]
+members = [".", "migration"]
+
+[features]
+default = []
+metrics = ["dep:prometheus"]
+openapi = [
+    "dep:utoipa",
+    "dep:utoipa-swagger-ui",
+    "aster_forge_api/openapi",
+    "aster_forge_api_docs_macros/openapi",
+    "aster_forge_config/openapi",
+    "aster_forge_mail/openapi",
+    "aster_forge_runtime/openapi",
+    "aster_forge_tasks/openapi",
+]
+full = ["metrics", "openapi"]
+jemalloc = ["dep:tikv-jemallocator", "aster_forge_alloc/jemalloc"]
+jemalloc-stats = [
+    "jemalloc",
+    "dep:tikv-jemalloc-ctl",
+    "tikv-jemalloc-ctl/stats",
+    "aster_forge_alloc/jemalloc-stats",
+]
+jemalloc-profiling = ["jemalloc-stats", "tikv-jemallocator/profiling"]
+
+# Development profile tuned for quick local feedback.
+[profile.dev]
+opt-level = 1
+lto = false
+codegen-units = 16
+panic = "unwind"
+strip = false
+incremental = true
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Profiling profile: close to release, but keeps symbols and disables LTO so profilers can expand
+# stacks. Frame pointers must be enabled through RUSTFLAGS:
+# RUSTFLAGS="-C force-frame-pointers=yes" cargo build --profile profiling
+[profile.profiling]
+inherits = "release"
+opt-level = 2
+codegen-units = 1
+debug = true
+strip = false
+lto = false
+panic = "abort"
+
+[profile.release-performance]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dependencies]
+actix-web = "4"
+aster_forge_actix_middleware = { git = "{{forge_git}}", package = "aster_forge_actix_middleware", features = ["metrics"] }
+aster_forge_alloc = { git = "{{forge_git}}", package = "aster_forge_alloc" }
+aster_forge_api = { git = "{{forge_git}}", package = "aster_forge_api" }
+aster_forge_api_docs_macros = { git = "{{forge_git}}", package = "aster_forge_api_docs_macros" }
+aster_forge_audit = { git = "{{forge_git}}", package = "aster_forge_audit" }
+aster_forge_cache = { git = "{{forge_git}}", package = "aster_forge_cache", features = ["memory", "redis", "runtime-component"] }
+aster_forge_config = { git = "{{forge_git}}", package = "aster_forge_config", features = ["redis-pubsub"] }
+aster_forge_db = { git = "{{forge_git}}", package = "aster_forge_db", features = ["runtime-component", "mail-outbox"] }
+aster_forge_logging = { git = "{{forge_git}}", package = "aster_forge_logging" }
+aster_forge_mail = { git = "{{forge_git}}", package = "aster_forge_mail", features = ["runtime-component"] }
+aster_forge_metrics = { git = "{{forge_git}}", package = "aster_forge_metrics" }
+aster_forge_panic = { git = "{{forge_git}}", package = "aster_forge_panic" }
+aster_forge_runtime = { git = "{{forge_git}}", package = "aster_forge_runtime" }
+aster_forge_tasks = { git = "{{forge_git}}", package = "aster_forge_tasks", features = ["runtime-component"] }
+aster_forge_utils = { git = "{{forge_git}}", package = "aster_forge_utils" }
+migration = { path = "migration" }
+prometheus = { version = "0.14", optional = true, default-features = false }
+sea-orm = { version = "2.0.0-rc.41", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+thiserror = "2"
+tikv-jemallocator = { version = "0.7", optional = true }
+tikv-jemalloc-ctl = { version = "0.7", optional = true }
+tokio-util = "0.7"
+toml = "1.1"
+tracing = "0.1"
+utoipa = { version = "5.5.0", features = ["actix_extras"], optional = true }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
+
+[dev-dependencies]
+sea-orm-migration = { version = "2.0.0-rc.41", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

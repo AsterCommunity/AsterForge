@@ -426,7 +426,7 @@ let registry = builder.build();
 - `Readiness`：判断实例能否接收流量，例如 database ping。
 - `Diagnostics`：完整运维诊断，例如 database、cache、storage、mail、tasks。
 
-产品 crate 仍然自己决定要检查哪些组件。比如 Yggdrasil 在产品服务里注册 database 和 cache 探针，`/health/ready` 执行 `Readiness` scope，runtime health task 执行 `Diagnostics` scope，然后把返回值交给 Forge 的报告模型。
+产品 crate 仍然自己决定要检查哪些组件。比如服务在产品侧注册 database 和 cache 探针，`/readyz` 执行 `Readiness` scope，runtime health task 执行 `Diagnostics` scope，然后把返回值交给 Forge 的报告模型。
 
 示例：
 

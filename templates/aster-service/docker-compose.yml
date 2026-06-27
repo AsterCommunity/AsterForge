@@ -1,0 +1,24 @@
+services:
+  {{crate_name}}:
+    build:
+      context: .
+      args:
+        CARGO_FEATURES: metrics
+    ports:
+      - "{{server_port}}:{{server_port}}"
+    volumes:
+      - ./data:/data
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - ASTER__SERVER__HOST=0.0.0.0
+      - ASTER__DATABASE__URL=sqlite:///data/{{project-name}}.db?mode=rwc
+      - ASTER__SERVER__TEMP_DIR=/data/.tmp
+      - ASTER__LOGGING__FILE=/data/{{project-name}}.log
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:{{server_port}}/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 45s
+    restart: unless-stopped

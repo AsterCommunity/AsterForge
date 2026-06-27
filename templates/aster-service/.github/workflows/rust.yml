@@ -1,0 +1,43 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        run: cargo check --workspace
+
+      - name: Check features
+        run: cargo check --workspace --features metrics,openapi
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --features metrics,openapi -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: OpenAPI test
+        run: cargo test --features metrics,openapi --test generate_openapi

@@ -1,0 +1,14 @@
+# cargo-audit 配置
+# 忽略已确认不影响本项目的上游传递依赖 advisory
+
+[advisories]
+ignore = [
+    # paste 1.0.x unmaintained — dtolnay 不再维护
+    # 纯编译期宏，零运行时代码，无安全风险
+    "RUSTSEC-2024-0436",
+
+    # proc-macro-error2 2.0.1 unmaintained
+    # 仅通过 validator_derive / sea-orm-macros 的 proc-macro 编译期路径引入
+    # RustSec 标记为 unmaintained，非已知漏洞；不进入服务运行时攻击面
+    "RUSTSEC-2026-0173",
+]
