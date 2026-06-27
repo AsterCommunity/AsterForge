@@ -8,6 +8,7 @@
 //! and return the service output.
 
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 
 use tokio_util::sync::CancellationToken;
@@ -116,9 +117,51 @@ pub struct RuntimeComponentBundleRegistration<B> {
     bundle: B,
 }
 
+/// Component factory that receives the runtime's shared shutdown token.
+pub struct RuntimeComponentWithShutdown<C, F> {
+    build: F,
+    _component: PhantomData<fn() -> C>,
+}
+
+/// Fallible component factory that receives the runtime's shared shutdown token.
+pub struct TryRuntimeComponentWithShutdown<C, F, E> {
+    build: F,
+    _component: PhantomData<fn() -> C>,
+    _error: PhantomData<fn() -> E>,
+}
+
 /// Adapts a [`RuntimeComponentBundle`] for [`AsterRuntimeBuilder::component`].
 pub const fn runtime_component<B>(bundle: B) -> RuntimeComponentBundleRegistration<B> {
     RuntimeComponentBundleRegistration { bundle }
+}
+
+/// Builds one runtime component from the runtime's shared shutdown token.
+///
+/// Use this when a product component needs the same token that `AsterRuntime`
+/// cancels on termination signals, for example an HTTP server, config reload
+/// subscription, or background worker group.
+pub fn runtime_component_with_shutdown<C, F>(build: F) -> RuntimeComponentWithShutdown<C, F>
+where
+    F: FnOnce(CancellationToken) -> C,
+{
+    RuntimeComponentWithShutdown {
+        build,
+        _component: PhantomData,
+    }
+}
+
+/// Fallible variant of [`runtime_component_with_shutdown`].
+pub fn try_runtime_component_with_shutdown<C, F, E>(
+    build: F,
+) -> TryRuntimeComponentWithShutdown<C, F, E>
+where
+    F: FnOnce(CancellationToken) -> Result<C, E>,
+{
+    TryRuntimeComponentWithShutdown {
+        build,
+        _component: PhantomData,
+        _error: PhantomData,
+    }
 }
 
 /// Runtime component for one shutdown-only owned resource.
@@ -246,6 +289,7 @@ impl<S, Service> AsterRuntimeComponent<S> for RuntimeServiceComponent<Service> {
 
         AsterRuntimeBuilder {
             service: Some(self.into_parts()),
+            shutdown_token: builder.shutdown_token,
             before_shutdown: builder.before_shutdown,
             components: builder.components,
             assembly_error,
@@ -264,6 +308,32 @@ where
             .components
             .push(Box::new(move |registry| self.bundle.register(registry)));
         builder
+    }
+}
+
+impl<S, C, F> AsterRuntimeComponent<S> for RuntimeComponentWithShutdown<C, F>
+where
+    C: AsterRuntimeComponent<S>,
+    F: FnOnce(CancellationToken) -> C,
+{
+    type Output = C::Output;
+
+    fn apply(self, builder: AsterRuntimeBuilder<S>) -> Self::Output {
+        let component = (self.build)(builder.shutdown_token.clone());
+        component.apply(builder)
+    }
+}
+
+impl<S, C, F, E> AsterRuntimeComponent<S> for TryRuntimeComponentWithShutdown<C, F, E>
+where
+    C: AsterRuntimeComponent<S>,
+    F: FnOnce(CancellationToken) -> Result<C, E>,
+{
+    type Output = Result<C::Output, E>;
+
+    fn apply(self, builder: AsterRuntimeBuilder<S>) -> Self::Output {
+        let component = (self.build)(builder.shutdown_token.clone())?;
+        Ok(component.apply(builder))
     }
 }
 
@@ -359,6 +429,7 @@ where
 /// Builder for [`AsterRuntime`].
 pub struct AsterRuntimeBuilder<S = ()> {
     service: Option<RuntimeServiceParts<S>>,
+    shutdown_token: CancellationToken,
     before_shutdown: RuntimeHook,
     components: Vec<RuntimeComponentRegistration>,
     assembly_error: Option<AsterRuntimeError>,
@@ -368,6 +439,7 @@ impl AsterRuntimeBuilder<()> {
     fn new() -> Self {
         Self {
             service: None,
+            shutdown_token: CancellationToken::new(),
             before_shutdown: empty_runtime_hook(),
             components: Vec::new(),
             assembly_error: None,
@@ -539,6 +611,51 @@ mod tests {
 
         assert_eq!(result, Ok(7));
         assert_eq!(events.lock().unwrap().as_slice(), ["before", "component"]);
+    }
+
+    #[tokio::test]
+    async fn aster_runtime_builder_shares_shutdown_token_with_components() {
+        let observed = Arc::new(AtomicBool::new(false));
+        let observed_component = Arc::clone(&observed);
+
+        let result = AsterRuntime::builder()
+            .component(crate::runtime_component_with_shutdown(|shutdown| {
+                let component_token = shutdown.clone();
+                RuntimeServiceComponent::new(
+                    "http",
+                    RuntimeComponentKind::Core,
+                    async move {
+                        component_token.cancel();
+                        Ok::<_, &'static str>(())
+                    },
+                    shutdown,
+                    || async {},
+                )
+            }))
+            .component(crate::runtime_component_with_shutdown(|shutdown| {
+                crate::runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+                    registry.component_shutdown(
+                        "observer",
+                        RuntimeComponentKind::Product,
+                        "observe_shared_shutdown",
+                        None,
+                        move || {
+                            let observed_component = Arc::clone(&observed_component);
+                            let shutdown = shutdown.clone();
+                            async move {
+                                observed_component.store(shutdown.is_cancelled(), Ordering::SeqCst);
+                                Ok(())
+                            }
+                        },
+                    );
+                })
+            }))
+            .run()
+            .await
+            .expect("runtime should run");
+
+        assert_eq!(result, Ok(()));
+        assert!(observed.load(Ordering::SeqCst));
     }
 
     #[test]

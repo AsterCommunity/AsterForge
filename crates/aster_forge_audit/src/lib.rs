@@ -21,13 +21,15 @@ use std::future::Future;
 
 use aster_forge_runtime::{
     RuntimeComponentBundleRegistration, RuntimeComponentKind, RuntimeComponentRegistry,
-    runtime_component,
+    StartupPhaseFailurePolicy, runtime_component,
 };
 
 /// Stable component name used for process lifecycle audit records.
 pub const AUDIT_LOGS_COMPONENT: &str = "audit_logs";
 /// Stable component name used for the buffered audit manager.
 pub const AUDIT_MANAGER_COMPONENT: &str = "audit_manager";
+/// Stable startup phase name for recording the process start event.
+pub const SERVER_START_AUDIT_PHASE: &str = "server_start_audit";
 /// Stable shutdown phase name for recording the process shutdown event.
 pub const SERVER_SHUTDOWN_AUDIT_PHASE: &str = "server_shutdown_audit";
 /// Stable shutdown phase name for flushing the buffered audit manager.
@@ -51,9 +53,48 @@ where
     FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
     FlushFut: Future<Output = Result<(), String>> + Send + 'static,
 {
+    runtime_component((
+        server_shutdown_audit_component(resources, record_server_shutdown),
+        audit_manager_component(flush_audit_manager),
+    ))
+}
+
+/// Creates the server-start audit startup component.
+pub fn server_start_audit_component<T, F, Fut>(
+    resources: T,
+    record_server_start: F,
+) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle>
+where
+    T: Send + 'static,
+    F: FnOnce(T) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), String>> + Send + 'static,
+{
     runtime_component(move |registry: &mut RuntimeComponentRegistry| {
-        register_server_shutdown_audit(registry, resources, record_server_shutdown);
-        register_audit_manager_shutdown(registry, flush_audit_manager);
+        let mut resources = Some(resources);
+        let mut record_server_start = Some(record_server_start);
+        registry.component_startup(
+            AUDIT_LOGS_COMPONENT,
+            RuntimeComponentKind::Product,
+            SERVER_START_AUDIT_PHASE,
+            StartupPhaseFailurePolicy::Required,
+            move || {
+                let resources = resources.take();
+                let record_server_start = record_server_start.take();
+                async move {
+                    let Some(resources) = resources else {
+                        return Err(
+                            "server start audit startup phase resources already consumed"
+                                .to_string(),
+                        );
+                    };
+                    let Some(record_server_start) = record_server_start else {
+                        return Err("server start audit startup phase callback already consumed"
+                            .to_string());
+                    };
+                    record_server_start(resources).await
+                }
+            },
+        );
     })
 }
 
@@ -95,33 +136,6 @@ where
     )
 }
 
-/// Registers the process shutdown audit event before the audit manager flushes.
-pub fn register_server_shutdown_audit<T, F, Fut>(
-    registry: &mut RuntimeComponentRegistry,
-    resources: T,
-    record_server_shutdown: F,
-) where
-    T: Send + 'static,
-    F: FnOnce(T) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<(), String>> + Send + 'static,
-{
-    registry.register_bundle(server_shutdown_audit_component(
-        resources,
-        record_server_shutdown,
-    ));
-}
-
-/// Registers graceful shutdown for the product audit manager.
-pub fn register_audit_manager_shutdown<F, Fut>(
-    registry: &mut RuntimeComponentRegistry,
-    flush_audit_manager: F,
-) where
-    F: FnOnce(()) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<(), String>> + Send + 'static,
-{
-    registry.register_bundle(audit_manager_component(flush_audit_manager));
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -133,8 +147,8 @@ mod tests {
 
     use super::{
         AUDIT_LOGS_COMPONENT, AUDIT_MANAGER_COMPONENT, AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE,
-        SERVER_SHUTDOWN_AUDIT_PHASE, audit_component, audit_manager_component,
-        register_audit_manager_shutdown, server_shutdown_audit_component,
+        SERVER_SHUTDOWN_AUDIT_PHASE, SERVER_START_AUDIT_PHASE, audit_component,
+        audit_manager_component, server_shutdown_audit_component, server_start_audit_component,
     };
 
     #[test]
@@ -161,6 +175,33 @@ mod tests {
                 .phase_name,
             SERVER_SHUTDOWN_AUDIT_PHASE
         );
+    }
+
+    #[tokio::test]
+    async fn server_start_audit_component_registers_and_runs_startup_phase() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_start = calls.clone();
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            server_start_audit_component((), move |()| {
+                let calls = calls_for_start.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(AUDIT_LOGS_COMPONENT)
+            .expect("audit logs component should be registered");
+        assert_eq!(descriptor.startup.len(), 1);
+        assert_eq!(descriptor.startup[0].phase_name, SERVER_START_AUDIT_PHASE);
+
+        let report = registry.startup().await;
+
+        assert!(!report.aborted());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -222,23 +263,5 @@ mod tests {
                 .as_slice(),
             ["record", "flush"]
         );
-    }
-
-    #[test]
-    fn audit_manager_shutdown_registrar_can_be_used_directly() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_flush = calls.clone();
-        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
-            register_audit_manager_shutdown(registry, move |()| {
-                let calls = calls_for_flush.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            });
-        });
-
-        assert!(registry.descriptor(AUDIT_MANAGER_COMPONENT).is_some());
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

@@ -18,29 +18,9 @@ pub const BACKGROUND_TASKS_COMPONENT: &str = "background_tasks";
 /// Stable shutdown phase name for background task workers.
 pub const BACKGROUND_TASKS_SHUTDOWN_PHASE: &str = "background_tasks";
 
-/// Static task metadata attached to the background task runtime component.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BackgroundTaskRuntimeDescriptor {
-    /// Stable task name used in logs, persisted runtime payloads, or admin UI.
-    pub task_name: &'static str,
-    /// Operator-facing display name.
-    pub display_name: &'static str,
-}
-
-impl BackgroundTaskRuntimeDescriptor {
-    /// Creates a static background task descriptor.
-    pub const fn new(task_name: &'static str, display_name: &'static str) -> Self {
-        Self {
-            task_name,
-            display_name,
-        }
-    }
-}
-
 /// Runtime component that owns spawned background task handles.
 pub struct BackgroundTaskRuntimeComponent {
     background_tasks: BackgroundTasks,
-    register_descriptors: Option<fn(&mut RuntimeComponentRegistry)>,
 }
 
 /// Runtime component that owns spawned task handles and registers task definitions.
@@ -52,19 +32,7 @@ pub struct BackgroundTaskRuntimeDefinitionsComponent<Kind: 'static, Presentation
 impl BackgroundTaskRuntimeComponent {
     /// Creates a background task runtime component from spawned task handles.
     pub const fn new(background_tasks: BackgroundTasks) -> Self {
-        Self {
-            background_tasks,
-            register_descriptors: None,
-        }
-    }
-
-    /// Adds a product-owned descriptor registration function.
-    pub const fn with_descriptor_registrar(
-        mut self,
-        register_descriptors: fn(&mut RuntimeComponentRegistry),
-    ) -> Self {
-        self.register_descriptors = Some(register_descriptors);
-        self
+        Self { background_tasks }
     }
 }
 
@@ -85,9 +53,6 @@ impl<Kind: 'static, PresentationCode: 'static>
 
 impl RuntimeComponentBundle for BackgroundTaskRuntimeComponent {
     fn register(self, registry: &mut RuntimeComponentRegistry) {
-        if let Some(register_descriptors) = self.register_descriptors {
-            register_descriptors(registry);
-        }
         register_background_tasks_shutdown(registry, self.background_tasks);
     }
 }
@@ -106,17 +71,6 @@ pub fn background_task_component(
     background_tasks: BackgroundTasks,
 ) -> RuntimeComponentBundleRegistration<BackgroundTaskRuntimeComponent> {
     runtime_component(BackgroundTaskRuntimeComponent::new(background_tasks))
-}
-
-/// Creates the background task runtime component with product task metadata registration.
-pub fn background_task_component_with_descriptors(
-    background_tasks: BackgroundTasks,
-    register_descriptors: fn(&mut RuntimeComponentRegistry),
-) -> RuntimeComponentBundleRegistration<BackgroundTaskRuntimeComponent> {
-    runtime_component(
-        BackgroundTaskRuntimeComponent::new(background_tasks)
-            .with_descriptor_registrar(register_descriptors),
-    )
 }
 
 /// Creates the background task runtime component with product task definitions.
@@ -142,7 +96,7 @@ where
 }
 
 /// Registers graceful shutdown for all spawned runtime background tasks.
-pub fn register_background_tasks_shutdown(
+fn register_background_tasks_shutdown(
     registry: &mut RuntimeComponentRegistry,
     background_tasks: BackgroundTasks,
 ) {
@@ -160,7 +114,7 @@ pub fn register_background_tasks_shutdown(
 }
 
 /// Registers static metadata from product runtime task definitions.
-pub fn register_background_task_definitions<Kind, PresentationCode>(
+fn register_background_task_definitions<Kind, PresentationCode>(
     registry: &mut RuntimeComponentRegistry,
     definitions: &'static [RuntimeTaskDefinition<Kind, PresentationCode>],
 ) {
@@ -174,37 +128,16 @@ pub fn register_background_task_definitions<Kind, PresentationCode>(
     }
 }
 
-/// Registers static metadata for runtime tasks owned by the background task component.
-pub fn register_background_task_descriptors(
-    registry: &mut RuntimeComponentRegistry,
-    descriptors: &'static [BackgroundTaskRuntimeDescriptor],
-) {
-    for task in descriptors {
-        registry.component_task(
-            BACKGROUND_TASKS_COMPONENT,
-            RuntimeComponentKind::Tasks,
-            task.task_name,
-            task.display_name,
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use aster_forge_runtime::{RuntimeComponentBundle, RuntimeComponentKind};
 
     use super::{
         BACKGROUND_TASKS_COMPONENT, BACKGROUND_TASKS_SHUTDOWN_PHASE,
-        BackgroundTaskRuntimeDescriptor, background_task_component_with_definitions,
-        background_task_component_with_descriptors, register_background_task_definitions,
-        register_background_task_descriptors, register_background_tasks_shutdown,
+        background_task_component_with_definitions,
     };
     use crate::{BackgroundTasks, RuntimeTaskDefinition};
 
-    const TEST_TASKS: &[BackgroundTaskRuntimeDescriptor] = &[
-        BackgroundTaskRuntimeDescriptor::new("cleanup", "Cleanup"),
-        BackgroundTaskRuntimeDescriptor::new("dispatch", "Dispatch"),
-    ];
     const TEST_DEFINITIONS: &[RuntimeTaskDefinition<TestRuntimeTask, TestPresentationCode>] = &[
         RuntimeTaskDefinition {
             kind: TestRuntimeTask::Cleanup,
@@ -233,36 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn background_task_component_registers_descriptors_and_shutdown() {
-        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
-            background_task_component_with_descriptors(BackgroundTasks::new(), |registry| {
-                register_background_task_descriptors(registry, TEST_TASKS);
-            })
-            .register(registry);
-        });
-
-        let descriptor = registry
-            .descriptor(BACKGROUND_TASKS_COMPONENT)
-            .expect("background task component should be registered");
-        assert_eq!(descriptor.kind, RuntimeComponentKind::Tasks);
-        assert_eq!(
-            descriptor
-                .shutdown
-                .expect("background task shutdown should be registered")
-                .phase_name,
-            BACKGROUND_TASKS_SHUTDOWN_PHASE
-        );
-        assert_eq!(
-            descriptor
-                .tasks
-                .iter()
-                .map(|task| (task.task_name, task.display_name))
-                .collect::<Vec<_>>(),
-            vec![("cleanup", "Cleanup"), ("dispatch", "Dispatch")]
-        );
-    }
-
-    #[test]
     fn background_task_component_registers_definitions_and_shutdown() {
         let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
             background_task_component_with_definitions(BackgroundTasks::new(), TEST_DEFINITIONS)
@@ -288,26 +191,5 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("cleanup", "Cleanup"), ("dispatch", "Dispatch")]
         );
-    }
-
-    #[test]
-    fn background_task_definition_registrar_can_be_used_directly() {
-        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
-            register_background_task_definitions(registry, TEST_DEFINITIONS);
-        });
-
-        let descriptor = registry
-            .descriptor(BACKGROUND_TASKS_COMPONENT)
-            .expect("background task definitions should register component metadata");
-        assert_eq!(descriptor.tasks.len(), 2);
-    }
-
-    #[test]
-    fn background_task_shutdown_registrar_can_be_used_directly() {
-        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
-            register_background_tasks_shutdown(registry, BackgroundTasks::new());
-        });
-
-        assert!(registry.descriptor(BACKGROUND_TASKS_COMPONENT).is_some());
     }
 }

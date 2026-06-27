@@ -49,7 +49,26 @@ impl DatabaseRuntimeComponent {
 
 impl RuntimeComponentBundle for DatabaseRuntimeComponent {
     fn register(self, registry: &mut RuntimeComponentRegistry) {
+        register_database_health_check(registry, self.db_handles.reader().clone());
         register_database_shutdown(registry, self.db_handles, self.dependencies);
+    }
+}
+
+/// Runtime component that registers the standard database health check only.
+pub struct DatabaseHealthComponent {
+    db: DatabaseConnection,
+}
+
+impl DatabaseHealthComponent {
+    /// Creates a database health component from a prepared connection.
+    pub const fn new(db: DatabaseConnection) -> Self {
+        Self { db }
+    }
+}
+
+impl RuntimeComponentBundle for DatabaseHealthComponent {
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        register_database_health_check(registry, self.db);
     }
 }
 
@@ -68,8 +87,15 @@ pub fn database_component_after(
     runtime_component(DatabaseRuntimeComponent::new(db_handles).depends_on_all(dependencies))
 }
 
+/// Creates the standard database health component.
+pub fn database_health_component(
+    db: DatabaseConnection,
+) -> RuntimeComponentBundleRegistration<DatabaseHealthComponent> {
+    runtime_component(DatabaseHealthComponent::new(db))
+}
+
 /// Registers database shutdown after product-declared dependency components.
-pub fn register_database_shutdown(
+fn register_database_shutdown(
     registry: &mut RuntimeComponentRegistry,
     db_handles: DbHandles,
     dependencies: &'static [&'static str],
@@ -93,10 +119,7 @@ pub fn register_database_shutdown(
 }
 
 /// Registers a database readiness and diagnostics health check.
-pub fn register_database_health_check(
-    registry: &mut RuntimeComponentRegistry,
-    db: DatabaseConnection,
-) {
+fn register_database_health_check(registry: &mut RuntimeComponentRegistry, db: DatabaseConnection) {
     registry.component_health_with_options(
         DATABASE_COMPONENT,
         RuntimeComponentKind::Database,
@@ -144,8 +167,7 @@ mod tests {
 
     use super::{
         DATABASE_COMPONENT, DATABASE_CONNECTIONS_SHUTDOWN_PHASE, DATABASE_HEALTH_CHECK,
-        check_database_component, database_component_after, register_database_health_check,
-        register_database_shutdown,
+        check_database_component, database_component_after, database_health_component,
     };
     use aster_forge_runtime::{HealthCheckScope, HealthStatus};
 
@@ -176,26 +198,7 @@ mod tests {
                 .phase_name,
             DATABASE_CONNECTIONS_SHUTDOWN_PHASE
         );
-    }
-
-    #[tokio::test]
-    async fn database_shutdown_registrar_can_be_used_directly() {
-        let db = sea_orm::Database::connect("sqlite::memory:")
-            .await
-            .expect("database shutdown registrar test database should connect");
-        let db_handles = crate::DbHandles::single(db);
-
-        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
-            register_database_shutdown(registry, db_handles, &["background_tasks"]);
-        });
-
-        assert_eq!(
-            registry
-                .descriptor(DATABASE_COMPONENT)
-                .expect("database component should be registered")
-                .dependencies,
-            vec!["background_tasks"]
-        );
+        assert_eq!(descriptor.health_checks.len(), 1);
     }
 
     #[tokio::test]
@@ -217,13 +220,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_health_check_registers_readiness_component() {
+    async fn database_health_component_registers_readiness_component() {
         let db = sea_orm::Database::connect("sqlite::memory:")
             .await
             .expect("database readiness test database should connect");
         let mut registry = aster_forge_runtime::RuntimeComponentRegistry::new();
 
-        register_database_health_check(&mut registry, db);
+        database_health_component(db).register(&mut registry);
 
         assert_eq!(registry.len(), 1);
         let report = registry.run_health(HealthCheckScope::Readiness).await;
@@ -233,6 +236,24 @@ mod tests {
             .map(|component| component.name)
             .collect::<Vec<_>>();
         assert_eq!(component_names, vec![DATABASE_HEALTH_CHECK]);
+        assert_eq!(report.status(), HealthStatus::Healthy);
+    }
+
+    #[tokio::test]
+    async fn database_health_component_reports_healthy_status() {
+        let db = sea_orm::Database::connect("sqlite::memory:")
+            .await
+            .expect("database health component test database should connect");
+
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            database_health_component(db).register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(DATABASE_COMPONENT)
+            .expect("database component should be registered");
+        assert_eq!(descriptor.health_checks.len(), 1);
+        let report = registry.run_health(HealthCheckScope::Readiness).await;
         assert_eq!(report.status(), HealthStatus::Healthy);
     }
 }

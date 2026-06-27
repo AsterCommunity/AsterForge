@@ -12,16 +12,16 @@ src/
   runtime/
     mod.rs                   组合产品 runtime state
     assembly.rs              初始化 database/cache/config/mail/task/http 资源
-    components.rs            注册 Forge runtime components
     startup.rs               产品 startup phase
   config/
     mod.rs                   产品 config key、默认值和 schema
   db/
+    runtime.rs               database component 和 health check 接入
     repository/              产品业务查询
   services/
-    audit_service/           产品 audit action/detail/presentation
-    mail_outbox_service/     产品模板 payload、渲染和审计 hook
-    task_service/            产品 task enum、payload/result 和执行体
+    audit_service/           产品 audit action/detail/presentation/runtime component
+    mail_outbox_service/     产品模板 payload、渲染、审计 hook 和 runtime component
+    task_service/            产品 task enum、payload/result、执行体和 runtime component
   api/
     routes/                  产品 API
 ```
@@ -68,53 +68,38 @@ async fn main() -> std::io::Result<()> {
     aster_forge_logging::init_tracing(&logging_config())
         .map_err(to_io_error)?;
 
-    let assembly = runtime::assembly::prepare().await.map_err(to_io_error)?;
+    let state = runtime::assembly::prepare_state().await.map_err(to_io_error)?;
+    let state = actix_web::web::Data::new(state);
 
     aster_forge_runtime::AsterRuntime::builder()
-        .component(runtime::http_component(
-            assembly.http_server,
-            assembly.shutdown_token.clone(),
-        ))
-        .component(runtime::components::product_components(assembly))
+        .component(runtime::http::http_component(http_config(), state.clone()))?
+        .component(tasks::runtime::background_tasks_component(state.clone()))
+        .component(services::mail_outbox_service::runtime::mail_runtime_component(state.get_ref()))
+        .component(services::audit_service::runtime::audit_runtime_component(state.get_ref()))
+        .component(db::runtime::database_component(state.get_ref().db_handles.clone()))
         .run()
         .await
         .map_err(to_io_error)
 }
 ```
 
-`product_components(...)` 负责组合所有子系统 component：
+每个领域模块暴露自己的 component factory，入口不直接碰 root registry，也不手写 shutdown 顺序：
 
 ```rust
-pub fn product_components(
-    assembly: RuntimeAssembly,
-) -> impl aster_forge_runtime::RuntimeComponentBundle {
-    (
-        aster_forge_tasks::background_task_component_with_definitions(
-            assembly.background_tasks,
-            task_service::runtime::runtime_task_definitions(),
-        ),
-        aster_forge_mail::mail_outbox_component(
-            assembly.mail_outbox_resources,
-            mail_outbox_service::runtime::drain_mail_outbox_on_shutdown,
-        ),
-        aster_forge_audit::audit_component(
-            assembly.audit_resources,
-            audit_service::runtime::record_server_shutdown_on_shutdown,
-            audit_service::runtime::flush_audit_manager_on_shutdown,
-        ),
-        aster_forge_db::database_component_after(
-            assembly.db_handles,
-            &[
-                aster_forge_tasks::BACKGROUND_TASKS_COMPONENT,
-                aster_forge_mail::MAIL_OUTBOX_COMPONENT,
-                aster_forge_audit::AUDIT_MANAGER_COMPONENT,
-            ],
-        ),
-    )
+pub fn audit_runtime_component(
+    state: &AppState,
+) -> aster_forge_runtime::RuntimeComponentBundleRegistration<
+    impl aster_forge_runtime::RuntimeComponentBundle,
+> {
+    let resources = AuditRuntimeResources::from_state(state);
+    aster_forge_runtime::runtime_component((
+        audit_component(resources.clone()),
+        server_start_audit_component(resources),
+    ))
 }
 ```
 
-组件依赖决定 shutdown 顺序。产品入口不应该再写“先停 task、再 drain mail、再写 audit、再关 db”这种手工流程。
+组件依赖决定 shutdown 顺序。产品入口不应该再写“先停 task、再 drain mail、再写 audit、再关 db”这种手工流程。需要整个 Actix state 的组件 clone `web::Data<AppState>`；只需要 database、runtime config、sender 这类资源的组件从 `&AppState` 抽最小句柄，避免为了方便 clone 整个 state 或再包一层 `Arc`。
 
 ## 初始化顺序
 
@@ -151,6 +136,12 @@ manager
     .await?;
 
 manager
+    .create_table(aster_forge_db::create_system_config_table(
+        manager.get_database_backend(),
+    ))
+    .await?;
+
+manager
     .create_table(aster_forge_db::create_mail_outbox_table(
         manager.get_database_backend(),
     ))
@@ -166,6 +157,10 @@ manager
 索引也从 Forge builder 来：
 
 ```rust
+manager
+    .create_index(aster_forge_db::create_system_config_key_unique_index())
+    .await?;
+
 for index in aster_forge_db::create_audit_logs_base_indexes() {
     manager.create_index(index).await?;
 }
@@ -243,9 +238,73 @@ Forge 承接：
 
 ## Config 和 Cache
 
-产品侧定义配置 key、默认值、展示 schema 和敏感标记。Forge 负责通用 runtime config snapshot、reload diff、配置同步消息和 cache backend。
+产品侧定义配置 key、默认值、展示 schema、normalizer、权限和审计语义。Forge 负责通用 `system_config` 表/store、runtime config snapshot、reload diff、配置同步消息、展示脱敏 helper、审计字符串 helper 和 cache backend。
 
-新项目不要把 Redis 写死成 config 同步唯一后端。配置结构应该表达“notification backend / pubsub backend”，具体 Redis、RabbitMQ 或其他实现通过 feature 和 backend adapter 接入。
+新项目的系统配置边界建议长这样：
+
+```rust
+aster_forge_config::define_config_registry! {
+    pub static CONFIG_REGISTRY = [
+        BRANDING_TITLE,
+        PUBLIC_SITE_URL,
+    ];
+}
+
+static SYSTEM_CONFIG_STORE: aster_forge_db::SystemConfigDbBinding =
+    aster_forge_db::SystemConfigDbBinding::new(
+        &CONFIG_REGISTRY,
+        DEPRECATED_SYSTEM_CONFIG_KEYS,
+    );
+
+SYSTEM_CONFIG_STORE.ensure_defaults(writer_db).await?;
+let row = SYSTEM_CONFIG_STORE.find_by_key(reader_db, key).await?;
+```
+
+产品 API DTO 可以继续留在产品仓库，但 stored row 到展示 row 的字段搬运和 value 脱敏不要再手写：
+
+```rust
+let presented = aster_forge_db::present_system_config(
+    row,
+    |error| tracing::warn!(%error, "invalid stored config value"),
+);
+```
+
+新项目的 config sync 配置结构应该表达“notification backend / pubsub backend”，具体 Redis、RabbitMQ 或其他实现通过 feature 和 backend adapter 接入。
+
+启动时直接用 Forge builder，不要在产品仓库再写 backend match：
+
+```rust
+let config_sync = aster_forge_config::build_config_sync_runtime(
+    &config.config_sync,
+    "aster_product",
+)?;
+```
+
+配置写入成功并更新本进程 runtime snapshot 后，再发 reload 信号：
+
+```rust
+config_sync
+    .publish_reload(
+        [saved.key.clone()],
+        aster_forge_config::ConfigNotificationSource::Api,
+    )
+    .await?;
+```
+
+后台订阅任务只提供“从权威存储 reload”的回调：
+
+```rust
+config_sync
+    .run_reload_subscription(shutdown, move |message| {
+        let state = state.clone();
+        async move {
+            tracing::debug!(keys = ?message.keys, "remote config reload");
+            state.runtime_config().reload(state.reader_db()).await?;
+            Ok(())
+        }
+    })
+    .await?;
+```
 
 ## 错误边界
 

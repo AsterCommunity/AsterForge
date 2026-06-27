@@ -29,9 +29,8 @@ pub mod startup;
 pub use buffered::{BufferedBatchConfig, BufferedBatchWriter};
 pub use component::{
     RuntimeComponentBuilder, RuntimeComponentBundle, RuntimeComponentDescriptor,
-    RuntimeComponentGraphError, RuntimeComponentKind, RuntimeComponentRegistrar,
-    RuntimeComponentRegistry, RuntimeComponentStateRegistrar, RuntimeShutdownDescriptor,
-    RuntimeStartupDescriptor, RuntimeTaskDescriptor,
+    RuntimeComponentGraphError, RuntimeComponentKind, RuntimeComponentRegistry,
+    RuntimeShutdownDescriptor, RuntimeStartupDescriptor, RuntimeTaskDescriptor,
 };
 pub use health::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckRegistryBuilder,
@@ -46,9 +45,10 @@ pub use lease::{
 };
 pub use lifecycle::{
     AsterRuntime, AsterRuntimeBuilder, AsterRuntimeComponent, AsterRuntimeError,
-    RuntimeComponentBundleRegistration, RuntimeServiceComponent, ServiceLifecycle,
-    ShutdownResourceComponent, runtime_component, shutdown_resource_component,
-    shutdown_resource_component_after,
+    RuntimeComponentBundleRegistration, RuntimeComponentWithShutdown, RuntimeServiceComponent,
+    ServiceLifecycle, ShutdownResourceComponent, TryRuntimeComponentWithShutdown,
+    runtime_component, runtime_component_with_shutdown, shutdown_resource_component,
+    shutdown_resource_component_after, try_runtime_component_with_shutdown,
 };
 pub use shutdown::{
     RuntimeSignalError, ShutdownCoordinator, ShutdownPhaseReport, ShutdownPhaseStatus,

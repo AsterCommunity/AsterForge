@@ -249,24 +249,6 @@ impl ConfigValue {
         }
     }
 
-    /// Builds a value suitable for presentation in an API response.
-    ///
-    /// Sensitive values are always represented as [`ConfigValue::String`] containing
-    /// [`ConfigValue::REDACTED`]. Non-sensitive values are parsed from storage with lossy fallback
-    /// so admin UI list endpoints can keep rendering even if an older row contains malformed JSON.
-    pub fn for_presentation(
-        value_type: impl Into<ConfigValueType>,
-        value: String,
-        is_sensitive: bool,
-        on_invalid: impl FnOnce(&ConfigCoreError),
-    ) -> Self {
-        if is_sensitive {
-            Self::redacted()
-        } else {
-            Self::from_storage_lossy(value_type, value, on_invalid)
-        }
-    }
-
     /// Returns the canonical redacted API value.
     pub fn redacted() -> Self {
         Self::String(Self::REDACTED.to_string())
@@ -341,6 +323,42 @@ impl From<String> for ConfigValue {
 impl From<Vec<String>> for ConfigValue {
     fn from(value: Vec<String>) -> Self {
         Self::StringArray(value)
+    }
+}
+
+/// Builds a configuration value for API presentation.
+///
+/// Sensitive values are redacted and malformed historical storage values fall back to an empty
+/// value for the declared type. Products should use this in API read/list paths instead of
+/// repeating redaction and lossy parsing logic in each service.
+pub fn present_config_value(
+    value_type: impl Into<ConfigValueType>,
+    value: String,
+    is_sensitive: bool,
+    on_invalid: impl FnOnce(&ConfigCoreError),
+) -> ConfigValue {
+    if is_sensitive {
+        ConfigValue::redacted()
+    } else {
+        ConfigValue::from_storage_lossy(value_type, value, on_invalid)
+    }
+}
+
+/// Builds an audit-safe string from a stored configuration value.
+///
+/// Sensitive values are always represented by [`ConfigValue::REDACTED`]. Non-sensitive values use
+/// the same lossy read path as API presentation so audit recording does not fail because of one
+/// malformed historical row.
+pub fn config_value_audit_string(
+    value_type: impl Into<ConfigValueType>,
+    value: String,
+    is_sensitive: bool,
+    on_invalid: impl FnOnce(&ConfigCoreError),
+) -> String {
+    if is_sensitive {
+        ConfigValue::REDACTED.to_string()
+    } else {
+        ConfigValue::from_storage_lossy(value_type, value, on_invalid).to_audit_string()
     }
 }
 
@@ -482,9 +500,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility,
+        ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility, config_value_audit_string,
         normalize_string_enum_set_selection, parse_single_string_enum_selection,
-        parse_string_array_config_value, parse_string_enum_set_selection, validate_storage_value,
+        parse_string_array_config_value, parse_string_enum_set_selection, present_config_value,
+        validate_storage_value,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -587,7 +606,7 @@ mod tests {
     #[test]
     fn config_value_presentation_redacts_and_falls_back_lossily() {
         let mut saw_error = false;
-        let value = ConfigValue::for_presentation(
+        let value = present_config_value(
             ConfigValueType::StringArray,
             "not json".to_string(),
             false,
@@ -596,7 +615,7 @@ mod tests {
         assert!(saw_error);
         assert_eq!(value, ConfigValue::StringArray(Vec::new()));
 
-        let value = ConfigValue::for_presentation(
+        let value = present_config_value(
             ConfigValueType::StringArray,
             r#"["secret"]"#.to_string(),
             true,
@@ -606,6 +625,33 @@ mod tests {
             value,
             ConfigValue::String(ConfigValue::REDACTED.to_string())
         );
+    }
+
+    #[test]
+    fn config_value_audit_string_redacts_and_serializes_lossily() {
+        let audit = config_value_audit_string(
+            ConfigValueType::StringArray,
+            r#"["b","a"]"#.to_string(),
+            false,
+            |_| unreachable!("valid storage should not report errors"),
+        );
+        assert_eq!(audit, r#"["b","a"]"#);
+
+        let audit =
+            config_value_audit_string(ConfigValueType::String, "secret".to_string(), true, |_| {
+                unreachable!("redacted values should not parse storage")
+            });
+        assert_eq!(audit, ConfigValue::REDACTED);
+
+        let mut saw_error = false;
+        let audit = config_value_audit_string(
+            ConfigValueType::StringArray,
+            "not json".to_string(),
+            false,
+            |_| saw_error = true,
+        );
+        assert!(saw_error);
+        assert_eq!(audit, "[]");
     }
 
     #[test]

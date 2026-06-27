@@ -27,6 +27,7 @@ pub mod runtime_lease;
 pub mod scheduled_task;
 pub mod search_query;
 pub mod sort;
+pub mod system_config;
 pub mod transaction;
 
 pub use audit_log::{
@@ -55,9 +56,9 @@ pub use audit_log::{
 };
 pub use component::{
     DATABASE_COMPONENT, DATABASE_CONNECTIONS_SHUTDOWN_PHASE, DATABASE_HEALTH_CHECK,
-    DATABASE_HEALTH_CHECK_TIMEOUT, DatabaseRuntimeComponent, check_database_component,
-    database_component, database_component_after, database_health_options, ping_database,
-    register_database_health_check, register_database_shutdown,
+    DATABASE_HEALTH_CHECK_TIMEOUT, DatabaseHealthComponent, DatabaseRuntimeComponent,
+    check_database_component, database_component, database_component_after,
+    database_health_component, database_health_options, ping_database,
 };
 pub use connection::{
     DatabaseConfig, DbHandles, DbMetricsRecorder, NoopDbMetrics, SharedDbMetricsRecorder, connect,
@@ -89,6 +90,19 @@ pub use scheduled_task::{
     create_scheduled_tasks_namespace_name_unique_index, create_scheduled_tasks_next_run_index,
     create_scheduled_tasks_table, drop_scheduled_tasks_namespace_name_unique_index,
     drop_scheduled_tasks_next_run_index, drop_scheduled_tasks_table,
+};
+pub use system_config::{
+    PresentedSystemConfig, SystemConfigCursorSlice, SystemConfigDbBinding, SystemConfigDbStore,
+    SystemConfigUpsert, present_system_config,
+};
+pub use system_config::{
+    SYSTEM_CONFIG_CATEGORY_COLUMN, SYSTEM_CONFIG_DESCRIPTION_COLUMN, SYSTEM_CONFIG_ID_COLUMN,
+    SYSTEM_CONFIG_IS_SENSITIVE_COLUMN, SYSTEM_CONFIG_KEY_COLUMN, SYSTEM_CONFIG_KEY_UNIQUE_INDEX,
+    SYSTEM_CONFIG_NAMESPACE_COLUMN, SYSTEM_CONFIG_REQUIRES_RESTART_COLUMN,
+    SYSTEM_CONFIG_SOURCE_COLUMN, SYSTEM_CONFIG_TABLE, SYSTEM_CONFIG_UPDATED_AT_COLUMN,
+    SYSTEM_CONFIG_UPDATED_BY_COLUMN, SYSTEM_CONFIG_VALUE_COLUMN, SYSTEM_CONFIG_VALUE_TYPE_COLUMN,
+    SYSTEM_CONFIG_VISIBILITY_COLUMN, create_system_config_key_unique_index,
+    create_system_config_table, drop_system_config_key_unique_index, drop_system_config_table,
 };
 
 /// Result type returned by database helpers.

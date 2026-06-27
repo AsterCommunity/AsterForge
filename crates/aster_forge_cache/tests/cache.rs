@@ -16,16 +16,16 @@ use tokio::time::{Duration, Instant, sleep};
 fn cache_config(backend: &str, default_ttl: u64) -> CacheConfig {
     CacheConfig {
         backend: backend.to_string(),
-        redis_url: String::new(),
+        endpoint: String::new(),
         default_ttl,
     }
 }
 
-async fn wait_for_redis_cache(redis_url: String) -> Arc<dyn aster_forge_cache::CacheBackend> {
+async fn wait_for_redis_cache(endpoint: String) -> Arc<dyn aster_forge_cache::CacheBackend> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let config = CacheConfig {
         backend: "redis".to_string(),
-        redis_url,
+        endpoint,
         default_ttl: 60,
     };
 
@@ -165,7 +165,7 @@ async fn test_memory_cache_zero_ttl_entries_expire_immediately() {
 async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
     let cache = create_cache(&CacheConfig {
         backend: "redis".to_string(),
-        redis_url: "not a redis url".to_string(),
+        endpoint: "not a redis url".to_string(),
         default_ttl: 60,
     })
     .await;

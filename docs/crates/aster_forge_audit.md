@@ -69,23 +69,9 @@ pub fn audit_component(
 
 `record_server_shutdown` 是产品语义，所以仍然留在产品仓库。Forge 只保证它在 `mail_outbox` drain 之后、`audit_manager` flush 之前执行。
 
-如果产品需要拆开注册，也可以使用：
-
-```rust
-aster_forge_audit::register_server_shutdown_audit(
-    registry,
-    resources,
-    |resources| async move {
-        record_server_shutdown(&resources).await;
-        Ok(())
-    },
-);
-
-aster_forge_audit::register_audit_manager_shutdown(registry, |()| async move {
-    shutdown_global_audit_log_manager().await;
-    Ok(())
-});
-```
+如果产品需要拆开注册，也应该使用 `server_shutdown_audit_component(...)` 和
+`audit_manager_component(...)` 这两个 component factory，再由入口或产品聚合 component
+统一注册 bundle。不要在产品侧直接调用低层 registry 注册函数。
 
 ## Database
 

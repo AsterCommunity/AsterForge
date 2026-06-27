@@ -250,7 +250,6 @@ impl aster_forge_mail::MailOutboxDispatchRow for mail_outbox::Model {
 - `MAIL_OUTBOX_COMPONENT`：`mail_outbox`
 - `MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE`：`mail_outbox_drain`
 - `mail_outbox_component(resources, drain)`
-- `register_mail_outbox_shutdown(registry, resources, drain)`
 
 标准依赖关系是：
 

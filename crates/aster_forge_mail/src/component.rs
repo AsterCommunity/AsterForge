@@ -8,9 +8,7 @@
 
 use std::future::Future;
 
-use aster_forge_runtime::{
-    RuntimeComponentBundleRegistration, RuntimeComponentKind, RuntimeComponentRegistry,
-};
+use aster_forge_runtime::{RuntimeComponentBundleRegistration, RuntimeComponentKind};
 
 /// Stable component name used for mail outbox lifecycle handling.
 pub const MAIL_OUTBOX_COMPONENT: &str = "mail_outbox";
@@ -42,19 +40,6 @@ where
     )
 }
 
-/// Registers graceful mail outbox draining after runtime background tasks stop.
-pub fn register_mail_outbox_shutdown<T, F, Fut>(
-    registry: &mut RuntimeComponentRegistry,
-    resources: T,
-    drain: F,
-) where
-    T: Send + 'static,
-    F: FnOnce(T) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<(), String>> + Send + 'static,
-{
-    registry.register_bundle(mail_outbox_component(resources, drain));
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -64,10 +49,7 @@ mod tests {
 
     use aster_forge_runtime::RuntimeComponentBundle;
 
-    use super::{
-        MAIL_OUTBOX_COMPONENT, MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE, mail_outbox_component,
-        register_mail_outbox_shutdown,
-    };
+    use super::{MAIL_OUTBOX_COMPONENT, MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE, mail_outbox_component};
 
     #[test]
     fn mail_outbox_component_registers_standard_shutdown_dependency() {
@@ -113,14 +95,5 @@ mod tests {
 
         assert!(!report.has_failures());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn mail_outbox_shutdown_registrar_can_be_used_directly() {
-        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
-            register_mail_outbox_shutdown(registry, (), |()| async { Ok(()) });
-        });
-
-        assert!(registry.descriptor(MAIL_OUTBOX_COMPONENT).is_some());
     }
 }

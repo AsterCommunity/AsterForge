@@ -32,6 +32,7 @@ pub use notification::{
     ConfigChangeNotifier, ConfigNotification, ConfigNotificationSource, ConfigReloadDecision,
     ConfigReloadMessage, ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime,
     InMemoryConfigNotifier, SharedConfigChangeNotifier, build_config_sync_runtime,
+    build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
     default_config_sync_topic, handle_config_reload_notification, run_config_reload_worker,
 };
 #[cfg(feature = "redis-pubsub")]
@@ -53,9 +54,10 @@ pub use runtime::{
     read_positive_u32, read_positive_u64, read_positive_usize,
 };
 pub use value::{
-    ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility,
+    ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility, config_value_audit_string,
     normalize_string_enum_set_selection, parse_single_string_enum_selection,
-    parse_string_array_config_value, parse_string_enum_set_selection, validate_storage_value,
+    parse_string_array_config_value, parse_string_enum_set_selection, present_config_value,
+    validate_storage_value,
 };
 
 /// Builds a static [`ConfigRegistry`] from a list of [`ConfigDefinition`] items.

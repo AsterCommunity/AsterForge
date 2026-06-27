@@ -25,18 +25,12 @@ use crate::{
 type RuntimeShutdownFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type RuntimeShutdownPhaseFn = dyn FnMut() -> RuntimeShutdownFuture + Send;
 
-/// Function exported by a product subsystem to register runtime components.
-pub type RuntimeComponentRegistrar = fn(&mut RuntimeComponentRegistry);
-
-/// Function exported by a product subsystem to register runtime components using product state.
-pub type RuntimeComponentStateRegistrar<S> = fn(&mut RuntimeComponentRegistry, &S);
-
 /// Product-owned runtime component bundle.
 ///
 /// A bundle is useful when registration needs to consume owned handles such as database pools,
-/// background task collections, or other shutdown-only resources. Stateless subsystems can keep
-/// using [`RuntimeComponentRegistrar`]; resource-owning subsystems can implement this trait and let
-/// the product entrypoint pass the bundle to [`RuntimeComponentRegistry::configured_with_bundle`].
+/// background task collections, or other shutdown-only resources. Product subsystems should expose
+/// component factory functions that return a bundle registration instead of asking entrypoints to
+/// call low-level registry functions directly.
 pub trait RuntimeComponentBundle {
     /// Registers this bundle into the runtime component registry.
     fn register(self, registry: &mut RuntimeComponentRegistry);
@@ -51,44 +45,26 @@ where
     }
 }
 
-impl<A, B> RuntimeComponentBundle for (A, B)
-where
-    A: RuntimeComponentBundle,
-    B: RuntimeComponentBundle,
-{
-    fn register(self, registry: &mut RuntimeComponentRegistry) {
-        self.0.register(registry);
-        self.1.register(registry);
-    }
+macro_rules! impl_runtime_component_bundle_tuple {
+    ($($name:ident : $index:tt),+) => {
+        impl<$($name),+> RuntimeComponentBundle for ($($name,)+)
+        where
+            $($name: RuntimeComponentBundle,)+
+        {
+            fn register(self, registry: &mut RuntimeComponentRegistry) {
+                $(self.$index.register(registry);)+
+            }
+        }
+    };
 }
 
-impl<A, B, C> RuntimeComponentBundle for (A, B, C)
-where
-    A: RuntimeComponentBundle,
-    B: RuntimeComponentBundle,
-    C: RuntimeComponentBundle,
-{
-    fn register(self, registry: &mut RuntimeComponentRegistry) {
-        self.0.register(registry);
-        self.1.register(registry);
-        self.2.register(registry);
-    }
-}
-
-impl<A, B, C, D> RuntimeComponentBundle for (A, B, C, D)
-where
-    A: RuntimeComponentBundle,
-    B: RuntimeComponentBundle,
-    C: RuntimeComponentBundle,
-    D: RuntimeComponentBundle,
-{
-    fn register(self, registry: &mut RuntimeComponentRegistry) {
-        self.0.register(registry);
-        self.1.register(registry);
-        self.2.register(registry);
-        self.3.register(registry);
-    }
-}
+impl_runtime_component_bundle_tuple!(A: 0, B: 1);
+impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2);
+impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3);
+impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4);
+impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5);
+impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6);
+impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7);
 
 /// Broad category for a registered runtime component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,16 +214,6 @@ impl RuntimeComponentRegistry {
         registry
     }
 
-    /// Creates a registry and applies one state-aware registration function.
-    pub fn configured_with_state<S, F>(state: &S, configure: F) -> Self
-    where
-        F: FnOnce(&mut Self, &S),
-    {
-        let mut registry = Self::new();
-        registry.configure_with_state(state, configure);
-        registry
-    }
-
     /// Creates a registry and registers one product-owned component bundle.
     pub fn configured_with_bundle<B>(bundle: B) -> Self
     where
@@ -267,47 +233,12 @@ impl RuntimeComponentRegistry {
         registry.shutdown().await
     }
 
-    /// Creates a registry and applies subsystem registrars in order.
-    ///
-    /// This is the static-list counterpart to [`RuntimeComponentRegistry::configured`]. Product
-    /// entrypoints can keep a single ordered registrar slice and let each subsystem own its own
-    /// component declaration, which avoids spreading root registry construction through tests and
-    /// startup code.
-    pub fn from_registrars(registrars: &[RuntimeComponentRegistrar]) -> Self {
-        let mut registry = Self::new();
-        registry.register_all(registrars);
-        registry
-    }
-
-    /// Creates a registry and applies state-aware subsystem registrars in order.
-    pub fn from_state_registrars<S>(
-        state: &S,
-        registrars: &[RuntimeComponentStateRegistrar<S>],
-    ) -> Self {
-        let mut registry = Self::new();
-        registry.register_all_with_state(state, registrars);
-        registry
-    }
-
     /// Applies a product or subsystem registration function.
-    ///
-    /// This mirrors Actix Web's `configure` style: subsystem modules receive a
-    /// mutable registry and attach their own components without creating or
-    /// owning the root registry.
     pub fn configure<F>(&mut self, configure: F) -> &mut Self
     where
         F: FnOnce(&mut Self),
     {
         configure(self);
-        self
-    }
-
-    /// Applies a state-aware product or subsystem registration function.
-    pub fn configure_with_state<S, F>(&mut self, state: &S, configure: F) -> &mut Self
-    where
-        F: FnOnce(&mut Self, &S),
-    {
-        configure(self, state);
         self
     }
 
@@ -317,26 +248,6 @@ impl RuntimeComponentRegistry {
         B: RuntimeComponentBundle,
     {
         bundle.register(self);
-        self
-    }
-
-    /// Applies subsystem registrars in order.
-    pub fn register_all(&mut self, registrars: &[RuntimeComponentRegistrar]) -> &mut Self {
-        for registrar in registrars {
-            registrar(self);
-        }
-        self
-    }
-
-    /// Applies state-aware subsystem registrars in order.
-    pub fn register_all_with_state<S>(
-        &mut self,
-        state: &S,
-        registrars: &[RuntimeComponentStateRegistrar<S>],
-    ) -> &mut Self {
-        for registrar in registrars {
-            registrar(self, state);
-        }
         self
     }
 
@@ -944,55 +855,6 @@ mod tests {
             );
     }
 
-    struct TestState {
-        cache_enabled: bool,
-    }
-
-    fn register_cache_component_with_state(
-        registry: &mut RuntimeComponentRegistry,
-        state: &TestState,
-    ) {
-        if state.cache_enabled {
-            register_cache_component(registry);
-        }
-    }
-
-    #[test]
-    fn registry_builds_from_ordered_registrars() {
-        let registry = RuntimeComponentRegistry::from_registrars(&[
-            register_database_component,
-            register_cache_component,
-        ]);
-
-        assert_eq!(registry.len(), 2);
-        assert_eq!(registry.descriptors()[0].name, "database");
-        assert_eq!(registry.descriptors()[1].name, "cache");
-        assert_eq!(registry.descriptors()[1].dependencies, vec!["database"]);
-    }
-
-    #[test]
-    fn registry_builds_from_state_aware_registrars() {
-        let state = TestState {
-            cache_enabled: true,
-        };
-        let registry = RuntimeComponentRegistry::from_state_registrars(
-            &state,
-            &[register_cache_component_with_state],
-        );
-
-        assert_eq!(registry.len(), 1);
-        assert_eq!(registry.descriptors()[0].name, "cache");
-
-        let state = TestState {
-            cache_enabled: false,
-        };
-        let registry =
-            RuntimeComponentRegistry::configured_with_state(&state, |registry, state| {
-                register_cache_component_with_state(registry, state);
-            });
-        assert!(registry.is_empty());
-    }
-
     #[tokio::test]
     async fn registry_runs_shutdown_phases_in_dependency_order() {
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -1321,6 +1183,38 @@ mod tests {
         assert_eq!(registry.len(), 2);
         assert_eq!(registry.descriptors()[0].name, "database");
         assert_eq!(registry.descriptors()[1].name, "cache");
+    }
+
+    #[test]
+    fn registry_accepts_five_item_tuple_component_bundle() {
+        fn register_mail_component(registry: &mut RuntimeComponentRegistry) {
+            registry.component("mail").kind(RuntimeComponentKind::Mail);
+        }
+        fn register_tasks_component(registry: &mut RuntimeComponentRegistry) {
+            registry
+                .component("tasks")
+                .kind(RuntimeComponentKind::Tasks);
+        }
+        fn register_audit_component(registry: &mut RuntimeComponentRegistry) {
+            registry
+                .component("audit")
+                .kind(RuntimeComponentKind::Product);
+        }
+
+        let registry = RuntimeComponentRegistry::configured_with_bundle((
+            register_database_component,
+            register_cache_component,
+            register_mail_component,
+            register_tasks_component,
+            register_audit_component,
+        ));
+
+        let names = registry
+            .descriptors()
+            .iter()
+            .map(|descriptor| descriptor.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["database", "cache", "mail", "tasks", "audit"]);
     }
 
     #[tokio::test]

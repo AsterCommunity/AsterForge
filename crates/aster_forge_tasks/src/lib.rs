@@ -38,10 +38,8 @@ mod temp;
 
 pub use component::{
     BACKGROUND_TASKS_COMPONENT, BACKGROUND_TASKS_SHUTDOWN_PHASE, BackgroundTaskRuntimeComponent,
-    BackgroundTaskRuntimeDefinitionsComponent, BackgroundTaskRuntimeDescriptor,
-    background_task_component, background_task_component_with_definitions,
-    background_task_component_with_descriptors, register_background_task_definitions,
-    register_background_task_descriptors, register_background_tasks_shutdown,
+    BackgroundTaskRuntimeDefinitionsComponent, background_task_component,
+    background_task_component_with_definitions,
 };
 pub use dedupe::{TASK_DEDUPE_KEY_MAX_LEN, TaskDedupeKey, scheduled_task_dedupe_key};
 pub use dispatch::{

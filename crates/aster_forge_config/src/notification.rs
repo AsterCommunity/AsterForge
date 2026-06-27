@@ -217,8 +217,24 @@ pub fn build_config_sync_runtime(
     config: &ConfigSyncConfig,
     namespace: &str,
 ) -> Result<ConfigSyncRuntime> {
+    build_config_sync_runtime_with_runtime_id(
+        config,
+        namespace,
+        aster_forge_utils::id::new_runtime_id(),
+    )
+}
+
+/// Builds a namespaced config-sync runtime with an explicit runtime ID.
+///
+/// Products normally use [`build_config_sync_runtime`]. This variant is useful when the product
+/// already has a stable process identity or when tests need deterministic self-origin filtering.
+pub fn build_config_sync_runtime_with_runtime_id(
+    config: &ConfigSyncConfig,
+    namespace: &str,
+    runtime_id: impl Into<String>,
+) -> Result<ConfigSyncRuntime> {
     let namespace = namespace.trim();
-    let runtime_id = aster_forge_utils::id::new_runtime_id();
+    let runtime_id = runtime_id.into();
     let topic = config_sync_topic(config, namespace);
     match config.backend.trim().to_ascii_lowercase().as_str() {
         "" | "disabled" | "none" => Ok(ConfigSyncRuntime::disabled_with_runtime_id(
@@ -231,6 +247,15 @@ pub fn build_config_sync_runtime(
             "unsupported config_sync.backend '{backend}'"
         ))),
     }
+}
+
+/// Decodes one transport payload into a config reload event.
+///
+/// Transport adapters should use this helper before forwarding data into the common notifier path.
+/// Malformed payloads are returned as errors so listeners can log and continue instead of ending the
+/// subscription loop.
+pub fn decode_config_reload_transport_payload(payload: &str) -> Result<ConfigChangeEvent> {
+    ConfigReloadMessage::decode(payload).map(ConfigChangeEvent::Reload)
 }
 
 fn config_sync_topic(config: &ConfigSyncConfig, namespace: &str) -> String {
@@ -618,7 +643,7 @@ mod redis_transport {
                             continue;
                         }
                     };
-                    let decoded = match ConfigReloadMessage::decode(&payload) {
+                    let decoded = match super::decode_config_reload_transport_payload(&payload) {
                         Ok(decoded) => decoded,
                         Err(error) => {
                             tracing::warn!(
@@ -628,7 +653,7 @@ mod redis_transport {
                             continue;
                         }
                     };
-                    let _ = sender.send(ConfigChangeEvent::Reload(decoded));
+                    let _ = sender.send(decoded);
                 }
             });
 
@@ -653,8 +678,10 @@ mod tests {
         CONFIG_SYNC_BACKEND_DISABLED, ConfigChangeEvent, ConfigChangeNotifier,
         ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,
         ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime, InMemoryConfigNotifier,
-        SharedConfigChangeNotifier, build_config_sync_runtime, default_config_sync_topic,
-        handle_config_reload_notification, redis_channel_from_topic, run_config_reload_worker,
+        SharedConfigChangeNotifier, build_config_sync_runtime,
+        build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
+        default_config_sync_topic, handle_config_reload_notification, redis_channel_from_topic,
+        run_config_reload_worker,
     };
     use crate::ConfigCoreError;
     use std::sync::{
@@ -712,6 +739,21 @@ mod tests {
     }
 
     #[test]
+    fn transport_payload_decode_surfaces_malformed_messages() {
+        let message = ConfigReloadMessage::new(
+            "aster_test",
+            "runtime-a",
+            ["feature_enabled"],
+            ConfigNotificationSource::Cli,
+        );
+        let encoded = message.encode().unwrap();
+        let event = decode_config_reload_transport_payload(&encoded).unwrap();
+        assert_eq!(event.reload_message(), &message);
+
+        assert!(decode_config_reload_transport_payload("{not-json").is_err());
+    }
+
+    #[test]
     fn config_sync_config_defaults_to_disabled_generic_topic() {
         let config = ConfigSyncConfig::default();
 
@@ -753,6 +795,30 @@ mod tests {
             default_config_sync_topic("aster_test"),
             "aster_test.config_reload"
         );
+    }
+
+    #[test]
+    fn config_sync_runtime_can_use_explicit_runtime_id() {
+        let runtime = build_config_sync_runtime_with_runtime_id(
+            &ConfigSyncConfig::default(),
+            "aster_test",
+            "runtime-explicit",
+        )
+        .unwrap();
+
+        assert!(!runtime.enabled());
+        assert_eq!(runtime.namespace(), "aster_test");
+        assert_eq!(runtime.runtime_id(), "runtime-explicit");
+    }
+
+    #[tokio::test]
+    async fn disabled_config_sync_publish_is_noop() {
+        let runtime = ConfigSyncRuntime::disabled_with_runtime_id("aster_test", "runtime-a");
+
+        runtime
+            .publish_reload(["feature"], ConfigNotificationSource::Api)
+            .await
+            .unwrap();
     }
 
     #[test]

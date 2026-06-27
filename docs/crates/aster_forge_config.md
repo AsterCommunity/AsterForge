@@ -1,8 +1,8 @@
 # aster_forge_config
 
-`aster_forge_config` 提供 Aster 服务的运行时配置公共内核。它负责配置定义注册、结构化值转换、存储字符串验证、默认值 seed 记录生成、定义元数据覆盖、运行时快照 reload diff，以及可选的 Redis reload pub/sub 通知。
+`aster_forge_config` 提供 Aster 服务的运行时配置公共内核。它负责配置定义注册、结构化值转换、存储字符串验证、默认值 seed 记录生成、定义元数据覆盖、展示脱敏、审计字符串转换、运行时快照 reload diff，以及可选的 Redis reload pub/sub 通知。
 
-它不负责产品数据库实体、SeaORM migration、管理 API、前端配置页、翻译文案、业务 normalizer 的具体规则，也不负责把配置变更写入审计。产品仓库只需要把自己的配置项注册进 Forge registry，并在存储边界把本地 DB enum 与 Forge enum 做显式转换。
+它不负责管理 API、前端配置页、翻译文案、业务 normalizer 的具体规则，也不负责把配置变更写入审计。`system_config` 的共享 SeaORM entity、store、table builder 和 index builder 放在 `aster_forge_db::system_config`；产品仓库只需要把自己的配置项注册进 Forge registry，并在产品边界绑定 registry、权限和审计语义。
 
 ## 适用场景
 
@@ -17,7 +17,8 @@
 - 产品自己的配置 key 常量。
 - 产品自己的 category 列表。
 - 产品自己的 i18n key。
-- 产品自己的数据库 ActiveModel / migration / repository SQL。
+- 产品自己的业务实体、产品专属 migration / repository SQL。
+- `system_config` 的 SeaORM entity、store 和 table builder；这些属于 `aster_forge_db::system_config`。
 - 产品自己的审计详情、权限判断和管理 API envelope。
 - 由配置派生出的产品运行时状态，例如邮件模板、审计 action set、Yggdrasil 策略对象。
 
@@ -55,6 +56,8 @@ aster_forge_config = {
 - `parse_string_array_config_value()`：解析配置存储中的 JSON string array，让产品侧继续负责后续 URL、域名、枚举等业务规范化。
 - `ConfigSource`：`system` / `custom` 来源。
 - `ConfigVisibility`：`private` / `public` / `authenticated` 可见性。
+- `present_config_value()`：API 展示用脱敏和 lossy 读取 helper。
+- `config_value_audit_string()`：审计详情用脱敏和 lossy 字符串 helper。
 - `StoredConfig`：产品数据库行转换后的 Forge 存储模型。
 - `AsyncRuntimeConfig` / `AsyncConfigSnapshot`：基于 `tokio::sync::RwLock` 的 async 配置快照和 reload diff。
 - `SyncRuntimeConfig` / `SyncConfigSnapshot`：基于标准库 `RwLock` 的同步热读配置快照。
@@ -194,10 +197,10 @@ let normalized_storage = CONFIG_REGISTRY.value_to_storage_for_key(
 
 如果产品正在实现更底层的 repository 或迁移逻辑，也可以单独使用 `ConfigValue::to_storage_for_type()`。
 
-读取和列表展示路径可以使用 `ConfigValue::for_presentation()`：
+读取和列表展示路径可以使用 `present_config_value()`：
 
 ```rust
-let value = ConfigValue::for_presentation(
+let value = aster_forge_config::present_config_value(
     value_type,
     stored_value,
     is_sensitive,
@@ -213,6 +216,19 @@ let value = ConfigValue::for_presentation(
 - 它不吞写入错误，产品保存配置时仍然必须走严格校验。
 
 产品侧仍然负责 `ConfigValue` 到本地数据库 enum 的转换、权限判断、审计上下文和配置变更后的业务动作。不要为了“适配旧代码”再包一层等价的本地 enum。
+
+审计详情里需要记录配置值时，使用同一套脱敏规则：
+
+```rust
+let audit_value = aster_forge_config::config_value_audit_string(
+    value_type,
+    stored_value,
+    is_sensitive,
+    |error| tracing::warn!(%error, "invalid stored config value"),
+);
+```
+
+如果产品使用 Forge DB store，`system_config` 表、entity 和 repository 机械层应该来自 `aster_forge_db::system_config`。产品 repository 只绑定 `CONFIG_REGISTRY`、deprecated keys、产品错误映射和权限语义，不再复制 SeaORM entity 或等价 CRUD。
 
 ### String Enum 兼容解析
 
@@ -400,6 +416,8 @@ notifier.publish_reload(message).await?;
 - `ConfigSyncConfig`
 - `ConfigSyncRuntime`
 - `build_config_sync_runtime(config, namespace)`
+- `build_config_sync_runtime_with_runtime_id(config, namespace, runtime_id)`
+- `decode_config_reload_transport_payload(payload)`
 - `ConfigReloadWorkerConfig`
 - `handle_config_reload_notification()`
 - `run_config_reload_worker()`
@@ -412,10 +430,14 @@ notifier.publish_reload(message).await?;
 
 产品侧如果需要构造静态配置或测试数据，优先使用 `CONFIG_SYNC_BACKEND_DISABLED` 和 `CONFIG_SYNC_BACKEND_REDIS`，不要在各仓库散写 backend 字符串。
 
-底层 `ConfigReloadWorkerConfig`、`handle_config_reload_notification()` 和 `run_config_reload_worker()` 仍然保留给特殊运行器或测试使用；普通产品不应该自己拼 reload message、notifier subscribe、namespace 过滤或 backend match。
+`build_config_sync_runtime_with_runtime_id(...)` 只在产品已有稳定进程 ID 或测试需要固定 origin 过滤时使用。普通服务用 `build_config_sync_runtime(...)` 生成 process-level runtime ID。
+
+底层 `ConfigReloadWorkerConfig`、`handle_config_reload_notification()`、`decode_config_reload_transport_payload()` 和 `run_config_reload_worker()` 仍然保留给特殊运行器、transport adapter 或测试使用；普通产品不应该自己拼 reload message、notifier subscribe、namespace 过滤或 backend match。
 
 这组 API 负责统一静态 config shape、backend factory、runtime ID 生成、namespace/topic 默认值、过滤 namespace、忽略本进程发出的消息、调用产品传入的 reload 回调，并在一次 reload 失败后继续监听后续通知。
 Forge 不假设 transport 只能是 Redis；后续 RabbitMQ、NATS 或其他 broker 可以实现同一个 `ConfigChangeNotifier` 边界，并接入 `build_config_sync_runtime()` 的 backend 分支。
+
+transport adapter 接收到原始 payload 时，应该先调用 `decode_config_reload_transport_payload(payload)`。解析失败只记录 warning 并继续监听，不应该让一个 malformed message 杀掉订阅 worker。
 
 ## 错误边界
 

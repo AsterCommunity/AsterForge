@@ -43,13 +43,15 @@ struct Config {
 ```rust
 let config = aster_forge_cache::CacheConfig {
     backend: "redis".to_string(),
-    redis_url: "redis://127.0.0.1/".to_string(),
+    endpoint: "redis://127.0.0.1/".to_string(),
     default_ttl: 3600,
 };
 let cache = aster_forge_cache::create_cache(&config).await;
 ```
 
-默认配置使用 `memory` backend、空 `redis_url` 和 3600 秒 TTL，和 Aster 产品配置文件里的历史默认值保持一致。
+默认配置使用 `memory` backend、空 `endpoint` 和 3600 秒 TTL，和 Aster 产品配置文件里的历史默认值保持一致。
+
+配置文件里应该使用 `endpoint`。为了不破坏已有部署，`CacheConfig` 反序列化时仍接受历史键 `redis_url` 作为 alias；Rust API 不保留 `redis_url` 字段。
 
 `create_cache()` 返回 `Arc<dyn CacheBackend>`。Redis 初始化失败时会记录 warn 并回退到 memory backend。
 
@@ -89,11 +91,10 @@ Forge 只负责后端机制，不负责产品可用性策略。
 如果产品使用 `aster_forge_runtime::RuntimeComponentRegistry`，可以直接注册标准 cache diagnostics：
 
 ```rust
-aster_forge_cache::register_cache_health_check(
-    registry,
+registry.register_bundle(aster_forge_cache::cache_health_component(
     config.cache.clone(),
     cache.clone(),
-);
+));
 ```
 
 这个检查注册在 `cache` component 下，只进入 diagnostics scope，并且是 optional health check。行为：
@@ -104,6 +105,8 @@ aster_forge_cache::register_cache_health_check(
 - report detail 会包含 `active_backend`，fallback 时还会包含 `configured_backend`。
 
 产品仍然决定这个 diagnostics 结果是否影响 readiness、admin overview 或告警策略。普通产品不应该再重复写 cache backend fallback/ping 的 report 拼装。
+
+新产品接入时优先使用 `cache_health_component(...)`，这样 health 也保持 component 化。低层 registry 注册函数是 crate 内部实现细节，不作为子系统 API 暴露。
 
 ## 测试要求
 

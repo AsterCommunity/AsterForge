@@ -29,8 +29,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 
 pub use health::{
-    CACHE_COMPONENT, CACHE_HEALTH_CHECK, CACHE_HEALTH_CHECK_TIMEOUT, cache_health_options,
-    check_cache_component, register_cache_health_check,
+    CACHE_COMPONENT, CACHE_HEALTH_CHECK, CACHE_HEALTH_CHECK_TIMEOUT, CacheHealthComponent,
+    cache_health_component, cache_health_options, check_cache_component,
 };
 #[cfg(feature = "memory")]
 pub use memory::MemoryCache;
@@ -79,9 +79,9 @@ pub struct CacheConfig {
     /// Backend name. Currently `memory` and `redis` are recognized.
     #[serde(default = "CacheConfig::default_backend")]
     pub backend: String,
-    /// Redis connection URL used when `backend` is `redis`.
-    #[serde(default)]
-    pub redis_url: String,
+    /// Backend endpoint. Redis uses a Redis connection URL.
+    #[serde(default, alias = "redis_url")]
+    pub endpoint: String,
     /// Default time-to-live, in seconds, for entries that do not specify an explicit TTL.
     #[serde(default = "CacheConfig::default_ttl")]
     pub default_ttl: u64,
@@ -91,7 +91,7 @@ impl Default for CacheConfig {
     fn default() -> Self {
         Self {
             backend: Self::default_backend(),
-            redis_url: String::new(),
+            endpoint: String::new(),
             default_ttl: Self::default_ttl(),
         }
     }
@@ -107,8 +107,8 @@ impl CacheConfig {
     }
 }
 
-fn redis_backend_target(redis_url: &str) -> String {
-    let Some((scheme, rest)) = redis_url.split_once("://") else {
+fn redis_backend_target(endpoint: &str) -> String {
+    let Some((scheme, rest)) = endpoint.split_once("://") else {
         return "configured".to_string();
     };
 
@@ -193,21 +193,19 @@ impl CacheExt for dyn CacheBackend {
 pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
     match config.backend.as_str() {
         #[cfg(feature = "redis")]
-        "redis" => {
-            match redis_cache::RedisCache::new(&config.redis_url, config.default_ttl).await {
-                Ok(cache) => {
-                    tracing::info!(
-                        target = %redis_backend_target(&config.redis_url),
-                        "cache backend: redis"
-                    );
-                    Arc::new(cache)
-                }
-                Err(e) => {
-                    tracing::warn!("redis connection failed: {e}, falling back to memory cache");
-                    create_memory_cache(config.default_ttl)
-                }
+        "redis" => match redis_cache::RedisCache::new(&config.endpoint, config.default_ttl).await {
+            Ok(cache) => {
+                tracing::info!(
+                    target = %redis_backend_target(&config.endpoint),
+                    "cache backend: redis"
+                );
+                Arc::new(cache)
             }
-        }
+            Err(e) => {
+                tracing::warn!("redis connection failed: {e}, falling back to memory cache");
+                create_memory_cache(config.default_ttl)
+            }
+        },
         _ => {
             tracing::info!("cache backend: memory (ttl={}s)", config.default_ttl);
             create_memory_cache(config.default_ttl)
@@ -229,7 +227,7 @@ mod tests {
         let config = CacheConfig::default();
 
         assert_eq!(config.backend, "memory");
-        assert_eq!(config.redis_url, "");
+        assert_eq!(config.endpoint, "");
         assert_eq!(config.default_ttl, 3600);
     }
 
@@ -241,11 +239,35 @@ mod tests {
         assert_eq!(config, CacheConfig::default());
     }
 
+    #[test]
+    fn cache_config_deserializes_endpoint_field() {
+        let config: CacheConfig = serde_json::from_str(
+            r#"{"backend":"redis","endpoint":"redis://127.0.0.1/","default_ttl":30}"#,
+        )
+        .expect("cache config should accept the endpoint field");
+
+        assert_eq!(config.backend, "redis");
+        assert_eq!(config.endpoint, "redis://127.0.0.1/");
+        assert_eq!(config.default_ttl, 30);
+    }
+
+    #[test]
+    fn cache_config_accepts_legacy_redis_url_alias() {
+        let config: CacheConfig = serde_json::from_str(
+            r#"{"backend":"redis","redis_url":"redis://127.0.0.1/","default_ttl":30}"#,
+        )
+        .expect("cache config should accept legacy redis_url config files");
+
+        assert_eq!(config.backend, "redis");
+        assert_eq!(config.endpoint, "redis://127.0.0.1/");
+        assert_eq!(config.default_ttl, 30);
+    }
+
     #[tokio::test]
     async fn create_cache_uses_memory_for_unknown_backend() {
         let cache = create_cache(&CacheConfig {
             backend: "unknown".to_string(),
-            redis_url: "redis://127.0.0.1/".to_string(),
+            endpoint: "redis://127.0.0.1/".to_string(),
             default_ttl: 5,
         })
         .await;

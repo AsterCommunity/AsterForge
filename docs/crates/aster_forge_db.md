@@ -1,6 +1,6 @@
 # aster_forge_db
 
-`aster_forge_db` 提供 SeaORM 相关的共享基础设施：数据库连接、连接关闭、查询重试、分页构造、搜索 query 处理、排序 helper、事务封装、runtime lease 数据库 store、scheduled task catalog 数据库 store、mail outbox store 和 audit log store。
+`aster_forge_db` 提供 SeaORM 相关的共享基础设施：数据库连接、连接关闭、查询重试、分页构造、搜索 query 处理、排序 helper、事务封装、runtime lease 数据库 store、scheduled task catalog 数据库 store、system config store、mail outbox store 和 audit log store。
 
 ## 适用场景
 
@@ -11,12 +11,13 @@
 - 事务 helper。
 - 多实例 runtime lease 的默认数据库表和 store。
 - 多实例 scheduled task catalog 的默认数据库表和 store。
+- system config 的默认数据库表、唯一索引、实体和 store。
 - mail outbox 的默认数据库表、索引和 dispatch store。
 - audit logs 的默认数据库表、索引和基础写入/统计 store。
 
 不适合放在这里的内容：
 
-- 产品实体和 migration。
+- 产品业务实体和产品专属 migration。
 - repository 业务查询。
 - 权限过滤。
 - 数据库配置来源和加密存储。
@@ -147,6 +148,105 @@ claim 语义：
 - completion 要求 claim owner 和 claim timestamp 匹配，然后推进 `next_run_at` 并清理 claim。
 
 推荐配合 `background_tasks.dedupe_key` 使用。`scheduled_tasks` 解决“谁跑这一次计划触发”，`background_tasks.dedupe_key` 解决“这一次触发最多写一条历史/业务任务 row”。
+
+## System Config
+
+模块：`system_config`
+
+`SystemConfigDbBinding` / `SystemConfigDbStore` 提供 Aster 产品通用的 `system_config` 表结构、唯一索引、SeaORM entity、默认值 seed/repair、upsert、delete、lock、cursor 查询和可见 custom config 查询。配置定义、normalizer、dependency validator、runtime snapshot 和 reload diff 仍然归 `aster_forge_config`；这个 crate 只负责数据库持久化边界。
+
+表结构由 Forge 维护：
+
+```text
+system_config
+  id                 primary key
+  key                stable config key, unique, varchar(128)
+  value              storage string, list values are JSON text
+  value_type         string/multiline/string_array/string_enum/string_enum_set/number/boolean
+  requires_restart   whether hot reload can apply the value
+  is_sensitive       whether API and audit output must redact the value
+  source             system/custom
+  visibility         private/public/authenticated
+  namespace          optional product namespace
+  category           product UI grouping category
+  description        product-facing backend description
+  updated_at
+  updated_by         optional actor user id
+```
+
+新产品 migration crate 不应该复制这张表的列定义，直接调用 Forge builder：
+
+```rust
+manager
+    .create_table(aster_forge_db::create_system_config_table(
+        manager.get_database_backend(),
+    ))
+    .await?;
+manager
+    .create_index(aster_forge_db::create_system_config_key_unique_index())
+    .await?;
+```
+
+down migration：
+
+```rust
+manager
+    .drop_index(aster_forge_db::drop_system_config_key_unique_index())
+    .await?;
+manager
+    .drop_table(aster_forge_db::drop_system_config_table())
+    .await?;
+```
+
+运行时接入：
+
+```rust
+static SYSTEM_CONFIG_STORE: aster_forge_db::SystemConfigDbBinding =
+    aster_forge_db::SystemConfigDbBinding::new(
+    &CONFIG_REGISTRY,
+    DEPRECATED_SYSTEM_CONFIG_KEYS,
+);
+
+SYSTEM_CONFIG_STORE.ensure_defaults(writer_db).await?;
+let row = SYSTEM_CONFIG_STORE
+    .upsert(
+        writer_db,
+        aster_forge_db::SystemConfigUpsert {
+            key,
+            value: &normalized_storage,
+            visibility,
+            updated_by,
+        },
+    )
+    .await?;
+```
+
+如果产品确实需要把一个 owned `DatabaseConnection` 和 registry 绑成值对象，也可以使用 `SystemConfigDbStore::new(...)`。新产品通常优先用 `SystemConfigDbBinding`，因为 repository function 已经能从 runtime state 里拿到 reader/writer connection。
+
+产品侧只保留有业务语义的边界：
+
+- config key 常量、默认值函数和 `ConfigRegistry`。
+- normalizer / dependency validator。
+- 管理 API DTO、权限和 audit action/detail。
+- 产品错误映射，例如把“删除 system config”映射成 forbidden，把 missing key 映射成 not found。
+
+API 展示可以用 Forge 的中间 presentation row，产品 DTO 只负责 API schema 和字段裁剪：
+
+```rust
+let presented = aster_forge_db::present_system_config(row, |error| {
+    tracing::warn!(%error, "invalid stored config value");
+});
+```
+
+运行时快照可以直接使用 Forge model，不需要产品再定义一份等价 entity：
+
+```rust
+let runtime_config = aster_forge_config::SyncRuntimeConfig::<
+    aster_forge_db::system_config::Model,
+>::new();
+```
+
+如果旧项目已经发布历史 migration，不要回改历史文件；后续新 migration 或新项目从 Forge builder 开始。
 
 ## Audit Logs
 
@@ -393,9 +493,9 @@ aster_forge_runtime::AsterRuntime::builder()
     ));
 ```
 
-`database_component_after()` 只负责通用生命周期：注册 `database` 组件、保存产品声明的 shutdown 依赖、在依赖组件关闭后消费 `DbHandles` 并调用 `close()`。产品仍然负责连接配置、migration、repository、健康检查和错误映射。
+`database_component_after()` 负责通用生命周期：注册 `database` 组件、注册标准 database ping health check、保存产品声明的 shutdown 依赖、在依赖组件关闭后消费 `DbHandles` 并调用 `close()`。产品仍然负责连接配置、migration、repository、额外业务健康检查和错误映射。
 
-还没接入 component 模式的旧入口可以直接关闭：
+还没迁移到 `AsterRuntime` 的应用仍然需要在自己的关闭流程里直接关闭句柄：
 
 ```rust
 db_handles.close().await?;
@@ -408,7 +508,9 @@ db_handles.close().await?;
 如果产品使用 `aster_forge_runtime::RuntimeComponentRegistry`，可以直接注册标准数据库 ping 检查：
 
 ```rust
-aster_forge_db::register_database_health_check(registry, db_handles.reader().clone());
+registry.register_bundle(aster_forge_db::database_health_component(
+    db_handles.reader().clone(),
+));
 ```
 
 这个检查注册在 `database` component 下，覆盖 readiness 和 diagnostics scope，默认 timeout 为 `DATABASE_HEALTH_CHECK_TIMEOUT`。它只做 `DatabaseConnection::ping()`，返回标准的 `HealthComponentReport`：
@@ -417,6 +519,8 @@ aster_forge_db::register_database_health_check(registry, db_handles.reader().clo
 - 失败：`database ping failed: ...`
 
 产品仍然负责决定使用 reader 还是 writer 连接、是否还需要 migration 状态、replica lag、follower readiness 等更高层诊断。不要在产品侧重复写普通 ping health，除非确实有额外业务语义。
+
+新产品接入时优先使用 `database_component_after(...)` 或 `database_health_component(...)`。低层 registry 注册函数是 crate 内部实现细节，不作为子系统 API 暴露。
 
 ## 重试
 

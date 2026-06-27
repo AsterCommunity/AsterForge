@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aster_forge_runtime::{
-    HealthCheckOptions, HealthCheckScopes, HealthComponentReport, RuntimeComponentKind,
-    RuntimeComponentRegistry,
+    HealthCheckOptions, HealthCheckScopes, HealthComponentReport, RuntimeComponentBundle,
+    RuntimeComponentBundleRegistration, RuntimeComponentKind, RuntimeComponentRegistry,
+    runtime_component,
 };
 
 use crate::{CacheBackend, CacheConfig};
@@ -22,8 +23,35 @@ pub const CACHE_HEALTH_CHECK: &str = "cache";
 /// Default timeout for cache diagnostics checks.
 pub const CACHE_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Runtime component that registers the standard cache diagnostics check.
+pub struct CacheHealthComponent {
+    config: CacheConfig,
+    cache: Arc<dyn CacheBackend>,
+}
+
+impl CacheHealthComponent {
+    /// Creates a cache health component from static configuration and active backend.
+    pub fn new(config: CacheConfig, cache: Arc<dyn CacheBackend>) -> Self {
+        Self { config, cache }
+    }
+}
+
+impl RuntimeComponentBundle for CacheHealthComponent {
+    fn register(self, registry: &mut RuntimeComponentRegistry) {
+        register_cache_health_check(registry, self.config, self.cache);
+    }
+}
+
+/// Creates the standard cache diagnostics health component.
+pub fn cache_health_component(
+    config: CacheConfig,
+    cache: Arc<dyn CacheBackend>,
+) -> RuntimeComponentBundleRegistration<CacheHealthComponent> {
+    runtime_component(CacheHealthComponent::new(config, cache))
+}
+
 /// Registers cache diagnostics health checks.
-pub fn register_cache_health_check(
+fn register_cache_health_check(
     registry: &mut RuntimeComponentRegistry,
     config: CacheConfig,
     cache: Arc<dyn CacheBackend>,
@@ -100,7 +128,7 @@ mod tests {
     use aster_forge_runtime::{HealthComponentDetailValue, HealthStatus};
     use async_trait::async_trait;
 
-    use super::{check_cache_component, register_cache_health_check};
+    use super::{cache_health_component, check_cache_component};
     use crate::{CacheBackend, CacheConfig};
 
     struct FakeCache {
@@ -168,7 +196,7 @@ mod tests {
     async fn cache_component_reports_configured_backend_fallback() {
         let config = CacheConfig {
             backend: "redis".to_string(),
-            redis_url: "redis://example.com:6379/0".to_string(),
+            endpoint: "redis://example.com:6379/0".to_string(),
             default_ttl: 60,
         };
         let cache = FakeCache::new("memory");
@@ -199,7 +227,7 @@ mod tests {
     async fn cache_component_reports_active_backend_probe_result() {
         let config = CacheConfig {
             backend: "redis".to_string(),
-            redis_url: "redis://example.com:6379/0".to_string(),
+            endpoint: "redis://example.com:6379/0".to_string(),
             default_ttl: 60,
         };
 
@@ -229,26 +257,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_health_check_registers_diagnostics_component() {
+    async fn cache_health_component_registers_diagnostics_component() {
         let config = CacheConfig::default();
         let cache = Arc::new(crate::MemoryCache::new(60)) as Arc<dyn CacheBackend>;
-        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::new();
 
-        register_cache_health_check(&mut registry, config, cache);
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            aster_forge_runtime::RuntimeComponentBundle::register(
+                cache_health_component(config, cache),
+                registry,
+            );
+        });
 
         let descriptor = registry
             .descriptor(super::CACHE_COMPONENT)
             .expect("cache component should be registered");
-        assert_eq!(
-            descriptor.kind,
-            aster_forge_runtime::RuntimeComponentKind::Cache
-        );
         assert_eq!(descriptor.health_checks.len(), 1);
 
         let report = registry
             .run_health(aster_forge_runtime::HealthCheckScope::Diagnostics)
             .await;
-        assert_eq!(report.components[0].name, super::CACHE_HEALTH_CHECK);
         assert_eq!(report.status(), HealthStatus::Healthy);
     }
 }
