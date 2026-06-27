@@ -1,0 +1,73 @@
+name: Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY_IMAGE_GHCR: ghcr.io/{% raw %}${{ github.repository }}{% endraw %}
+
+jobs:
+  build:
+    name: Build {% raw %}${{ matrix.variant }}{% endraw %} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: default
+            features: ""
+            suffix: ""
+          - variant: metrics
+            features: "metrics"
+            suffix: "-metrics"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: {% raw %}${{ github.repository_owner }}{% endraw %}
+          password: {% raw %}${{ secrets.GITHUB_TOKEN }}{% endraw %}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: {% raw %}${{ env.REGISTRY_IMAGE_GHCR }}{% endraw %}
+          tags: |
+            type=ref,event=tag,suffix={% raw %}${{ matrix.suffix }}{% endraw %}
+            type=raw,value=latest{% raw %}${{ matrix.suffix }}{% endraw %},enable={% raw %}${{ !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'rc') }}{% endraw %}
+            type=raw,value=edge{% raw %}${{ matrix.suffix }}{% endraw %},enable={% raw %}${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}{% endraw %}
+          labels: |
+            org.opencontainers.image.title={{project-name}}
+            org.opencontainers.image.description={{package_description}}
+            org.opencontainers.image.vendor=AsterCommunity
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: {% raw %}${{ steps.meta.outputs.tags }}{% endraw %}
+          labels: {% raw %}${{ steps.meta.outputs.labels }}{% endraw %}
+          cache-from: type=gha,scope=docker-image-{% raw %}${{ matrix.variant }}{% endraw %}
+          cache-to: type=gha,mode=max,scope=docker-image-{% raw %}${{ matrix.variant }}{% endraw %}
+          build-args: |
+            CARGO_FEATURES={% raw %}${{ matrix.features }}{% endraw %}
+          provenance: true
+          sbom: true

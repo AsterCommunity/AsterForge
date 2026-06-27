@@ -123,7 +123,9 @@ mod tests {
         let generated = std::fs::read_to_string(&path).expect("read default config");
 
         assert!(generated.contains(r#"temp_dir = "{{server_temp_dir}}""#));
-        assert!(generated.contains(r#"url = "{{database_url}}""#));
+        assert!(
+            generated.contains(r#"url = "{{database_url}}""#)
+        );
 
         let _ = std::fs::remove_file(path);
     }

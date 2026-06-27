@@ -5,6 +5,7 @@
 
 mod recorder;
 mod registry;
+mod system;
 
 pub use recorder::PrometheusMetricsRecorder;
-pub use registry::{export_metrics, init_metrics};
+pub use registry::{export_metrics, get_metrics, init_metrics};

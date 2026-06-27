@@ -1,5 +1,5 @@
 # Stage 1: Build Rust binary
-FROM rust:1.94-alpine AS builder
+FROM rust:1.95-alpine AS builder
 
 RUN apk add --no-cache build-base pkgconfig sqlite-dev curl
 
@@ -19,7 +19,11 @@ COPY tests/ tests/
 ARG CARGO_FEATURES="metrics"
 ENV RUSTFLAGS="-C link-arg=-s"
 
-RUN cargo build --release --features "${CARGO_FEATURES}"
+RUN if [ -n "${CARGO_FEATURES}" ]; then \
+      cargo build --release --features "${CARGO_FEATURES}"; \
+    else \
+      cargo build --release; \
+    fi
 
 # Stage 2: Alpine runtime
 FROM alpine:3.23

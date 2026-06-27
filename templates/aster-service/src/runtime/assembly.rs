@@ -47,7 +47,9 @@ pub async fn run(state: crate::runtime::AppState) -> std::io::Result<()> {
             state.clone(),
             metrics_data,
         ))?
-        .component(crate::tasks::runtime::background_tasks_component())
+        .component(crate::tasks::runtime::background_tasks_component(
+            app_state.metrics.clone(),
+        ))
         .component(crate::services::mail_outbox_service::runtime::mail_runtime_component(app_state))
         .component(crate::services::audit_service::runtime::audit_runtime_component())
         .component(crate::db::runtime::database_component(

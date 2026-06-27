@@ -3,7 +3,7 @@ name = "{{project-name}}"
 version = "0.1.0"
 description = "{{package_description}}"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 license = "MIT"
 repository = ""
 
@@ -12,7 +12,7 @@ members = [".", "migration"]
 
 [features]
 default = []
-metrics = ["dep:prometheus"]
+metrics = ["dep:parking_lot", "dep:prometheus", "dep:sysinfo"]
 openapi = [
     "dep:utoipa",
     "dep:utoipa-swagger-ui",
@@ -86,6 +86,7 @@ aster_forge_runtime = { git = "{{forge_git}}", package = "aster_forge_runtime" }
 aster_forge_tasks = { git = "{{forge_git}}", package = "aster_forge_tasks", features = ["runtime-component"] }
 aster_forge_utils = { git = "{{forge_git}}", package = "aster_forge_utils" }
 migration = { path = "migration" }
+parking_lot = { version = "0.12", optional = true }
 prometheus = { version = "0.14", optional = true, default-features = false }
 sea-orm = { version = "2.0.0-rc.41", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
 serde = { version = "1", features = ["derive"] }
@@ -94,12 +95,13 @@ config = { version = "0.15", default-features = false, features = ["toml"] }
 thiserror = "2"
 tikv-jemallocator = { version = "0.7", optional = true }
 tikv-jemalloc-ctl = { version = "0.7", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tokio-util = "0.7"
 toml = "1.1"
 tracing = "0.1"
+sysinfo = { version = "0.39", optional = true, default-features = false, features = ["system"] }
 utoipa = { version = "5.5.0", features = ["actix_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
 
 [dev-dependencies]
 sea-orm-migration = { version = "2.0.0-rc.41", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

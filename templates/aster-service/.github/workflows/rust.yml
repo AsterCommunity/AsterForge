@@ -1,25 +1,44 @@
-name: Rust
+name: Rust CI
 
 on:
   push:
-    branches: [main]
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust.yml'
+    branches: [main, master]
   pull_request:
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust.yml'
 
 env:
   CARGO_TERM_COLOR: always
+  CODECOV_TOKEN: {% raw %}${{ secrets.CODECOV_TOKEN }}{% endraw %}
+
+permissions:
+  contents: read
 
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.94.0
-          components: rustfmt, clippy
+          toolchain: 1.95.0
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -34,10 +53,38 @@ jobs:
         run: cargo check --workspace --features metrics,openapi
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --features metrics,openapi -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
         run: cargo test --workspace
 
       - name: OpenAPI test
         run: cargo test --features metrics,openapi --test generate_openapi
+
+      - name: Prepare coverage output directory
+        run: mkdir -p coverage/rust
+
+      - name: Run Rust coverage
+        run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path coverage/rust/lcov.info
+
+      - name: Generate HTML coverage report
+        if: success()
+        run: cargo llvm-cov report --html --output-dir coverage/rust/html
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-coverage
+          if-no-files-found: ignore
+          path: coverage/rust
+
+      - name: Upload coverage reports to Codecov
+        if: always() && hashFiles('coverage/rust/lcov.info') != '' && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v7
+        with:
+          files: coverage/rust/lcov.info
+          flags: rust
+          name: rust-backend
+          token: {% raw %}${{ env.CODECOV_TOKEN }}{% endraw %}
+          fail_ci_if_error: true

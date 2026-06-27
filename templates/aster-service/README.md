@@ -123,8 +123,9 @@ Prometheus metrics are available when the `metrics` feature is enabled:
 cargo run --features metrics
 ```
 
-The service then exposes `/metrics`. The template records low-cardinality HTTP and database metrics
-through Forge recorder traits, plus allocator heap gauges from `aster_forge_alloc`.
+The service then exposes `/metrics`. The template records low-cardinality HTTP, database, health,
+background task, external-operation, allocator, process RSS, CPU, and uptime metrics through Forge
+recorder traits.
 
 Allocator behavior follows the Aster service pattern:
 
@@ -143,8 +144,12 @@ The template exposes:
 
 ## CI and Container Image
 
-The generated project includes `.github/workflows/rust.yml` with format, check, clippy, test, and
-OpenAPI generation checks.
+The generated project includes:
+
+- `.github/workflows/rust.yml`: format, check, all-feature clippy, tests, OpenAPI generation, and
+  Rust coverage artifact upload.
+- `.github/workflows/audit.yml`: scheduled and manual `cargo audit`.
+- `.github/workflows/docker-image.yml`: GHCR image publishing for default and `metrics` variants.
 
 Build the container image with:
 
