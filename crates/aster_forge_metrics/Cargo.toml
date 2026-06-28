@@ -8,7 +8,18 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+default = []
+allocator-metrics = ["dep:aster_forge_alloc"]
+backend-prometheus = ["dep:prometheus", "dep:sysinfo"]
+runtime-health = ["dep:aster_forge_runtime"]
+
 [dependencies]
+aster_forge_alloc = { path = "../aster_forge_alloc", optional = true }
+aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
+prometheus = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tokio-util.workspace = true
 tracing.workspace = true

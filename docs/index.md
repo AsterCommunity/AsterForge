@@ -44,6 +44,7 @@ aster_forge_runtime::AsterRuntime::builder()
 当前覆盖的 crate 按字母顺序排列：
 
 - [`aster_forge_actix_middleware`](./crates/aster_forge_actix_middleware.md)
+- [`aster_forge_actix_observability`](./crates/aster_forge_actix_observability.md)
 - [`aster_forge_alloc`](./crates/aster_forge_alloc.md)
 - [`aster_forge_api`](./crates/aster_forge_api.md)
 - [`aster_forge_api_docs_macros`](./crates/aster_forge_api_docs_macros.md)

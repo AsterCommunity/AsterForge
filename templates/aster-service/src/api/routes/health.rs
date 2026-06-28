@@ -1,6 +1,7 @@
 //! Health API routes.
 
 use actix_web::{HttpResponse, Scope, web};
+use aster_forge_runtime::{HealthComponentReport, SystemHealthReport};
 
 use crate::api::response::{HealthResponse, ReadinessComponent, ReadinessResponse};
 
@@ -10,10 +11,7 @@ pub fn routes() -> Scope {
         .route("/healthz", web::get().to(healthz))
         .route("/readyz", web::get().to(readyz));
 
-    #[cfg(feature = "metrics")]
-    let scope = scope.route("/metrics", web::get().to(metrics));
-
-    scope
+    crate::metrics::configure_route(scope)
 }
 
 #[aster_forge_api_docs_macros::path(
@@ -44,15 +42,24 @@ pub async fn healthz(state: web::Data<crate::runtime::AppState>) -> HttpResponse
     )
 )]
 pub async fn readyz(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
-    let components = vec![
+    let started = std::time::Instant::now();
+    let component_reports = vec![
         check_database(state.get_ref()).await,
         check_cache(state.get_ref()).await,
     ];
-    let ready = components
+    let report = SystemHealthReport::with_duration(component_reports, started.elapsed());
+    crate::metrics::record_health_report(aster_forge_runtime::HealthCheckScope::Readiness, &report);
+
+    let ready = report
+        .components
         .iter()
-        .all(|component| component.status == "healthy");
+        .all(|component| !component.status.is_issue());
     let response = ReadinessResponse {
-        components,
+        components: report
+            .components
+            .iter()
+            .map(readiness_component_response)
+            .collect(),
         service: env!("CARGO_PKG_NAME"),
         status: if ready { "ready" } else { "not_ready" },
     };
@@ -64,45 +71,28 @@ pub async fn readyz(state: web::Data<crate::runtime::AppState>) -> HttpResponse 
     }
 }
 
-async fn check_database(state: &crate::runtime::AppState) -> ReadinessComponent {
+async fn check_database(state: &crate::runtime::AppState) -> HealthComponentReport {
     match aster_forge_db::ping_database(state.db_handles.reader()).await {
-        Ok(()) => ReadinessComponent {
-            name: "database",
-            status: "healthy",
-            message: "database ping succeeded".to_string(),
-        },
-        Err(error) => ReadinessComponent {
-            name: "database",
-            status: "unhealthy",
-            message: format!("database ping failed: {error}"),
-        },
-    }
-}
-
-async fn check_cache(state: &crate::runtime::AppState) -> ReadinessComponent {
-    match state.cache.health_check().await {
-        Ok(()) => ReadinessComponent {
-            name: "cache",
-            status: "healthy",
-            message: "cache health check succeeded".to_string(),
-        },
-        Err(error) => ReadinessComponent {
-            name: "cache",
-            status: "unhealthy",
-            message: format!("cache health check failed: {error}"),
-        },
-    }
-}
-
-#[cfg(feature = "metrics")]
-async fn metrics() -> HttpResponse {
-    match crate::metrics::export_metrics() {
-        Ok(body) => HttpResponse::Ok()
-            .content_type("text/plain; version=0.0.4; charset=utf-8")
-            .body(body),
+        Ok(()) => HealthComponentReport::healthy("database", "database ping succeeded"),
         Err(error) => {
-            tracing::debug!(error = %error, "metrics export failed");
-            HttpResponse::ServiceUnavailable().body(error)
+            HealthComponentReport::unhealthy("database", format!("database ping failed: {error}"))
         }
+    }
+}
+
+async fn check_cache(state: &crate::runtime::AppState) -> HealthComponentReport {
+    match state.cache.health_check().await {
+        Ok(()) => HealthComponentReport::healthy("cache", "cache health check succeeded"),
+        Err(error) => {
+            HealthComponentReport::unhealthy("cache", format!("cache health check failed: {error}"))
+        }
+    }
+}
+
+fn readiness_component_response(component: &HealthComponentReport) -> ReadinessComponent {
+    ReadinessComponent {
+        name: component.name,
+        status: component.status.as_str(),
+        message: component.message.clone(),
     }
 }

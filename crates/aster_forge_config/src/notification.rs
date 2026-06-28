@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -122,6 +123,65 @@ pub enum ConfigReloadDecision {
     IgnoredNamespace,
     /// The notification came from this process and should not be replayed.
     IgnoredOrigin,
+}
+
+impl ConfigReloadDecision {
+    /// Returns the stable metrics label for this decision.
+    pub const fn as_label(self) -> &'static str {
+        match self {
+            Self::Reloaded => "reloaded",
+            Self::IgnoredNamespace => "ignored_namespace",
+            Self::IgnoredOrigin => "ignored_origin",
+        }
+    }
+}
+
+/// Observability event emitted after handling a config reload notification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigReloadObservation {
+    /// Source label suitable for low-cardinality metrics.
+    pub source: &'static str,
+    /// Handling decision.
+    pub decision: ConfigReloadDecision,
+    /// Whether the handling path succeeded.
+    pub status: &'static str,
+    /// Number of changed keys advertised by the reload hint.
+    pub changed_keys: u64,
+    /// Time spent handling this notification.
+    pub duration_seconds: f64,
+}
+
+impl ConfigReloadObservation {
+    fn new(
+        source: &'static str,
+        decision: ConfigReloadDecision,
+        status: &'static str,
+        changed_keys: usize,
+        duration_seconds: f64,
+    ) -> Self {
+        Self {
+            source,
+            decision,
+            status,
+            changed_keys: u64::try_from(changed_keys).unwrap_or(u64::MAX),
+            duration_seconds,
+        }
+    }
+}
+
+/// Receives config reload observability events.
+pub trait ConfigReloadObserver: Send + Sync {
+    /// Records one reload observation.
+    fn observe_config_reload(&self, observation: ConfigReloadObservation);
+}
+
+impl<F> ConfigReloadObserver for F
+where
+    F: Fn(ConfigReloadObservation) + Send + Sync,
+{
+    fn observe_config_reload(&self, observation: ConfigReloadObservation) {
+        self(observation);
+    }
 }
 
 /// Runtime reload worker configuration.
@@ -345,6 +405,29 @@ where
     F: FnMut(ConfigReloadMessage) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
+    run_config_reload_worker_with_observer(
+        notifier,
+        config,
+        shutdown,
+        move |message| reload(message),
+        None::<&dyn ConfigReloadObserver>,
+    )
+    .await
+}
+
+/// Runs a reload subscription loop and reports low-cardinality observations.
+pub async fn run_config_reload_worker_with_observer<N, F, Fut>(
+    notifier: Arc<N>,
+    config: ConfigReloadWorkerConfig,
+    shutdown: CancellationToken,
+    mut reload: F,
+    observer: Option<&dyn ConfigReloadObserver>,
+) -> Result<()>
+where
+    N: ConfigChangeNotifier + ?Sized,
+    F: FnMut(ConfigReloadMessage) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     let mut subscription = notifier.subscribe().await?;
     loop {
         tokio::select! {
@@ -355,12 +438,36 @@ where
                 let event = event?;
                 match event {
                     ConfigChangeEvent::Reload(message) => {
+                        let changed_keys = message.keys.len();
+                        let started = Instant::now();
                         match handle_config_reload_notification(&config, message, &mut reload).await {
                             Ok(ConfigReloadDecision::Reloaded) => {
+                                observe_config_reload(
+                                    observer,
+                                    ConfigReloadDecision::Reloaded,
+                                    "ok",
+                                    changed_keys,
+                                    started,
+                                );
                                 tracing::debug!("runtime config reloaded after remote notification");
                             }
-                            Ok(ConfigReloadDecision::IgnoredNamespace | ConfigReloadDecision::IgnoredOrigin) => {}
+                            Ok(decision @ (ConfigReloadDecision::IgnoredNamespace | ConfigReloadDecision::IgnoredOrigin)) => {
+                                observe_config_reload(
+                                    observer,
+                                    decision,
+                                    "ok",
+                                    changed_keys,
+                                    started,
+                                );
+                            }
                             Err(error) => {
+                                observe_config_reload(
+                                    observer,
+                                    ConfigReloadDecision::Reloaded,
+                                    "error",
+                                    changed_keys,
+                                    started,
+                                );
                                 tracing::warn!(
                                     error = %error,
                                     "failed to reload runtime config after remote notification"
@@ -371,6 +478,24 @@ where
                 }
             }
         }
+    }
+}
+
+fn observe_config_reload(
+    observer: Option<&dyn ConfigReloadObserver>,
+    decision: ConfigReloadDecision,
+    status: &'static str,
+    changed_keys: usize,
+    started: Instant,
+) {
+    if let Some(observer) = observer {
+        observer.observe_config_reload(ConfigReloadObservation::new(
+            "pubsub",
+            decision,
+            status,
+            changed_keys,
+            started.elapsed().as_secs_f64(),
+        ));
     }
 }
 
@@ -508,6 +633,31 @@ impl ConfigSyncRuntime {
             return Ok(());
         };
         run_config_reload_worker(notifier, self.worker_config(), shutdown, reload).await
+    }
+
+    /// Runs this runtime's reload subscription worker and reports observations.
+    pub async fn run_reload_subscription_with_observer<F, Fut>(
+        &self,
+        shutdown: CancellationToken,
+        reload: F,
+        observer: Option<&dyn ConfigReloadObserver>,
+    ) -> Result<()>
+    where
+        F: FnMut(ConfigReloadMessage) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        let Some(notifier) = self.notifier().cloned() else {
+            shutdown.cancelled().await;
+            return Ok(());
+        };
+        run_config_reload_worker_with_observer(
+            notifier,
+            self.worker_config(),
+            shutdown,
+            reload,
+            observer,
+        )
+        .await
     }
 }
 
@@ -681,11 +831,11 @@ mod tests {
         SharedConfigChangeNotifier, build_config_sync_runtime,
         build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
         default_config_sync_topic, handle_config_reload_notification, redis_channel_from_topic,
-        run_config_reload_worker,
+        run_config_reload_worker, run_config_reload_worker_with_observer,
     };
     use crate::ConfigCoreError;
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
     use tokio::time::{Duration, timeout};
@@ -1129,6 +1279,129 @@ mod tests {
 
         shutdown.cancel();
         worker.await.unwrap().unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[derive(Default)]
+    struct TestReloadObserver {
+        observations: Mutex<Vec<super::ConfigReloadObservation>>,
+    }
+
+    impl super::ConfigReloadObserver for TestReloadObserver {
+        fn observe_config_reload(&self, observation: super::ConfigReloadObservation) {
+            self.observations.lock().unwrap().push(observation);
+        }
+    }
+
+    impl TestReloadObserver {
+        fn snapshot(&self) -> Vec<super::ConfigReloadObservation> {
+            self.observations.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_worker_observes_decisions_and_reload_errors() {
+        let notifier = Arc::new(InMemoryConfigNotifier::default());
+        let shutdown = CancellationToken::new();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = attempts.clone();
+        let observer = Arc::new(TestReloadObserver::default());
+        let worker_observer = observer.clone();
+        let worker_shutdown = shutdown.clone();
+        let worker_notifier = notifier.clone();
+
+        let worker = tokio::spawn(async move {
+            run_config_reload_worker_with_observer(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                worker_shutdown,
+                move |_| {
+                    let observed_attempts = observed_attempts.clone();
+                    async move {
+                        let attempt = observed_attempts.fetch_add(1, Ordering::SeqCst);
+                        if attempt == 0 {
+                            Err(ConfigCoreError::store("temporary reload failure"))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                },
+                Some(worker_observer.as_ref()),
+            )
+            .await
+        });
+
+        wait_for_subscriber(&notifier).await;
+
+        notifier
+            .publish_reload(ConfigReloadMessage::new(
+                "other",
+                "node-b",
+                ["foreign"],
+                ConfigNotificationSource::Api,
+            ))
+            .await
+            .unwrap();
+        notifier
+            .publish_reload(ConfigReloadMessage::new(
+                "aster_test",
+                "node-a",
+                ["local"],
+                ConfigNotificationSource::Api,
+            ))
+            .await
+            .unwrap();
+        notifier
+            .publish_reload(ConfigReloadMessage::new(
+                "aster_test",
+                "node-b",
+                ["first"],
+                ConfigNotificationSource::Api,
+            ))
+            .await
+            .unwrap();
+        notifier
+            .publish_reload(ConfigReloadMessage::new(
+                "aster_test",
+                "node-c",
+                ["second", "third"],
+                ConfigNotificationSource::Api,
+            ))
+            .await
+            .unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            while observer.snapshot().len() != 4 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+
+        let observations = observer.snapshot();
+        assert_eq!(observations.len(), 4);
+        assert_eq!(
+            observations[0].decision,
+            ConfigReloadDecision::IgnoredNamespace
+        );
+        assert_eq!(observations[0].status, "ok");
+        assert_eq!(observations[0].changed_keys, 1);
+        assert_eq!(
+            observations[1].decision,
+            ConfigReloadDecision::IgnoredOrigin
+        );
+        assert_eq!(observations[1].status, "ok");
+        assert_eq!(observations[2].decision, ConfigReloadDecision::Reloaded);
+        assert_eq!(observations[2].status, "error");
+        assert_eq!(observations[3].decision, ConfigReloadDecision::Reloaded);
+        assert_eq!(observations[3].status, "ok");
+        assert_eq!(observations[3].changed_keys, 2);
+        assert!(observations.iter().all(|observation| {
+            observation.source == "pubsub" && observation.duration_seconds >= 0.0
+        }));
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 }

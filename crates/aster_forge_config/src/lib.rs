@@ -30,10 +30,12 @@ pub use error::{ConfigCoreError, Result};
 pub use notification::{
     CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigChangeEvent,
     ConfigChangeNotifier, ConfigNotification, ConfigNotificationSource, ConfigReloadDecision,
-    ConfigReloadMessage, ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime,
-    InMemoryConfigNotifier, SharedConfigChangeNotifier, build_config_sync_runtime,
-    build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
-    default_config_sync_topic, handle_config_reload_notification, run_config_reload_worker,
+    ConfigReloadMessage, ConfigReloadObservation, ConfigReloadObserver, ConfigReloadWorkerConfig,
+    ConfigSyncConfig, ConfigSyncRuntime, InMemoryConfigNotifier, SharedConfigChangeNotifier,
+    build_config_sync_runtime, build_config_sync_runtime_with_runtime_id,
+    decode_config_reload_transport_payload, default_config_sync_topic,
+    handle_config_reload_notification, run_config_reload_worker,
+    run_config_reload_worker_with_observer,
 };
 #[cfg(feature = "redis-pubsub")]
 pub use notification::{RedisConfigChangeNotifier, RedisConfigReloadListener};

@@ -40,9 +40,11 @@ async fn metrics_route_exports_prometheus_text() {
     let body = std::str::from_utf8(&body).expect("metrics body should be utf-8");
     assert!(body.contains("db_queries_total"));
     assert!(body.contains("health_report_status"));
+    assert!(body.contains("health_component_status"));
     assert!(body.contains("background_tasks_pending"));
+    assert!(body.contains("config_reloads_total"));
     assert!(body.contains("process_uptime_seconds"));
-    assert!(body.contains("process_heap_allocated_mib"));
+    assert!(body.contains("process_memory_rss_bytes"));
 }
 
 async fn prepare_state() -> {{crate_name}}::runtime::AppState {

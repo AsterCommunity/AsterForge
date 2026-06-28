@@ -123,9 +123,9 @@ Prometheus metrics are available when the `metrics` feature is enabled:
 cargo run --features metrics
 ```
 
-The service then exposes `/metrics`. The template records low-cardinality HTTP, database, health,
-background task, external-operation, allocator, process RSS, CPU, and uptime metrics through Forge
-recorder traits.
+The service then exposes `/metrics` through `aster_forge_actix_observability`. Forge records
+low-cardinality HTTP, database, health, background task, external-operation, allocator heap,
+process RSS, CPU, and uptime metrics through shared recorder traits.
 
 Allocator behavior follows the Aster service pattern:
 

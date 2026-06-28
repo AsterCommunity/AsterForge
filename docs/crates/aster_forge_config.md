@@ -418,15 +418,19 @@ notifier.publish_reload(message).await?;
 - `build_config_sync_runtime(config, namespace)`
 - `build_config_sync_runtime_with_runtime_id(config, namespace, runtime_id)`
 - `decode_config_reload_transport_payload(payload)`
+- `ConfigReloadObservation`
+- `ConfigReloadObserver`
 - `ConfigReloadWorkerConfig`
 - `handle_config_reload_notification()`
 - `run_config_reload_worker()`
+- `run_config_reload_worker_with_observer()`
 
 常规产品接入应该直接持有 `ConfigSyncRuntime`。它把 namespace、进程级 runtime ID、backend notifier、reload 发布和订阅 worker 绑定在一起，产品侧只需要：
 
 1. 启动时调用 `build_config_sync_runtime(&config.config_sync, "aster_product")`。
 2. 本地配置写入成功后调用 `runtime.publish_reload(keys, ConfigNotificationSource::Api).await`。
 3. 后台任务中调用 `runtime.run_reload_subscription(shutdown, reload_callback).await`，其中 `reload_callback` 从产品自己的权威存储重新加载配置。
+4. 如果产品启用了 metrics，调用 `runtime.run_reload_subscription_with_observer(...)`，把 `ConfigReloadObservation` 映射到产品 recorder。
 
 产品侧如果需要构造静态配置或测试数据，优先使用 `CONFIG_SYNC_BACKEND_DISABLED` 和 `CONFIG_SYNC_BACKEND_REDIS`，不要在各仓库散写 backend 字符串。
 
@@ -438,6 +442,38 @@ notifier.publish_reload(message).await?;
 Forge 不假设 transport 只能是 Redis；后续 RabbitMQ、NATS 或其他 broker 可以实现同一个 `ConfigChangeNotifier` 边界，并接入 `build_config_sync_runtime()` 的 backend 分支。
 
 transport adapter 接收到原始 payload 时，应该先调用 `decode_config_reload_transport_payload(payload)`。解析失败只记录 warning 并继续监听，不应该让一个 malformed message 杀掉订阅 worker。
+
+### Reload 观测
+
+`ConfigReloadObservation` 是 reload worker 发出的低基数观测事件。它包含：
+
+- `source`：当前为 `pubsub`。
+- `decision`：`reloaded`、`ignored_namespace` 或 `ignored_origin`。
+- `status`：`ok` 或 `error`。
+- `changed_keys`：消息中声明的 key 数量，不包含 key 名称。
+- `duration_seconds`：处理该通知的耗时。
+
+Forge 不直接依赖 `aster_forge_metrics`，避免 config crate 反向绑定具体 metrics surface。产品侧可以传入实现
+`ConfigReloadObserver` 的 recorder adapter，也可以直接传闭包：
+
+```rust
+let metrics = state.metrics().clone();
+let observer = move |observation: aster_forge_config::ConfigReloadObservation| {
+    metrics.record_config_reload(
+        observation.source,
+        observation.decision.as_label(),
+        observation.status,
+        observation.changed_keys,
+        observation.duration_seconds,
+    );
+};
+
+runtime
+    .run_reload_subscription_with_observer(shutdown, reload_callback, Some(&observer))
+    .await?;
+```
+
+观测事件不会把配置 key 放进 label。key 名称只能出现在 debug 日志或审计详情里，不能进入 Prometheus label，否则多项目接入后 cardinality 会失控。
 
 ## 错误边界
 

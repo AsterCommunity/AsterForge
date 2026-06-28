@@ -519,7 +519,7 @@ let report = SystemHealthReport::new(Vec::new());
 report.record_metrics("diagnostics", &ProductHealthMetrics(metrics));
 ```
 
-这样 Forge 只定义稳定的 health report/metrics 语义，Prometheus、OpenTelemetry、Noop recorder、feature flag 和 label 策略仍然留在产品仓库。
+这样 Forge 定义稳定的 health report/metrics 语义，并通过 `aster_forge_metrics` 提供可选 backend。产品仓库只负责在入口选择 metrics feature、挂载观测 endpoint，并保持业务 label 低基数。
 
 Yggdrasil 的接入方式是让 `PrometheusMetricsRecorder` 同时实现 `aster_forge_runtime::HealthMetricsRecorder`，并在 health service 完成 `Readiness` 或 `Diagnostics` scope 后调用 `SystemHealthReport::record_metrics()`。Prometheus 指标保持低基数：
 

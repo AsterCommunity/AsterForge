@@ -3,8 +3,9 @@
 //! Applications often share the same infrastructure metrics while exposing different
 //! product-domain metrics. This crate keeps the common recorder surface small and provides a
 //! registration catalog so each subsystem can describe the metrics it owns without forcing every
-//! product-specific method into a single shared trait. Concrete backends, such as Prometheus
-//! collectors, remain in application crates where label choices and feature flags are known.
+//! product-specific method into a single shared trait. Concrete backends are selected once at the
+//! product entrypoint through Forge feature flags, so business modules record metric semantics
+//! without depending on exporter crates.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
@@ -24,6 +25,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
+
+#[cfg(feature = "backend-prometheus")]
+pub mod prometheus;
+
+const ENABLED_BACKEND_COUNT: usize = cfg!(feature = "backend-prometheus") as usize;
+
+const _: () = assert!(
+    ENABLED_BACKEND_COUNT <= 1,
+    "aster_forge_metrics allows only one backend-* feature at a time"
+);
 
 /// Normalized database backend label used by infrastructure metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +184,27 @@ pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
     ) {
     }
 
+    /// Records a runtime configuration reload attempt.
+    fn record_config_reload(
+        &self,
+        source: &'static str,
+        decision: &'static str,
+        status: &'static str,
+        changed_keys: u64,
+        duration_seconds: f64,
+    ) {
+    }
+
+    /// Records a runtime configuration mutation.
+    fn record_config_mutation(
+        &self,
+        source: &'static str,
+        operation: &'static str,
+        status: &'static str,
+        changed_keys: u64,
+    ) {
+    }
+
     /// Records a background task state transition.
     fn record_background_task_transition(&self, kind: &'static str, status: &'static str) {}
 
@@ -255,6 +287,23 @@ where
     }
 }
 
+/// Initializes the metrics backend selected by enabled Forge features.
+///
+/// Product entrypoints should prefer this helper over selecting a concrete backend directly. If no
+/// backend feature is enabled, or if backend initialization fails, the returned recorder is
+/// [`NoopMetrics`].
+pub fn init_configured_or_noop() -> SharedMetricsRecorder {
+    #[cfg(feature = "backend-prometheus")]
+    {
+        return prometheus::init_or_noop();
+    }
+
+    #[cfg(not(feature = "backend-prometheus"))]
+    {
+        NoopMetrics::arc()
+    }
+}
+
 /// Kind of metric described by a subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
@@ -267,7 +316,7 @@ pub enum MetricKind {
 }
 
 /// Static metric descriptor registered by a subsystem.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MetricDescriptor {
     /// Owning subsystem name.
     pub subsystem: &'static str,
@@ -279,6 +328,8 @@ pub struct MetricDescriptor {
     pub kind: MetricKind,
     /// Ordered label names used by the metric.
     pub labels: &'static [&'static str],
+    /// Optional histogram buckets.
+    pub buckets: &'static [f64],
 }
 
 impl MetricDescriptor {
@@ -295,6 +346,7 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Counter,
             labels,
+            buckets: &[],
         }
     }
 
@@ -311,6 +363,7 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Gauge,
             labels,
+            buckets: &[],
         }
     }
 
@@ -327,6 +380,25 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Histogram,
             labels,
+            buckets: &[],
+        }
+    }
+
+    /// Creates a descriptor for a histogram metric with explicit buckets.
+    pub const fn histogram_with_buckets(
+        subsystem: &'static str,
+        name: &'static str,
+        help: &'static str,
+        labels: &'static [&'static str],
+        buckets: &'static [f64],
+    ) -> Self {
+        Self {
+            subsystem,
+            name,
+            help,
+            kind: MetricKind::Histogram,
+            labels,
+            buckets,
         }
     }
 }
@@ -452,6 +524,8 @@ mod tests {
         recorder.record_http_request("GET", "/health", 200, 0.01);
         recorder.record_auth_event("login", "ok", "password");
         recorder.record_application_event("config", "updated", "ok");
+        recorder.record_config_reload("api", "reloaded", "ok", 2, 0.01);
+        recorder.record_config_mutation("api", "upsert", "ok", 1);
         recorder.record_background_task_transition("cleanup", "completed");
         recorder.set_background_tasks_pending(2);
         recorder.record_external_operation("oidc", "token", "ok", 0.02);
@@ -508,6 +582,37 @@ mod tests {
         let recorder = init_metrics_or_noop(|| Err::<(), _>("registry failed"), || EnabledMetrics);
 
         assert!(!recorder.enabled());
+    }
+
+    #[test]
+    #[cfg(not(feature = "backend-prometheus"))]
+    fn init_configured_or_noop_returns_noop_without_backend_feature() {
+        let recorder = init_configured_or_noop();
+
+        assert!(!recorder.enabled());
+    }
+
+    #[test]
+    #[cfg(feature = "backend-prometheus")]
+    fn init_configured_or_noop_uses_enabled_backend_feature() {
+        let recorder = init_configured_or_noop();
+
+        assert!(recorder.enabled());
+    }
+
+    #[test]
+    fn histogram_descriptor_preserves_explicit_buckets() {
+        let descriptor = MetricDescriptor::histogram_with_buckets(
+            "worker",
+            "duration_seconds",
+            "Worker duration.",
+            &["kind"],
+            &[0.1, 1.0],
+        );
+
+        assert_eq!(descriptor.kind, MetricKind::Histogram);
+        assert_eq!(descriptor.labels, &["kind"]);
+        assert_eq!(descriptor.buckets, &[0.1, 1.0]);
     }
 
     #[test]

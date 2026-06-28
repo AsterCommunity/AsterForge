@@ -12,7 +12,12 @@ members = [".", "migration"]
 
 [features]
 default = []
-metrics = ["dep:parking_lot", "dep:prometheus", "dep:sysinfo"]
+metrics = [
+    "aster_forge_actix_observability/prometheus",
+    "aster_forge_metrics/allocator-metrics",
+    "aster_forge_metrics/backend-prometheus",
+    "aster_forge_metrics/runtime-health",
+]
 openapi = [
     "dep:utoipa",
     "dep:utoipa-swagger-ui",
@@ -27,8 +32,6 @@ full = ["metrics", "openapi"]
 jemalloc = ["dep:tikv-jemallocator", "aster_forge_alloc/jemalloc"]
 jemalloc-stats = [
     "jemalloc",
-    "dep:tikv-jemalloc-ctl",
-    "tikv-jemalloc-ctl/stats",
     "aster_forge_alloc/jemalloc-stats",
 ]
 jemalloc-profiling = ["jemalloc-stats", "tikv-jemallocator/profiling"]
@@ -71,6 +74,7 @@ strip = true
 [dependencies]
 actix-web = "4"
 aster_forge_actix_middleware = { git = "{{forge_git}}", package = "aster_forge_actix_middleware", features = ["metrics"] }
+aster_forge_actix_observability = { git = "{{forge_git}}", package = "aster_forge_actix_observability" }
 aster_forge_alloc = { git = "{{forge_git}}", package = "aster_forge_alloc" }
 aster_forge_api = { git = "{{forge_git}}", package = "aster_forge_api" }
 aster_forge_api_docs_macros = { git = "{{forge_git}}", package = "aster_forge_api_docs_macros" }
@@ -86,20 +90,16 @@ aster_forge_runtime = { git = "{{forge_git}}", package = "aster_forge_runtime" }
 aster_forge_tasks = { git = "{{forge_git}}", package = "aster_forge_tasks", features = ["runtime-component"] }
 aster_forge_utils = { git = "{{forge_git}}", package = "aster_forge_utils" }
 migration = { path = "migration" }
-parking_lot = { version = "0.12", optional = true }
-prometheus = { version = "0.14", optional = true, default-features = false }
 sea-orm = { version = "2.0.0-rc.41", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 thiserror = "2"
 tikv-jemallocator = { version = "0.7", optional = true }
-tikv-jemalloc-ctl = { version = "0.7", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tokio-util = "0.7"
 toml = "1.1"
 tracing = "0.1"
-sysinfo = { version = "0.39", optional = true, default-features = false, features = ["system"] }
 utoipa = { version = "5.5.0", features = ["actix_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
 

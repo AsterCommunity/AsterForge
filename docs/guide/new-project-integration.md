@@ -66,6 +66,7 @@ src/
 ```toml
 [dependencies]
 aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_middleware", features = ["metrics"] }
+aster_forge_actix_observability = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_observability" }
 aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
 aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_audit" }
 aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_cache", features = ["memory", "runtime-component"] }
@@ -87,6 +88,7 @@ aster_forge_validation = { git = "https://github.com/AsterCommunity/AsterForge",
 - config 同步：`aster_forge_config` 的 `redis-pubsub`。
 - task runtime：只用 retry、dedupe、steps、spec 时不需要 feature；需要 worker、scheduled task 或 runtime component 时启用 `aster_forge_tasks` 的 `runtime-component`。
 - external auth：`aster_forge_external_auth` 的 `github`、`google`、`microsoft`、`qq` 等连接器。
+- metrics：产品自己的 `metrics` feature 应转发到 `aster_forge_metrics/backend-prometheus`、`aster_forge_metrics/runtime-health`、`aster_forge_metrics/allocator-metrics` 和 `aster_forge_actix_observability/prometheus`。
 - OpenAPI：产品自己的 `openapi` feature 再转发到 Forge crate。
 
 Feature 边界要保持显式。默认 feature 只应该带最小可用内核，不能因为某个产品接入方便就把 Redis、SeaORM 表、runtime worker、mail drain 或 OpenAPI schema 静默拖进来。
@@ -94,10 +96,12 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 | crate | 默认 feature | 常见显式 feature | 说明 |
 | --- | --- | --- | --- |
 | `aster_forge_actix_middleware` | 无 | `metrics` | CSRF、CORS、rate limit、request id 默认可用；HTTP metrics 需要显式启用。 |
+| `aster_forge_actix_observability` | 无 | `prometheus` | Actix `/metrics` endpoint glue；未启用时 route helper 是 no-op。 |
 | `aster_forge_cache` | `memory` | `redis`, `runtime-component` | Redis 后端显式启用；runtime health component 单独启用。 |
 | `aster_forge_config` | 无 | `redis-pubsub`, `sea-orm`, `openapi` | 配置 reload 通知后端和数据库转换能力分开启用。 |
 | `aster_forge_db` | 无 | `all`, `audit-log`, `mail-outbox`, `runtime-component`, `runtime-lease`, `scheduled-task`, `system-config` | 连接、transaction、pagination 等基础能力默认可用；共享表/store 按需启用。 |
 | `aster_forge_mail` | 无 | `persistence`, `runtime-component`, `openapi` | sender/template 默认可用；SeaORM outbox model 和 runtime drain component 分开启用。 |
+| `aster_forge_metrics` | 无 | `backend-prometheus`, `runtime-health`, `allocator-metrics` | backend 由产品入口统一选择；普通产品用 `init_configured_or_noop()`。 |
 | `aster_forge_tasks` | 无 | `runtime`, `runtime-component`, `openapi` | retry、dedupe、steps、spec 默认可用；worker/scheduled runtime 和 component factory 分开启用。 |
 
 ## main.rs 目标形态
@@ -422,6 +426,8 @@ Forge 自身改 public API 或 feature split 后，至少跑一次 feature matri
 ```bash
 cargo check -p aster_forge_actix_middleware --no-default-features --all-targets
 cargo check -p aster_forge_actix_middleware --no-default-features --features metrics --all-targets
+cargo check -p aster_forge_actix_observability --no-default-features --all-targets
+cargo check -p aster_forge_actix_observability --no-default-features --features prometheus --all-targets
 cargo check -p aster_forge_cache --no-default-features --all-targets
 cargo check -p aster_forge_cache --no-default-features --features memory --all-targets
 cargo check -p aster_forge_cache --no-default-features --features redis --all-targets
