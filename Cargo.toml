@@ -27,7 +27,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 rust-version = "1.94.0"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/AsterCommunity/AsterForge"
 authors = [
     "AptS-1547 <apts-1547@esaps.net>",

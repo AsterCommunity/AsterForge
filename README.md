@@ -17,7 +17,7 @@
   <a href="docs/en/index.md"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
   <a href="docs/crates/aster_forge_actix_middleware.md"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
   <img alt="Rust 1.94+" src="https://img.shields.io/badge/rust-1.94%2B-B7410E?logo=rust&logoColor=white">
-  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-0F172A">
+  <img alt="License MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-0F172A">
 </p>
 
 ## What is AsterForge?
@@ -41,7 +41,7 @@ aster_forge_runtime::AsterRuntime::builder()
 
 Product code still owns resource creation and business semantics; Forge owns the reusable lifecycle and persistence mechanics behind those components.
 
-All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+`, edition 2024, and uses MIT license metadata.
+All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+`, edition 2024, and uses dual `MIT OR Apache-2.0` license metadata.
 
 ## Crates
 
@@ -116,4 +116,9 @@ templates/              cargo-generate templates for new Aster services
 
 ## License
 
-MIT, as declared in the workspace package metadata.
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option, as declared in the workspace package metadata.

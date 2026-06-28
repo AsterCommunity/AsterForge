@@ -107,4 +107,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Test workspace feature matrix
-        run: cargo hack test --workspace --all-targets --feature-powerset --no-fail-fast
+        run: |
+          cargo hack test --workspace --all-targets --no-default-features --no-fail-fast
+          cargo hack test --workspace --all-targets --each-feature --no-fail-fast
+          cargo test --workspace --all-targets --all-features --no-fail-fast

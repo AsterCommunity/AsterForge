@@ -25,6 +25,13 @@ use tokio_util::sync::CancellationToken;
 static METRICS: OnceLock<PrometheusMetrics> = OnceLock::new();
 static PROCESS_STARTED_AT: OnceLock<Instant> = OnceLock::new();
 
+fn boxed_collector<C>(collector: C) -> Box<dyn prometheus::core::Collector>
+where
+    C: prometheus::core::Collector + 'static,
+{
+    Box::new(collector)
+}
+
 /// Prometheus metric families for product-neutral Aster infrastructure.
 pub struct PrometheusMetrics {
     registry: Registry,
@@ -225,33 +232,33 @@ impl PrometheusMetrics {
             &["kind"],
         )?;
 
-        let mut collectors: Vec<Box<dyn prometheus::core::Collector>> = vec![
-            Box::new(http_requests_total.clone()) as Box<dyn prometheus::core::Collector>,
-            Box::new(http_request_duration_seconds.clone()),
-            Box::new(db_queries_total.clone()),
-            Box::new(db_query_duration_seconds.clone()),
-            Box::new(auth_events_total.clone()),
-            Box::new(application_events_total.clone()),
-            Box::new(config_reloads_total.clone()),
-            Box::new(config_reload_duration_seconds.clone()),
-            Box::new(config_reload_changed_keys.clone()),
-            Box::new(config_mutations_total.clone()),
-            Box::new(config_mutation_changed_keys.clone()),
-            Box::new(background_tasks_total.clone()),
-            Box::new(background_tasks_pending.clone()),
-            Box::new(background_task_retries_total.clone()),
-            Box::new(external_operations_total.clone()),
-            Box::new(external_operation_duration_seconds.clone()),
-            Box::new(health_report_status.clone()),
-            Box::new(health_report_duration_seconds.clone()),
-            Box::new(health_component_status.clone()),
-            Box::new(health_component_duration_seconds.clone()),
-            Box::new(process_memory_rss_bytes.clone()),
-            Box::new(process_cpu_milliseconds_total.clone()),
-            Box::new(uptime_seconds.clone()),
+        let collectors: Vec<Box<dyn prometheus::core::Collector>> = vec![
+            boxed_collector(http_requests_total.clone()),
+            boxed_collector(http_request_duration_seconds.clone()),
+            boxed_collector(db_queries_total.clone()),
+            boxed_collector(db_query_duration_seconds.clone()),
+            boxed_collector(auth_events_total.clone()),
+            boxed_collector(application_events_total.clone()),
+            boxed_collector(config_reloads_total.clone()),
+            boxed_collector(config_reload_duration_seconds.clone()),
+            boxed_collector(config_reload_changed_keys.clone()),
+            boxed_collector(config_mutations_total.clone()),
+            boxed_collector(config_mutation_changed_keys.clone()),
+            boxed_collector(background_tasks_total.clone()),
+            boxed_collector(background_tasks_pending.clone()),
+            boxed_collector(background_task_retries_total.clone()),
+            boxed_collector(external_operations_total.clone()),
+            boxed_collector(external_operation_duration_seconds.clone()),
+            boxed_collector(health_report_status.clone()),
+            boxed_collector(health_report_duration_seconds.clone()),
+            boxed_collector(health_component_status.clone()),
+            boxed_collector(health_component_duration_seconds.clone()),
+            boxed_collector(process_memory_rss_bytes.clone()),
+            boxed_collector(process_cpu_milliseconds_total.clone()),
+            boxed_collector(uptime_seconds.clone()),
+            #[cfg(feature = "allocator-metrics")]
+            boxed_collector(process_heap_memory_mib.clone()),
         ];
-        #[cfg(feature = "allocator-metrics")]
-        collectors.push(Box::new(process_heap_memory_mib.clone()));
 
         for collector in collectors {
             registry.register(collector)?;
