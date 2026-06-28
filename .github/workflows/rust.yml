@@ -6,6 +6,7 @@ on:
       - '**/*.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'templates/aster-service/**'
       - 'scripts/coverage-summary.mjs'
       - '.github/workflows/rust.yml'
     branches: [master]
@@ -14,6 +15,7 @@ on:
       - '**/*.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'templates/aster-service/**'
       - 'scripts/coverage-summary.mjs'
       - '.github/workflows/rust.yml'
     branches: [master, develop]
@@ -47,7 +49,7 @@ jobs:
         run: cargo build --verbose
 
       - name: Format check
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -87,3 +89,22 @@ jobs:
           name: rust-coverage
           if-no-files-found: ignore
           path: coverage/rust
+
+  feature-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test workspace feature matrix
+        run: cargo hack test --workspace --all-targets --feature-powerset --no-fail-fast

@@ -26,7 +26,7 @@ use actix_web::Scope;
 pub fn configure_prometheus_route(scope: Scope) -> Scope {
     #[cfg(feature = "prometheus")]
     {
-        return scope.route("/metrics", actix_web::web::get().to(prometheus_metrics));
+        scope.route("/metrics", actix_web::web::get().to(prometheus_metrics))
     }
 
     #[cfg(not(feature = "prometheus"))]

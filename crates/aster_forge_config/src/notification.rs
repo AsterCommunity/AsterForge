@@ -398,7 +398,7 @@ pub async fn run_config_reload_worker<N, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
     shutdown: CancellationToken,
-    mut reload: F,
+    reload: F,
 ) -> Result<()>
 where
     N: ConfigChangeNotifier + ?Sized,
@@ -409,7 +409,7 @@ where
         notifier,
         config,
         shutdown,
-        move |message| reload(message),
+        reload,
         None::<&dyn ConfigReloadObserver>,
     )
     .await

@@ -295,7 +295,7 @@ where
 pub fn init_configured_or_noop() -> SharedMetricsRecorder {
     #[cfg(feature = "backend-prometheus")]
     {
-        return prometheus::init_or_noop();
+        prometheus::init_or_noop()
     }
 
     #[cfg(not(feature = "backend-prometheus"))]
