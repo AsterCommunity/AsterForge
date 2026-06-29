@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="%ASTER_SERVICE_FAVICON_URL%" />
+    <link rel="apple-touch-icon" href="%ASTER_SERVICE_FAVICON_URL%" />
+    <meta name="description" content="%ASTER_SERVICE_DESCRIPTION%" />
+    <meta http-equiv="Content-Security-Policy" content="%ASTER_SERVICE_CSP%" />
+    <meta name="aster-service-version" content="%ASTER_SERVICE_VERSION%" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>%ASTER_SERVICE_TITLE%</title>
+  </head>
+  <body>
+    <div id="root">
+      <div
+        class="grid min-h-svh place-items-center bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50"
+        data-aster-boot-loading
+        role="status"
+        aria-label="Loading"
+      >
+        <div class="size-5 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600 dark:border-slate-700 dark:border-t-blue-300"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

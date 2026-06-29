@@ -7,22 +7,24 @@ use crate::api::response::StatusResponse;
 
 /// Returns the health route scope.
 pub fn routes() -> Scope {
-    let scope = web::scope("")
-        .route("/healthz", web::get().to(healthz))
-        .route("/readyz", web::get().to(readyz));
+    let scope = web::scope("/health")
+        .route("", web::get().to(health))
+        .route("", web::head().to(health))
+        .route("/ready", web::get().to(ready))
+        .route("/ready", web::head().to(ready));
 
     crate::metrics::configure_route(scope)
 }
 
 #[aster_forge_api_docs_macros::path(
     get,
-    path = "/healthz",
+    path = "/health",
     tag = "health",
     responses(
         (status = 200, description = "Service health status", body = StatusResponse)
     )
 )]
-pub async fn healthz() -> HttpResponse {
+pub async fn health() -> HttpResponse {
     HttpResponse::Ok().json(StatusResponse {
         service: env!("CARGO_PKG_NAME"),
         status: "ok",
@@ -31,14 +33,14 @@ pub async fn healthz() -> HttpResponse {
 
 #[aster_forge_api_docs_macros::path(
     get,
-    path = "/readyz",
+    path = "/health/ready",
     tag = "health",
     responses(
         (status = 200, description = "Service is ready", body = StatusResponse),
         (status = 503, description = "Service dependency is not ready", body = StatusResponse)
     )
 )]
-pub async fn readyz(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
+pub async fn ready(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
     let started = std::time::Instant::now();
     let component_reports = vec![
         check_database(state.get_ref()).await,

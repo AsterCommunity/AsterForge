@@ -3,6 +3,7 @@
 //! Keep product DTOs, permissions, and response semantics here. Forge middleware and API helpers
 //! should be called directly when they add reusable mechanics.
 
+pub(crate) mod common;
 pub mod http;
 #[cfg(all(debug_assertions, feature = "openapi"))]
 pub mod openapi;
@@ -13,10 +14,14 @@ use actix_web::web;
 
 /// Registers product routes.
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(routes::health::routes());
+    cfg.service(web::scope(routes::API_V1_PREFIX).configure(routes::configure_api))
+        .service(routes::health::routes());
 
     #[cfg(all(debug_assertions, feature = "openapi"))]
     configure_openapi(cfg);
+
+    // Frontend fallback is intentionally last so product and health routes keep API semantics.
+    cfg.service(routes::frontend::routes());
 }
 
 #[cfg(all(debug_assertions, feature = "openapi"))]

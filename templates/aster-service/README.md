@@ -121,7 +121,7 @@ Prometheus metrics are available when the `metrics` feature is enabled:
 cargo run --features metrics
 ```
 
-The service then exposes `/metrics` through `aster_forge_actix_observability`. Forge records
+The service then exposes `/health/metrics` through `aster_forge_actix_observability`. Forge records
 low-cardinality HTTP, database, health, background task, external-operation, allocator heap,
 process RSS, CPU, and uptime metrics through shared recorder traits.
 
@@ -136,9 +136,11 @@ Allocator behavior follows the Aster service pattern:
 
 The template exposes:
 
-- `/healthz`: lightweight liveness response.
-- `/readyz`: database and cache readiness check.
-- `/metrics`: Prometheus text export when the `metrics` feature is enabled.
+- `/api/v1/*`: versioned product API scope. Unknown API paths return a JSON
+  `endpoint_not_found` response instead of the frontend SPA fallback.
+- `/health`: lightweight liveness response.
+- `/health/ready`: database and cache readiness check.
+- `/health/metrics`: Prometheus text export when the `metrics` feature is enabled.
 
 ## CI and Container Image
 
@@ -172,7 +174,7 @@ Mount `/data` for persistent runtime files. The image sets:
 
 - `ASTER__SERVER__HOST=0.0.0.0`
 
-The image healthcheck probes `/readyz`.
+The image healthcheck probes `/health/ready`.
 
 ## Local Forge Development
 

@@ -1,0 +1,18 @@
+@import "@fontsource-variable/geist";
+@import "tailwindcss";
+
+@theme {
+	--font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+	html,
+	body,
+	#root {
+		min-height: 100%;
+	}
+
+	body {
+		margin: 0;
+	}
+}

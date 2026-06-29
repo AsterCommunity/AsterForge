@@ -1,20 +1,17 @@
 //! HTTP health route integration tests.
 
-use actix_web::{App, http::StatusCode, test, web};
-use aster_forge_cache::CacheConfig;
+#[macro_use]
+mod common;
+
+use actix_web::{http::StatusCode, test};
 
 #[actix_web::test]
 async fn health_and_ready_routes_return_ok() {
-    let state = prepare_state().await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure({{crate_name}}::api::configure),
-    )
-    .await;
+    let state = common::setup().await;
+    let app = create_test_app!(state);
 
     let health =
-        test::call_service(&app, test::TestRequest::get().uri("/healthz").to_request()).await;
+        test::call_service(&app, test::TestRequest::get().uri("/health").to_request()).await;
     assert_eq!(health.status(), StatusCode::OK);
     let health_body: serde_json::Value = test::read_body_json(health).await;
     assert_eq!(health_body["status"], "ok");
@@ -23,8 +20,11 @@ async fn health_and_ready_routes_return_ok() {
     assert!(health_body.get("config_sync_enabled").is_none());
     assert!(health_body.get("components").is_none());
 
-    let ready =
-        test::call_service(&app, test::TestRequest::get().uri("/readyz").to_request()).await;
+    let ready = test::call_service(
+        &app,
+        test::TestRequest::get().uri("/health/ready").to_request(),
+    )
+    .await;
     assert_eq!(ready.status(), StatusCode::OK);
     let ready_body: serde_json::Value = test::read_body_json(ready).await;
     assert_eq!(ready_body["status"], "ready");
@@ -34,19 +34,97 @@ async fn health_and_ready_routes_return_ok() {
     assert!(ready_body.get("components").is_none());
 }
 
+#[actix_web::test]
+async fn api_scope_returns_json_404_instead_of_frontend_fallback() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/v1/missing-route")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["code"], "endpoint_not_found");
+    assert_eq!(body["message"], "endpoint not found");
+}
+
+#[actix_web::test]
+async fn frontend_fallback_still_serves_spa_routes() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/settings/runtime")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html"))
+    );
+}
+
+#[actix_web::test]
+async fn base_http_middleware_adds_request_id_and_security_headers() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response =
+        test::call_service(&app, test::TestRequest::get().uri("/health").to_request()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key("x-request-id"));
+    assert_eq!(
+        response
+            .headers()
+            .get("x-frame-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("SAMEORIGIN")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("referrer-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("strict-origin-when-cross-origin")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-content-type-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("nosniff")
+    );
+}
+
 #[cfg(feature = "metrics")]
 #[actix_web::test]
 async fn metrics_route_exports_prometheus_text() {
-    let state = prepare_state().await;
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state))
-            .configure({{crate_name}}::api::configure),
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get().uri("/health/metrics").to_request(),
     )
     .await;
-
-    let response =
-        test::call_service(&app, test::TestRequest::get().uri("/metrics").to_request()).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = test::read_body(response).await;
     let body = std::str::from_utf8(&body).expect("metrics body should be utf-8");
@@ -57,23 +135,4 @@ async fn metrics_route_exports_prometheus_text() {
     assert!(body.contains("config_reloads_total"));
     assert!(body.contains("process_uptime_seconds"));
     assert!(body.contains("process_memory_rss_bytes"));
-}
-
-async fn prepare_state() -> {{crate_name}}::runtime::AppState {
-    let mut config = {{crate_name}}::config::AppConfig::default();
-    config.database.url = format!("sqlite://{}?mode=rwc", unique_database_path().display());
-    config.cache = CacheConfig::default();
-    config.logging.file = String::new();
-
-    {{crate_name}}::runtime::assembly::prepare_state(config)
-        .await
-        .expect("runtime state should prepare")
-}
-
-fn unique_database_path() -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!("{}-health-test-{nanos}.db", env!("CARGO_PKG_NAME")))
 }

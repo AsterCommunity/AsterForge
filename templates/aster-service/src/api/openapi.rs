@@ -15,11 +15,12 @@ use utoipa::OpenApi;
         license(name = "MIT"),
     ),
     paths(
-        crate::api::routes::health::healthz,
-        crate::api::routes::health::readyz,
+        crate::api::routes::health::health,
+        crate::api::routes::health::ready,
     ),
     components(
         schemas(
+            crate::api::response::ErrorResponse,
             crate::api::response::StatusResponse,
         )
     )

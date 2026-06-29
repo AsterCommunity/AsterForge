@@ -1,6 +1,16 @@
 [template]
 description = "A minimal Aster service wired to AsterForge runtime components."
-ignore = ["target", ".git"]
+ignore = [
+    "target",
+    ".git",
+    "frontend-panel/node_modules",
+    "frontend-panel/dist",
+    "frontend-panel/coverage",
+    "frontend-panel/playwright-report",
+    "frontend-panel/test-results",
+    "frontend-panel/generated",
+    "frontend-panel/dev-dist",
+]
 
 [placeholders.package_description]
 type = "string"
