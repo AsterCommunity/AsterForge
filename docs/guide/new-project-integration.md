@@ -7,8 +7,8 @@
 Forge 提供 `cargo generate` 模板，适合新 Aster 服务从一开始就按 component 形态接入：
 
 ```bash
-cargo generate --git https://github.com/AsterCommunity/AsterForge \
-  --path templates/aster-service \
+cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
+  templates/aster-service \
   --name aster_product_service
 ```
 

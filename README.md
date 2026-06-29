@@ -69,8 +69,8 @@ See [`docs/guide/new-project-integration.md`](docs/guide/new-project-integration
 New Aster services can start from the bundled `cargo generate` template:
 
 ```bash
-cargo generate --git https://github.com/AsterCommunity/AsterForge \
-  --path templates/aster-service \
+cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
+  templates/aster-service \
   --name aster_product_service \
   --define server_port=3000
 ```
