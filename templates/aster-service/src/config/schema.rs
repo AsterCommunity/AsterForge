@@ -1,7 +1,7 @@
 //! Static configuration schema.
 //!
-//! Values in this module are loaded before the runtime component graph starts. The generated
-//! defaults come from `cargo generate`; `config.toml` can override any subset of these fields.
+//! Values in this module are loaded before the runtime component graph starts. These conservative
+//! defaults keep the generated service runnable; `config.toml` can override any subset of them.
 
 /// Static service configuration used by the generated skeleton.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -25,21 +25,21 @@ impl Default for AppConfig {
             server: ServerConfig::default(),
             database: DatabaseConfig::default(),
             cache: aster_forge_cache::CacheConfig {
-                backend: "{{cache_backend}}".to_string(),
-                endpoint: "{{cache_endpoint}}".to_string(),
-                default_ttl: {{cache_default_ttl}},
+                backend: "memory".to_string(),
+                endpoint: String::new(),
+                default_ttl: 3600,
             },
             config_sync: aster_forge_config::ConfigSyncConfig {
-                backend: "{{config_sync_backend}}".to_string(),
-                endpoint: "{{config_sync_endpoint}}".to_string(),
-                topic: "{{config_sync_topic}}".to_string(),
+                backend: "disabled".to_string(),
+                endpoint: String::new(),
+                topic: "{{project-name}}.config_reload".to_string(),
             },
             logging: aster_forge_logging::LoggingConfig {
-                level: "{{logging_level}}".to_string(),
-                format: "{{logging_format}}".to_string(),
-                file: "{{logging_file}}".to_string(),
-                enable_rotation: {{logging_enable_rotation}},
-                max_backups: {{logging_max_backups}},
+                level: "info".to_string(),
+                format: "text".to_string(),
+                file: String::new(),
+                enable_rotation: false,
+                max_backups: 5,
             },
         }
     }
@@ -62,10 +62,10 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            host: "{{server_host}}".to_string(),
+            host: "127.0.0.1".to_string(),
             port: {{server_port}},
-            workers: {{server_workers}},
-            temp_dir: "{{server_temp_dir}}".to_string(),
+            workers: 0,
+            temp_dir: ".tmp".to_string(),
         }
     }
 }
@@ -85,9 +85,9 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "{{database_url}}".to_string(),
-            pool_size: {{database_pool_size}},
-            retry_count: {{database_retry_count}},
+            url: "sqlite://{{project-name}}.db?mode=rwc".to_string(),
+            pool_size: 10,
+            retry_count: 3,
         }
     }
 }

@@ -63,7 +63,5 @@ fn unique_database_path() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!(
-        "{{project-name}}-health-test-{nanos}.db"
-    ))
+    std::env::temp_dir().join(format!("{}-health-test-{nanos}.db", env!("CARGO_PKG_NAME")))
 }

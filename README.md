@@ -75,7 +75,7 @@ cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
   --define server_port=3000
 ```
 
-The template wires a thin product entrypoint to Forge runtime components, exposes Yggdrasil-style boot parameters for server/database/cache/config-sync/logging, includes a migration crate for Forge-owned infrastructure tables, and uses Cargo metadata such as `env!("CARGO_PKG_NAME")` for process, health, panic, and placeholder mail display names. Product repositories still own their business routes, product migrations, config registry, audit enums/details, task payloads/results, and mail template rendering.
+The template wires a thin product entrypoint to Forge runtime components, keeps generation prompts to package description and HTTP port, uses the official AsterForge Git repository for Forge dependencies, uses conservative defaults for server/database/cache/config-sync/logging, derives project-name based defaults for database URL and config sync topic, leaves file logging disabled by default, includes a migration crate for Forge-owned infrastructure tables, and uses Cargo metadata such as `env!("CARGO_PKG_NAME")` for process, health, panic, and placeholder mail display names. Product repositories still own their business routes, product migrations, config registry, audit enums/details, task payloads/results, and mail template rendering.
 
 ## Documentation
 

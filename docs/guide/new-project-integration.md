@@ -17,13 +17,12 @@ cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
 ```bash
 cargo generate --path templates/aster-service \
   --name aster_product_service \
-  --define server_port=3000 \
-  --define database_url="sqlite://aster_product_service.db?mode=rwc"
+  --define server_port=3000
 ```
 
 模板生成的是一个可编译的产品骨架，不是业务完整实现。它已经接好 `AsterRuntime`、Actix HTTP、database handles、migration crate、background task shutdown、mail outbox shutdown drain、audit lifecycle 和基础健康接口；产品侧仍然要补自己的产品表 migration、配置 registry、API、权限、audit action/detail、task payload/result 和邮件模板渲染。
 
-模板暴露的构建参数按 Yggdrasil 的静态配置分组：`server_host`、`server_port`、`server_workers`、`server_temp_dir`、`database_url`、`database_pool_size`、`database_retry_count`、`cache_backend`、`cache_endpoint`、`cache_default_ttl`、`config_sync_backend`、`config_sync_endpoint`、`config_sync_topic`、`logging_level`、`logging_format`、`logging_file`、`logging_enable_rotation`、`logging_max_backups`。生成后的 `AppConfig` 也保留这些分组，后续接入真实 config loader 时不需要再重排结构。
+模板生成阶段只暴露 `package_description` 和 `server_port`。Forge 依赖源固定为官方 Git 仓库；其余 server、database、cache、config sync 和 logging 设置使用保守默认值；`database.url` 和 `config_sync.topic` 默认由项目名派生，`logging.file` 默认为空且不开启日志轮转。生成后仍可在 `data/config.toml` 或环境变量中覆盖这些配置。生成后的 `AppConfig` 保留这些分组，后续接入真实 config loader 时不需要再重排结构。
 
 生成后的 `migration` crate 默认创建 Forge 拥有的基础设施表：`runtime_leases`、`scheduled_tasks`、`system_config`、`mail_outbox`、`audit_logs`。产品表继续作为新的 migration module 加在产品仓库里，不要把业务实体迁进 Forge。
 

@@ -15,7 +15,7 @@ fn default_config_uses_generated_data_paths() {
         config.database.url,
         "sqlite://{{project-name}}.db?mode=rwc"
     );
-    assert_eq!(config.logging.file, "{{project-name}}.log");
+    assert!(config.logging.file.is_empty());
 }
 
 #[test]
@@ -49,6 +49,8 @@ fn default_config_file_is_created_under_data_dir() {
     assert!(generated.contains("# {{project-name}} configuration file"));
     assert!(generated.contains(r#"temp_dir = ".tmp""#));
     assert!(generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#));
+    assert!(generated.contains(r#"file = """#));
+    assert!(generated.contains("enable_rotation = false"));
 }
 
 #[test]

@@ -2,102 +2,12 @@
 description = "A minimal Aster service wired to AsterForge runtime components."
 ignore = ["target", ".git"]
 
-[placeholders.forge_git]
-type = "string"
-prompt = "AsterForge Git repository"
-default = "https://github.com/AsterCommunity/AsterForge"
-
 [placeholders.package_description]
 type = "string"
 prompt = "Cargo package description"
 default = "Aster service wired to AsterForge runtime components."
 
-[placeholders.server_host]
-type = "string"
-prompt = "HTTP bind host"
-default = "127.0.0.1"
-
 [placeholders.server_port]
 type = "string"
 prompt = "HTTP bind port"
 default = "3000"
-
-[placeholders.server_workers]
-type = "string"
-prompt = "Actix worker count; 0 uses Actix default"
-default = "0"
-
-[placeholders.server_temp_dir]
-type = "string"
-prompt = "Temporary directory path inside data/config.toml"
-default = ".tmp"
-
-[placeholders.database_url]
-type = "string"
-prompt = "Database URL inside data/config.toml"
-default = "sqlite://{{project-name}}.db?mode=rwc"
-
-[placeholders.database_pool_size]
-type = "string"
-prompt = "Database pool size"
-default = "10"
-
-[placeholders.database_retry_count]
-type = "string"
-prompt = "Database connection retry count"
-default = "3"
-
-[placeholders.cache_backend]
-type = "string"
-prompt = "Cache backend"
-default = "memory"
-
-[placeholders.cache_endpoint]
-type = "string"
-prompt = "Cache endpoint"
-default = ""
-
-[placeholders.cache_default_ttl]
-type = "string"
-prompt = "Cache default TTL seconds"
-default = "3600"
-
-[placeholders.config_sync_backend]
-type = "string"
-prompt = "Config sync backend"
-default = "disabled"
-
-[placeholders.config_sync_endpoint]
-type = "string"
-prompt = "Config sync endpoint"
-default = ""
-
-[placeholders.config_sync_topic]
-type = "string"
-prompt = "Config sync topic"
-default = "{{project-name}}.config_reload"
-
-[placeholders.logging_level]
-type = "string"
-prompt = "Logging level"
-default = "info"
-
-[placeholders.logging_format]
-type = "string"
-prompt = "Logging format"
-default = "text"
-
-[placeholders.logging_file]
-type = "string"
-prompt = "Logging file path inside data/config.toml"
-default = "{{project-name}}.log"
-
-[placeholders.logging_enable_rotation]
-type = "bool"
-prompt = "Enable log file rotation"
-default = true
-
-[placeholders.logging_max_backups]
-type = "string"
-prompt = "Maximum retained rotated log files"
-default = "5"

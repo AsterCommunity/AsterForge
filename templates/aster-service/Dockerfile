@@ -48,9 +48,6 @@ EXPOSE {{server_port}}
 
 WORKDIR /
 ENV ASTER__SERVER__HOST=0.0.0.0
-ENV ASTER__DATABASE__URL=sqlite:///data/{{project-name}}.db?mode=rwc
-ENV ASTER__SERVER__TEMP_DIR=/data/.tmp
-ENV ASTER__LOGGING__FILE=/data/{{project-name}}.log
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:{{server_port}}/readyz"]

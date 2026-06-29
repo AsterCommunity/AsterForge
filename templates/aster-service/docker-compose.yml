@@ -12,8 +12,6 @@ services:
     environment:
       - ASTER__SERVER__HOST=0.0.0.0
       - ASTER__DATABASE__URL=sqlite:///data/{{project-name}}.db?mode=rwc
-      - ASTER__SERVER__TEMP_DIR=/data/.tmp
-      - ASTER__LOGGING__FILE=/data/{{project-name}}.log
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:{{server_port}}/readyz"]
       interval: 30s

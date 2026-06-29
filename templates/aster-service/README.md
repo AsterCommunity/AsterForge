@@ -46,10 +46,9 @@ The default data layout matches AsterDrive and AsterYggdrasil:
 - `data/config.toml`
 - `data/{{project-name}}.db`
 - `data/.tmp`
-- `data/{{project-name}}.log`
 
-Startup creates the parent directories for the configured temp directory, SQLite database, and log
-file.
+Startup creates the parent directories for the configured temp directory and SQLite database. It
+also creates the parent directory for `logging.file` when file logging is configured.
 
 Relative filesystem paths and relative `sqlite://` database paths in `data/config.toml` are
 resolved from the configuration file directory. For example, `sqlite://service.db?mode=rwc` in
@@ -57,15 +56,14 @@ resolved from the configuration file directory. For example, `sqlite://service.d
 
 ## Template Parameters
 
-The generator exposes the same boot-time groups used by AsterYggdrasil-style services:
+The generator only asks for values that are useful at project creation time:
 
-- Package metadata: `package_description`, `forge_git`.
-- Server: `server_host`, `server_port`, `server_workers`, `server_temp_dir`.
-- Database: `database_url`, `database_pool_size`, `database_retry_count`.
-- Cache: `cache_backend`, `cache_endpoint`, `cache_default_ttl`.
-- Config sync: `config_sync_backend`, `config_sync_endpoint`, `config_sync_topic`.
-- Logging: `logging_level`, `logging_format`, `logging_file`, `logging_enable_rotation`,
-  `logging_max_backups`.
+- `package_description`: Cargo package and container image description.
+- `server_port`: Local HTTP bind port.
+
+Server host/workers/temp dir, database pool/retry settings, cache, config sync, and logging use
+conservative defaults in the generated configuration. Override them in `data/config.toml` or with
+`ASTER__...` environment variables when deploying.
 
 ## Product Boundaries
 
@@ -173,9 +171,6 @@ docker compose up --build
 Mount `/data` for persistent runtime files. The image sets:
 
 - `ASTER__SERVER__HOST=0.0.0.0`
-- `ASTER__DATABASE__URL=sqlite:///data/{{project-name}}.db?mode=rwc`
-- `ASTER__SERVER__TEMP_DIR=/data/.tmp`
-- `ASTER__LOGGING__FILE=/data/{{project-name}}.log`
 
 The image healthcheck probes `/readyz`.
 
@@ -184,7 +179,7 @@ The image healthcheck probes `/readyz`.
 The template depends on the AsterForge project through Git:
 
 ```toml
-aster_forge_runtime = { git = "{{forge_git}}", package = "aster_forge_runtime" }
+aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_runtime" }
 ```
 
 When working on Forge and a generated product on the same machine, temporarily replace those Git

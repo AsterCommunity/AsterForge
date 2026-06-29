@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
-aster_forge_db = { git = "{{forge_git}}", package = "aster_forge_db", features = ["all"] }
+aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db", features = ["all"] }
 sea-orm-migration = { version = "2.0.0-rc.41", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
