@@ -1,0 +1,7 @@
+{
+	"notFoundTitle": "Page not found",
+	"routeFailedTitle": "Route failed",
+	"notFoundDescription": "The requested frontend route does not exist.",
+	"routeFailedDescription": "The frontend route could not be loaded.",
+	"backHome": "Back to overview"
+}

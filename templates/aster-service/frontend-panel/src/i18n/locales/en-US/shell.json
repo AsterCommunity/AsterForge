@@ -1,0 +1,10 @@
+{
+	"brandLabel": "Aster service",
+	"navigationLabel": "Service navigation",
+	"nav": {
+		"overview": "Overview",
+		"operations": "Operations",
+		"settings": "Settings"
+	},
+	"status": "Service shell ready"
+}

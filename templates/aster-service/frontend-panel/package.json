@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "tsgo -b && vite build",
-		"generate-api": "openapi-typescript ./generated/openapi.json -o ./src/services/api.generated.ts",
+		"generate-api": "openapi-typescript ./generated/openapi.json -o ./src/types/api.generated.ts",
 		"check": "tsgo -b && biome check .",
 		"check:fix": "biome check --write .",
 		"format": "biome format --write .",
@@ -15,7 +15,6 @@
 		"test:coverage": "vitest run --coverage",
 		"test:watch": "vitest",
 		"test:e2e": "playwright test",
-		"test:e2e:asterdrive": "playwright test e2e",
 		"test:e2e:headed": "playwright test --headed",
 		"test:e2e:ui": "playwright test --ui"
 	},

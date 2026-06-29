@@ -1,0 +1,10 @@
+{
+	"brandLabel": "Aster 服务",
+	"navigationLabel": "服务导航",
+	"nav": {
+		"overview": "概览",
+		"operations": "运维",
+		"settings": "设置"
+	},
+	"status": "服务面板已就绪"
+}

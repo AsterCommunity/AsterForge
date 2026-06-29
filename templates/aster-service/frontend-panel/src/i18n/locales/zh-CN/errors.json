@@ -1,0 +1,7 @@
+{
+	"notFoundTitle": "页面不存在",
+	"routeFailedTitle": "路由加载失败",
+	"notFoundDescription": "请求的前端路由不存在。",
+	"routeFailedDescription": "前端路由无法加载。",
+	"backHome": "返回概览"
+}

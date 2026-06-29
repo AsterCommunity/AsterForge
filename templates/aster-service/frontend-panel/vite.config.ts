@@ -3,6 +3,12 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { backendPathDenylist } from "./src/routes/routePaths.js";
+
+const templateServerPort = "{{server_port}}";
+const backendTarget = templateServerPort.includes("{")
+	? "http://127.0.0.1:3000"
+	: `http://127.0.0.1:${templateServerPort}`;
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -38,10 +44,7 @@ export default defineConfig({
 			workbox: {
 				globPatterns: ["index.html", "assets/**/*.{js,css,mjs,woff2}"],
 				navigateFallback: "index.html",
-				navigateFallbackDenylist: [
-					/^\/api\//,
-					/^\/health(?:\/.*)?$/,
-				],
+				navigateFallbackDenylist: [...backendPathDenylist],
 			},
 			devOptions: {
 				enabled: true,
@@ -58,8 +61,8 @@ export default defineConfig({
 	},
 	server: {
 		proxy: {
-			"/api": "http://127.0.0.1:{{server_port}}",
-			"/health": "http://127.0.0.1:{{server_port}}",
+			"/api": backendTarget,
+			"/health": backendTarget,
 		},
 	},
 	build: {

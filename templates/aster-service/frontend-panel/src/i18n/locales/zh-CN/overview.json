@@ -1,0 +1,45 @@
+{
+	"hero": {
+		"eyebrow": "运行时底座",
+		"title": "服务核心已准备好承接产品工作。",
+		"description": "生成的后端已经接入配置加载、健康检查、指标、迁移、前端资源嵌入和运行时装配。",
+		"routeCount": "3",
+		"routeCountLabel": "个基础路由已挂载"
+	},
+	"checksLabel": "服务检查",
+	"checks": {
+		"http": {
+			"label": "HTTP 运行时",
+			"value": "服务中",
+			"detail": "Actix 路由已挂载，可以继续接入产品 API。"
+		},
+		"readiness": {
+			"label": "就绪检查",
+			"detail": "就绪检查用于部署探针和发布门禁。"
+		},
+		"openapi": {
+			"label": "OpenAPI",
+			"value": "已生成",
+			"detail": "运行 OpenAPI 测试刷新 frontend-panel/generated。"
+		}
+	},
+	"backend": {
+		"eyebrow": "后端接口面",
+		"title": "基础设施端点保持稳定可预期。",
+		"notes": {
+			"health": "存活探针",
+			"readiness": "就绪探针",
+			"metrics": "启用 metrics feature 后导出 Prometheus 指标",
+			"api": "产品 API 路由",
+			"openapi": "调试用 OpenAPI 描述"
+		}
+	},
+	"live": {
+		"label": "实时探针",
+		"refresh": "刷新",
+		"health": "健康",
+		"readiness": "就绪",
+		"unknown": "未知",
+		"failed": "请求失败"
+	}
+}

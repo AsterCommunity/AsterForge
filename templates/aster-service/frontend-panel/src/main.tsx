@@ -1,8 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { RouterProvider } from "react-router-dom";
+import { App } from "@/app/App";
+import { AppProviders } from "@/app/AppProviders";
+import "@/i18n";
 import "./index.css";
-import { router } from "@/router/index";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element not found");
@@ -10,6 +11,8 @@ if (!root) throw new Error("Root element not found");
 root.querySelector("[data-aster-boot-loading]")?.remove();
 createRoot(root).render(
 	<StrictMode>
-		<RouterProvider router={router} />
+		<AppProviders>
+			<App />
+		</AppProviders>
 	</StrictMode>,
 );

@@ -11,7 +11,7 @@
 			"!!**/public",
 			"!!**/dist",
 			"!!**/generated",
-			"!!**/src/services/api.generated.ts"
+			"!!**/src/types/api.generated.ts"
 		]
 	},
 	"formatter": {

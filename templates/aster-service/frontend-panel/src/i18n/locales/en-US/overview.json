@@ -1,0 +1,45 @@
+{
+	"hero": {
+		"eyebrow": "Runtime foundation",
+		"title": "Service core is ready for product work.",
+		"description": "The generated backend owns configuration loading, health probes, metrics, migrations, embedded frontend assets, and runtime assembly.",
+		"routeCount": "3",
+		"routeCountLabel": "foundation routes wired"
+	},
+	"checksLabel": "Service checks",
+	"checks": {
+		"http": {
+			"label": "HTTP runtime",
+			"value": "Serving",
+			"detail": "Actix routes are mounted and ready for product APIs."
+		},
+		"readiness": {
+			"label": "Readiness",
+			"detail": "Use readiness for deployment probes and rollout gates."
+		},
+		"openapi": {
+			"label": "OpenAPI",
+			"value": "Generated",
+			"detail": "Run the OpenAPI test to refresh frontend-panel/generated."
+		}
+	},
+	"backend": {
+		"eyebrow": "Backend surfaces",
+		"title": "Infrastructure endpoints stay predictable.",
+		"notes": {
+			"health": "Liveness probe",
+			"readiness": "Readiness probe",
+			"metrics": "Prometheus metrics with metrics feature",
+			"api": "Product API routes",
+			"openapi": "Debug OpenAPI spec"
+		}
+	},
+	"live": {
+		"label": "Live probes",
+		"refresh": "Refresh",
+		"health": "Health",
+		"readiness": "Readiness",
+		"unknown": "Unknown",
+		"failed": "Request failed"
+	}
+}

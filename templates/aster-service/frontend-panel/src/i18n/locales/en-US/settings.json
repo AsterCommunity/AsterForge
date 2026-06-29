@@ -1,0 +1,15 @@
+{
+	"eyebrow": "Settings",
+	"title": "Product choices stay explicit.",
+	"language": {
+		"label": "Interface language",
+		"en-US": "English",
+		"zh-CN": "简体中文"
+	},
+	"items": {
+		"database": "Database",
+		"serverBind": "Server bind",
+		"loggingFile": "Logging file",
+		"loggingFileValue": "disabled by default"
+	}
+}

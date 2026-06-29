@@ -1,0 +1,18 @@
+{
+	"eyebrow": "Operations",
+	"title": "Operational surfaces have a clear place to land.",
+	"items": {
+		"runtime": {
+			"title": "Runtime",
+			"body": "Register product components in the Rust runtime assembly."
+		},
+		"persistence": {
+			"title": "Persistence",
+			"body": "Add product schema with SeaORM migrations and generated entities."
+		},
+		"background": {
+			"title": "Background work",
+			"body": "Attach scheduled tasks after the business contract is clear."
+		}
+	}
+}

@@ -1,32 +1,26 @@
-# React + TypeScript + Vite
+# Frontend panel
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This panel is the starter React shell embedded by the generated Aster service. It is intentionally
+small: product projects should keep route paths, generated API types, page components, and reusable
+UI pieces in separate modules instead of wiring everything through `main.tsx`.
 
-Currently, two official plugins are available:
+## Commands
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+bun install
+bun run dev
+bun run check
+bun run test
+bun run build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## OpenAPI types
+
+The backend OpenAPI test writes `generated/openapi.json`. Generate TypeScript types from it with:
+
+```bash
+bun run generate-api
+```
+
+Generated OpenAPI types are written to `src/types/api.generated.ts`. Application code should import
+from `src/types/api.ts`, which mirrors the wrapper style used by the reference Aster frontends.

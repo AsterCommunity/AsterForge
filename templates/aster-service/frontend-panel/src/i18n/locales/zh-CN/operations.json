@@ -1,0 +1,18 @@
+{
+	"eyebrow": "运维",
+	"title": "运维界面有明确的承接位置。",
+	"items": {
+		"runtime": {
+			"title": "运行时",
+			"body": "在 Rust runtime assembly 中注册产品组件。"
+		},
+		"persistence": {
+			"title": "持久化",
+			"body": "用 SeaORM migration 和生成实体接入产品 schema。"
+		},
+		"background": {
+			"title": "后台任务",
+			"body": "业务契约明确后再接入 scheduled tasks。"
+		}
+	}
+}
