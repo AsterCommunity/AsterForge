@@ -42,13 +42,18 @@ fn default_config_file_is_created_under_data_dir() {
         loaded.database.url,
         format!(
             "sqlite://{}?mode=rwc",
-            runtime_relative_path(dir.join("data").join("{{project-name}}.db"))
+            runtime_relative_path(
+                dir.join("data")
+                    .join("{{project-name}}.db")
+            )
         )
     );
     assert!(config_path.exists());
     assert!(generated.contains("# {{project-name}} configuration file"));
     assert!(generated.contains(r#"temp_dir = ".tmp""#));
-    assert!(generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#));
+    assert!(
+        generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#)
+    );
     assert!(generated.contains(r#"file = """#));
     assert!(generated.contains("enable_rotation = false"));
 }
@@ -129,7 +134,9 @@ impl EnvGuard {
         let lock = ENV_LOCK.lock().expect("env lock poisoned");
         Self {
             _lock: lock,
-            config_path: std::env::var_os({{crate_name}}::config::CONFIG_ENV_VAR),
+            config_path: std::env::var_os(
+                {{crate_name}}::config::CONFIG_ENV_VAR,
+            ),
             server_host: std::env::var_os("ASTER__SERVER__HOST"),
         }
     }

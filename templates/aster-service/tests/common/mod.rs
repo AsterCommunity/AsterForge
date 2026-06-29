@@ -16,11 +16,18 @@ pub async fn setup() -> {{crate_name}}::runtime::AppState {
 }
 
 fn unique_database_path() -> std::path::PathBuf {
+    static NEXT_DATABASE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let id = NEXT_DATABASE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("{}-test-{nanos}.db", env!("CARGO_PKG_NAME")))
+    std::env::temp_dir().join(format!(
+        "{}-test-{}-{id}-{nanos}.db",
+        env!("CARGO_PKG_NAME"),
+        std::process::id()
+    ))
 }
 
 /// Creates the standard test Actix app.

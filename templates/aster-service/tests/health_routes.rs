@@ -35,6 +35,26 @@ async fn health_and_ready_routes_return_ok() {
 }
 
 #[actix_web::test]
+async fn health_head_routes_return_probe_status_without_body() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    for path in ["/health", "/health/ready"] {
+        let response = test::call_service(
+            &app,
+            test::TestRequest::default()
+                .method(actix_web::http::Method::HEAD)
+                .uri(path)
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("x-request-id"));
+        assert!(response.headers().contains_key("x-content-type-options"));
+    }
+}
+
+#[actix_web::test]
 async fn api_scope_returns_json_404_instead_of_frontend_fallback() {
     let state = common::setup().await;
     let app = create_test_app!(state);
@@ -61,6 +81,18 @@ async fn api_scope_returns_json_404_instead_of_frontend_fallback() {
 }
 
 #[actix_web::test]
+async fn api_scope_root_returns_json_404_instead_of_frontend_fallback() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response =
+        test::call_service(&app, test::TestRequest::get().uri("/api/v1").to_request()).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["code"], "endpoint_not_found");
+}
+
+#[actix_web::test]
 async fn frontend_fallback_still_serves_spa_routes() {
     let state = common::setup().await;
     let app = create_test_app!(state);
@@ -80,6 +112,121 @@ async fn frontend_fallback_still_serves_spa_routes() {
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("text/html"))
     );
+}
+
+#[actix_web::test]
+async fn frontend_index_sets_csp_header_and_meta_without_header_only_directives() {
+    use {{crate_name}}::api::routes::frontend::{
+        FRONTEND_CSP_HEADER, FRONTEND_CSP_META,
+    };
+
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response = test::call_service(&app, test::TestRequest::get().uri("/").to_request()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some(FRONTEND_CSP_HEADER)
+    );
+    assert!(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("no-cache"))
+    );
+
+    let body = test::read_body(response).await;
+    let html = std::str::from_utf8(&body).expect("index html should be utf-8");
+    let escaped_csp = FRONTEND_CSP_META.replace('\'', "&#39;");
+    assert!(
+        html.contains(&format!(
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"{escaped_csp}\" />"
+        )),
+        "expected index.html to include CSP meta tag"
+    );
+    assert!(
+        !html.contains("frame-ancestors"),
+        "meta CSP should not include header-only frame-ancestors directive"
+    );
+    assert!(html.contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[actix_web::test]
+async fn frontend_csp_constants_split_header_only_directives() {
+    use {{crate_name}}::api::routes::frontend::{
+        FRONTEND_CSP_HEADER, FRONTEND_CSP_META,
+    };
+
+    assert!(
+        FRONTEND_CSP_HEADER.contains("frame-ancestors 'self'"),
+        "header CSP should retain frame-ancestors"
+    );
+    assert!(
+        !FRONTEND_CSP_META.contains("frame-ancestors"),
+        "meta CSP should exclude frame-ancestors"
+    );
+    assert!(
+        FRONTEND_CSP_META.contains("connect-src 'self' http: https: ws: wss:"),
+        "meta CSP should still allow browser connections"
+    );
+}
+
+#[actix_web::test]
+async fn frontend_assets_use_expected_content_types_and_cache_headers() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let favicon = test::call_service(
+        &app,
+        test::TestRequest::get().uri("/favicon.svg").to_request(),
+    )
+    .await;
+    assert_eq!(favicon.status(), StatusCode::OK);
+    assert_eq!(
+        favicon
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("image/svg+xml")
+    );
+    assert_eq!(
+        favicon
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("public, max-age=86400")
+    );
+
+    let missing_pwa_file = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/manifest.webmanifest")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(missing_pwa_file.status(), StatusCode::NOT_FOUND);
+    let body = test::read_body(missing_pwa_file).await;
+    assert_eq!(&body[..], b"File not found");
+}
+
+#[actix_web::test]
+async fn frontend_asset_traversal_is_rejected() {
+    let state = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/assets/../index.html")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[actix_web::test]
