@@ -20,9 +20,7 @@ use utoipa::OpenApi;
     ),
     components(
         schemas(
-            crate::api::response::HealthResponse,
-            crate::api::response::ReadinessComponent,
-            crate::api::response::ReadinessResponse,
+            crate::api::response::StatusResponse,
         )
     )
 )]

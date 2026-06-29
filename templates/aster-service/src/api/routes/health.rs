@@ -3,7 +3,7 @@
 use actix_web::{HttpResponse, Scope, web};
 use aster_forge_runtime::{HealthComponentReport, SystemHealthReport};
 
-use crate::api::response::{HealthResponse, ReadinessComponent, ReadinessResponse};
+use crate::api::response::StatusResponse;
 
 /// Returns the health route scope.
 pub fn routes() -> Scope {
@@ -19,14 +19,11 @@ pub fn routes() -> Scope {
     path = "/healthz",
     tag = "health",
     responses(
-        (status = 200, description = "Service health status", body = HealthResponse)
+        (status = 200, description = "Service health status", body = StatusResponse)
     )
 )]
-pub async fn healthz(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
-    HttpResponse::Ok().json(HealthResponse {
-        cache_backend: state.cache_backend_name(),
-        config_sync_enabled: state.config_sync_enabled(),
-        runtime_id: state.runtime_id().to_string(),
+pub async fn healthz() -> HttpResponse {
+    HttpResponse::Ok().json(StatusResponse {
         service: env!("CARGO_PKG_NAME"),
         status: "ok",
     })
@@ -37,8 +34,8 @@ pub async fn healthz(state: web::Data<crate::runtime::AppState>) -> HttpResponse
     path = "/readyz",
     tag = "health",
     responses(
-        (status = 200, description = "Service is ready", body = ReadinessResponse),
-        (status = 503, description = "Service dependency is not ready", body = ReadinessResponse)
+        (status = 200, description = "Service is ready", body = StatusResponse),
+        (status = 503, description = "Service dependency is not ready", body = StatusResponse)
     )
 )]
 pub async fn readyz(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
@@ -54,12 +51,7 @@ pub async fn readyz(state: web::Data<crate::runtime::AppState>) -> HttpResponse 
         .components
         .iter()
         .all(|component| !component.status.is_issue());
-    let response = ReadinessResponse {
-        components: report
-            .components
-            .iter()
-            .map(readiness_component_response)
-            .collect(),
+    let response = StatusResponse {
         service: env!("CARGO_PKG_NAME"),
         status: if ready { "ready" } else { "not_ready" },
     };
@@ -86,13 +78,5 @@ async fn check_cache(state: &crate::runtime::AppState) -> HealthComponentReport 
         Err(error) => {
             HealthComponentReport::unhealthy("cache", format!("cache health check failed: {error}"))
         }
-    }
-}
-
-fn readiness_component_response(component: &HealthComponentReport) -> ReadinessComponent {
-    ReadinessComponent {
-        name: component.name,
-        status: component.status.as_str(),
-        message: component.message.clone(),
     }
 }

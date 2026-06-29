@@ -16,10 +16,22 @@ async fn health_and_ready_routes_return_ok() {
     let health =
         test::call_service(&app, test::TestRequest::get().uri("/healthz").to_request()).await;
     assert_eq!(health.status(), StatusCode::OK);
+    let health_body: serde_json::Value = test::read_body_json(health).await;
+    assert_eq!(health_body["status"], "ok");
+    assert!(health_body.get("runtime_id").is_none());
+    assert!(health_body.get("cache_backend").is_none());
+    assert!(health_body.get("config_sync_enabled").is_none());
+    assert!(health_body.get("components").is_none());
 
     let ready =
         test::call_service(&app, test::TestRequest::get().uri("/readyz").to_request()).await;
     assert_eq!(ready.status(), StatusCode::OK);
+    let ready_body: serde_json::Value = test::read_body_json(ready).await;
+    assert_eq!(ready_body["status"], "ready");
+    assert!(ready_body.get("runtime_id").is_none());
+    assert!(ready_body.get("cache_backend").is_none());
+    assert!(ready_body.get("config_sync_enabled").is_none());
+    assert!(ready_body.get("components").is_none());
 }
 
 #[cfg(feature = "metrics")]

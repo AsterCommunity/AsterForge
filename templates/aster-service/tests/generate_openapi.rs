@@ -23,7 +23,7 @@ fn generated_openapi_contains_health_route() {
     assert!(value["paths"].get("/healthz").is_some());
     assert!(
         value["components"]["schemas"]
-            .get("HealthResponse")
+            .get("StatusResponse")
             .is_some()
     );
 }
