@@ -3,8 +3,10 @@
 //! Product crates own audit actions, detail schemas, authorization rules,
 //! operator-facing presentation, and the concrete manager implementation.
 //! Forge owns the runtime lifecycle contract shared by Aster products: record a
-//! best-effort server shutdown audit event after outbound mail drains, then
-//! flush the product audit manager before database handles close.
+//! best-effort server shutdown audit event, then flush the product audit manager
+//! before database handles close. Products that also use a mail outbox can enable
+//! the `mail-outbox-dependency` feature to make the standard audit constructors
+//! depend on the mail outbox drain component.
 #![cfg_attr(
     not(test),
     deny(
@@ -35,14 +37,53 @@ pub const SERVER_SHUTDOWN_AUDIT_PHASE: &str = "server_shutdown_audit";
 /// Stable shutdown phase name for flushing the buffered audit manager.
 pub const AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE: &str = "audit_manager_flush";
 
+#[cfg(feature = "mail-outbox-dependency")]
+const DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES: &[&str] =
+    &[aster_forge_mail::MAIL_OUTBOX_COMPONENT];
+#[cfg(not(feature = "mail-outbox-dependency"))]
+const DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES: &[&str] = &[];
+
 /// Creates the full audit lifecycle component bundle used by product entrypoints.
 ///
 /// `resources` is product-defined. It commonly contains a database connection
 /// and runtime config snapshot. `record_server_start` and `record_server_shutdown`
 /// record the product's own lifecycle audit entries. `flush_audit_manager` drains
-/// the product's buffered audit writer.
+/// the product's buffered audit writer. With the `mail-outbox-dependency`
+/// feature enabled, the shutdown audit phase automatically runs after the mail
+/// outbox drain component.
 pub fn audit_component<T, StartFn, StartFut, ShutdownFn, ShutdownFut, FlushFn, FlushFut>(
     resources: T,
+    record_server_start: StartFn,
+    record_server_shutdown: ShutdownFn,
+    flush_audit_manager: FlushFn,
+) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle>
+where
+    T: Clone + Send + 'static,
+    StartFn: FnOnce(T) -> StartFut + Send + Sync + 'static,
+    StartFut: Future<Output = Result<(), String>> + Send + 'static,
+    ShutdownFn: FnOnce(T) -> ShutdownFut + Send + Sync + 'static,
+    ShutdownFut: Future<Output = Result<(), String>> + Send + 'static,
+    FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
+    FlushFut: Future<Output = Result<(), String>> + Send + 'static,
+{
+    audit_component_after(
+        resources,
+        DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES,
+        record_server_start,
+        record_server_shutdown,
+        flush_audit_manager,
+    )
+}
+
+/// Creates the full audit lifecycle component bundle with caller-provided
+/// shutdown dependencies for the server-shutdown audit phase.
+///
+/// Use this when a product has another product-neutral component that must
+/// finish before recording `server_shutdown`. The audit-manager flush still runs
+/// after `AUDIT_LOGS_COMPONENT`.
+pub fn audit_component_after<T, StartFn, StartFut, ShutdownFn, ShutdownFut, FlushFn, FlushFut>(
+    resources: T,
+    shutdown_dependencies: &'static [&'static str],
     record_server_start: StartFn,
     record_server_shutdown: ShutdownFn,
     flush_audit_manager: FlushFn,
@@ -59,7 +100,11 @@ where
     let startup_resources = resources.clone();
     runtime_component((
         server_start_audit_component(startup_resources, record_server_start),
-        server_shutdown_audit_component(resources, record_server_shutdown),
+        server_shutdown_audit_component_after(
+            resources,
+            shutdown_dependencies,
+            record_server_shutdown,
+        ),
         audit_manager_component(flush_audit_manager),
     ))
 }
@@ -68,7 +113,9 @@ where
 ///
 /// Use this only when a product intentionally records server startup elsewhere.
 /// Normal Aster services should use [`audit_component`] so startup, shutdown,
-/// and manager flush share one lifecycle component.
+/// and manager flush share one lifecycle component. With the
+/// `mail-outbox-dependency` feature enabled, the shutdown audit phase
+/// automatically runs after the mail outbox drain component.
 pub fn shutdown_audit_component<T, RecordFn, RecordFut, FlushFn, FlushFut>(
     resources: T,
     record_server_shutdown: RecordFn,
@@ -81,8 +128,35 @@ where
     FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
     FlushFut: Future<Output = Result<(), String>> + Send + 'static,
 {
+    shutdown_audit_component_after(
+        resources,
+        DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES,
+        record_server_shutdown,
+        flush_audit_manager,
+    )
+}
+
+/// Creates the audit shutdown component bundle with caller-provided dependencies
+/// for the server-shutdown audit phase.
+pub fn shutdown_audit_component_after<T, RecordFn, RecordFut, FlushFn, FlushFut>(
+    resources: T,
+    shutdown_dependencies: &'static [&'static str],
+    record_server_shutdown: RecordFn,
+    flush_audit_manager: FlushFn,
+) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle>
+where
+    T: Send + 'static,
+    RecordFn: FnOnce(T) -> RecordFut + Send + Sync + 'static,
+    RecordFut: Future<Output = Result<(), String>> + Send + 'static,
+    FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
+    FlushFut: Future<Output = Result<(), String>> + Send + 'static,
+{
     runtime_component((
-        server_shutdown_audit_component(resources, record_server_shutdown),
+        server_shutdown_audit_component_after(
+            resources,
+            shutdown_dependencies,
+            record_server_shutdown,
+        ),
         audit_manager_component(flush_audit_manager),
     ))
 }
@@ -126,9 +200,31 @@ where
     })
 }
 
-/// Creates the server-shutdown audit component.
+/// Creates the server-shutdown audit component with the crate's default
+/// dependencies.
+///
+/// The default dependency list is empty unless the `mail-outbox-dependency`
+/// feature is enabled.
 pub fn server_shutdown_audit_component<T, F, Fut>(
     resources: T,
+    record_server_shutdown: F,
+) -> RuntimeComponentBundleRegistration<aster_forge_runtime::ShutdownResourceComponent<T>>
+where
+    T: Send + 'static,
+    F: FnOnce(T) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), String>> + Send + 'static,
+{
+    server_shutdown_audit_component_after(
+        resources,
+        DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES,
+        record_server_shutdown,
+    )
+}
+
+/// Creates the server-shutdown audit component with caller-provided dependencies.
+pub fn server_shutdown_audit_component_after<T, F, Fut>(
+    resources: T,
+    shutdown_dependencies: &'static [&'static str],
     record_server_shutdown: F,
 ) -> RuntimeComponentBundleRegistration<aster_forge_runtime::ShutdownResourceComponent<T>>
 where
@@ -140,7 +236,7 @@ where
         AUDIT_LOGS_COMPONENT,
         RuntimeComponentKind::Product,
         SERVER_SHUTDOWN_AUDIT_PHASE,
-        &[aster_forge_mail::MAIL_OUTBOX_COMPONENT],
+        shutdown_dependencies,
         resources,
         record_server_shutdown,
     )
@@ -176,10 +272,36 @@ mod tests {
     use super::{
         AUDIT_LOGS_COMPONENT, AUDIT_MANAGER_COMPONENT, AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE,
         SERVER_SHUTDOWN_AUDIT_PHASE, SERVER_START_AUDIT_PHASE, audit_component,
-        audit_manager_component, server_shutdown_audit_component, server_start_audit_component,
+        audit_component_after, audit_manager_component, server_shutdown_audit_component,
+        server_shutdown_audit_component_after, server_start_audit_component,
         shutdown_audit_component,
     };
 
+    #[cfg(not(feature = "mail-outbox-dependency"))]
+    #[test]
+    fn server_shutdown_audit_component_registers_without_dependencies() {
+        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            server_shutdown_audit_component((), |()| async { Ok(()) }).register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(AUDIT_LOGS_COMPONENT)
+            .expect("audit logs component should be registered");
+        assert_eq!(
+            descriptor.kind,
+            aster_forge_runtime::RuntimeComponentKind::Product
+        );
+        assert!(descriptor.dependencies.is_empty());
+        assert_eq!(
+            descriptor
+                .shutdown
+                .expect("audit logs shutdown should be registered")
+                .phase_name,
+            SERVER_SHUTDOWN_AUDIT_PHASE
+        );
+    }
+
+    #[cfg(feature = "mail-outbox-dependency")]
     #[test]
     fn server_shutdown_audit_component_registers_mail_outbox_dependency() {
         let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
@@ -203,6 +325,26 @@ mod tests {
                 .expect("audit logs shutdown should be registered")
                 .phase_name,
             SERVER_SHUTDOWN_AUDIT_PHASE
+        );
+    }
+
+    #[test]
+    fn server_shutdown_audit_component_after_registers_caller_dependencies() {
+        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            server_shutdown_audit_component_after(
+                (),
+                &["background_tasks", "mail_outbox"],
+                |()| async { Ok(()) },
+            )
+            .register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(AUDIT_LOGS_COMPONENT)
+            .expect("audit logs component should be registered");
+        assert_eq!(
+            descriptor.dependencies,
+            vec!["background_tasks", "mail_outbox"]
         );
     }
 
@@ -307,6 +449,47 @@ mod tests {
                 .expect("audit component test order should lock")
                 .as_slice(),
             ["start", "record", "flush"]
+        );
+    }
+
+    #[test]
+    fn audit_component_after_registers_shutdown_dependencies() {
+        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            audit_component_after(
+                (),
+                &["mail_outbox"],
+                |()| async { Ok(()) },
+                |()| async { Ok(()) },
+                |()| async { Ok(()) },
+            )
+            .register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(AUDIT_LOGS_COMPONENT)
+            .expect("audit logs component should be registered");
+        assert_eq!(descriptor.dependencies, vec!["mail_outbox"]);
+    }
+
+    #[cfg(feature = "mail-outbox-dependency")]
+    #[test]
+    fn audit_component_registers_mail_outbox_dependency_when_feature_enabled() {
+        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            audit_component(
+                (),
+                |()| async { Ok(()) },
+                |()| async { Ok(()) },
+                |()| async { Ok(()) },
+            )
+            .register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(AUDIT_LOGS_COMPONENT)
+            .expect("audit logs component should be registered");
+        assert_eq!(
+            descriptor.dependencies,
+            vec![aster_forge_mail::MAIL_OUTBOX_COMPONENT]
         );
     }
 

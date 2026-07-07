@@ -8,8 +8,12 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+default = []
+mail-outbox-dependency = ["dep:aster_forge_mail"]
+
 [dependencies]
-aster_forge_mail = { path = "../aster_forge_mail", default-features = false }
+aster_forge_mail = { path = "../aster_forge_mail", default-features = false, optional = true }
 aster_forge_runtime = { path = "../aster_forge_runtime" }
 
 [dev-dependencies]

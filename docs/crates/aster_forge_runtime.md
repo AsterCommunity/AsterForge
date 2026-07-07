@@ -189,7 +189,7 @@ audit_manager  -> depends_on audit_logs
 database       -> depends_on background_tasks, mail_outbox, audit_manager
 ```
 
-上面的图即使按 `database, audit_manager, audit_logs, mail_outbox, background_tasks` 的顺序注册，shutdown 仍会按 `background_tasks -> mail_outbox -> audit_logs -> audit_manager -> database` 执行。产品侧不应该再把注册顺序当成 shutdown 正确性的来源。
+上面的图假设 `aster_forge_audit` 启用了 `mail-outbox-dependency` feature。即使按 `database, audit_manager, audit_logs, mail_outbox, background_tasks` 的顺序注册，shutdown 仍会按 `background_tasks -> mail_outbox -> audit_logs -> audit_manager -> database` 执行。产品侧不应该再把注册顺序当成 shutdown 正确性的来源。
 
 如果不需要链式添加依赖，可以直接使用 registry shortcut：
 
@@ -320,7 +320,7 @@ pub fn audit_runtime_component(
 }
 ```
 
-这样入口只表达“HTTP + tasks + mail + audit + database”，资源拆解留在各自业务模块里。需要持有整个 Actix state 的组件可以 clone `web::Data<AppState>`；只需要 database/runtime config/sender 的组件应该从 `&AppState` 抽最小资源，避免为方便而多包一层 `Arc` 或 clone 整个 state。
+这样入口只表达“HTTP + tasks + mail + audit + database”，资源拆解留在各自业务模块里。如果产品启用了 `aster_forge_audit/mail-outbox-dependency`，同一个 `audit_component(...)` 会自动声明 `audit_logs -> mail_outbox`。需要持有整个 Actix state 的组件可以 clone `web::Data<AppState>`；只需要 database/runtime config/sender 的组件应该从 `&AppState` 抽最小资源，避免为方便而多包一层 `Arc` 或 clone 整个 state。
 
 这就是 Forge runtime 的目标形态：产品入口只声明“有哪些组件”，组件自己把 health、startup、task、shutdown 和 descriptor 注册进 Forge registry。记录 server shutdown audit、drain mail outbox、flush audit manager、close database 这类生命周期动作应该属于各自 component，不应该散落在入口的裸 `before_shutdown` hook 里。Forge 不替产品创建资源，也不把业务 shutdown 动作藏在框架默认值里。
 

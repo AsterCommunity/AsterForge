@@ -24,6 +24,15 @@
 aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
+默认不依赖 `aster_forge_mail`。如果产品有 mail outbox，并且希望 shutdown audit 在
+outbox drain 之后执行，显式启用 `mail-outbox-dependency`。启用后调用点不需要变化，
+仍然使用 `audit_component(...)`：
+
+```toml
+[dependencies]
+aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", features = ["mail-outbox-dependency"] }
+```
+
 如果产品同时需要共享 audit table 和 store，应配合 `aster_forge_db`：
 
 ```toml
@@ -36,7 +45,7 @@ aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge" }
 核心组件名和 shutdown phase 由 Forge 固定：
 
 ```text
-audit_logs     -> depends_on mail_outbox
+audit_logs     -> no default dependency
 audit_manager  -> depends_on audit_logs
 ```
 
@@ -48,7 +57,7 @@ audit_manager  -> depends_on audit_logs
 - `SERVER_SHUTDOWN_AUDIT_PHASE`
 - `AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE`
 
-推荐产品侧只提供资源和三个 hook：
+产品侧只提供资源和三个 hook：
 
 ```rust
 pub fn audit_component(
@@ -72,11 +81,33 @@ pub fn audit_component(
 }
 ```
 
-`record_server_start` 和 `record_server_shutdown` 是产品语义，所以仍然留在产品仓库。Forge 只保证 startup phase、shutdown phase 和 manager flush 使用同一套 lifecycle graph：server start 作为 required startup phase 执行；server shutdown 在 `mail_outbox` drain 之后、`audit_manager` flush 之前执行。
+`record_server_start` 和 `record_server_shutdown` 是产品语义，所以仍然留在产品仓库。Forge 只保证 startup phase、shutdown phase 和 manager flush 使用同一套 lifecycle graph：server start 作为 required startup phase 执行；server shutdown 在调用方声明的依赖之后、`audit_manager` flush 之前执行。
 
-`mail_outbox` 依赖使用 `aster_forge_mail::MAIL_OUTBOX_COMPONENT` 这个稳定组件名常量。这个常量不需要启用 mail 的 `runtime-component` feature；只有产品实际注册 mail outbox drain 组件时，才需要在 `aster_forge_mail` 上启用 `runtime-component`。
+启用 `mail-outbox-dependency` feature 后，同一个 `audit_component(...)` 会把
+`audit_logs` 声明为依赖 `aster_forge_mail::MAIL_OUTBOX_COMPONENT`：
 
-常规产品入口应该直接使用 `audit_component(...)`，不要在产品侧手写 tuple 去拼
+```text
+mail_outbox    -> depends_on background_tasks
+audit_logs     -> depends_on mail_outbox
+audit_manager  -> depends_on audit_logs
+```
+
+`MAIL_OUTBOX_COMPONENT` 这个常量不需要启用 mail 的 `runtime-component` feature；只有产品实际注册 mail outbox drain 组件时，才需要在 `aster_forge_mail` 上启用 `runtime-component`。
+
+如果产品有别的 shutdown 依赖，使用 caller-provided 变体：
+
+```rust
+aster_forge_audit::audit_component_after(
+    resources,
+    &[MY_COMPONENT],
+    record_server_start,
+    record_server_shutdown,
+    flush_audit_manager,
+)
+```
+
+常规产品入口应该直接使用 `audit_component(...)`，需要自定义依赖时才用
+`audit_component_after(...)`。不要在产品侧手写 tuple 去拼
 `server_start_audit_component(...)`、`server_shutdown_audit_component(...)` 和
 `audit_manager_component(...)`。如果产品确实需要拆开注册，也应该使用这些 component
 factory，再由产品聚合 component 统一注册 bundle。不要在产品侧直接调用低层 registry
