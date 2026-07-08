@@ -80,17 +80,16 @@ mod tests {
     async fn mail_outbox_component_consumes_resource_once_during_shutdown() {
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_drain = calls.clone();
-        let report = aster_forge_runtime::RuntimeComponentRegistry::shutdown_bundle(
-            mail_outbox_component(7usize, move |resource| {
-                let calls = calls_for_drain.clone();
-                async move {
-                    assert_eq!(resource, 7);
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            }),
-        )
-        .await;
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::new();
+        registry.register_bundle(mail_outbox_component(7usize, move |resource| {
+            let calls = calls_for_drain.clone();
+            async move {
+                assert_eq!(resource, 7);
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }));
+        let report = registry.shutdown().await;
 
         assert!(!report.has_failures());
         assert_eq!(calls.load(Ordering::SeqCst), 1);

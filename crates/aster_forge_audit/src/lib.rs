@@ -98,15 +98,20 @@ where
     FlushFut: Future<Output = Result<(), String>> + Send + 'static,
 {
     let startup_resources = resources.clone();
-    runtime_component((
-        server_start_audit_component(startup_resources, record_server_start),
-        server_shutdown_audit_component_after(
-            resources,
-            shutdown_dependencies,
-            record_server_shutdown,
-        ),
-        audit_manager_component(flush_audit_manager),
-    ))
+    let server_start = server_start_audit_component(startup_resources, record_server_start);
+    let server_shutdown = server_shutdown_audit_component_after(
+        resources,
+        shutdown_dependencies,
+        record_server_shutdown,
+    );
+    let audit_manager = audit_manager_component(flush_audit_manager);
+
+    runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+        registry
+            .register_bundle(server_start)
+            .register_bundle(server_shutdown)
+            .register_bundle(audit_manager);
+    })
 }
 
 /// Creates the audit shutdown component bundle without the server-start phase.
@@ -151,14 +156,18 @@ where
     FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
     FlushFut: Future<Output = Result<(), String>> + Send + 'static,
 {
-    runtime_component((
-        server_shutdown_audit_component_after(
-            resources,
-            shutdown_dependencies,
-            record_server_shutdown,
-        ),
-        audit_manager_component(flush_audit_manager),
-    ))
+    let server_shutdown = server_shutdown_audit_component_after(
+        resources,
+        shutdown_dependencies,
+        record_server_shutdown,
+    );
+    let audit_manager = audit_manager_component(flush_audit_manager);
+
+    runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+        registry
+            .register_bundle(server_shutdown)
+            .register_bundle(audit_manager);
+    })
 }
 
 /// Creates the server-start audit startup component.
@@ -499,32 +508,31 @@ mod tests {
         let order_for_record = order.clone();
         let order_for_flush = order.clone();
 
-        let report = aster_forge_runtime::RuntimeComponentRegistry::shutdown_bundle(
-            shutdown_audit_component(
-                (),
-                move |()| {
-                    let order = order_for_record.clone();
-                    async move {
-                        order
-                            .lock()
-                            .expect("audit component test order should lock")
-                            .push("record");
-                        Ok(())
-                    }
-                },
-                move |()| {
-                    let order = order_for_flush.clone();
-                    async move {
-                        order
-                            .lock()
-                            .expect("audit component test order should lock")
-                            .push("flush");
-                        Ok(())
-                    }
-                },
-            ),
-        )
-        .await;
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::new();
+        registry.register_bundle(shutdown_audit_component(
+            (),
+            move |()| {
+                let order = order_for_record.clone();
+                async move {
+                    order
+                        .lock()
+                        .expect("audit component test order should lock")
+                        .push("record");
+                    Ok(())
+                }
+            },
+            move |()| {
+                let order = order_for_flush.clone();
+                async move {
+                    order
+                        .lock()
+                        .expect("audit component test order should lock")
+                        .push("flush");
+                    Ok(())
+                }
+            },
+        ));
+        let report = registry.shutdown().await;
 
         assert!(!report.has_failures());
         assert_eq!(

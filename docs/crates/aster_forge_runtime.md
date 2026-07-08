@@ -92,19 +92,21 @@ aster_forge_runtime::run_runtime_lease_supervisor(
 
 ```rust
 use aster_forge_runtime::{
-    RuntimeComponentBundle, RuntimeComponentBundleRegistration,
+    RuntimeComponentBundle, RuntimeComponentBundleRegistration, RuntimeComponentRegistry,
 };
 
 pub fn core_health_component(
     state: &AppState,
 ) -> RuntimeComponentBundleRegistration<impl RuntimeComponentBundle> {
-    aster_forge_runtime::runtime_component((
-        aster_forge_db::database_health_component(state.reader_db().clone()),
-        aster_forge_cache::cache_health_component(
-            state.config().cache.clone(),
-            state.cache().clone(),
-        ),
-    ))
+    let database = aster_forge_db::database_health_component(state.reader_db().clone());
+    let cache = aster_forge_cache::cache_health_component(
+        state.config().cache.clone(),
+        state.cache().clone(),
+    );
+
+    aster_forge_runtime::runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+        registry.register_bundle(database).register_bundle(cache);
+    })
 }
 ```
 
@@ -154,13 +156,15 @@ AsterRuntime::builder()
     .component(aster_forge_db::database_component_after(...));
 ```
 
-如果入口要组合多个资源包，可以用 tuple bundle：
+如果入口要组合多个资源包，直接链式注册 bundle：
 
 ```rust
-let report = RuntimeComponentRegistry::shutdown_bundle((
-    ShutdownComponents { background_tasks, db_handles },
-    ProductAuditComponents,
-)).await;
+let mut registry = RuntimeComponentRegistry::new();
+registry
+    .register_bundle(ShutdownComponents { background_tasks, db_handles })
+    .register_bundle(ProductAuditComponents);
+
+let report = registry.shutdown().await;
 ```
 
 shutdown 也走同一个注册模型。普通产品代码优先使用领域 crate 暴露的 component factory；如果 phase 需要消费数据库句柄、后台任务集合这类只能关闭一次的资源，由领域 component 内部使用 `component_shutdown_once()` 处理 `Option<T>::take()` 这类机械层。数据库 component 例子：

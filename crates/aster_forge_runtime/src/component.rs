@@ -45,27 +45,6 @@ where
     }
 }
 
-macro_rules! impl_runtime_component_bundle_tuple {
-    ($($name:ident : $index:tt),+) => {
-        impl<$($name),+> RuntimeComponentBundle for ($($name,)+)
-        where
-            $($name: RuntimeComponentBundle,)+
-        {
-            fn register(self, registry: &mut RuntimeComponentRegistry) {
-                $(self.$index.register(registry);)+
-            }
-        }
-    };
-}
-
-impl_runtime_component_bundle_tuple!(A: 0, B: 1);
-impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2);
-impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3);
-impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4);
-impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5);
-impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6);
-impl_runtime_component_bundle_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7);
-
 /// Broad category for a registered runtime component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeComponentKind {
@@ -212,25 +191,6 @@ impl RuntimeComponentRegistry {
         let mut registry = Self::new();
         registry.configure(configure);
         registry
-    }
-
-    /// Creates a registry and registers one product-owned component bundle.
-    pub fn configured_with_bundle<B>(bundle: B) -> Self
-    where
-        B: RuntimeComponentBundle,
-    {
-        let mut registry = Self::new();
-        registry.register_bundle(bundle);
-        registry
-    }
-
-    /// Creates a registry from one bundle, runs registered shutdown phases, and returns the report.
-    pub async fn shutdown_bundle<B>(bundle: B) -> ShutdownReport
-    where
-        B: RuntimeComponentBundle,
-    {
-        let mut registry = Self::configured_with_bundle(bundle);
-        registry.shutdown().await
     }
 
     /// Applies a product or subsystem registration function.
@@ -1142,7 +1102,8 @@ mod tests {
     #[tokio::test]
     async fn registry_accepts_owned_component_bundle() {
         let values = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = RuntimeComponentRegistry::configured_with_bundle(TestShutdownBundle {
+        let mut registry = RuntimeComponentRegistry::new();
+        registry.register_bundle(TestShutdownBundle {
             values: Arc::clone(&values),
         });
 
@@ -1163,68 +1124,36 @@ mod tests {
 
     #[test]
     fn registry_accepts_closure_component_bundle() {
-        let registry = RuntimeComponentRegistry::configured_with_bundle(
-            |registry: &mut RuntimeComponentRegistry| {
-                register_database_component(registry);
-            },
-        );
+        let mut registry = RuntimeComponentRegistry::new();
+        registry.register_bundle(|registry: &mut RuntimeComponentRegistry| {
+            register_database_component(registry);
+        });
 
         assert_eq!(registry.len(), 1);
         assert_eq!(registry.descriptors()[0].name, "database");
     }
 
     #[test]
-    fn registry_accepts_tuple_component_bundle() {
-        let registry = RuntimeComponentRegistry::configured_with_bundle((
-            register_database_component,
-            register_cache_component,
-        ));
+    fn registry_register_bundle_chains_multiple_component_bundles() {
+        let mut registry = RuntimeComponentRegistry::new();
+        registry
+            .register_bundle(register_database_component)
+            .register_bundle(register_cache_component);
 
         assert_eq!(registry.len(), 2);
         assert_eq!(registry.descriptors()[0].name, "database");
         assert_eq!(registry.descriptors()[1].name, "cache");
     }
 
-    #[test]
-    fn registry_accepts_five_item_tuple_component_bundle() {
-        fn register_mail_component(registry: &mut RuntimeComponentRegistry) {
-            registry.component("mail").kind(RuntimeComponentKind::Mail);
-        }
-        fn register_tasks_component(registry: &mut RuntimeComponentRegistry) {
-            registry
-                .component("tasks")
-                .kind(RuntimeComponentKind::Tasks);
-        }
-        fn register_audit_component(registry: &mut RuntimeComponentRegistry) {
-            registry
-                .component("audit")
-                .kind(RuntimeComponentKind::Product);
-        }
-
-        let registry = RuntimeComponentRegistry::configured_with_bundle((
-            register_database_component,
-            register_cache_component,
-            register_mail_component,
-            register_tasks_component,
-            register_audit_component,
-        ));
-
-        let names = registry
-            .descriptors()
-            .iter()
-            .map(|descriptor| descriptor.name)
-            .collect::<Vec<_>>();
-        assert_eq!(names, ["database", "cache", "mail", "tasks", "audit"]);
-    }
-
     #[tokio::test]
-    async fn registry_can_shutdown_component_bundle_directly() {
+    async fn registry_can_shutdown_registered_component_bundle() {
         let values = Arc::new(Mutex::new(Vec::new()));
 
-        let report = RuntimeComponentRegistry::shutdown_bundle(TestShutdownBundle {
+        let mut registry = RuntimeComponentRegistry::new();
+        registry.register_bundle(TestShutdownBundle {
             values: Arc::clone(&values),
-        })
-        .await;
+        });
+        let report = registry.shutdown().await;
 
         assert!(!report.has_failures());
         assert_eq!(values.lock().unwrap().as_slice(), ["audit", "database"]);
