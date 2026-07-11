@@ -576,6 +576,27 @@ registry.register_bundle(aster_forge_db::database_health_component(
 
 产品侧仍然负责字段白名单和索引设计。
 
+`sort::SortOrder` 直接重导出 `aster_forge_api::SortOrder`。API 查询参数和 repository
+排序必须复用同一个方向类型，不要在产品仓库或 DB crate 里再定义一套等价 enum，也不需要
+编写 `API SortOrder -> DB SortOrder` 转换 facade：
+
+```rust
+use aster_forge_api::SortOrder;
+use aster_forge_db::sort::order_by_column_with_id;
+
+let query = order_by_column_with_id(query, UserColumn::CreatedAt, order, UserColumn::Id);
+```
+
+`pagination::fetch_offset_page` 的错误类型是调用方选择的 `E`，要求
+`E: From<aster_forge_db::DbError>`。产品 repository 可以直接返回自己的错误类型，不需要为
+每一个分页查询重复 `.map_err(...)`：
+
+```rust
+pub async fn list_users(db: &DatabaseConnection) -> ProductResult<(Vec<User>, u64)> {
+    fetch_offset_page(db, UserEntity::find(), 50, 0).await
+}
+```
+
 ## 事务
 
 模块：`transaction`
@@ -590,7 +611,12 @@ repository::write(&txn, input).await?;
 aster_forge_db::transaction::commit(txn).await?;
 ```
 
-产品仓库如果要保留自己的错误类型，可以在本地 facade 或 service 边界把 `DbError` 转成产品错误。
+产品仓库通过 `From<DbError>` 在 service/repository 返回边界转换错误；不要为了保留旧 import
+路径再包装一套同名 transaction facade。调用点可以直接 import Forge 模块：
+
+```rust
+use aster_forge_db::transaction;
+```
 
 `with_transaction` 更适合 service/repository 组合调用。它允许回调返回产品错误类型 `E`，并只把 Forge 自己创建的事务边界错误映射成 `E`：
 
@@ -601,11 +627,16 @@ impl From<aster_forge_db::DbError> for AsterError {
     }
 }
 
-let user = aster_forge_db::transaction::with_transaction(db, async |txn| {
-    let user = user_repo::create(txn, input).await?;
-    audit_repo::record_user_create(txn, user.id).await?;
-    Ok::<_, AsterError>(user)
-})
+use aster_forge_db::transaction;
+
+let user = transaction::with_transaction(
+    db,
+    async |txn| -> Result<User, AsterError> {
+        let user = user_repo::create(txn, input).await?;
+        audit_repo::record_user_create(txn, user.id).await?;
+        Ok(user)
+    },
+)
 .await?;
 ```
 

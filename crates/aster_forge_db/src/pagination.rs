@@ -6,28 +6,35 @@
 
 use sea_orm::{ConnectionTrait, EntityTrait, PaginatorTrait, QuerySelect, Select};
 
-use crate::{DbError, Result};
+use crate::DbError;
 
 /// Fetches an offset page and total count from a SeaORM select query.
-pub async fn fetch_offset_page<C, E>(
+pub async fn fetch_offset_page<C, Entity, Error>(
     db: &C,
-    query: Select<E>,
+    query: Select<Entity>,
     limit: u64,
     offset: u64,
-) -> Result<(Vec<E::Model>, u64)>
+) -> std::result::Result<(Vec<Entity::Model>, u64), Error>
 where
     C: ConnectionTrait,
-    E: EntityTrait,
-    Select<E>: QuerySelect,
-    for<'db> Select<E>: PaginatorTrait<'db, C>,
+    Entity: EntityTrait,
+    Error: From<DbError>,
+    Select<Entity>: QuerySelect,
+    for<'db> Select<Entity>: PaginatorTrait<'db, C>,
 {
-    let total = query.clone().count(db).await.map_err(DbError::from)?;
+    let total = query
+        .clone()
+        .count(db)
+        .await
+        .map_err(DbError::from)
+        .map_err(Error::from)?;
     let items = query
         .limit(limit)
         .offset(offset)
         .all(db)
         .await
-        .map_err(DbError::from)?;
+        .map_err(DbError::from)
+        .map_err(Error::from)?;
     Ok((items, total))
 }
 
@@ -68,9 +75,14 @@ mod tests {
         .await
         .expect("rows should be inserted");
 
-        let (items, total) = fetch_offset_page(&db, Entity::find().order_by_asc(Column::Id), 2, 1)
-            .await
-            .expect("page should load");
+        let (items, total) = fetch_offset_page::<_, _, crate::DbError>(
+            &db,
+            Entity::find().order_by_asc(Column::Id),
+            2,
+            1,
+        )
+        .await
+        .expect("page should load");
 
         assert_eq!(total, 3);
         assert_eq!(

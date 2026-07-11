@@ -9,6 +9,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+aster_forge_api = { path = "../aster_forge_api" }
 aster_forge_config = { path = "../aster_forge_config", features = ["sea-orm"], optional = true }
 aster_forge_mail = { path = "../aster_forge_mail", features = ["persistence"], optional = true }
 aster_forge_metrics = { path = "../aster_forge_metrics" }

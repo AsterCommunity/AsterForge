@@ -6,14 +6,7 @@
 
 use sea_orm::{ColumnTrait, QueryOrder};
 
-/// Sort direction for query-order helpers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortOrder {
-    /// Sort ascending.
-    Asc,
-    /// Sort descending.
-    Desc,
-}
+pub use aster_forge_api::SortOrder;
 
 /// Orders a query by one column.
 pub fn order_by_column<Q, C>(query: Q, column: C, order: SortOrder) -> Q

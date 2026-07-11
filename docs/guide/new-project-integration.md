@@ -100,6 +100,11 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 | `aster_forge_cache` | `memory` | `redis`, `runtime-component` | Redis 后端显式启用；runtime health component 单独启用。 |
 | `aster_forge_config` | 无 | `redis-pubsub`, `sea-orm`, `openapi` | 配置 reload 通知后端和数据库转换能力分开启用。 |
 | `aster_forge_db` | 无 | `all`, `audit-log`, `mail-outbox`, `runtime-component`, `runtime-lease`, `scheduled-task`, `system-config` | 连接、transaction、pagination 等基础能力默认可用；共享表/store 按需启用。 |
+
+`aster_forge_db::sort::SortOrder` 与 `aster_forge_api::SortOrder` 是同一个类型。API 层解析出的
+排序方向可以直接传给 DB sort helper。`pagination::fetch_offset_page` 会通过
+`E: From<DbError>` 返回产品错误类型，因此产品 repository 不需要复制 pagination helper 或
+为每个调用点手写 `map_err`。
 | `aster_forge_mail` | 无 | `persistence`, `runtime-component`, `openapi` | sender/template 默认可用；SeaORM outbox model 和 runtime drain component 分开启用。 |
 | `aster_forge_metrics` | 无 | `backend-prometheus`, `runtime-health`, `allocator-metrics` | backend 由产品入口统一选择；普通产品用 `init_configured_or_noop()`。 |
 | `aster_forge_tasks` | 无 | `runtime`, `runtime-component`, `openapi` | retry、dedupe、steps、spec 默认可用；worker/scheduled runtime 和 component factory 分开启用。 |

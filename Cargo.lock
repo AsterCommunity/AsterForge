@@ -587,6 +587,7 @@ dependencies = [
 name = "aster_forge_db"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_api",
  "aster_forge_config",
  "aster_forge_mail",
  "aster_forge_metrics",
