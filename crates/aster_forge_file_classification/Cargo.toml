@@ -11,8 +11,10 @@ publish = false
 [features]
 default = []
 openapi = ["dep:utoipa"]
+sea-orm = ["dep:sea-orm"]
 
 [dependencies]
+sea-orm = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
 utoipa = { workspace = true, optional = true }

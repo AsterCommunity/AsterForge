@@ -17,8 +17,17 @@
 
 use std::str::FromStr;
 
+#[cfg(feature = "sea-orm")]
+use sea_orm::entity::prelude::*;
+
+/// Storage width required for persisted extension and category values.
+///
+/// Products persisting [`FileClassification::extension`],
+/// [`FileClassification::compound_extension`], or [`FileCategory`] should use a string column with
+/// at least this width. Increasing this value is a schema compatibility change for consumers.
+pub const FILE_CLASSIFICATION_STORAGE_LEN: u32 = 32;
 /// Maximum accepted extension filter length.
-pub const MAX_EXTENSION_LEN: usize = 32;
+pub const MAX_EXTENSION_LEN: usize = FILE_CLASSIFICATION_STORAGE_LEN as usize;
 /// Maximum number of extension filters accepted in one filter string.
 pub const MAX_EXTENSION_FILTERS: usize = 32;
 
@@ -49,25 +58,39 @@ impl FileClassificationError {
 /// High-level file category inferred from extension and MIME type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "sea-orm", derive(EnumIter, DeriveActiveEnum))]
+#[cfg_attr(
+    feature = "sea-orm",
+    sea_orm(rs_type = "String", db_type = "String(StringLen::N(32))")
+)]
 #[serde(rename_all = "lowercase")]
 pub enum FileCategory {
     /// Image files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "image"))]
     Image,
     /// Video files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "video"))]
     Video,
     /// Audio files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "audio"))]
     Audio,
     /// Document and plain text files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "document"))]
     Document,
     /// Spreadsheet files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "spreadsheet"))]
     Spreadsheet,
     /// Presentation files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "presentation"))]
     Presentation,
     /// Archive and compressed files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "archive"))]
     Archive,
     /// Source code and structured text files.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "code"))]
     Code,
     /// Files that do not match a known category.
+    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "other"))]
     Other,
 }
 
@@ -278,7 +301,7 @@ pub fn extension_from_name(name: &str) -> Option<String> {
         return None;
     }
     let extension = &trimmed[dot + 1..];
-    if extension.is_empty() {
+    if extension.is_empty() || extension.len() > MAX_EXTENSION_LEN {
         return None;
     }
     Some(extension.to_ascii_lowercase())
@@ -391,6 +414,10 @@ mod tests {
         );
         assert_eq!(extension_from_name(".gitignore"), None);
         assert_eq!(extension_from_name("README"), None);
+        assert_eq!(
+            extension_from_name(&format!("file.{}", "a".repeat(33))),
+            None
+        );
     }
 
     #[test]
@@ -452,5 +479,30 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",");
         assert!(parse_extension_filters(&too_many).is_err());
+    }
+
+    #[cfg(feature = "sea-orm")]
+    #[test]
+    fn file_category_has_stable_sea_orm_values() {
+        assert_eq!(FileCategory::Image.to_value(), "image");
+        assert_eq!(FileCategory::Archive.to_value(), "archive");
+        assert_eq!(
+            FileCategory::try_from_value(&"spreadsheet".to_string()),
+            Ok(FileCategory::Spreadsheet)
+        );
+        assert!(FileCategory::try_from_value(&"folder".to_string()).is_err());
+        for category in [
+            FileCategory::Image,
+            FileCategory::Video,
+            FileCategory::Audio,
+            FileCategory::Document,
+            FileCategory::Spreadsheet,
+            FileCategory::Presentation,
+            FileCategory::Archive,
+            FileCategory::Code,
+            FileCategory::Other,
+        ] {
+            assert!(category.to_value().len() <= FILE_CLASSIFICATION_STORAGE_LEN as usize);
+        }
     }
 }

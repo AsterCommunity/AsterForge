@@ -26,6 +26,7 @@ aster_forge_file_classification = { git = "https://github.com/AsterCommunity/Ast
 可选 feature：
 
 - `openapi`：给分类类型派生 OpenAPI schema。
+- `sea-orm`：让 `FileCategory` 直接实现 SeaORM `ActiveEnum`，使用稳定的小写字符串值持久化。
 
 ## 核心 API
 
@@ -36,6 +37,7 @@ aster_forge_file_classification = { git = "https://github.com/AsterCommunity/Ast
 - `FileClassificationError`
 - `MAX_EXTENSION_LEN`
 - `MAX_EXTENSION_FILTERS`
+- `FILE_CLASSIFICATION_STORAGE_LEN`
 
 函数：
 
@@ -67,6 +69,39 @@ let classification = aster_forge_file_classification::classify_file(
 - 限制过滤器数量。
 
 产品侧仍然应该决定非法过滤器对应什么 HTTP 状态码和文案。
+
+## SeaORM 接入
+
+需要把分类持久化到产品表时，直接启用 `sea-orm` feature：
+
+```toml
+aster_forge_file_classification = { git = "https://github.com/AsterCommunity/AsterForge", features = ["sea-orm"] }
+```
+
+启用后，`FileCategory` 可以直接作为 SeaORM entity 字段类型。产品仓库不应该再定义同名枚举或编写分类值转换层；产品 migration 仍然由产品仓库维护。
+
+持久化 `extension`、`compound_extension` 和 `FileCategory` 时，字符串列宽至少使用
+`FILE_CLASSIFICATION_STORAGE_LEN`。当前值为 `32`，产品 migration 可以直接引用该常量：
+
+```rust
+use aster_forge_file_classification::FILE_CLASSIFICATION_STORAGE_LEN;
+
+ColumnDef::new(Files::Extension)
+    .string_len(FILE_CLASSIFICATION_STORAGE_LEN)
+    .not_null()
+    .default("");
+ColumnDef::new(Files::CompoundExtension)
+    .string_len(FILE_CLASSIFICATION_STORAGE_LEN)
+    .null();
+ColumnDef::new(Files::FileCategory)
+    .string_len(FILE_CLASSIFICATION_STORAGE_LEN)
+    .not_null()
+    .default(aster_forge_file_classification::FileCategory::Other.as_str());
+```
+
+`classify_file()` 保证返回的普通扩展名和复合扩展名不会超过该宽度；超长后缀不会写入
+`extension`，分类会回退到 MIME type。以后如果 Forge 提高这个常量，已经落库的产品必须先
+增加扩列 migration，再升级分类 crate，不能只更新依赖。
 
 ## 测试要求
 
