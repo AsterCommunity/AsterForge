@@ -75,6 +75,44 @@ where
     )
 }
 
+/// Creates the full audit lifecycle component for hooks that cannot fail.
+///
+/// This is the preferred entrypoint when product audit hooks already handle
+/// write failures internally and return `()`. It preserves the same component
+/// graph and feature-provided dependencies as [`audit_component`] without
+/// forcing every product to wrap each hook in `Ok(())`.
+pub fn audit_component_infallible<
+    T,
+    StartFn,
+    StartFut,
+    ShutdownFn,
+    ShutdownFut,
+    FlushFn,
+    FlushFut,
+>(
+    resources: T,
+    record_server_start: StartFn,
+    record_server_shutdown: ShutdownFn,
+    flush_audit_manager: FlushFn,
+) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle>
+where
+    T: Clone + Send + 'static,
+    StartFn: FnOnce(T) -> StartFut + Send + Sync + 'static,
+    StartFut: Future<Output = ()> + Send + 'static,
+    ShutdownFn: FnOnce(T) -> ShutdownFut + Send + Sync + 'static,
+    ShutdownFut: Future<Output = ()> + Send + 'static,
+    FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
+    FlushFut: Future<Output = ()> + Send + 'static,
+{
+    audit_component_after_infallible(
+        resources,
+        DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES,
+        record_server_start,
+        record_server_shutdown,
+        flush_audit_manager,
+    )
+}
+
 /// Creates the full audit lifecycle component bundle with caller-provided
 /// shutdown dependencies for the server-shutdown audit phase.
 ///
@@ -112,6 +150,53 @@ where
             .register_bundle(server_shutdown)
             .register_bundle(audit_manager);
     })
+}
+
+/// Creates the full audit lifecycle component with caller-provided shutdown
+/// dependencies for hooks that cannot fail.
+///
+/// Use this instead of [`audit_component_infallible`] when a product needs a
+/// shutdown dependency other than the crate default.
+pub fn audit_component_after_infallible<
+    T,
+    StartFn,
+    StartFut,
+    ShutdownFn,
+    ShutdownFut,
+    FlushFn,
+    FlushFut,
+>(
+    resources: T,
+    shutdown_dependencies: &'static [&'static str],
+    record_server_start: StartFn,
+    record_server_shutdown: ShutdownFn,
+    flush_audit_manager: FlushFn,
+) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle>
+where
+    T: Clone + Send + 'static,
+    StartFn: FnOnce(T) -> StartFut + Send + Sync + 'static,
+    StartFut: Future<Output = ()> + Send + 'static,
+    ShutdownFn: FnOnce(T) -> ShutdownFut + Send + Sync + 'static,
+    ShutdownFut: Future<Output = ()> + Send + 'static,
+    FlushFn: FnOnce(()) -> FlushFut + Send + Sync + 'static,
+    FlushFut: Future<Output = ()> + Send + 'static,
+{
+    audit_component_after(
+        resources,
+        shutdown_dependencies,
+        move |resources| async move {
+            record_server_start(resources).await;
+            Ok(())
+        },
+        move |resources| async move {
+            record_server_shutdown(resources).await;
+            Ok(())
+        },
+        move |()| async move {
+            flush_audit_manager(()).await;
+            Ok(())
+        },
+    )
 }
 
 /// Creates the audit shutdown component bundle without the server-start phase.
@@ -281,7 +366,8 @@ mod tests {
     use super::{
         AUDIT_LOGS_COMPONENT, AUDIT_MANAGER_COMPONENT, AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE,
         SERVER_SHUTDOWN_AUDIT_PHASE, SERVER_START_AUDIT_PHASE, audit_component,
-        audit_component_after, audit_manager_component, server_shutdown_audit_component,
+        audit_component_after, audit_component_after_infallible, audit_component_infallible,
+        audit_manager_component, server_shutdown_audit_component,
         server_shutdown_audit_component_after, server_start_audit_component,
         shutdown_audit_component,
     };
@@ -461,6 +547,61 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn infallible_audit_component_runs_unit_returning_hooks_in_order() {
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let order_for_start = order.clone();
+        let order_for_record = order.clone();
+        let order_for_flush = order.clone();
+
+        let mut registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            audit_component_infallible(
+                (),
+                move |()| {
+                    let order = order_for_start.clone();
+                    async move {
+                        order
+                            .lock()
+                            .expect("audit component test order should lock")
+                            .push("start");
+                    }
+                },
+                move |()| {
+                    let order = order_for_record.clone();
+                    async move {
+                        order
+                            .lock()
+                            .expect("audit component test order should lock")
+                            .push("record");
+                    }
+                },
+                move |()| {
+                    let order = order_for_flush.clone();
+                    async move {
+                        order
+                            .lock()
+                            .expect("audit component test order should lock")
+                            .push("flush");
+                    }
+                },
+            )
+            .register(registry);
+        });
+
+        let startup_report = registry.startup().await;
+        assert!(!startup_report.aborted());
+        let shutdown_report = registry.shutdown().await;
+
+        assert!(!shutdown_report.has_failures());
+        assert_eq!(
+            order
+                .lock()
+                .expect("audit component test order should lock")
+                .as_slice(),
+            ["start", "record", "flush"]
+        );
+    }
+
     #[test]
     fn audit_component_after_registers_shutdown_dependencies() {
         let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
@@ -478,6 +619,25 @@ mod tests {
             .descriptor(AUDIT_LOGS_COMPONENT)
             .expect("audit logs component should be registered");
         assert_eq!(descriptor.dependencies, vec!["mail_outbox"]);
+    }
+
+    #[test]
+    fn infallible_audit_component_after_registers_shutdown_dependencies() {
+        let registry = aster_forge_runtime::RuntimeComponentRegistry::configured(|registry| {
+            audit_component_after_infallible(
+                (),
+                &["background_tasks"],
+                |()| async {},
+                |()| async {},
+                |()| async {},
+            )
+            .register(registry);
+        });
+
+        let descriptor = registry
+            .descriptor(AUDIT_LOGS_COMPONENT)
+            .expect("audit logs component should be registered");
+        assert_eq!(descriptor.dependencies, vec!["background_tasks"]);
     }
 
     #[cfg(feature = "mail-outbox-dependency")]

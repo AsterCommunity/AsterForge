@@ -57,31 +57,23 @@ audit_manager  -> depends_on audit_logs
 - `SERVER_SHUTDOWN_AUDIT_PHASE`
 - `AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE`
 
-产品侧只提供资源和三个 hook：
+产品侧只提供资源和三个 hook。大多数产品的审计写入会在内部处理错误，hook 返回
+`()`；这种情况优先使用 `audit_component_infallible(...)`：
 
 ```rust
-pub fn audit_component(
-    resources: AuditRuntimeResources,
-) -> RuntimeComponentBundleRegistration<impl aster_forge_runtime::RuntimeComponentBundle> {
-    aster_forge_audit::audit_component(
-        resources,
-        |resources| async move {
-            record_server_start(&resources).await;
-            Ok(())
-        },
-        |resources| async move {
-            record_server_shutdown(&resources).await;
-            Ok(())
-        },
-        |()| async move {
-            shutdown_global_audit_log_manager().await;
-            Ok(())
-        },
-    )
-}
+aster_forge_audit::audit_component_infallible(
+    resources,
+    |resources| async move { record_server_start(&resources).await },
+    |resources| async move { record_server_shutdown(&resources).await },
+    |()| async move { shutdown_global_audit_log_manager().await },
+)
 ```
 
 `record_server_start` 和 `record_server_shutdown` 是产品语义，所以仍然留在产品仓库。Forge 只保证 startup phase、shutdown phase 和 manager flush 使用同一套 lifecycle graph：server start 作为 required startup phase 执行；server shutdown 在调用方声明的依赖之后、`audit_manager` flush 之前执行。
+
+如果 hook 需要把错误传播给 runtime phase，使用 `audit_component(...)`，三个 future
+返回 `Result<(), String>`。Forge 同时保留 fallible 和 infallible 入口，不要求产品为了
+公共 API 改变自己的错误策略。
 
 启用 `mail-outbox-dependency` feature 后，同一个 `audit_component(...)` 会把
 `audit_logs` 声明为依赖 `aster_forge_mail::MAIL_OUTBOX_COMPONENT`：
@@ -97,7 +89,7 @@ audit_manager  -> depends_on audit_logs
 如果产品有别的 shutdown 依赖，使用 caller-provided 变体：
 
 ```rust
-aster_forge_audit::audit_component_after(
+aster_forge_audit::audit_component_after_infallible(
     resources,
     &[MY_COMPONENT],
     record_server_start,
@@ -106,8 +98,9 @@ aster_forge_audit::audit_component_after(
 )
 ```
 
-常规产品入口应该直接使用 `audit_component(...)`，需要自定义依赖时才用
-`audit_component_after(...)`。不要在产品侧手写 tuple 去拼
+常规 infallible 产品入口应该直接使用 `audit_component_infallible(...)`，需要自定义
+依赖时才用 `audit_component_after_infallible(...)`；需要传播 hook 错误时使用对应的
+fallible 变体 `audit_component(...)` / `audit_component_after(...)`。不要在产品侧手写 tuple 去拼
 `server_start_audit_component(...)`、`server_shutdown_audit_component(...)` 和
 `audit_manager_component(...)`。如果产品确实需要拆开注册，也应该使用这些 component
 factory，再由产品聚合 component 统一注册 bundle。不要在产品侧直接调用低层 registry
