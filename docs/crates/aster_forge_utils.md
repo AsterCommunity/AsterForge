@@ -8,6 +8,7 @@
 - Gravatar hash 和 URL 拼接。
 - best-effort 临时文件和目录清理。
 - HTML 和 inline script 占位符 escaping。
+- HTTP date 和条件请求 ETag 比较。
 - UUID 和 token 生成。
 - 网络地址和 trusted proxy 解析。
 - 安全数值转换。
@@ -96,6 +97,21 @@ Spotlight/Finder 或文件监听器在删除过程中短暂写入目录的情况
 - `UNIQUE_UUID_MAX_ATTEMPTS`
 
 唯一 UUID 生成流程通过 `UniqueUuidAttempt` 把“候选冲突”和“成功结果”表达出来。产品侧决定冲突如何查询数据库。
+
+### http_validators
+
+主要 API：
+
+- `format_http_date(time)`
+- `parse_http_date(value)`
+- `http_date_epoch_seconds(time)`
+- `if_match_header_matches(raw, resource_exists, current_etag)`
+- `if_none_match_header_matches(raw, resource_exists, current_etag)`
+
+该模块实现 transport-neutral 的 HTTP conditional request 基础语义：`If-Match` 使用强
+ETag 比较，`If-None-Match` 使用弱比较，二者都支持 `*`，并拒绝没有任何 entity tag
+的空列表。实现不依赖 Actix/Axum；产品负责把 `HttpValidatorError` 映射为 REST、WebDAV、
+WOPI 或其他协议所需的状态码和响应体。
 
 ### net
 

@@ -21,6 +21,7 @@ pub mod avatar;
 pub mod bool_like;
 pub mod fs;
 pub mod html;
+pub mod http_validators;
 pub mod id;
 pub mod net;
 pub mod numbers;
