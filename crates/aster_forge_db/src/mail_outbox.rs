@@ -11,8 +11,7 @@ use std::future::Future;
 use chrono::{DateTime, Duration, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
-    Alias, ColumnDef, Index, IndexCreateStatement, IndexDropStatement, Table, TableCreateStatement,
-    TableDropStatement,
+    Alias, ColumnDef, Index, IndexCreateStatement, Table, TableCreateStatement, TableDropStatement,
 };
 use sea_orm::{
     ActiveEnum, ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
@@ -54,6 +53,12 @@ pub const MAIL_OUTBOX_LAST_ERROR_COLUMN: &str = "last_error";
 pub const MAIL_OUTBOX_CREATED_AT_COLUMN: &str = "created_at";
 /// Row update timestamp column.
 pub const MAIL_OUTBOX_UPDATED_AT_COLUMN: &str = "updated_at";
+/// Index name for due-row dispatch scans.
+pub const MAIL_OUTBOX_DUE_INDEX: &str = "idx_mail_outbox_due";
+/// Index name for stale-processing recovery scans.
+pub const MAIL_OUTBOX_PROCESSING_INDEX: &str = "idx_mail_outbox_processing";
+/// Index name for sent-row retention scans.
+pub const MAIL_OUTBOX_SENT_AT_INDEX: &str = "idx_mail_outbox_sent_at";
 
 const MAIL_TEMPLATE_CODE_MAX_LEN: u32 = 64;
 const MAIL_TEMPLATE_CODE_MAX_BYTES: usize = 64;
@@ -115,7 +120,7 @@ pub fn drop_mail_outbox_table() -> TableDropStatement {
 /// Builds the due-row index used by dispatch polling.
 pub fn create_mail_outbox_due_index() -> IndexCreateStatement {
     Index::create()
-        .name("idx_mail_outbox_due")
+        .name(MAIL_OUTBOX_DUE_INDEX)
         .table(mail_outbox_table())
         .col(mail_outbox_status())
         .col(mail_outbox_next_attempt_at())
@@ -127,7 +132,7 @@ pub fn create_mail_outbox_due_index() -> IndexCreateStatement {
 /// Builds the processing-stale index used by dispatch recovery.
 pub fn create_mail_outbox_processing_index() -> IndexCreateStatement {
     Index::create()
-        .name("idx_mail_outbox_processing")
+        .name(MAIL_OUTBOX_PROCESSING_INDEX)
         .table(mail_outbox_table())
         .col(mail_outbox_status())
         .col(mail_outbox_processing_started_at())
@@ -139,26 +144,11 @@ pub fn create_mail_outbox_processing_index() -> IndexCreateStatement {
 /// Builds the sent timestamp index used by retention and admin queries.
 pub fn create_mail_outbox_sent_at_index() -> IndexCreateStatement {
     Index::create()
-        .name("idx_mail_outbox_sent_at")
+        .name(MAIL_OUTBOX_SENT_AT_INDEX)
         .table(mail_outbox_table())
         .col(mail_outbox_sent_at())
         .if_not_exists()
         .to_owned()
-}
-
-/// Builds the due-row index drop statement.
-pub fn drop_mail_outbox_due_index(backend: DatabaseBackend) -> IndexDropStatement {
-    crate::index::drop_index_for_backend(backend, mail_outbox_table(), "idx_mail_outbox_due")
-}
-
-/// Builds the processing-stale index drop statement.
-pub fn drop_mail_outbox_processing_index(backend: DatabaseBackend) -> IndexDropStatement {
-    crate::index::drop_index_for_backend(backend, mail_outbox_table(), "idx_mail_outbox_processing")
-}
-
-/// Builds the sent timestamp index drop statement.
-pub fn drop_mail_outbox_sent_at_index(backend: DatabaseBackend) -> IndexDropStatement {
-    crate::index::drop_index_for_backend(backend, mail_outbox_table(), "idx_mail_outbox_sent_at")
 }
 
 fn mail_outbox_table() -> Alias {

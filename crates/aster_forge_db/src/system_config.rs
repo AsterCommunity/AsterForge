@@ -10,8 +10,7 @@
 use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
-    Alias, ColumnDef, Index, IndexCreateStatement, IndexDropStatement, Table, TableCreateStatement,
-    TableDropStatement,
+    Alias, ColumnDef, Index, IndexCreateStatement, Table, TableCreateStatement, TableDropStatement,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection,
@@ -146,15 +145,6 @@ pub fn create_system_config_key_unique_index() -> IndexCreateStatement {
         .unique()
         .if_not_exists()
         .to_owned()
-}
-
-/// Builds the system config key unique index drop statement.
-pub fn drop_system_config_key_unique_index(backend: DatabaseBackend) -> IndexDropStatement {
-    crate::index::drop_index_for_backend(
-        backend,
-        system_config_table(),
-        SYSTEM_CONFIG_KEY_UNIQUE_INDEX,
-    )
 }
 
 fn system_config_table() -> Alias {

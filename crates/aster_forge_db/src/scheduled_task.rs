@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
-    Alias, ColumnDef, Index, IndexCreateStatement, IndexDropStatement, Table, TableCreateStatement,
-    TableDropStatement,
+    Alias, ColumnDef, Index, IndexCreateStatement, Table, TableCreateStatement, TableDropStatement,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseBackend, DatabaseConnection, EntityTrait,
@@ -47,6 +46,11 @@ pub const SCHEDULED_TASK_LAST_FINISHED_AT_COLUMN: &str = "last_finished_at";
 pub const SCHEDULED_TASK_CREATED_AT_COLUMN: &str = "created_at";
 /// Row update timestamp column.
 pub const SCHEDULED_TASK_UPDATED_AT_COLUMN: &str = "updated_at";
+/// Unique index name for one task per namespace/name pair.
+pub const SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX: &str =
+    "idx_scheduled_tasks_namespace_name_unique";
+/// Index name for due-time claim scans.
+pub const SCHEDULED_TASK_NEXT_RUN_INDEX: &str = "idx_scheduled_tasks_next_run";
 
 const SCHEDULED_TASK_ID_MAX_LEN: usize = 191;
 const SCHEDULED_TASK_NAMESPACE_MAX_LEN: usize = 64;
@@ -105,7 +109,7 @@ pub fn drop_scheduled_tasks_table() -> TableDropStatement {
 /// Builds the unique index for one scheduled task per namespace/name pair.
 pub fn create_scheduled_tasks_namespace_name_unique_index() -> IndexCreateStatement {
     Index::create()
-        .name("idx_scheduled_tasks_namespace_name_unique")
+        .name(SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX)
         .table(scheduled_tasks_table())
         .col(scheduled_task_namespace())
         .col(scheduled_task_name())
@@ -117,31 +121,11 @@ pub fn create_scheduled_tasks_namespace_name_unique_index() -> IndexCreateStatem
 /// Builds the due-time index used by scheduled task claim checks.
 pub fn create_scheduled_tasks_next_run_index() -> IndexCreateStatement {
     Index::create()
-        .name("idx_scheduled_tasks_next_run")
+        .name(SCHEDULED_TASK_NEXT_RUN_INDEX)
         .table(scheduled_tasks_table())
         .col(scheduled_task_next_run_at())
         .if_not_exists()
         .to_owned()
-}
-
-/// Builds the scheduled task namespace/name index drop statement.
-pub fn drop_scheduled_tasks_namespace_name_unique_index(
-    backend: DatabaseBackend,
-) -> IndexDropStatement {
-    crate::index::drop_index_for_backend(
-        backend,
-        scheduled_tasks_table(),
-        "idx_scheduled_tasks_namespace_name_unique",
-    )
-}
-
-/// Builds the scheduled task due-time index drop statement.
-pub fn drop_scheduled_tasks_next_run_index(backend: DatabaseBackend) -> IndexDropStatement {
-    crate::index::drop_index_for_backend(
-        backend,
-        scheduled_tasks_table(),
-        "idx_scheduled_tasks_next_run",
-    )
 }
 
 fn scheduled_tasks_table() -> Alias {

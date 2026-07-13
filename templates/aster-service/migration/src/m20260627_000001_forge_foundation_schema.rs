@@ -55,13 +55,18 @@ async fn create_scheduled_tasks(manager: &SchemaManager<'_>) -> Result<(), DbErr
 }
 
 async fn drop_scheduled_tasks(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    let backend = manager.get_database_backend();
-    manager
-        .drop_index(aster_forge_db::drop_scheduled_tasks_next_run_index(backend))
-        .await?;
-    manager
-        .drop_index(aster_forge_db::drop_scheduled_tasks_namespace_name_unique_index(backend))
-        .await?;
+    aster_forge_db::drop_index_if_exists(
+        manager.get_connection(),
+        aster_forge_db::SCHEDULED_TASKS_TABLE,
+        aster_forge_db::SCHEDULED_TASK_NEXT_RUN_INDEX,
+    )
+    .await?;
+    aster_forge_db::drop_index_if_exists(
+        manager.get_connection(),
+        aster_forge_db::SCHEDULED_TASKS_TABLE,
+        aster_forge_db::SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX,
+    )
+    .await?;
     manager
         .drop_table(aster_forge_db::drop_scheduled_tasks_table())
         .await
@@ -79,10 +84,12 @@ async fn create_system_config(manager: &SchemaManager<'_>) -> Result<(), DbErr> 
 }
 
 async fn drop_system_config(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    let backend = manager.get_database_backend();
-    manager
-        .drop_index(aster_forge_db::drop_system_config_key_unique_index(backend))
-        .await?;
+    aster_forge_db::drop_index_if_exists(
+        manager.get_connection(),
+        aster_forge_db::SYSTEM_CONFIG_TABLE,
+        aster_forge_db::SYSTEM_CONFIG_KEY_UNIQUE_INDEX,
+    )
+    .await?;
     manager
         .drop_table(aster_forge_db::drop_system_config_table())
         .await
@@ -106,16 +113,18 @@ async fn create_mail_outbox(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
 }
 
 async fn drop_mail_outbox(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    let backend = manager.get_database_backend();
-    manager
-        .drop_index(aster_forge_db::drop_mail_outbox_sent_at_index(backend))
+    for index_name in [
+        aster_forge_db::MAIL_OUTBOX_SENT_AT_INDEX,
+        aster_forge_db::MAIL_OUTBOX_PROCESSING_INDEX,
+        aster_forge_db::MAIL_OUTBOX_DUE_INDEX,
+    ] {
+        aster_forge_db::drop_index_if_exists(
+            manager.get_connection(),
+            aster_forge_db::MAIL_OUTBOX_TABLE,
+            index_name,
+        )
         .await?;
-    manager
-        .drop_index(aster_forge_db::drop_mail_outbox_processing_index(backend))
-        .await?;
-    manager
-        .drop_index(aster_forge_db::drop_mail_outbox_due_index(backend))
-        .await?;
+    }
     manager
         .drop_table(aster_forge_db::drop_mail_outbox_table())
         .await
@@ -137,18 +146,22 @@ async fn create_audit_logs(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
 }
 
 async fn drop_audit_logs(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    let backend = manager.get_database_backend();
-    for drop_index in [
-        aster_forge_db::drop_audit_logs_entity_type_created_id_index(backend),
-        aster_forge_db::drop_audit_logs_action_created_id_index(backend),
-        aster_forge_db::drop_audit_logs_user_created_id_index(backend),
-        aster_forge_db::drop_audit_logs_created_id_index(backend),
-        aster_forge_db::drop_audit_logs_action_created_user_index(backend),
-        aster_forge_db::drop_audit_logs_user_id_index(backend),
-        aster_forge_db::drop_audit_logs_action_index(backend),
-        aster_forge_db::drop_audit_logs_created_at_index(backend),
+    for index_name in [
+        aster_forge_db::AUDIT_LOG_ENTITY_TYPE_CREATED_ID_INDEX,
+        aster_forge_db::AUDIT_LOG_ACTION_CREATED_ID_INDEX,
+        aster_forge_db::AUDIT_LOG_USER_CREATED_ID_INDEX,
+        aster_forge_db::AUDIT_LOG_CREATED_ID_INDEX,
+        aster_forge_db::AUDIT_LOG_ACTION_CREATED_USER_INDEX,
+        aster_forge_db::AUDIT_LOG_USER_ID_INDEX,
+        aster_forge_db::AUDIT_LOG_ACTION_INDEX,
+        aster_forge_db::AUDIT_LOG_CREATED_AT_INDEX,
     ] {
-        manager.drop_index(drop_index).await?;
+        aster_forge_db::drop_index_if_exists(
+            manager.get_connection(),
+            aster_forge_db::AUDIT_LOGS_TABLE,
+            index_name,
+        )
+        .await?;
     }
     manager
         .drop_table(aster_forge_db::drop_audit_logs_table())

@@ -55,12 +55,7 @@ pub use audit_log::{
     create_audit_logs_created_id_index, create_audit_logs_entity_type_created_id_index,
     create_audit_logs_query_indexes, create_audit_logs_table,
     create_audit_logs_user_created_id_index, create_audit_logs_user_id_index,
-    delete_audit_logs_before, drop_audit_logs_action_created_id_index,
-    drop_audit_logs_action_created_user_index, drop_audit_logs_action_index,
-    drop_audit_logs_created_at_index, drop_audit_logs_created_id_index,
-    drop_audit_logs_entity_type_created_id_index, drop_audit_logs_index, drop_audit_logs_table,
-    drop_audit_logs_user_created_id_index, drop_audit_logs_user_id_index,
-    find_audit_logs_with_filters_cursor,
+    delete_audit_logs_before, drop_audit_logs_table, find_audit_logs_with_filters_cursor,
 };
 #[cfg(feature = "runtime-component")]
 pub use component::{
@@ -73,17 +68,18 @@ pub use connection::{
     DatabaseConfig, DbHandles, connect, connect_reader_for_writer,
     connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
+pub use index::{drop_index_if_exists, rename_mysql_index_if_exists};
 #[cfg(feature = "mail-outbox")]
 pub use mail_outbox::{
-    MAIL_OUTBOX_ATTEMPT_COUNT_COLUMN, MAIL_OUTBOX_CREATED_AT_COLUMN, MAIL_OUTBOX_ID_COLUMN,
-    MAIL_OUTBOX_LAST_ERROR_COLUMN, MAIL_OUTBOX_NEXT_ATTEMPT_AT_COLUMN,
-    MAIL_OUTBOX_PAYLOAD_JSON_COLUMN, MAIL_OUTBOX_PROCESSING_STARTED_AT_COLUMN,
-    MAIL_OUTBOX_SENT_AT_COLUMN, MAIL_OUTBOX_STATUS_COLUMN, MAIL_OUTBOX_TABLE,
+    MAIL_OUTBOX_ATTEMPT_COUNT_COLUMN, MAIL_OUTBOX_CREATED_AT_COLUMN, MAIL_OUTBOX_DUE_INDEX,
+    MAIL_OUTBOX_ID_COLUMN, MAIL_OUTBOX_LAST_ERROR_COLUMN, MAIL_OUTBOX_NEXT_ATTEMPT_AT_COLUMN,
+    MAIL_OUTBOX_PAYLOAD_JSON_COLUMN, MAIL_OUTBOX_PROCESSING_INDEX,
+    MAIL_OUTBOX_PROCESSING_STARTED_AT_COLUMN, MAIL_OUTBOX_SENT_AT_COLUMN,
+    MAIL_OUTBOX_SENT_AT_INDEX, MAIL_OUTBOX_STATUS_COLUMN, MAIL_OUTBOX_TABLE,
     MAIL_OUTBOX_TEMPLATE_CODE_COLUMN, MAIL_OUTBOX_TO_ADDRESS_COLUMN, MAIL_OUTBOX_TO_NAME_COLUMN,
     MAIL_OUTBOX_UPDATED_AT_COLUMN, MailOutboxCreate, MailOutboxDbStore,
     create_mail_outbox_due_index, create_mail_outbox_processing_index, create_mail_outbox_row,
-    create_mail_outbox_sent_at_index, create_mail_outbox_table, drop_mail_outbox_due_index,
-    drop_mail_outbox_processing_index, drop_mail_outbox_sent_at_index, drop_mail_outbox_table,
+    create_mail_outbox_sent_at_index, create_mail_outbox_table, drop_mail_outbox_table,
 };
 #[cfg(feature = "runtime-lease")]
 pub use runtime_lease::{
@@ -97,11 +93,12 @@ pub use scheduled_task::{
     SCHEDULED_TASK_CLAIM_EXPIRES_AT_COLUMN, SCHEDULED_TASK_CLAIM_OWNER_ID_COLUMN,
     SCHEDULED_TASK_CREATED_AT_COLUMN, SCHEDULED_TASK_DISPLAY_NAME_COLUMN, SCHEDULED_TASK_ID_COLUMN,
     SCHEDULED_TASK_LAST_CLAIMED_AT_COLUMN, SCHEDULED_TASK_LAST_FINISHED_AT_COLUMN,
-    SCHEDULED_TASK_NAME_COLUMN, SCHEDULED_TASK_NAMESPACE_COLUMN, SCHEDULED_TASK_NEXT_RUN_AT_COLUMN,
-    SCHEDULED_TASK_UPDATED_AT_COLUMN, SCHEDULED_TASKS_TABLE, ScheduledTaskDbStore,
-    create_scheduled_tasks_namespace_name_unique_index, create_scheduled_tasks_next_run_index,
-    create_scheduled_tasks_table, drop_scheduled_tasks_namespace_name_unique_index,
-    drop_scheduled_tasks_next_run_index, drop_scheduled_tasks_table,
+    SCHEDULED_TASK_NAME_COLUMN, SCHEDULED_TASK_NAMESPACE_COLUMN,
+    SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX, SCHEDULED_TASK_NEXT_RUN_AT_COLUMN,
+    SCHEDULED_TASK_NEXT_RUN_INDEX, SCHEDULED_TASK_UPDATED_AT_COLUMN, SCHEDULED_TASKS_TABLE,
+    ScheduledTaskDbStore, create_scheduled_tasks_namespace_name_unique_index,
+    create_scheduled_tasks_next_run_index, create_scheduled_tasks_table,
+    drop_scheduled_tasks_table,
 };
 #[cfg(feature = "system-config")]
 pub use system_config::{
@@ -116,7 +113,7 @@ pub use system_config::{
     SYSTEM_CONFIG_SOURCE_COLUMN, SYSTEM_CONFIG_TABLE, SYSTEM_CONFIG_UPDATED_AT_COLUMN,
     SYSTEM_CONFIG_UPDATED_BY_COLUMN, SYSTEM_CONFIG_VALUE_COLUMN, SYSTEM_CONFIG_VALUE_TYPE_COLUMN,
     SYSTEM_CONFIG_VISIBILITY_COLUMN, create_system_config_key_unique_index,
-    create_system_config_table, drop_system_config_key_unique_index, drop_system_config_table,
+    create_system_config_table, drop_system_config_table,
 };
 
 /// Result type returned by database helpers.
