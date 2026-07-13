@@ -149,12 +149,12 @@ pub fn create_system_config_key_unique_index() -> IndexCreateStatement {
 }
 
 /// Builds the system config key unique index drop statement.
-pub fn drop_system_config_key_unique_index() -> IndexDropStatement {
-    Index::drop()
-        .name(SYSTEM_CONFIG_KEY_UNIQUE_INDEX)
-        .table(system_config_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_system_config_key_unique_index(backend: DatabaseBackend) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(
+        backend,
+        system_config_table(),
+        SYSTEM_CONFIG_KEY_UNIQUE_INDEX,
+    )
 }
 
 fn system_config_table() -> Alias {

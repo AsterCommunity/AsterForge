@@ -22,6 +22,7 @@ pub mod audit_log;
 #[cfg(feature = "runtime-component")]
 mod component;
 pub mod connection;
+mod index;
 #[cfg(feature = "mail-outbox")]
 pub mod mail_outbox;
 pub mod pagination;

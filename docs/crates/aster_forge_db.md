@@ -119,11 +119,12 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        let backend = manager.get_database_backend();
         manager
-            .drop_index(aster_forge_db::drop_scheduled_tasks_next_run_index())
+            .drop_index(aster_forge_db::drop_scheduled_tasks_next_run_index(backend))
             .await?;
         manager
-            .drop_index(aster_forge_db::drop_scheduled_tasks_namespace_name_unique_index())
+            .drop_index(aster_forge_db::drop_scheduled_tasks_namespace_name_unique_index(backend))
             .await?;
         manager
             .drop_table(aster_forge_db::drop_scheduled_tasks_table())
@@ -190,8 +191,9 @@ manager
 down migration：
 
 ```rust
+let backend = manager.get_database_backend();
 manager
-    .drop_index(aster_forge_db::drop_system_config_key_unique_index())
+    .drop_index(aster_forge_db::drop_system_config_key_unique_index(backend))
     .await?;
 manager
     .drop_table(aster_forge_db::drop_system_config_table())
@@ -305,25 +307,28 @@ query indexes 覆盖 Aster 管理后台常见 cursor/aggregation 查询：
 down migration 可以直接用命名 drop builder：
 
 ```rust
+let backend = manager.get_database_backend();
 manager
-    .drop_index(aster_forge_db::drop_audit_logs_entity_type_created_id_index())
+    .drop_index(aster_forge_db::drop_audit_logs_entity_type_created_id_index(backend))
     .await?;
 manager
-    .drop_index(aster_forge_db::drop_audit_logs_action_created_id_index())
+    .drop_index(aster_forge_db::drop_audit_logs_action_created_id_index(backend))
     .await?;
 manager
-    .drop_index(aster_forge_db::drop_audit_logs_user_created_id_index())
+    .drop_index(aster_forge_db::drop_audit_logs_user_created_id_index(backend))
     .await?;
 manager
-    .drop_index(aster_forge_db::drop_audit_logs_created_id_index())
+    .drop_index(aster_forge_db::drop_audit_logs_created_id_index(backend))
     .await?;
 manager
-    .drop_index(aster_forge_db::drop_audit_logs_action_created_user_index())
+    .drop_index(aster_forge_db::drop_audit_logs_action_created_user_index(backend))
     .await?;
 manager
     .drop_table(aster_forge_db::drop_audit_logs_table())
     .await?;
 ```
+
+所有 index drop builder 都要求传入实际数据库 backend。MySQL 不支持 `DROP INDEX IF EXISTS`，因此 Forge 在 MySQL 生成确定性的 `DROP INDEX ... ON ...`；SQLite/PostgreSQL 保留 `IF EXISTS`。如果 migration 的索引本身是可选状态，产品应先通过数据库 metadata 检查存在性，再执行 drop statement。
 
 运行时写入：
 

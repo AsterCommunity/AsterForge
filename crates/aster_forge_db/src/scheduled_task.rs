@@ -125,21 +125,23 @@ pub fn create_scheduled_tasks_next_run_index() -> IndexCreateStatement {
 }
 
 /// Builds the scheduled task namespace/name index drop statement.
-pub fn drop_scheduled_tasks_namespace_name_unique_index() -> IndexDropStatement {
-    Index::drop()
-        .name("idx_scheduled_tasks_namespace_name_unique")
-        .table(scheduled_tasks_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_scheduled_tasks_namespace_name_unique_index(
+    backend: DatabaseBackend,
+) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(
+        backend,
+        scheduled_tasks_table(),
+        "idx_scheduled_tasks_namespace_name_unique",
+    )
 }
 
 /// Builds the scheduled task due-time index drop statement.
-pub fn drop_scheduled_tasks_next_run_index() -> IndexDropStatement {
-    Index::drop()
-        .name("idx_scheduled_tasks_next_run")
-        .table(scheduled_tasks_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_scheduled_tasks_next_run_index(backend: DatabaseBackend) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(
+        backend,
+        scheduled_tasks_table(),
+        "idx_scheduled_tasks_next_run",
+    )
 }
 
 fn scheduled_tasks_table() -> Alias {

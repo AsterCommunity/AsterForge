@@ -234,52 +234,50 @@ pub fn create_audit_logs_query_indexes() -> [IndexCreateStatement; 5] {
 }
 
 /// Builds a drop statement for one audit-log index.
-pub fn drop_audit_logs_index(name: &'static str) -> IndexDropStatement {
-    Index::drop()
-        .name(name)
-        .table(audit_logs_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_audit_logs_index(backend: DatabaseBackend, name: &'static str) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(backend, audit_logs_table(), name)
 }
 
 /// Builds the created-at index drop statement.
-pub fn drop_audit_logs_created_at_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_CREATED_AT_INDEX)
+pub fn drop_audit_logs_created_at_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_CREATED_AT_INDEX)
 }
 
 /// Builds the action index drop statement.
-pub fn drop_audit_logs_action_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_ACTION_INDEX)
+pub fn drop_audit_logs_action_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_ACTION_INDEX)
 }
 
 /// Builds the user id index drop statement.
-pub fn drop_audit_logs_user_id_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_USER_ID_INDEX)
+pub fn drop_audit_logs_user_id_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_USER_ID_INDEX)
 }
 
 /// Builds the action/created/user activity index drop statement.
-pub fn drop_audit_logs_action_created_user_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_ACTION_CREATED_USER_INDEX)
+pub fn drop_audit_logs_action_created_user_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_ACTION_CREATED_USER_INDEX)
 }
 
 /// Builds the created-at/id cursor index drop statement.
-pub fn drop_audit_logs_created_id_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_CREATED_ID_INDEX)
+pub fn drop_audit_logs_created_id_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_CREATED_ID_INDEX)
 }
 
 /// Builds the user/created-at/id cursor index drop statement.
-pub fn drop_audit_logs_user_created_id_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_USER_CREATED_ID_INDEX)
+pub fn drop_audit_logs_user_created_id_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_USER_CREATED_ID_INDEX)
 }
 
 /// Builds the action/created-at/id cursor index drop statement.
-pub fn drop_audit_logs_action_created_id_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_ACTION_CREATED_ID_INDEX)
+pub fn drop_audit_logs_action_created_id_index(backend: DatabaseBackend) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_ACTION_CREATED_ID_INDEX)
 }
 
 /// Builds the entity-type/created-at/id cursor index drop statement.
-pub fn drop_audit_logs_entity_type_created_id_index() -> IndexDropStatement {
-    drop_audit_logs_index(AUDIT_LOG_ENTITY_TYPE_CREATED_ID_INDEX)
+pub fn drop_audit_logs_entity_type_created_id_index(
+    backend: DatabaseBackend,
+) -> IndexDropStatement {
+    drop_audit_logs_index(backend, AUDIT_LOG_ENTITY_TYPE_CREATED_ID_INDEX)
 }
 
 fn audit_logs_table() -> Alias {
@@ -1079,7 +1077,7 @@ mod tests {
             .await
             .expect("audit logs table builder should execute");
         assert!(
-            drop_audit_logs_created_id_index()
+            drop_audit_logs_created_id_index(DbBackend::Sqlite)
                 .to_string(SqliteQueryBuilder)
                 .contains(AUDIT_LOG_CREATED_ID_INDEX)
         );

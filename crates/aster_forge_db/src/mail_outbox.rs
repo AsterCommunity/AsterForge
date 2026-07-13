@@ -147,30 +147,18 @@ pub fn create_mail_outbox_sent_at_index() -> IndexCreateStatement {
 }
 
 /// Builds the due-row index drop statement.
-pub fn drop_mail_outbox_due_index() -> IndexDropStatement {
-    Index::drop()
-        .name("idx_mail_outbox_due")
-        .table(mail_outbox_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_mail_outbox_due_index(backend: DatabaseBackend) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(backend, mail_outbox_table(), "idx_mail_outbox_due")
 }
 
 /// Builds the processing-stale index drop statement.
-pub fn drop_mail_outbox_processing_index() -> IndexDropStatement {
-    Index::drop()
-        .name("idx_mail_outbox_processing")
-        .table(mail_outbox_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_mail_outbox_processing_index(backend: DatabaseBackend) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(backend, mail_outbox_table(), "idx_mail_outbox_processing")
 }
 
 /// Builds the sent timestamp index drop statement.
-pub fn drop_mail_outbox_sent_at_index() -> IndexDropStatement {
-    Index::drop()
-        .name("idx_mail_outbox_sent_at")
-        .table(mail_outbox_table())
-        .if_exists()
-        .to_owned()
+pub fn drop_mail_outbox_sent_at_index(backend: DatabaseBackend) -> IndexDropStatement {
+    crate::index::drop_index_for_backend(backend, mail_outbox_table(), "idx_mail_outbox_sent_at")
 }
 
 fn mail_outbox_table() -> Alias {
