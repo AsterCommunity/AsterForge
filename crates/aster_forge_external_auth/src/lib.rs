@@ -36,9 +36,9 @@ pub use driver::{
 pub use error::{ExternalAuthError, MapExternalAuthErr, Result};
 pub use registry::{ExternalAuthProviderRegistry, default_registry};
 pub use types::{
-    ExternalAuthProtocol, ExternalAuthProviderKind, ExternalAuthProviderOptions,
-    MicrosoftExternalAuthProviderOptions, parse_external_auth_provider_options,
-    serialize_external_auth_provider_options,
+    EXTERNAL_AUTH_TYPE_STORAGE_LEN, ExternalAuthProtocol, ExternalAuthProviderKind,
+    ExternalAuthProviderOptions, MicrosoftExternalAuthProviderOptions,
+    parse_external_auth_provider_options, serialize_external_auth_provider_options,
 };
 
 #[cfg(any(feature = "oauth2", feature = "oidc"))]

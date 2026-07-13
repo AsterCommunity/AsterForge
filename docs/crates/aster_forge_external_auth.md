@@ -33,13 +33,14 @@
 - `microsoft`
 - `qq`
 - `openapi`
+- `sea-orm`
 
 示例：
 
 ```toml
 aster_forge_external_auth = {
   git = "https://github.com/AsterCommunity/AsterForge",
-  features = ["github", "google", "microsoft", "qq", "openapi"]
+  features = ["github", "google", "microsoft", "qq", "openapi", "sea-orm"]
 }
 ```
 
@@ -108,9 +109,9 @@ Forge 到第 5 步结束。第 6 步必须留在产品仓库。
 
 产品侧应直接使用 Forge 的 runtime contract，不要再复制或包装一套同构 driver/registry：
 
-- 数据库 ActiveEnum、SeaORM entity 和加密后的 credential 继续由产品持有。
+- SeaORM entity、表结构、migration 和加密后的 credential 继续由产品持有。
+- 产品数据库字段如果直接持久化 Forge 的 provider kind / protocol，启用 `sea-orm` feature 后直接使用 `ExternalAuthProviderKind` / `ExternalAuthProtocol`；不要复制同构 ActiveEnum 再双向转换。
 - 在 service 的持久化边界把数据库 model 转成 `ExternalAuthProviderConfig`。
-- provider kind / protocol 如果必须由产品 ActiveEnum 表达，只保留穷举的双向转换。
 - 直接调用 `default_registry()`、`ExternalAuthProviderRegistry` 和 `driver_for_provider()`；不要建立只转发 `contains()`、`descriptors()`、`get_driver()` 的产品 registry。
 - 直接使用 `ExternalAuthProfile`、`ExternalAuthCallback` 和 `ExternalAuthProviderTestResult`；除非产品 API schema 确实不同，不要复制同字段 DTO 再逐字段转换。
 - 产品只需实现一次 `ExternalAuthError` 到产品错误类型的分类映射，让普通 `?` 保持调用点干净。
@@ -124,13 +125,15 @@ fn runtime_provider_config(
     aster_forge_external_auth::ExternalAuthProviderConfig {
         id: provider.id,
         key: provider.key.clone(),
-        provider_kind: provider.provider_kind.into(),
-        protocol: provider.protocol.into(),
+        provider_kind: provider.provider_kind,
+        protocol: provider.protocol,
         // ...产品持久化字段映射...
         outbound_http_user_agent: Some(PRODUCT_USER_AGENT.to_string()),
     }
 }
 ```
+
+`EXTERNAL_AUTH_TYPE_STORAGE_LEN` 固定共享 provider kind / protocol 的最小持久化列宽。新 migration 应引用这个契约或保持至少相同宽度；历史 migration 已发布后不要回改，只在后续 migration 中修正不足。
 
 不要为 `start_authorization()`、`exchange_callback()` 或 `test_provider()` 分别增加产品侧纯转发函数。
 

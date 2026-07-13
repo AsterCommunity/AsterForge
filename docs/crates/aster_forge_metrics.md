@@ -252,5 +252,5 @@ Forge 可以定义通用指标描述：
 
 ## 参考项目
 
-- AsterDrive：完整监控和 Grafana dashboard 适合作为产品侧业务指标参考；后续迁移时不应继续依赖产品本地 Prometheus registry。
+- AsterDrive：`metrics` feature 已直接启用 `allocator-metrics`、`backend-prometheus` 和 `runtime-health`。database/cache/remote-node diagnostics 聚合成 Forge `SystemHealthReport` 后直接调用 `record_metrics()`；Drive 只保留文件、上传、存储 driver 等产品指标，不再复制 health metric 记录逻辑。
 - AsterYggdrasil：后台任务 transition、pending task、DB metrics、config reload / mutation metrics 的轻量接入。

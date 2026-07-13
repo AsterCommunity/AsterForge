@@ -10,11 +10,16 @@ publish = false
 
 [features]
 default = []
+db-writer = ["dep:aster_forge_db", "dep:sea-orm"]
 mail-outbox-dependency = ["dep:aster_forge_mail"]
 
 [dependencies]
+aster_forge_db = { path = "../aster_forge_db", default-features = false, features = ["audit-log"], optional = true }
 aster_forge_mail = { path = "../aster_forge_mail", default-features = false, optional = true }
 aster_forge_runtime = { path = "../aster_forge_runtime" }
+sea-orm = { workspace = true, optional = true }
+tracing.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

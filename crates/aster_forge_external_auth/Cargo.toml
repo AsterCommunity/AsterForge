@@ -11,6 +11,7 @@ publish = false
 [features]
 default = ["oidc", "oauth2"]
 openapi = ["dep:utoipa"]
+sea-orm = ["dep:sea-orm"]
 oidc = ["dep:openidconnect"]
 oauth2 = ["dep:base64", "dep:rand", "dep:reqwest", "dep:sha2"]
 github = ["oauth2"]
@@ -27,6 +28,7 @@ base64 = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+sea-orm = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true, optional = true }

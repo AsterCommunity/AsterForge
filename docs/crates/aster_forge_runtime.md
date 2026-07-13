@@ -457,7 +457,41 @@ let report = registry.run_scope(HealthCheckScope::Diagnostics).await;
 assert_eq!(report.summary(), "database healthy");
 ```
 
-产品侧把 health report 映射到 task outcome、HTTP response 或 admin DTO 时，优先使用这些投影 helper。比如 Drive 和 Yggdrasil 的 runtime health task 都可以用 `issue_summary()` / `issue_details()` 把异常组件写进失败记录，同时保留产品自己的 task result 类型。结构化 component details 应该继续透传到产品 task/admin DTO，避免 cache backend、storage driver、queue depth 这类诊断值只停留在日志里。
+产品侧把 health report 映射到 task outcome、HTTP response 或 admin DTO 时，优先使用这些投影 helper。Drive 和 Yggdrasil 的 runtime health task 都直接使用 `issue_summary()` / `issue_details()` 把异常组件写进失败记录，同时保留产品自己的 task result 类型。结构化 component details 应该继续透传到产品 task/admin DTO，避免 cache backend、storage driver、queue depth 这类诊断值只停留在日志里。
+
+AsterDrive 的完整 diagnostics component 由产品 health service 组装，而不是在 runtime task 或 `main.rs` 里逐个调用检查：
+
+```rust
+pub fn primary_health_component<S>(
+    state: S,
+) -> RuntimeComponentBundleRegistration<impl RuntimeComponentBundle + use<S>>
+where
+    S: RemoteProtocolRuntimeState + Clone + Send + Sync + 'static,
+{
+    let database = aster_forge_db::database_health_component(state.writer_db().clone());
+    let cache = aster_forge_cache::cache_health_component(
+        state.config().cache.clone(),
+        state.cache().clone(),
+    );
+
+    aster_forge_runtime::runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+        registry.register_bundle(database).register_bundle(cache);
+        registry.component_health_with_options(
+            "remote_nodes",
+            RuntimeComponentKind::Product,
+            "remote_nodes",
+            HealthCheckOptions::required(None)
+                .with_scopes(HealthCheckScopes::diagnostics()),
+            move || {
+                let state = state.clone();
+                async move { check_remote_nodes_component(&state).await }
+            },
+        );
+    })
+}
+```
+
+这里 database/cache 机械层直接来自 Forge，remote node probe 和其统计语义仍由 Drive 拥有。Drive 已删除本地 `HealthStatus`、`HealthComponentReport`、`SystemHealthReport` 复制实现；产品侧只保留稳定的任务持久化/API DTO，并在边界把 Forge report 投影进去。不要为了保留旧模块路径再导出 Forge health 类型，也不要写同签名转发 helper。
 
 ### Typed Detail Schema
 
@@ -525,7 +559,7 @@ report.record_metrics("diagnostics", &ProductHealthMetrics(metrics));
 
 这样 Forge 定义稳定的 health report/metrics 语义，并通过 `aster_forge_metrics` 提供可选 backend。产品仓库只负责在入口选择 metrics feature、挂载观测 endpoint，并保持业务 label 低基数。
 
-Yggdrasil 的接入方式是让 `PrometheusMetricsRecorder` 同时实现 `aster_forge_runtime::HealthMetricsRecorder`，并在 health service 完成 `Readiness` 或 `Diagnostics` scope 后调用 `SystemHealthReport::record_metrics()`。Prometheus 指标保持低基数：
+Drive 和 Yggdrasil 都通过 `aster_forge_metrics/runtime-health` 让 `PrometheusMetricsRecorder` 实现 `aster_forge_runtime::HealthMetricsRecorder`，并在 health service 完成 `Readiness` 或 `Diagnostics` scope 后调用 `SystemHealthReport::record_metrics()`。Prometheus 指标保持低基数：
 
 - `health_report_status{scope}`：aggregate status，`healthy=0`、`degraded=1`、`unhealthy=2`。
 - `health_report_duration_seconds{scope,status}`：aggregate health run duration。

@@ -1,12 +1,13 @@
 //! Shared audit runtime integration for Aster services.
 //!
 //! Product crates own audit actions, detail schemas, authorization rules,
-//! operator-facing presentation, and the concrete manager implementation.
-//! Forge owns the runtime lifecycle contract shared by Aster products: record a
-//! best-effort server shutdown audit event, then flush the product audit manager
-//! before database handles close. Products that also use a mail outbox can enable
-//! the `mail-outbox-dependency` feature to make the standard audit constructors
-//! depend on the mail outbox drain component.
+//! operator-facing presentation. Forge owns the runtime lifecycle contract shared
+//! by Aster products: record a best-effort server shutdown audit event, then flush
+//! the audit manager before database handles close. With the `db-writer` feature,
+//! Forge also owns the shared buffered database writer used by Aster products.
+//! Products that also use a mail outbox can enable the `mail-outbox-dependency`
+//! feature to make the standard audit constructors depend on the mail outbox drain
+//! component.
 #![cfg_attr(
     not(test),
     deny(
@@ -21,9 +22,20 @@
 
 use std::future::Future;
 
+#[cfg(feature = "db-writer")]
+mod db_writer;
+
 use aster_forge_runtime::{
     RuntimeComponentBundleRegistration, RuntimeComponentKind, RuntimeComponentRegistry,
     StartupPhaseFailurePolicy, runtime_component,
+};
+
+#[cfg(feature = "db-writer")]
+pub use db_writer::{
+    AuditLogBufferConfig, AuditLogManager, DEFAULT_AUDIT_LOG_BATCH_SIZE,
+    DEFAULT_AUDIT_LOG_DELAYED_FLUSH_AFTER, DEFAULT_AUDIT_LOG_QUEUE_CAPACITY,
+    flush_global_audit_log_manager, global_audit_log_manager, init_global_audit_log_manager,
+    record_audit_log, shutdown_global_audit_log_manager, write_audit_log_direct,
 };
 
 /// Stable component name used for process lifecycle audit records.
