@@ -104,6 +104,36 @@ aster_forge_external_auth = {
 
 Forge 到第 5 步结束。第 6 步必须留在产品仓库。
 
+## 推荐的产品接入边界
+
+产品侧应直接使用 Forge 的 runtime contract，不要再复制或包装一套同构 driver/registry：
+
+- 数据库 ActiveEnum、SeaORM entity 和加密后的 credential 继续由产品持有。
+- 在 service 的持久化边界把数据库 model 转成 `ExternalAuthProviderConfig`。
+- provider kind / protocol 如果必须由产品 ActiveEnum 表达，只保留穷举的双向转换。
+- 直接调用 `default_registry()`、`ExternalAuthProviderRegistry` 和 `driver_for_provider()`；不要建立只转发 `contains()`、`descriptors()`、`get_driver()` 的产品 registry。
+- 直接使用 `ExternalAuthProfile`、`ExternalAuthCallback` 和 `ExternalAuthProviderTestResult`；除非产品 API schema 确实不同，不要复制同字段 DTO 再逐字段转换。
+- 产品只需实现一次 `ExternalAuthError` 到产品错误类型的分类映射，让普通 `?` 保持调用点干净。
+
+下面这种 model-to-runtime 转换是必要的持久化 adapter，不属于薄封装：
+
+```rust
+fn runtime_provider_config(
+    provider: &external_auth_provider::Model,
+) -> aster_forge_external_auth::ExternalAuthProviderConfig {
+    aster_forge_external_auth::ExternalAuthProviderConfig {
+        id: provider.id,
+        key: provider.key.clone(),
+        provider_kind: provider.provider_kind.into(),
+        protocol: provider.protocol.into(),
+        // ...产品持久化字段映射...
+        outbound_http_user_agent: Some(PRODUCT_USER_AGENT.to_string()),
+    }
+}
+```
+
+不要为 `start_authorization()`、`exchange_callback()` 或 `test_provider()` 分别增加产品侧纯转发函数。
+
 ## 规范化规则
 
 模块：`aster_forge_external_auth::normalize`
@@ -130,8 +160,9 @@ assert_eq!(return_path, "/settings?tab=login");
 - 决定 URL / issuer / return path 的最大长度。
 - 构建 callback redirect URI，因为它需要读取产品 runtime config、当前 request host 和产品 API 错误码。
 - 本地邮箱格式校验、账号绑定、自动创建用户、审计和 session 写入。
+- 为 outbound provider request 注入产品自己的 User-Agent；不要把共享 crate 名称暴露给外部 provider。
 
-不要在产品仓库保留只重复这些规则的实现；如果产品要保留同名 helper，应该只做错误映射或注入产品常量。
+不要在产品仓库保留只重复这些规则的实现。产品常量应直接传给带 `max_len` 等参数的 Forge helper；不要为了注入一个常量建立同名纯转发 helper。
 
 ## 自定义 provider
 
