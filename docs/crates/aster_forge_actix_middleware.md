@@ -43,6 +43,7 @@ aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterF
 - `NormalizedStringRateLimiter`
 - `RateLimitRejection`
 - `build_ip_governor_config(seconds_per_request, burst_size, trusted_proxies)`
+- `build_ip_governor_config_with_rejection_response(...)`
 - `retry_after_seconds(not_until)`
 
 Forge 负责产品无关的 rate-limit 机械行为：
@@ -51,6 +52,7 @@ Forge 负责产品无关的 rate-limit 机械行为：
 - 仅当 direct peer 是可信代理时，使用 `X-Forwarded-For` 最左侧地址作为客户端 IP。
 - 为 `actix-governor` 提供可复用 IP key extractor。
 - 从非零 `(seconds_per_request, burst_size)` 构造 governor quota。
+- 允许产品注入自己的 `429` response factory，同时继续复用可信代理和 client IP 提取。
 - 提供按字符串 key 限流的 `NormalizedStringRateLimiter`，默认 trim 并 lowercase key。
 - 把 governor rejection 转成可复用的 `retry_after_seconds`。
 
@@ -64,54 +66,38 @@ Forge 负责产品无关的 rate-limit 机械行为：
 典型 Actix API 接入：
 
 ```rust
-use actix_governor::{GovernorConfig, GovernorConfigBuilder, KeyExtractor};
-use actix_web::{HttpResponse, HttpResponseBuilder, dev::ServiceRequest};
+use actix_governor::GovernorConfig;
+use actix_web::http::StatusCode;
 use aster_forge_actix_middleware::rate_limit::{
-    TrustedProxyIpKeyExtractor, retry_after_seconds,
+    TrustedProxyIpKeyExtractor, build_ip_governor_config_with_rejection_response,
 };
-use governor::{NotUntil, clock::QuantaInstant, middleware::NoOpMiddleware};
-use std::net::IpAddr;
-
-#[derive(Debug, Clone)]
-struct ProductIpKeyExtractor {
-    inner: TrustedProxyIpKeyExtractor,
-}
-
-impl KeyExtractor for ProductIpKeyExtractor {
-    type Key = IpAddr;
-    type KeyExtractionError = actix_governor::SimpleKeyExtractionError<&'static str>;
-
-    fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
-        self.inner.extract(req)
-    }
-
-    fn exceed_rate_limit_response(
-        &self,
-        negative: &NotUntil<QuantaInstant>,
-        _response: HttpResponseBuilder,
-    ) -> HttpResponse {
-        let retry_after = retry_after_seconds(negative);
-        HttpResponse::TooManyRequests()
-            .insert_header(("Retry-After", retry_after.to_string()))
-            .finish()
-    }
-}
+use governor::middleware::NoOpMiddleware;
+use std::num::{NonZeroU32, NonZeroU64};
 
 fn build_config(
-    seconds_per_request: u64,
-    burst_size: u32,
+    seconds_per_request: NonZeroU64,
+    burst_size: NonZeroU32,
     trusted_proxies: &[String],
-) -> GovernorConfig<ProductIpKeyExtractor, NoOpMiddleware> {
-    GovernorConfigBuilder::default()
-        .key_extractor(ProductIpKeyExtractor {
-            inner: TrustedProxyIpKeyExtractor::new(trusted_proxies),
-        })
-        .seconds_per_request(seconds_per_request)
-        .burst_size(burst_size)
-        .finish()
-        .expect("validated non-zero rate-limit quota")
+) -> GovernorConfig<TrustedProxyIpKeyExtractor, NoOpMiddleware> {
+    build_ip_governor_config_with_rejection_response(
+        seconds_per_request,
+        burst_size,
+        trusted_proxies,
+        |retry_after, mut response| {
+            response
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .insert_header(("Retry-After", retry_after.to_string()))
+                .json(serde_json::json!({
+                    "code": "rate_limited",
+                    "retry_after": retry_after,
+                }))
+        },
+    )
 }
 ```
+
+不要为修改 `429` body 再复制一份 `KeyExtractor`。产品只注入 response factory；trusted proxy、
+`X-Forwarded-For` 和 governor quota 的机械逻辑继续由 Forge 持有。
 
 典型协议端点接入：
 
@@ -144,7 +130,8 @@ if let Some(rejection) = limiter.check("User@Example.com") {
 
 这个模块只做 Actix `HeaderMap` 适配：从请求头里读取 `X-Forwarded-For`，然后把可信代理判断交给
 `aster_forge_utils::net`。适合 service 或 audit 代码已经拿到 `HttpRequest` / `HeaderMap`，但不想重复写
-header 解析逻辑的场景。
+header 解析逻辑的场景。可信 peer 的左侧 forwarded 值支持裸 IPv4/IPv6，也支持代理常见的
+`IPv4:port` 与 `[IPv6]:port` 形式；非法值回退到 direct peer。
 
 ```rust
 use aster_forge_actix_middleware::client_ip::real_ip_from_headers;
@@ -207,6 +194,7 @@ label 低基数。
 - `RuntimeCorsPolicy`
 - `CorsAllowedOrigins`
 - `CorsMiddlewareError`
+- `CorsMiddlewareErrorKind`
 
 Forge 负责产品无关的 Actix CORS 机械行为：
 
@@ -224,12 +212,20 @@ Forge 负责产品无关的 Actix CORS 机械行为：
 - allowed methods、allowed request headers、exposed response headers。
 - `CorsMiddlewareError` 到产品错误类型的映射。
 
+`CorsMiddlewareErrorKind` 区分两类边界：
+
+- `InvalidRequest`：客户端传入了非法 `Origin` 或 preflight header，通常映射为产品的 `400` validation error。
+- `InvalidResponse`：下游响应或 middleware 生成的 header 无法序列化，通常映射为产品的 `500` internal error。
+
+这样产品可以保留稳定错误码，而不需要根据错误字符串猜测来源。
+
 典型接入：
 
 ```rust
 use actix_web::{Error, dev::ServiceRequest, web};
 use aster_forge_actix_middleware::cors::{
-    CorsAllowedOrigins, CorsMiddlewareError, RuntimeCors, RuntimeCorsConfig, RuntimeCorsPolicy,
+    CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, RuntimeCors,
+    RuntimeCorsConfig, RuntimeCorsPolicy,
 };
 
 fn runtime_cors() -> RuntimeCors {
@@ -248,7 +244,14 @@ fn runtime_cors() -> RuntimeCors {
             },
             |path| path == "/" || path.starts_with("/assets/"),
             |error: CorsMiddlewareError| -> Error {
-                AsterError::validation_error(error.message()).into()
+                match error.kind() {
+                    CorsMiddlewareErrorKind::InvalidRequest => {
+                        AsterError::validation_error(error.message()).into()
+                    }
+                    CorsMiddlewareErrorKind::InvalidResponse => {
+                        AsterError::internal_error(error.message()).into()
+                    }
+                }
             },
         )
         .allowed_methods(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])

@@ -65,18 +65,34 @@ impl RuntimeCorsPolicy {
     }
 }
 
+/// CORS middleware failure category for product error mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorsMiddlewareErrorKind {
+    /// The incoming request contains an invalid origin or preflight header.
+    InvalidRequest,
+    /// A response header produced or inherited by the middleware is invalid.
+    InvalidResponse,
+}
+
 /// Product-neutral CORS middleware error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct CorsMiddlewareError {
+    kind: CorsMiddlewareErrorKind,
     message: String,
 }
 
 impl CorsMiddlewareError {
-    fn new(message: impl Into<String>) -> Self {
+    fn new(kind: CorsMiddlewareErrorKind, message: impl Into<String>) -> Self {
         Self {
+            kind,
             message: message.into(),
         }
+    }
+
+    /// Returns the failure category.
+    pub const fn kind(&self) -> CorsMiddlewareErrorKind {
+        self.kind
     }
 
     /// Returns the diagnostic message.
@@ -212,10 +228,18 @@ where
 
             let origin = origin_header
                 .to_str()
-                .map_err(|_| (config.map_error)(CorsMiddlewareError::new("invalid Origin header")))
+                .map_err(|_| {
+                    (config.map_error)(CorsMiddlewareError::new(
+                        CorsMiddlewareErrorKind::InvalidRequest,
+                        "invalid Origin header",
+                    ))
+                })
                 .and_then(|origin| {
                     aster_forge_utils::url::normalize_origin(origin, false).map_err(|error| {
-                        (config.map_error)(CorsMiddlewareError::new(error.to_string()))
+                        (config.map_error)(CorsMiddlewareError::new(
+                            CorsMiddlewareErrorKind::InvalidRequest,
+                            error.to_string(),
+                        ))
                     })
                 })?;
 
@@ -299,6 +323,7 @@ fn requested_headers_are_allowed(
 
     let request_headers = request_headers.to_str().map_err(|_| {
         map_error(CorsMiddlewareError::new(
+            CorsMiddlewareErrorKind::InvalidRequest,
             "invalid Access-Control-Request-Headers",
         ))
     })?;
@@ -318,6 +343,7 @@ fn requested_headers_are_allowed(
         let parsed: Result<header::HeaderName, _> = requested.parse();
         if parsed.is_err() {
             return Err(map_error(CorsMiddlewareError::new(
+                CorsMiddlewareErrorKind::InvalidRequest,
                 "invalid Access-Control-Request-Headers",
             )));
         }
@@ -420,9 +446,12 @@ fn ensure_vary(
     let mut vary_values = BTreeSet::new();
 
     if let Some(existing) = headers.get(header::VARY) {
-        let existing = existing
-            .to_str()
-            .map_err(|_| map_error(CorsMiddlewareError::new("invalid Vary header")))?;
+        let existing = existing.to_str().map_err(|_| {
+            map_error(CorsMiddlewareError::new(
+                CorsMiddlewareErrorKind::InvalidResponse,
+                "invalid Vary header",
+            ))
+        })?;
         for item in existing.split(',') {
             let item = item.trim();
             if !item.is_empty() {
@@ -443,7 +472,12 @@ fn header_value(
     error_message: &'static str,
     map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
 ) -> Result<HeaderValue, Error> {
-    HeaderValue::from_str(value).map_err(|_| map_error(CorsMiddlewareError::new(error_message)))
+    HeaderValue::from_str(value).map_err(|_| {
+        map_error(CorsMiddlewareError::new(
+            CorsMiddlewareErrorKind::InvalidResponse,
+            error_message,
+        ))
+    })
 }
 
 fn forbidden(req: ServiceRequest) -> ServiceResponse {
@@ -463,11 +497,17 @@ mod tests {
 
     use actix_web::{
         App, HttpResponse,
-        http::header::{self, HeaderValue},
+        http::{
+            StatusCode,
+            header::{self, HeaderValue},
+        },
         test, web,
     };
 
-    use super::{CorsAllowedOrigins, RuntimeCors, RuntimeCorsConfig, RuntimeCorsPolicy};
+    use super::{
+        CorsAllowedOrigins, CorsMiddlewareErrorKind, RuntimeCors, RuntimeCorsConfig,
+        RuntimeCorsPolicy,
+    };
 
     fn test_config() -> RuntimeCorsConfig {
         RuntimeCorsConfig::new(
@@ -589,6 +629,105 @@ mod tests {
         assert_eq!(
             response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
             Some(&HeaderValue::from_static("https://two.example.com"))
+        );
+    }
+
+    #[actix_web::test]
+    async fn cors_middleware_classifies_invalid_request_headers() {
+        let kinds = Arc::new(Mutex::new(Vec::new()));
+        let config = RuntimeCorsConfig::new(
+            |_req| {
+                Ok(RuntimeCorsPolicy {
+                    enabled: true,
+                    allowed_origins: CorsAllowedOrigins::Any,
+                    allow_credentials: false,
+                    max_age_secs: 60,
+                })
+            },
+            |_| false,
+            {
+                let kinds = Arc::clone(&kinds);
+                move |error| {
+                    kinds.lock().expect("kinds lock").push(error.kind());
+                    actix_web::error::ErrorBadRequest(error.to_string())
+                }
+            },
+        );
+        let app = test::init_service(
+            App::new()
+                .wrap(RuntimeCors::new(config))
+                .route("/api/demo", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let invalid_origin = HeaderValue::from_bytes(&[0xff]).expect("opaque header value");
+        let req = test::TestRequest::get()
+            .uri("/api/demo")
+            .insert_header((header::ORIGIN, invalid_origin))
+            .to_request();
+        let error = test::try_call_service(&app, req)
+            .await
+            .expect_err("invalid request header should return a service error");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            *kinds.lock().expect("kinds lock"),
+            vec![CorsMiddlewareErrorKind::InvalidRequest]
+        );
+    }
+
+    #[actix_web::test]
+    async fn cors_middleware_classifies_invalid_response_headers() {
+        let kinds = Arc::new(Mutex::new(Vec::new()));
+        let config = RuntimeCorsConfig::new(
+            |_req| {
+                Ok(RuntimeCorsPolicy {
+                    enabled: true,
+                    allowed_origins: CorsAllowedOrigins::Any,
+                    allow_credentials: false,
+                    max_age_secs: 60,
+                })
+            },
+            |_| false,
+            {
+                let kinds = Arc::clone(&kinds);
+                move |error| {
+                    kinds.lock().expect("kinds lock").push(error.kind());
+                    actix_web::error::ErrorInternalServerError(error.to_string())
+                }
+            },
+        );
+        let app = test::init_service(App::new().wrap(RuntimeCors::new(config)).route(
+            "/api/demo",
+            web::get().to(|| async {
+                HttpResponse::Ok()
+                    .insert_header((
+                        header::VARY,
+                        HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
+                    ))
+                    .finish()
+            }),
+        ))
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/demo")
+            .insert_header((header::ORIGIN, "https://panel.example.com"))
+            .to_request();
+        let error = test::try_call_service(&app, req)
+            .await
+            .expect_err("invalid response header should return a service error");
+
+        assert_eq!(
+            error.as_response_error().status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            *kinds.lock().expect("kinds lock"),
+            vec![CorsMiddlewareErrorKind::InvalidResponse]
         );
     }
 }

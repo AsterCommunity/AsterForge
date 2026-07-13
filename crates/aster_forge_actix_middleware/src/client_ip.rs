@@ -92,4 +92,27 @@ mod tests {
             "10.0.0.5".parse::<IpAddr>().unwrap()
         );
     }
+
+    #[test]
+    fn real_ip_accepts_forwarded_values_with_ports() {
+        let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_string()]);
+
+        for (forwarded, expected) in [
+            ("203.0.113.10:54321, 10.0.0.5", "203.0.113.10"),
+            ("[2001:db8::1]:443, 10.0.0.5", "2001:db8::1"),
+        ] {
+            let req = actix_test::TestRequest::default()
+                .insert_header(("X-Forwarded-For", forwarded))
+                .to_srv_request();
+
+            assert_eq!(
+                real_ip_from_trusted_headers(
+                    req.headers(),
+                    "10.0.0.5".parse::<IpAddr>().unwrap(),
+                    &trusted,
+                ),
+                expected.parse::<IpAddr>().unwrap()
+            );
+        }
+    }
 }

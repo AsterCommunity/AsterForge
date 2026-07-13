@@ -5,7 +5,7 @@
 //! Header-framework adapters stay in application crates; this module accepts plain strings and
 //! standard address types so it remains independent of Actix, Axum, or Hyper.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use ipnet::IpNet;
 
@@ -59,12 +59,20 @@ pub fn real_ip_from_forwarded_for(
     if !trusted.is_empty() && is_trusted_proxy(peer, trusted) {
         let ip = x_forwarded_for
             .and_then(|value| value.split(',').next())
-            .and_then(|part| part.trim().parse::<IpAddr>().ok());
+            .and_then(parse_forwarded_ip);
         if let Some(ip) = ip {
             return ip;
         }
     }
     peer
+}
+
+fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
+    let value = value.trim();
+    value
+        .parse::<IpAddr>()
+        .or_else(|_| value.parse::<SocketAddr>().map(|address| address.ip()))
+        .ok()
 }
 
 #[cfg(test)]
@@ -124,6 +132,21 @@ mod tests {
                 &trusted,
             ),
             "198.51.100.2".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn real_ip_accepts_forwarded_socket_address_forms() {
+        let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_string()]);
+        let peer = "10.0.0.5".parse::<IpAddr>().unwrap();
+
+        assert_eq!(
+            real_ip_from_forwarded_for(Some("203.0.113.10:54321, 10.0.0.5"), peer, &trusted),
+            "203.0.113.10".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            real_ip_from_forwarded_for(Some("[2001:db8::1]:443, 10.0.0.5"), peer, &trusted),
+            "2001:db8::1".parse::<IpAddr>().unwrap()
         );
     }
 

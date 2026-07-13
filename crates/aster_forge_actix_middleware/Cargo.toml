@@ -28,3 +28,4 @@ metrics = ["dep:aster_forge_metrics"]
 
 [dev-dependencies]
 sea-orm.workspace = true
+serde_json.workspace = true

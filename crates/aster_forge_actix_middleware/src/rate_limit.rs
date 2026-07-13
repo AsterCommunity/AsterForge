@@ -10,6 +10,7 @@
 //! - a keyed string limiter for protocol endpoints that rate-limit by usernames,
 //!   emails, or other normalized business keys.
 
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
@@ -19,6 +20,8 @@ use actix_governor::{
     GovernorConfig, GovernorConfigBuilder, KeyExtractor, SimpleKeyExtractionError,
 };
 use actix_web::dev::ServiceRequest;
+use actix_web::http::header::ContentType;
+use actix_web::{HttpResponse, HttpResponseBuilder};
 use governor::clock::{Clock, DefaultClock, QuantaInstant};
 use governor::middleware::NoOpMiddleware;
 use governor::state::keyed::DefaultKeyedStateStore;
@@ -34,9 +37,26 @@ type StringKeyedLimiter =
 /// matches one of the trusted proxy CIDR entries, the leftmost `X-Forwarded-For`
 /// address is used as the client key. Invalid or missing forwarded addresses
 /// fall back to the direct peer address.
-#[derive(Debug, Clone)]
+type RejectionResponseFactory =
+    dyn Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static;
+
+#[derive(Clone)]
 pub struct TrustedProxyIpKeyExtractor {
     trusted: Vec<IpNet>,
+    rejection_response: Option<Arc<RejectionResponseFactory>>,
+}
+
+impl fmt::Debug for TrustedProxyIpKeyExtractor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TrustedProxyIpKeyExtractor")
+            .field("trusted", &self.trusted)
+            .field(
+                "has_custom_rejection_response",
+                &self.rejection_response.is_some(),
+            )
+            .finish()
+    }
 }
 
 impl TrustedProxyIpKeyExtractor {
@@ -48,12 +68,29 @@ impl TrustedProxyIpKeyExtractor {
     pub fn new(trusted_proxies: &[String]) -> Self {
         Self {
             trusted: aster_forge_utils::net::parse_trusted_proxies(trusted_proxies),
+            rejection_response: None,
         }
     }
 
     /// Builds an extractor from an already parsed trusted proxy list.
     pub fn from_trusted(trusted: Vec<IpNet>) -> Self {
-        Self { trusted }
+        Self {
+            trusted,
+            rejection_response: None,
+        }
+    }
+
+    /// Uses a product-provided response factory when the request exceeds its quota.
+    ///
+    /// The factory receives the retry delay in whole seconds and the response builder created by
+    /// `actix-governor`. Products can use this to preserve their response envelope and error code
+    /// without reimplementing trusted-proxy extraction.
+    pub fn with_rejection_response<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static,
+    {
+        self.rejection_response = Some(Arc::new(factory));
+        self
     }
 
     /// Returns whether the provided IP is trusted as a proxy.
@@ -77,6 +114,20 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
             .map(|socket| socket.ip())
             .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
         Ok(self.real_ip(req, peer))
+    }
+
+    fn exceed_rate_limit_response(
+        &self,
+        negative: &NotUntil<QuantaInstant>,
+        mut response: HttpResponseBuilder,
+    ) -> HttpResponse {
+        let retry_after = retry_after_seconds(negative);
+        if let Some(factory) = &self.rejection_response {
+            return factory(retry_after, response);
+        }
+        response
+            .content_type(ContentType::plaintext())
+            .body(format!("Too many requests, retry in {retry_after}s"))
     }
 }
 
@@ -102,6 +153,31 @@ pub fn build_ip_governor_config(
 ) -> GovernorConfig<TrustedProxyIpKeyExtractor, NoOpMiddleware> {
     GovernorConfigBuilder::default()
         .key_extractor(TrustedProxyIpKeyExtractor::new(trusted_proxies))
+        .seconds_per_request(seconds_per_request.get())
+        .burst_size(burst_size.get())
+        .finish()
+        .expect("non-zero rate limit tier should always build")
+}
+
+/// Builds an Actix governor config with a product-provided rejection response.
+#[expect(
+    clippy::expect_used,
+    reason = "non-zero quota fields make actix-governor finish() infallible"
+)]
+pub fn build_ip_governor_config_with_rejection_response<F>(
+    seconds_per_request: NonZeroU64,
+    burst_size: NonZeroU32,
+    trusted_proxies: &[String],
+    rejection_response: F,
+) -> GovernorConfig<TrustedProxyIpKeyExtractor, NoOpMiddleware>
+where
+    F: Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static,
+{
+    GovernorConfigBuilder::default()
+        .key_extractor(
+            TrustedProxyIpKeyExtractor::new(trusted_proxies)
+                .with_rejection_response(rejection_response),
+        )
         .seconds_per_request(seconds_per_request.get())
         .burst_size(burst_size.get())
         .finish()
@@ -178,9 +254,12 @@ fn build_string_keyed_limiter(
 
 #[cfg(test)]
 mod tests {
-    use super::{NormalizedStringRateLimiter, TrustedProxyIpKeyExtractor};
-    use actix_governor::KeyExtractor;
-    use actix_web::test as actix_test;
+    use super::{
+        NormalizedStringRateLimiter, TrustedProxyIpKeyExtractor,
+        build_ip_governor_config_with_rejection_response,
+    };
+    use actix_governor::{Governor, KeyExtractor};
+    use actix_web::{App, HttpResponse, http::StatusCode, test as actix_test, web};
     use std::net::IpAddr;
     use std::num::{NonZeroU32, NonZeroU64};
 
@@ -235,6 +314,49 @@ mod tests {
             extractor.extract(&missing_peer).unwrap(),
             "127.0.0.1".parse::<IpAddr>().unwrap()
         );
+    }
+
+    #[actix_web::test]
+    async fn custom_rejection_response_preserves_product_envelope() {
+        let config = build_ip_governor_config_with_rejection_response(
+            NonZeroU64::new(60).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            &[],
+            |retry_after, mut response| {
+                response
+                    .insert_header(("Retry-After", retry_after.to_string()))
+                    .json(serde_json::json!({
+                        "code": "rate_limited",
+                        "retry_after": retry_after,
+                    }))
+            },
+        );
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(Governor::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let first = actix_test::TestRequest::get()
+            .uri("/")
+            .peer_addr("127.0.0.1:12345".parse().unwrap())
+            .to_request();
+        assert_eq!(
+            actix_test::call_service(&app, first).await.status(),
+            StatusCode::OK
+        );
+
+        let second = actix_test::TestRequest::get()
+            .uri("/")
+            .peer_addr("127.0.0.1:12345".parse().unwrap())
+            .to_request();
+        let response = actix_test::call_service(&app, second).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key("Retry-After"));
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["code"], "rate_limited");
+        assert!(body["retry_after"].as_u64().is_some_and(|value| value > 0));
     }
 
     #[test]
