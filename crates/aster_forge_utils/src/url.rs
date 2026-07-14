@@ -111,6 +111,18 @@ pub fn normalize_http_base_url(
 /// The returned value is lowercase `scheme://authority`. Paths other than `/`, query strings,
 /// fragments, and userinfo are rejected. When `allow_wildcard` is true, `*` is returned unchanged.
 pub fn normalize_origin(origin: &str, allow_wildcard: bool) -> Result<String> {
+    normalize_origin_with_additional_schemes(origin, allow_wildcard, &[])
+}
+
+/// Normalizes an origin while accepting explicitly selected non-HTTP schemes.
+///
+/// Additional schemes only affect syntax validation. Callers must still apply their own exact
+/// origin allowlist; accepting a scheme here does not authorize every origin using that scheme.
+pub fn normalize_origin_with_additional_schemes(
+    origin: &str,
+    allow_wildcard: bool,
+    additional_schemes: &[&str],
+) -> Result<String> {
     let trimmed = origin.trim();
     if trimmed.is_empty() {
         return Err(UtilsError::invalid_value("origin cannot be empty"));
@@ -130,9 +142,9 @@ pub fn normalize_origin(origin: &str, allow_wildcard: bool) -> Result<String> {
         ))
     })?;
 
-    if scheme != "http" && scheme != "https" {
+    if scheme != "http" && scheme != "https" && !additional_schemes.contains(&scheme) {
         return Err(UtilsError::invalid_value(format!(
-            "origin must use http or https: '{trimmed}'"
+            "origin scheme is not supported: '{trimmed}'"
         )));
     }
 
@@ -404,6 +416,31 @@ mod tests {
         assert!(normalize_origin("https://user@app.example.com", false).is_err());
         assert!(normalize_origin("ftp://app.example.com", false).is_err());
         assert!(normalize_origin("https:///missing-host", false).is_err());
+    }
+
+    #[test]
+    fn normalize_origin_accepts_only_explicit_additional_schemes() {
+        use super::normalize_origin_with_additional_schemes;
+
+        let extension_origin = "chrome-extension://iikmkjmpaadaobahmlepeloendndfphd";
+        assert!(normalize_origin(extension_origin, false).is_err());
+        assert_eq!(
+            normalize_origin_with_additional_schemes(
+                extension_origin,
+                false,
+                &["chrome-extension"],
+            )
+            .unwrap(),
+            extension_origin
+        );
+        assert!(
+            normalize_origin_with_additional_schemes(
+                "custom-extension://example",
+                false,
+                &["chrome-extension"],
+            )
+            .is_err()
+        );
     }
 
     #[test]

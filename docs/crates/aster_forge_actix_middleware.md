@@ -199,6 +199,7 @@ label 低基数。
 Forge 负责产品无关的 Actix CORS 机械行为：
 
 - 读取 `Origin`。
+- 策略未启用或没有有效允许来源时，在解析 `Origin` 前原样透传请求。
 - 判断 same-origin、preflight 和普通跨源请求。
 - 校验 `Access-Control-Request-Method` 与 `Access-Control-Request-Headers`。
 - 应用 `Access-Control-Allow-Origin`、`Access-Control-Allow-Credentials`、`Access-Control-Allow-Methods`、`Access-Control-Allow-Headers`、`Access-Control-Max-Age`、`Access-Control-Expose-Headers`。
@@ -210,6 +211,7 @@ Forge 负责产品无关的 Actix CORS 机械行为：
 - runtime policy resolver，例如从 `AppState` 读取当前 `RuntimeConfig`。
 - exempt path predicate，例如静态前端资源、favicon、service worker。
 - allowed methods、allowed request headers、exposed response headers。
+- 可选的额外 origin scheme 解析规则；这只扩展语法，最终仍需精确 origin 白名单匹配。
 - `CorsMiddlewareError` 到产品错误类型的映射。
 
 `CorsMiddlewareErrorKind` 区分两类边界：
@@ -256,10 +258,15 @@ fn runtime_cors() -> RuntimeCors {
         )
         .allowed_methods(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
         .allowed_headers(["authorization", "content-type", "x-csrf-token", "x-request-id"])
-        .exposed_headers(["content-length", "etag", "x-request-id"]),
+        .exposed_headers(["content-length", "etag", "x-request-id"])
+        .additional_origin_schemes(["chrome-extension"]),
     )
 }
 ```
+
+`additional_origin_schemes` 不按 scheme 放行请求。即使配置了 `chrome-extension`，策略中仍然
+必须列出完整的 `chrome-extension://<extension-id>`，其他扩展 ID 会继续被拒绝。通用
+HTTP(S) origin、public site URL 和 CSRF 来源解析不受这个 CORS 专用扩展点影响。
 
 不要把产品 auth、admin 权限、用户实体、config key 或错误码写进 Forge。不同产品可以用同一套 CORS 机械层，但通过不同的 policy resolver 和 header 列表表达自己的业务需求。
 

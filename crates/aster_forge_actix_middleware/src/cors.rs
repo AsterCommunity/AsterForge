@@ -110,6 +110,7 @@ pub struct RuntimeCorsConfig {
     allowed_methods: Vec<&'static str>,
     allowed_headers: Vec<&'static str>,
     exposed_headers: Vec<&'static str>,
+    additional_origin_schemes: Vec<&'static str>,
     policy: Rc<PolicyResolver>,
     exempt_path: Rc<ExemptPathPredicate>,
     map_error: Rc<ErrorMapper>,
@@ -127,6 +128,7 @@ impl RuntimeCorsConfig {
             allowed_methods: Vec::new(),
             allowed_headers: Vec::new(),
             exposed_headers: Vec::new(),
+            additional_origin_schemes: Vec::new(),
             policy: Rc::new(policy),
             exempt_path: Rc::new(exempt_path),
             map_error: Rc::new(map_error),
@@ -150,6 +152,18 @@ impl RuntimeCorsConfig {
         self.exposed_headers = headers.into_iter().collect();
         self
     }
+
+    /// Accepts selected non-HTTP schemes while parsing request origins.
+    ///
+    /// This does not authorize a scheme by itself. The normalized full origin must still match
+    /// [`RuntimeCorsPolicy::allowed_origins`].
+    pub fn additional_origin_schemes(
+        mut self,
+        schemes: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        self.additional_origin_schemes = schemes.into_iter().collect();
+        self
+    }
 }
 
 impl Clone for RuntimeCorsConfig {
@@ -158,6 +172,7 @@ impl Clone for RuntimeCorsConfig {
             allowed_methods: self.allowed_methods.clone(),
             allowed_headers: self.allowed_headers.clone(),
             exposed_headers: self.exposed_headers.clone(),
+            additional_origin_schemes: self.additional_origin_schemes.clone(),
             policy: Rc::clone(&self.policy),
             exempt_path: Rc::clone(&self.exempt_path),
             map_error: Rc::clone(&self.map_error),
@@ -226,6 +241,12 @@ where
                 return Ok(svc.call(req).await?.map_into_left_body());
             };
 
+            let policy = (config.policy)(&req)?;
+
+            if !policy.enforces_requests() {
+                return Ok(svc.call(req).await?.map_into_left_body());
+            }
+
             let origin = origin_header
                 .to_str()
                 .map_err(|_| {
@@ -235,19 +256,18 @@ where
                     ))
                 })
                 .and_then(|origin| {
-                    aster_forge_utils::url::normalize_origin(origin, false).map_err(|error| {
+                    aster_forge_utils::url::normalize_origin_with_additional_schemes(
+                        origin,
+                        false,
+                        &config.additional_origin_schemes,
+                    )
+                    .map_err(|error| {
                         (config.map_error)(CorsMiddlewareError::new(
                             CorsMiddlewareErrorKind::InvalidRequest,
                             error.to_string(),
                         ))
                     })
                 })?;
-
-            let policy = (config.policy)(&req)?;
-
-            if !policy.enforces_requests() {
-                return Ok(svc.call(req).await?.map_into_left_body());
-            }
 
             if request_is_same_origin(&req, &origin) {
                 return Ok(svc.call(req).await?.map_into_left_body());
@@ -585,6 +605,87 @@ mod tests {
 
         assert_eq!(response.status(), 403);
         assert!(response.headers().contains_key(header::VARY));
+    }
+
+    #[actix_web::test]
+    async fn cors_middleware_does_not_parse_origins_when_policy_is_inactive() {
+        let config = RuntimeCorsConfig::new(
+            |_req| {
+                Ok(RuntimeCorsPolicy {
+                    enabled: false,
+                    allowed_origins: CorsAllowedOrigins::None,
+                    allow_credentials: false,
+                    max_age_secs: 60,
+                })
+            },
+            |_| false,
+            |error| actix_web::error::ErrorBadRequest(error.to_string()),
+        );
+        let app = test::init_service(
+            App::new()
+                .wrap(RuntimeCors::new(config))
+                .route("/api/demo", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/demo")
+            .insert_header((
+                header::ORIGIN,
+                "chrome-extension://iikmkjmpaadaobahmlepeloendndfphd",
+            ))
+            .to_request();
+        let response = test::call_service(&app, req).await;
+
+        assert_eq!(response.status(), 200);
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
+    }
+
+    #[actix_web::test]
+    async fn cors_middleware_accepts_configured_additional_origin_scheme() {
+        const EXTENSION_ORIGIN: &str = "chrome-extension://iikmkjmpaadaobahmlepeloendndfphd";
+
+        let config = RuntimeCorsConfig::new(
+            |_req| {
+                Ok(RuntimeCorsPolicy {
+                    enabled: true,
+                    allowed_origins: CorsAllowedOrigins::List(vec![EXTENSION_ORIGIN.to_string()]),
+                    allow_credentials: true,
+                    max_age_secs: 60,
+                })
+            },
+            |_| false,
+            |error| actix_web::error::ErrorBadRequest(error.to_string()),
+        )
+        .additional_origin_schemes(["chrome-extension"])
+        .allowed_methods(["GET", "OPTIONS"])
+        .allowed_headers(["authorization"]);
+        let app = test::init_service(
+            App::new()
+                .wrap(RuntimeCors::new(config))
+                .route("/api/demo", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let req = test::TestRequest::default()
+            .method(actix_web::http::Method::OPTIONS)
+            .uri("/api/demo")
+            .insert_header((header::ORIGIN, EXTENSION_ORIGIN))
+            .insert_header((header::ACCESS_CONTROL_REQUEST_METHOD, "GET"))
+            .insert_header((header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization"))
+            .to_request();
+        let response = test::call_service(&app, req).await;
+
+        assert_eq!(response.status(), 204);
+        assert_eq!(
+            response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static(EXTENSION_ORIGIN))
+        );
     }
 
     #[actix_web::test]
