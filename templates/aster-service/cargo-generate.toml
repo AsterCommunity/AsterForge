@@ -8,7 +8,6 @@ ignore = [
     "frontend-panel/coverage",
     "frontend-panel/playwright-report",
     "frontend-panel/test-results",
-    "frontend-panel/generated",
     "frontend-panel/dev-dist",
 ]
 

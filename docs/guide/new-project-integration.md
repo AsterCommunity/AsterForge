@@ -22,6 +22,10 @@ cargo generate --path templates/aster-service \
 
 模板生成的是一个可编译的产品骨架，不是业务完整实现。它已经接好 `AsterRuntime`、Actix HTTP、database handles、migration crate、background task shutdown、mail outbox shutdown drain、audit lifecycle 和基础健康接口；产品侧仍然要补自己的产品表 migration、配置 registry、API、权限、audit action/detail、task payload/result 和邮件模板渲染。
 
+模板的构建和 CI 约束与 AsterDrive 对齐：`rust-toolchain.toml` 固定 Rust 1.95 并安装 `rustfmt`、`clippy`、`llvm-tools-preview`；开发 profile 对 workspace 代码使用 O0、对第三方依赖使用 O1；debug/test 缺少前端产物时只在 Cargo `OUT_DIR` 生成隔离 fallback，release 构建则要求先完成真实前端构建。`ASTER_BUILD_TIME` 可以由构建环境显式传入，前端嵌入路径通过构建期 `ASTER_FRONTEND_DIST_DIR` 选择，不再把 fallback 写回源码目录。
+
+生成项目会跟踪 `frontend-panel/generated/openapi.json` 和 `frontend-panel/src/types/api.generated.ts`。Rust CI 分成 format/clippy、OpenAPI 与 SDK drift、coverage、PostgreSQL/MySQL integration backend 四组 job；API schema 变化后必须同时运行 OpenAPI 测试和 `bun run generate-api`。
+
 模板生成阶段只暴露 `package_description` 和 `server_port`。Forge 依赖源固定为官方 Git 仓库；其余 server、database、cache、config sync 和 logging 设置使用保守默认值；`database.url` 和 `config_sync.topic` 默认由项目名派生，`logging.file` 默认为空且不开启日志轮转。生成后仍可在 `data/config.toml` 或环境变量中覆盖这些配置。生成后的 `AppConfig` 保留这些分组，后续接入真实 config loader 时不需要再重排结构。
 
 生成后的 `migration` crate 默认创建 Forge 拥有的基础设施表：`runtime_leases`、`scheduled_tasks`、`system_config`、`mail_outbox`、`audit_logs`。产品表继续作为新的 migration module 加在产品仓库里，不要把业务实体迁进 Forge。

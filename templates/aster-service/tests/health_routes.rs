@@ -116,9 +116,7 @@ async fn frontend_fallback_still_serves_spa_routes() {
 
 #[actix_web::test]
 async fn frontend_index_sets_csp_header_and_meta_without_header_only_directives() {
-    use {{crate_name}}::api::routes::frontend::{
-        FRONTEND_CSP_HEADER, FRONTEND_CSP_META,
-    };
+    use {{crate_name}}::api::routes::frontend::{FRONTEND_CSP_HEADER, FRONTEND_CSP_META};
 
     let state = common::setup().await;
     let app = create_test_app!(state);
@@ -158,9 +156,7 @@ async fn frontend_index_sets_csp_header_and_meta_without_header_only_directives(
 
 #[actix_web::test]
 async fn frontend_csp_constants_split_header_only_directives() {
-    use {{crate_name}}::api::routes::frontend::{
-        FRONTEND_CSP_HEADER, FRONTEND_CSP_META,
-    };
+    use {{crate_name}}::api::routes::frontend::{FRONTEND_CSP_HEADER, FRONTEND_CSP_META};
 
     assert!(
         FRONTEND_CSP_HEADER.contains("frame-ancestors 'self'"),

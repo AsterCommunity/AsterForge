@@ -8,8 +8,15 @@ use utoipa::OpenApi;
 
 #[test]
 fn generate_openapi() {
-    let doc = ApiDoc::openapi();
-    let json = serde_json::to_string_pretty(&doc).expect("serialize openapi document");
+    let mut doc = ApiDoc::openapi();
+    // Keep tracked generated artifacts template-stable across different cargo-generate inputs.
+    // Runtime Swagger UI still uses the real Cargo package metadata from `ApiDoc::openapi()`.
+    doc.info.title = "generated-aster-service".to_string();
+    doc.info.description = Some("Generated Aster service OpenAPI document.".to_string());
+    let json = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&doc).expect("serialize openapi document")
+    );
 
     fs::create_dir_all("./frontend-panel/generated").expect("create frontend generated directory");
     fs::write("./frontend-panel/generated/openapi.json", json)

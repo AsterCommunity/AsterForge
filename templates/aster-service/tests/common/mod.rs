@@ -30,8 +30,7 @@ fn unique_database_path() -> std::path::PathBuf {
     ))
 }
 
-/// Creates the standard test Actix app.
-{% raw %}
+/// Creates the standard test Actix app.{% raw %}
 #[macro_export]
 macro_rules! create_test_app {
     ($state:expr) => {{

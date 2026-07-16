@@ -6,6 +6,11 @@ on:
       - '**/*.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'frontend-panel/package.json'
+      - 'frontend-panel/generated/openapi.json'
+      - 'frontend-panel/src/types/api.generated.ts'
+      - 'scripts/coverage-summary.mjs'
       - '.github/workflows/rust.yml'
     branches: [main, master]
   pull_request:
@@ -13,71 +18,128 @@ on:
       - '**/*.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'frontend-panel/package.json'
+      - 'frontend-panel/generated/openapi.json'
+      - 'frontend-panel/src/types/api.generated.ts'
+      - 'scripts/coverage-summary.mjs'
       - '.github/workflows/rust.yml'
+
+concurrency:
+  group: rust-{% raw %}${{ github.workflow }}-${{ github.ref }}{% endraw %}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_TEST_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CODECOV_TOKEN: {% raw %}${{ secrets.CODECOV_TOKEN }}{% endraw %}
 
 permissions:
   contents: read
 
 jobs:
-  rust:
+  format-and-clippy:
+    name: Format and Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Install Rust
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
-          components: rustfmt, clippy, llvm-tools-preview
+          components: rustfmt, clippy
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy-v1
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  openapi-sdk-drift:
+    name: OpenAPI and generated SDK drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: openapi-v1
+
+      - name: Generate OpenAPI specification
+        run: cargo test --features openapi --test generate_openapi
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install frontend dependencies
+        working-directory: frontend-panel
+        run: bun install --frozen-lockfile
+
+      - name: Generate TypeScript SDK
+        working-directory: frontend-panel
+        run: bun run generate-api
+
+      - name: Verify generated files are up to date
+        run: |
+          git diff --exit-code -- \
+            frontend-panel/generated/openapi.json \
+            frontend-panel/src/types/api.generated.ts
+
+  coverage:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Format
-        run: cargo fmt --all -- --check
-
-      - name: Check
-        run: cargo check --workspace
-
-      - name: Check features
-        run: cargo check --workspace --features metrics,openapi
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Test
-        run: cargo test --workspace
-
-      - name: OpenAPI test
-        run: cargo test --features metrics,openapi --test generate_openapi
-
       - name: Prepare coverage output directory
         run: mkdir -p coverage/rust
 
-      - name: Run Rust coverage
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Run tests with coverage
         run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path coverage/rust/lcov.info
 
       - name: Generate HTML coverage report
         if: success()
         run: cargo llvm-cov report --html --output-dir coverage/rust/html
 
-      - name: Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-coverage
-          if-no-files-found: ignore
-          path: coverage/rust
+      - name: Publish coverage summary
+        if: always() && hashFiles('coverage/rust/lcov.info') != ''
+        run: bun scripts/coverage-summary.mjs "Rust" coverage/rust/lcov.info
 
       - name: Upload coverage reports to Codecov
         if: always() && hashFiles('coverage/rust/lcov.info') != '' && env.CODECOV_TOKEN != ''
@@ -88,3 +150,42 @@ jobs:
           name: rust-backend
           token: {% raw %}${{ env.CODECOV_TOKEN }}{% endraw %}
           fail_ci_if_error: true
+          verbose: true
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-coverage
+          if-no-files-found: ignore
+          path: coverage/rust
+
+  integration-backends:
+    name: Integration tests ({% raw %}${{ matrix.backend }}{% endraw %})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [postgres, mysql]
+    env:
+      ASTER_TEST_DATABASE_BACKEND: {% raw %}${{ matrix.backend }}{% endraw %}
+      TESTCONTAINERS_REUSE_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration-v1
+
+      - name: Verify Docker availability
+        run: docker version
+
+      - name: Run integration tests against {% raw %}${{ matrix.backend }}{% endraw %}
+        run: cargo test --tests --no-fail-fast

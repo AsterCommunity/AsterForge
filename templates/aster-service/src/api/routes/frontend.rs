@@ -10,7 +10,7 @@ use rust_embed::Embed;
 use std::path::PathBuf;
 
 #[derive(Embed)]
-#[folder = "frontend-panel/dist/"]
+#[folder = "$ASTER_FRONTEND_DIST_DIR"]
 struct FrontendAssets;
 
 /// Frontend override directory used by deployments that replace embedded assets.
@@ -95,12 +95,15 @@ impl FrontendService {
     }
 
     fn escape_manifest_string(value: &str) -> String {
-        let encoded = serde_json::to_string(value).expect("manifest placeholder should serialize");
-        encoded
+        let encoded = serde_json::Value::String(value.to_string()).to_string();
+        if let Some(inner) = encoded
             .strip_prefix('"')
             .and_then(|value| value.strip_suffix('"'))
-            .expect("serialized string should be quoted")
-            .to_string()
+        {
+            inner.to_string()
+        } else {
+            encoded
+        }
     }
 
     fn get_content_type(path: &str) -> &'static str {
@@ -124,11 +127,9 @@ impl FrontendService {
     async fn serve_index(state: &crate::runtime::AppState) -> HttpResponse {
         let html = match Self::load_file("index.html").await {
             Some(data) => String::from_utf8_lossy(&data).into_owned(),
-            None => include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/frontend-panel/dist/index.html"
-            ))
-            .to_string(),
+            None => {
+                include_str!(concat!(env!("ASTER_FRONTEND_DIST_DIR"), "/index.html")).to_string()
+            }
         };
         let processed = Self::process_index_html(&html, state);
 

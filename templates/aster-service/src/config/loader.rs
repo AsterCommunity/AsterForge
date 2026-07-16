@@ -123,9 +123,7 @@ mod tests {
         let generated = std::fs::read_to_string(&path).expect("read default config");
 
         assert!(generated.contains(r#"temp_dir = ".tmp""#));
-        assert!(
-            generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#)
-        );
+        assert!(generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#));
 
         let _ = std::fs::remove_file(path);
     }

@@ -16,11 +16,13 @@ bun run build
 
 ## OpenAPI types
 
-The backend OpenAPI test writes `generated/openapi.json`. Generate TypeScript types from it with:
+The backend OpenAPI test refreshes the tracked `generated/openapi.json`. Generate TypeScript types
+from it with:
 
 ```bash
 bun run generate-api
 ```
 
 Generated OpenAPI types are written to `src/types/api.generated.ts`. Application code should import
-from `src/types/api.ts`, which mirrors the wrapper style used by the reference Aster frontends.
+from `src/types/api.ts`, which mirrors the wrapper style used by the reference Aster frontends. CI
+regenerates both files and rejects drift.

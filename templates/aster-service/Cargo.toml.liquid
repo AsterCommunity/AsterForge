@@ -3,7 +3,7 @@ name = "{{project-name}}"
 version = "0.1.0"
 description = "{{package_description}}"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.95.0"
 license = "MIT"
 repository = ""
 build = "build.rs"
@@ -37,14 +37,21 @@ jemalloc-stats = [
 ]
 jemalloc-profiling = ["jemalloc-stats", "tikv-jemallocator/profiling"]
 
-# Development profile tuned for quick local feedback.
+# Development builds prioritize short edit-compile-test feedback. Workspace code stays at O0 so
+# local changes do not repeatedly pay optimization cost, while third-party dependencies use O1 to
+# keep crypto, compression, and other dependency-heavy debug/test paths usable.
 [profile.dev]
-opt-level = 1
+opt-level = 0
 lto = false
-codegen-units = 16
+codegen-units = 256
+debug = 1
 panic = "unwind"
 strip = false
 incremental = true
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
 
 [profile.release]
 opt-level = 2
@@ -91,11 +98,11 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", pa
 aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks", features = ["runtime-component"] }
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
 migration = { path = "migration" }
-sea-orm = { version = "2.0.0-rc.41", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
+sea-orm = { version = "2.0.0-rc.43", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 config = { version = "0.15", default-features = false, features = ["toml"] }
-rust-embed = "8"
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 thiserror = "2"
 tikv-jemallocator = { version = "0.7", optional = true }
 tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "time"] }
@@ -106,4 +113,8 @@ utoipa = { version = "5.5.0", features = ["actix_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
 
 [dev-dependencies]
-sea-orm-migration = { version = "2.0.0-rc.41", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "2.0.0-rc.43", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+testcontainers = { version = "0.27", features = ["reusable-containers"] }
+
+[build-dependencies]
+chrono = "0.4"

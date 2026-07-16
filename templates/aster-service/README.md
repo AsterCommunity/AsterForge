@@ -16,6 +16,22 @@ cargo check
 cargo run
 ```
 
+Debug and test builds use an isolated frontend fallback under Cargo's `OUT_DIR` when
+`frontend-panel/dist` is missing, so a backend-only build does not write generated assets into the
+source tree. Release builds require a real frontend bundle:
+
+```bash
+cd frontend-panel
+bun install --frozen-lockfile
+bun run build
+cd ..
+cargo build --release
+```
+
+The build script accepts an explicit single-line `ASTER_BUILD_TIME`; when it is unset, the script
+uses the current UTC time. Embedded assets are selected through the build-time
+`ASTER_FRONTEND_DIST_DIR` value rather than a source-tree-only path.
+
 The generated service starts an Actix HTTP server and registers the standard Forge runtime
 components:
 
@@ -32,6 +48,11 @@ components:
 Runtime display names use Cargo package metadata. Rename the generated package in `Cargo.toml`
 when the service name should change; the template reads `env!("CARGO_PKG_NAME")` instead of
 keeping a separate service-name placeholder.
+
+The generated `rust-toolchain.toml` installs Rust 1.95 with `rustfmt`, `clippy`, and
+`llvm-tools-preview`. The development profile keeps workspace code at O0 with high codegen
+parallelism while compiling third-party dependencies at O1, matching AsterDrive's local feedback
+profile.
 
 ## Configuration
 
@@ -105,9 +126,17 @@ When enabled in a debug build, the service exposes:
 - `/api-docs/openapi.json`
 - `/swagger-ui/`
 
-The OpenAPI generation test writes `generated/openapi.json`. Products with a frontend can point
-their frontend type generator at that file or change the test output path to their frontend
-workspace.
+The OpenAPI generation test writes the tracked `frontend-panel/generated/openapi.json`. Refresh
+both tracked artifacts after API changes:
+
+```bash
+cargo test --features openapi --test generate_openapi
+cd frontend-panel
+bun run generate-api
+```
+
+The generated SDK is written to `frontend-panel/src/types/api.generated.ts`; application code
+imports the stable wrapper from `frontend-panel/src/types/api.ts`.
 
 Add product route annotations with `aster_forge_api_docs_macros::path(...)`, then register those
 handlers and schemas in `src/api/openapi.rs`. Release builds do not expand the route annotations
@@ -146,10 +175,14 @@ The template exposes:
 
 The generated project includes:
 
-- `.github/workflows/rust.yml`: format, check, all-feature clippy, tests, OpenAPI generation, and
-  Rust coverage artifact upload.
-- `.github/workflows/audit.yml`: scheduled and manual `cargo audit`.
+- `.github/workflows/rust.yml`: AsterDrive-aligned format/clippy, OpenAPI and TypeScript SDK drift,
+  coverage summary/artifact, and PostgreSQL/MySQL integration jobs.
+- `.github/workflows/audit.yml`: dependency-change, scheduled, and manual `cargo audit -D warnings`.
 - `.github/workflows/docker-image.yml`: GHCR image publishing for default and `metrics` variants.
+
+The backend integration matrix uses reusable testcontainers and runs the Forge foundation
+migration against PostgreSQL and MySQL. Docker must be available when running those tests locally
+with `ASTER_TEST_DATABASE_BACKEND=postgres` or `mysql`.
 
 Build the container image with:
 

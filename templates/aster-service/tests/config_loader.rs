@@ -26,10 +26,7 @@ fn default_config_file_is_created_under_data_dir() {
     let config_path = dir.join("data").join("config.toml");
 
     unsafe {
-        std::env::set_var(
-            {{crate_name}}::config::CONFIG_ENV_VAR,
-            &config_path,
-        );
+        std::env::set_var({{crate_name}}::config::CONFIG_ENV_VAR, &config_path);
     }
     let loaded = {{crate_name}}::config::load().expect("load config");
     let generated = fs::read_to_string(&config_path).expect("read generated config");
@@ -42,18 +39,13 @@ fn default_config_file_is_created_under_data_dir() {
         loaded.database.url,
         format!(
             "sqlite://{}?mode=rwc",
-            runtime_relative_path(
-                dir.join("data")
-                    .join("{{project-name}}.db")
-            )
+            runtime_relative_path(dir.join("data").join("{{project-name}}.db"))
         )
     );
     assert!(config_path.exists());
     assert!(generated.contains("# {{project-name}} configuration file"));
     assert!(generated.contains(r#"temp_dir = ".tmp""#));
-    assert!(
-        generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#)
-    );
+    assert!(generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#));
     assert!(generated.contains(r#"file = """#));
     assert!(generated.contains("enable_rotation = false"));
 }
@@ -85,10 +77,7 @@ file = "service.log"
     .expect("write config");
 
     unsafe {
-        std::env::set_var(
-            {{crate_name}}::config::CONFIG_ENV_VAR,
-            &config_path,
-        );
+        std::env::set_var({{crate_name}}::config::CONFIG_ENV_VAR, &config_path);
     }
     let loaded = {{crate_name}}::config::load().expect("load config");
 
@@ -134,9 +123,7 @@ impl EnvGuard {
         let lock = ENV_LOCK.lock().expect("env lock poisoned");
         Self {
             _lock: lock,
-            config_path: std::env::var_os(
-                {{crate_name}}::config::CONFIG_ENV_VAR,
-            ),
+            config_path: std::env::var_os({{crate_name}}::config::CONFIG_ENV_VAR),
             server_host: std::env::var_os("ASTER__SERVER__HOST"),
         }
     }

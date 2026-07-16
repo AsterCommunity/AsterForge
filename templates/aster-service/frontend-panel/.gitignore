@@ -15,7 +15,6 @@ coverage
 playwright-report
 test-results
 *.local
-generated/
 dev-dist/
 
 # Editor directories and files
