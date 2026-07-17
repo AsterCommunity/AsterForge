@@ -16,9 +16,10 @@
 //! .await?;
 //! ```
 
-use crate::{DbError, Result};
-use std::ops::AsyncFnOnce;
+use crate::{DbError, Result, database_error_kind};
+use sea_orm::TransactionSession;
 use std::panic::Location;
+use std::{future::Future, ops::AsyncFnOnce, pin::Pin, time::Duration};
 
 struct RollbackGuard {
     file: &'static str,
@@ -58,21 +59,182 @@ impl Drop for RollbackGuard {
 pub async fn begin<C: sea_orm::TransactionTrait>(db: &C) -> Result<C::Transaction> {
     db.begin()
         .await
-        .map_err(|error| DbError::database_operation(format!("begin transaction: {error}")))
+        .map_err(|error| database_operation_with_context(error, "begin transaction"))
 }
 
 /// Commits a transaction and maps errors consistently.
 pub async fn commit<T: sea_orm::TransactionSession>(txn: T) -> Result<()> {
     txn.commit()
         .await
-        .map_err(|error| DbError::database_operation(format!("commit transaction: {error}")))
+        .map_err(|error| database_operation_with_context(error, "commit transaction"))
 }
 
 /// Rolls back a transaction and maps errors consistently.
 pub async fn rollback<T: sea_orm::TransactionSession>(txn: T) -> Result<()> {
     txn.rollback()
         .await
-        .map_err(|error| DbError::database_operation(format!("rollback transaction: {error}")))
+        .map_err(|error| database_operation_with_context(error, "rollback transaction"))
+}
+
+fn database_operation_with_context(error: sea_orm::DbErr, context: &str) -> DbError {
+    let kind = database_error_kind(&error);
+    let message = format!("{context}: {error}");
+    match kind {
+        Some(kind) => DbError::database_operation_classified(message, kind),
+        None => DbError::database_operation(message),
+    }
+}
+
+/// Bounded transaction retry settings. Products choose which classified errors are retryable.
+#[derive(Clone, Debug)]
+pub struct TransactionRetryConfig {
+    /// Maximum number of retries after the initial transaction attempt.
+    pub max_retries: u32,
+    /// Exponential backoff base in milliseconds.
+    pub base_delay_ms: u64,
+    /// Maximum backoff delay in milliseconds.
+    pub max_delay_ms: u64,
+}
+
+impl Default for TransactionRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay_ms: 5,
+            max_delay_ms: 50,
+        }
+    }
+}
+
+fn transaction_delay(config: &TransactionRetryConfig, attempt: u32) -> Duration {
+    let multiplier = 1_u64.checked_shl(attempt).unwrap_or(u64::MAX);
+    Duration::from_millis(
+        config
+            .base_delay_ms
+            .saturating_mul(multiplier)
+            .min(config.max_delay_ms),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommitFailureAction {
+    Retry,
+    ReturnKnownFailure,
+    ReturnOutcomeUnknown,
+}
+
+fn commit_failure_action(
+    retryable: bool,
+    outcome_known_rolled_back: bool,
+    attempt: u32,
+    max_retries: u32,
+) -> CommitFailureAction {
+    if !outcome_known_rolled_back {
+        CommitFailureAction::ReturnOutcomeUnknown
+    } else if retryable {
+        if attempt < max_retries {
+            CommitFailureAction::Retry
+        } else {
+            CommitFailureAction::ReturnKnownFailure
+        }
+    } else {
+        CommitFailureAction::ReturnKnownFailure
+    }
+}
+
+fn commit_outcome_known_rolled_back(kind: Option<crate::DatabaseErrorKind>) -> bool {
+    matches!(
+        kind,
+        Some(crate::DatabaseErrorKind::Deadlock | crate::DatabaseErrorKind::SerializationFailure)
+    )
+}
+
+/// Runs a complete transaction boundary with bounded retries selected by the product.
+///
+/// The callback is rerun only after rollback or a commit failure known to have rolled back the
+/// transaction. Any commit error with an uncertain server-side outcome is returned as
+/// `DbError::CommitOutcomeUnknown`, because the server may have committed the transaction even
+/// though the client did not receive a success response.
+pub async fn with_transaction_retry<C, F, T, E, P>(
+    db: &C,
+    config: &TransactionRetryConfig,
+    mut operation: F,
+    should_retry: P,
+) -> std::result::Result<T, E>
+where
+    C: sea_orm::TransactionTrait,
+    F: for<'txn> FnMut(
+        &'txn C::Transaction,
+    )
+        -> Pin<Box<dyn Future<Output = std::result::Result<T, E>> + Send + 'txn>>,
+    E: From<DbError> + std::fmt::Display,
+    P: Fn(&E) -> bool,
+{
+    let mut attempt = 0;
+    loop {
+        let txn = match db.begin().await {
+            Ok(txn) => txn,
+            Err(error) => {
+                let error = E::from(database_operation_with_context(error, "begin transaction"));
+                if attempt < config.max_retries && should_retry(&error) {
+                    tokio::time::sleep(transaction_delay(config, attempt)).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Err(error);
+            }
+        };
+
+        match operation(&txn).await {
+            Ok(value) => match txn.commit().await {
+                Ok(()) => return Ok(value),
+                Err(error) => {
+                    let kind = database_error_kind(&error);
+                    let classified_error = E::from(match kind {
+                        Some(kind) => DbError::database_operation_classified(
+                            format!("commit transaction: {error}"),
+                            kind,
+                        ),
+                        None => DbError::database_operation(format!("commit transaction: {error}")),
+                    });
+                    match commit_failure_action(
+                        should_retry(&classified_error),
+                        commit_outcome_known_rolled_back(kind),
+                        attempt,
+                        config.max_retries,
+                    ) {
+                        CommitFailureAction::Retry => {
+                            tokio::time::sleep(transaction_delay(config, attempt)).await;
+                            attempt += 1;
+                            continue;
+                        }
+                        CommitFailureAction::ReturnKnownFailure => return Err(classified_error),
+                        CommitFailureAction::ReturnOutcomeUnknown => {
+                            return Err(E::from(DbError::commit_outcome_unknown(
+                                format!("commit transaction: {error}"),
+                                kind,
+                            )));
+                        }
+                    }
+                }
+            },
+            Err(error) => {
+                if let Err(rollback_error) = txn.rollback().await {
+                    tracing::warn!(
+                        callback_error = %error,
+                        rollback_error = %rollback_error,
+                        "transaction rollback failed after callback error"
+                    );
+                }
+                if attempt < config.max_retries && should_retry(&error) {
+                    tokio::time::sleep(transaction_delay(config, attempt)).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
 }
 
 /// Runs a transaction callback with consistent tracing and rollback guarding.
@@ -129,7 +291,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{rollback, with_transaction};
+    use super::{
+        CommitFailureAction, commit_failure_action, commit_outcome_known_rolled_back, rollback,
+        with_transaction,
+    };
     use crate::{DbError, connection::DatabaseConfig};
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
     use std::fmt;
@@ -240,6 +405,78 @@ mod tests {
             ProductError::Validation("business validation failed")
         );
         assert_eq!(count_rows(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn with_transaction_retry_restarts_after_callback_failure() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let db = sqlite_db().await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let config = super::TransactionRetryConfig {
+            max_retries: 2,
+            base_delay_ms: 0,
+            max_delay_ms: 0,
+        };
+        let result = {
+            let attempts = Arc::clone(&attempts);
+            super::with_transaction_retry(
+                &db,
+                &config,
+                move |_txn| {
+                    let attempts = Arc::clone(&attempts);
+                    Box::pin(async move {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                        if attempt < 2 {
+                            Err(DbError::database_operation("temporary failure"))
+                        } else {
+                            Ok::<_, DbError>("ok")
+                        }
+                    })
+                },
+                |error| matches!(error, DbError::DatabaseOperation(_)),
+            )
+            .await
+        };
+
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn commit_failure_action_preserves_known_exhausted_deadlocks() {
+        assert_eq!(
+            commit_failure_action(true, true, 0, 3),
+            CommitFailureAction::Retry
+        );
+        assert_eq!(
+            commit_failure_action(true, true, 3, 3),
+            CommitFailureAction::ReturnKnownFailure
+        );
+        assert_eq!(
+            commit_failure_action(false, false, 0, 3),
+            CommitFailureAction::ReturnOutcomeUnknown
+        );
+        assert_eq!(
+            commit_failure_action(true, false, 0, 3),
+            CommitFailureAction::ReturnOutcomeUnknown
+        );
+        assert_eq!(
+            commit_failure_action(false, true, 0, 3),
+            CommitFailureAction::ReturnKnownFailure
+        );
+        assert!(commit_outcome_known_rolled_back(Some(
+            crate::DatabaseErrorKind::Deadlock
+        )));
+        assert!(commit_outcome_known_rolled_back(Some(
+            crate::DatabaseErrorKind::SerializationFailure
+        )));
+        assert!(!commit_outcome_known_rolled_back(Some(
+            crate::DatabaseErrorKind::LockTimeout
+        )));
     }
 
     #[tokio::test]

@@ -683,6 +683,35 @@ let user = transaction::with_transaction(
   并只对 `database_error_kind(...)` 识别出的可重试错误重跑；已经执行外部对象存储、邮件、
   HTTP 或消息副作用的步骤必须放在事务重试边界之外。
 
+需要把完整事务边界纳入有限重试时，使用 `with_transaction_retry`。它重新执行的是完整的
+`begin -> callback -> commit`，回调失败后会先 rollback；产品通过 `should_retry` 明确选择
+可重试的错误分类：
+
+```rust
+let config = transaction::TransactionRetryConfig {
+    max_retries: 3,
+    base_delay_ms: 5,
+    max_delay_ms: 50,
+};
+use aster_forge_db::{DatabaseErrorKind, DbError};
+let file = transaction::with_transaction_retry(
+    db,
+    &config,
+    |txn| Box::pin(async move { file_repo::create(txn, input).await }),
+    |error: &DbError| {
+        error.database_error_kind() == Some(DatabaseErrorKind::Deadlock)
+    },
+)
+.await?;
+```
+
+未能确认事务已经回滚的 commit 错误会转换成 `DbError::CommitOutcomeUnknown`，表示服务端
+可能已经提交；即使产品的 `should_retry` 接受该分类，Forge 也不会重放结果不确定的事务。
+产品侧不应在这种错误上删除外部对象或无条件重放副作用。已确认回滚且被产品选为可重试
+的 commit 错误在重试耗尽后仍以其原始分类返回，例如 MySQL `1213` 表示事务已回滚，不会
+被误标为结果不确定。Forge 只提供事务机械层和错误分类，具体后端、重试种类、清理策略仍
+由产品决定。
+
 不要把校验错误、权限错误、协议错误等业务失败转换成 `DbError`。如果子系统有自己的错误类型，例如协议层错误，可以直接为该类型实现 `From<DbError>`，或者先转成产品错误再由子系统错误接收。
 
 ## 错误边界

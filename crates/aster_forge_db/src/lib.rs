@@ -190,6 +190,18 @@ pub enum DbError {
     /// A database query, transaction, or setup operation failed.
     #[error("database operation error: {0}")]
     DatabaseOperation(String),
+    /// A database operation error with a driver-native classification.
+    #[error("database operation error: {message}")]
+    DatabaseOperationClassified {
+        message: String,
+        kind: DatabaseErrorKind,
+    },
+    /// The commit response was lost after the transaction may have been committed.
+    #[error("database commit outcome unknown: {message}")]
+    CommitOutcomeUnknown {
+        message: String,
+        kind: Option<DatabaseErrorKind>,
+    },
     /// Retry loop exhausted without a final operation error.
     #[error("retry exhausted")]
     RetryExhausted,
@@ -209,6 +221,42 @@ impl DbError {
         Self::DatabaseOperation(error.to_string())
     }
 
+    /// Creates a database-operation error while preserving its driver-native classification.
+    pub fn database_operation_classified(
+        error: impl std::fmt::Display,
+        kind: DatabaseErrorKind,
+    ) -> Self {
+        Self::DatabaseOperationClassified {
+            message: error.to_string(),
+            kind,
+        }
+    }
+
+    /// Creates an error for a commit whose final server-side outcome is unknown.
+    pub fn commit_outcome_unknown(
+        error: impl std::fmt::Display,
+        kind: Option<DatabaseErrorKind>,
+    ) -> Self {
+        Self::CommitOutcomeUnknown {
+            message: error.to_string(),
+            kind,
+        }
+    }
+
+    /// Returns the driver-native classification, when one was available.
+    pub fn database_error_kind(&self) -> Option<DatabaseErrorKind> {
+        match self {
+            Self::DatabaseOperationClassified { kind, .. } => Some(*kind),
+            Self::CommitOutcomeUnknown { kind, .. } => *kind,
+            _ => None,
+        }
+    }
+
+    /// Returns whether this error came from a commit with an unknown final outcome.
+    pub fn commit_outcome_is_unknown(&self) -> bool {
+        matches!(self, Self::CommitOutcomeUnknown { .. })
+    }
+
     /// Creates a non-retryable error from a displayable error.
     pub fn non_retryable(error: impl std::fmt::Display) -> Self {
         Self::NonRetryable(error.to_string())
@@ -218,14 +266,19 @@ impl DbError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::DatabaseOperation(_) | Self::DatabaseConnection(_)
+            Self::DatabaseOperation(_)
+                | Self::DatabaseOperationClassified { .. }
+                | Self::DatabaseConnection(_)
         )
     }
 }
 
 impl From<sea_orm::DbErr> for DbError {
     fn from(value: sea_orm::DbErr) -> Self {
-        Self::database_operation(value)
+        match database_error_kind(&value) {
+            Some(kind) => Self::database_operation_classified(value, kind),
+            None => Self::database_operation(value),
+        }
     }
 }
 
@@ -305,6 +358,20 @@ mod tests {
         assert!(DbError::database_operation("locked").is_retryable());
         assert!(!DbError::RetryExhausted.is_retryable());
         assert!(!DbError::non_retryable("invalid config").is_retryable());
+    }
+
+    #[test]
+    fn commit_outcome_unknown_preserves_kind_and_marker() {
+        let error = DbError::commit_outcome_unknown(
+            "connection lost after COMMIT",
+            Some(DatabaseErrorKind::Deadlock),
+        );
+        assert!(error.commit_outcome_is_unknown());
+        assert_eq!(
+            error.database_error_kind(),
+            Some(DatabaseErrorKind::Deadlock)
+        );
+        assert!(!error.is_retryable());
     }
 
     #[test]
