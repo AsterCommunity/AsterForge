@@ -569,6 +569,29 @@ registry.register_bundle(aster_forge_db::database_health_component(
 - 事务内写入一般不要在外层盲目重试。
 - 已经产生外部副作用的流程不能简单重放。
 
+### 结构化数据库错误
+
+`database_error_kind(&sea_orm::DbErr)` 用于从 SeaORM/SQLx 驱动错误提取
+产品无关、适合基础设施决策的错误分类。目前支持：
+
+- `Deadlock`：MySQL `1213`、PostgreSQL SQLSTATE `40P01`；
+- `SerializationFailure`：PostgreSQL SQLSTATE `40001`；
+- `LockTimeout`：MySQL `1205`、PostgreSQL SQLSTATE `55P03`；
+- `UniqueConstraint`：SQLx `ErrorKind::UniqueViolation`；
+- `ForeignKeyConstraint`：SQLx `ErrorKind::ForeignKeyViolation`。
+
+分类读取驱动提供的错误号、SQLSTATE 或 SQLx 的跨后端 `ErrorKind`，不匹配本地化的错误文本。`DbErr::sql_err()`
+只覆盖常见唯一键和外键约束；deadlock 等其他错误仍应通过 `RuntimeErr::SqlxError`
+下钻到驱动错误。Forge 只提供分类，不会替产品决定是否重跑事务。
+
+```rust
+use aster_forge_db::{DatabaseErrorKind, database_error_kind};
+
+if database_error_kind(&db_error) == Some(DatabaseErrorKind::Deadlock) {
+    // 只有确认回调没有外部副作用时，产品侧才应开启有界事务重试。
+}
+```
+
 ## 分页、排序、搜索
 
 模块：
@@ -656,6 +679,9 @@ let user = transaction::with_transaction(
 - `with_transaction` 的回调错误是产品或子系统错误，会原样返回，不会包装成 `DbError`。
 - `with_transaction` 的错误类型需要满足 `E: From<DbError> + std::fmt::Display`，这样 commit/begin 失败可以进入产品错误边界，rollback 日志也能记录回调错误。
 - 回调失败后 rollback 如果也失败，函数仍然返回原始回调错误，同时记录 rollback 失败日志；不要用 rollback 失败覆盖业务失败。
+- `with_transaction` 不会自动重跑回调。产品需要重试时，应在完整事务边界外重新 begin，
+  并只对 `database_error_kind(...)` 识别出的可重试错误重跑；已经执行外部对象存储、邮件、
+  HTTP 或消息副作用的步骤必须放在事务重试边界之外。
 
 不要把校验错误、权限错误、协议错误等业务失败转换成 `DbError`。如果子系统有自己的错误类型，例如协议层错误，可以直接为该类型实现 `From<DbError>`，或者先转成产品错误再由子系统错误接收。
 
@@ -674,6 +700,10 @@ let user = transaction::with_transaction(
 
 - SQLite 内存库至少覆盖连接、事务和基础 query helper。
 - 产品 repository 要覆盖 token fence、状态转换和并发保护。
+- 错误分类至少覆盖 MySQL `1213`/`1205`、PostgreSQL `40P01`/`40001`/`55P03`、
+  unique/FK 约束和非驱动/普通业务错误不误判。
+- 事务重试测试要验证每次重试都会重新 begin，回调失败会 rollback，达到上限后返回最后一个
+  数据库错误，并且非数据库错误不会进入重试。
 - shutdown 测试要确认 `DbHandles::close()` 被调用或错误被记录。
 
 ## 参考项目

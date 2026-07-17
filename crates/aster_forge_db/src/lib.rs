@@ -119,6 +119,68 @@ pub use system_config::{
 /// Result type returned by database helpers.
 pub type Result<T> = std::result::Result<T, DbError>;
 
+/// Database failure classes that are stable enough for infrastructure retry decisions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseErrorKind {
+    /// The database aborted the current transaction because of a deadlock.
+    Deadlock,
+    /// The database aborted the transaction because its serialization snapshot could not commit.
+    SerializationFailure,
+    /// The database rejected an operation after a lock wait timeout.
+    LockTimeout,
+    /// A unique or primary-key constraint rejected the operation.
+    UniqueConstraint,
+    /// A foreign-key constraint rejected the operation.
+    ForeignKeyConstraint,
+}
+
+/// Classifies driver-native database errors without relying on localized messages.
+pub fn database_error_kind(error: &sea_orm::DbErr) -> Option<DatabaseErrorKind> {
+    use sea_orm::{DbErr, RuntimeErr};
+
+    let sqlx_error = match error {
+        DbErr::Exec(RuntimeErr::SqlxError(error)) | DbErr::Query(RuntimeErr::SqlxError(error)) => {
+            error.as_ref()
+        }
+        _ => return None,
+    };
+    let sea_orm::sqlx::Error::Database(database_error) = sqlx_error else {
+        return None;
+    };
+
+    let mysql_number = database_error
+        .try_downcast_ref::<sea_orm::sqlx::mysql::MySqlDatabaseError>()
+        .map(sea_orm::sqlx::mysql::MySqlDatabaseError::number);
+    let postgres_code = database_error
+        .try_downcast_ref::<sea_orm::sqlx::postgres::PgDatabaseError>()
+        .map(sea_orm::sqlx::postgres::PgDatabaseError::code);
+    database_error_kind_from_signals(database_error.kind(), mysql_number, postgres_code)
+}
+
+fn database_error_kind_from_signals(
+    driver_kind: sea_orm::sqlx::error::ErrorKind,
+    mysql_number: Option<u16>,
+    postgres_code: Option<&str>,
+) -> Option<DatabaseErrorKind> {
+    use sea_orm::sqlx::error::ErrorKind;
+
+    match driver_kind {
+        ErrorKind::UniqueViolation => return Some(DatabaseErrorKind::UniqueConstraint),
+        ErrorKind::ForeignKeyViolation => return Some(DatabaseErrorKind::ForeignKeyConstraint),
+        _ => {}
+    }
+    match mysql_number {
+        Some(1205) => Some(DatabaseErrorKind::LockTimeout),
+        Some(1213) => Some(DatabaseErrorKind::Deadlock),
+        _ => match postgres_code {
+            Some("40P01") => Some(DatabaseErrorKind::Deadlock),
+            Some("40001") => Some(DatabaseErrorKind::SerializationFailure),
+            Some("55P03") => Some(DatabaseErrorKind::LockTimeout),
+            _ => None,
+        },
+    }
+}
+
 /// Errors returned by database helpers.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -169,7 +231,56 @@ impl From<sea_orm::DbErr> for DbError {
 
 #[cfg(test)]
 mod tests {
-    use super::DbError;
+    use super::{DatabaseErrorKind, DbError, database_error_kind_from_signals};
+    use sea_orm::sqlx::error::ErrorKind;
+
+    #[test]
+    fn database_error_kind_covers_common_driver_signals() {
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::Other, Some(1213), None),
+            Some(DatabaseErrorKind::Deadlock)
+        );
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::Other, Some(1205), None),
+            Some(DatabaseErrorKind::LockTimeout)
+        );
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::Other, None, Some("40P01")),
+            Some(DatabaseErrorKind::Deadlock)
+        );
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::Other, None, Some("40001")),
+            Some(DatabaseErrorKind::SerializationFailure)
+        );
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::Other, None, Some("55P03")),
+            Some(DatabaseErrorKind::LockTimeout)
+        );
+    }
+
+    #[test]
+    fn database_error_kind_prefers_cross_backend_constraint_kind() {
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::UniqueViolation, Some(1213), None),
+            Some(DatabaseErrorKind::UniqueConstraint)
+        );
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::ForeignKeyViolation, None, None),
+            Some(DatabaseErrorKind::ForeignKeyConstraint)
+        );
+    }
+
+    #[test]
+    fn database_error_kind_ignores_unknown_or_non_driver_signals() {
+        assert_eq!(
+            database_error_kind_from_signals(ErrorKind::Other, Some(9999), Some("99999")),
+            None
+        );
+        assert_eq!(
+            super::database_error_kind(&sea_orm::DbErr::Custom("not a driver error".to_string())),
+            None
+        );
+    }
 
     #[test]
     fn db_error_constructors_preserve_messages() {

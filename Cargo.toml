@@ -57,7 +57,7 @@ quote = "1"
 openidconnect = "4.0.1"
 rand = { version = "0.10.2", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
-redis = { version = "1.4.0", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+redis = { version = "1.4.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 reqwest = { version = "0.13", features = ["json"] }
 sea-orm = { version = "2.0.0-rc.43", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
 serde = { version = "1.0.228", features = ["derive"] }
