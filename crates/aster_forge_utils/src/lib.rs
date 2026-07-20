@@ -18,6 +18,7 @@
 )]
 
 pub mod avatar;
+pub mod backoff;
 pub mod bool_like;
 pub mod fs;
 pub mod html;

@@ -88,7 +88,7 @@ pub async fn connect_with_metrics(
 ) -> Result<DatabaseConnection> {
     let retry_config = retry::RetryConfig {
         max_retries: cfg.retry_count,
-        ..Default::default()
+        ..retry::RetryConfig::connection()
     };
     retry::with_retry(&retry_config, || {
         Box::pin(connect_once(cfg, metrics.clone()))
@@ -114,7 +114,7 @@ pub async fn connect_reader_for_writer_with_metrics(
 
     let retry_config = retry::RetryConfig {
         max_retries: cfg.retry_count,
-        ..Default::default()
+        ..retry::RetryConfig::connection()
     };
     let reader = retry::with_retry(&retry_config, || {
         connect_sqlite_reader_once(cfg, &url, metrics.clone())
@@ -157,11 +157,11 @@ async fn connect_once(
     let db = if is_sqlite {
         SqlxSqliteConnector::connect(opt)
             .await
-            .map_err(DbError::database_operation)?
+            .map_err(DbError::database_connection)?
     } else {
         Database::connect(opt)
             .await
-            .map_err(DbError::database_operation)?
+            .map_err(DbError::database_connection)?
     };
 
     let backend = db.get_database_backend();
@@ -169,18 +169,21 @@ async fn connect_once(
 
     if is_sqlite {
         tracing::info!(max_connections, "applying SQLite PRAGMA optimizations");
+        // PRAGMA failures classify through DbError::from: transient lock contention
+        // (SQLITE_BUSY while another process initializes the file) stays retryable,
+        // persistent failures (permissions, corrupt file) fail fast.
         db.execute_unprepared("PRAGMA journal_mode=WAL;")
             .await
-            .map_err(DbError::database_operation)?;
+            .map_err(DbError::from)?;
         db.execute_unprepared("PRAGMA busy_timeout=15000;")
             .await
-            .map_err(DbError::database_operation)?;
+            .map_err(DbError::from)?;
         db.execute_unprepared("PRAGMA synchronous=NORMAL;")
             .await
-            .map_err(DbError::database_operation)?;
+            .map_err(DbError::from)?;
         db.execute_unprepared("PRAGMA foreign_keys=ON;")
             .await
-            .map_err(DbError::database_operation)?;
+            .map_err(DbError::from)?;
     }
 
     let mut db = db;
@@ -217,7 +220,7 @@ async fn connect_sqlite_reader_once(
 
     let mut db = SqlxSqliteConnector::connect(opt)
         .await
-        .map_err(DbError::database_operation)?;
+        .map_err(DbError::database_connection)?;
     install_db_metrics(&mut db, metrics);
 
     tracing::info!(

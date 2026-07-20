@@ -67,6 +67,27 @@ pub fn parse_absolute_url(value: &str, label: &str) -> Result<Url> {
     })
 }
 
+/// Parses a required absolute HTTP or HTTPS URL with a host.
+///
+/// Paths, queries, and fragments are preserved. This is intended for ordinary
+/// navigation or redirect targets rather than base URLs used for path joining.
+pub fn parse_http_url(value: &str, label: &str) -> Result<Url> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(UtilsError::invalid_value(format!(
+            "{label} cannot be empty"
+        )));
+    }
+
+    let parsed = parse_absolute_url(normalized, label)?;
+    if !has_http_scheme(&parsed) || parsed.host_str().is_none() {
+        return Err(UtilsError::invalid_value(format!(
+            "{label} must use http or https and include a host"
+        )));
+    }
+    Ok(parsed)
+}
+
 /// Normalizes an HTTP base URL.
 ///
 /// Surrounding whitespace and trailing slashes are removed before parsing. The URL must be absolute,

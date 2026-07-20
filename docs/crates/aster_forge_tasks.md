@@ -48,7 +48,7 @@ aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge" }
 - `retry`：`TaskRetryClass` 和默认 retry delay。
 - `runtime`：periodic task、dispatch worker、`BackgroundTasks`。需要 `runtime` feature。
 - `runtime_metadata`：`RuntimeTaskDefinition`、`RegisteredRuntimeTaskKind`、`RuntimeTaskName<K>` 和 `runtime_task_registry!`。
-- `schedule`：`ScheduledTaskStore`、`ScheduledPeriodicTask`、`run_scheduled_periodic_task`。需要 `runtime` feature。
+- `schedule`：`ScheduledTaskStore`、`ScheduledPeriodicTask`、`run_scheduled_periodic_task`、`run_scheduled_claim_renewal_loop`。需要 `runtime` feature。
 - `spec`：typed task spec、payload/result codec、erased adapter。
 - `steps`：task step 状态。
 - `temp`：task/runtime 临时目录清理。
@@ -284,8 +284,17 @@ scheduled task claim    -> 防多个实例同时运行同一个计划触发点
 - 先通过 `ScheduledTaskStore::ensure_scheduled_task` 确保 catalog row 存在。
 - 用 `ScheduledTaskStore::claim_scheduled_task` 原子 claim 当前 due firing。
 - 只有 claim 成功的进程执行业务函数。
+- 业务函数执行期间，runner 按 `scheduled_claim_renew_interval(claim_ttl)`（TTL 的三分之一，下限 10ms）周期性调用 `renew_scheduled_task_claim` 延长 claim，任务运行超过 `claim_ttl` 也不会被其他实例重复认领执行。
 - 记录结果后用 `complete_scheduled_task` 推进 `next_run_at` 并释放 claim。
-- 如果进程在执行中崩溃，其他进程会在 `claim_ttl` 过期后重新 claim。
+- 如果进程在执行中崩溃，续约随之停止，其他进程会在 `claim_ttl` 过期后重新 claim——崩溃恢复语义不变。
+
+续约循环的错误语义和后台任务 heartbeat 对齐：
+
+- `Ok(false)` 表示 ownership 谓词（task id + owner id + claim 时间戳）不再匹配，即 firing 已被其他 runtime 认领，续约循环停止；任务体不会被中止，`complete_scheduled_task` 的 ownership 检查仍然是最后防线。
+- `Err(_)` 视为瞬时存储错误，记录 warn 后下一 tick 重试。
+- 续约失败永远不中止业务函数——产品任务体跑到一半被强制取消可能比偶发重复执行更危险。
+
+`ScheduledTaskDbStore::renew_claim` 只更新 `claim_expires_at`/`updated_at`，且谓词与 completion 相同：其他 runtime 已认领的 firing（新 owner 或更新的 `last_claimed_at`）无法被续约"复活"。过期但无人争抢的 row 可以被原 owner 续约续上，避免 DB 瞬时故障恢复后 firing 被重复执行。
 
 `aster_forge_db` 提供了默认的 `scheduled_tasks` 表和 `ScheduledTaskDbStore`。产品迁移应该调用：
 

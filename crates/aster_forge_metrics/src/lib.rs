@@ -31,6 +31,10 @@ pub mod prometheus;
 
 const ENABLED_BACKEND_COUNT: usize = cfg!(feature = "backend-prometheus") as usize;
 
+#[expect(
+    clippy::absurd_extreme_comparisons,
+    reason = "only one backend-* feature exists today so the guard is vacuous, but it must keep compiling until a second backend feature makes it meaningful"
+)]
 const _: () = assert!(
     ENABLED_BACKEND_COUNT <= 1,
     "aster_forge_metrics allows only one backend-* feature at a time"

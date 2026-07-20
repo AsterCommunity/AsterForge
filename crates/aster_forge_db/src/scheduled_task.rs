@@ -18,8 +18,8 @@ use sea_orm::{
 
 use crate::DbError;
 use aster_forge_tasks::{
-    ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,
-    ScheduledTaskCompletion,
+    ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRenewal,
+    ScheduledTaskClaimRequest, ScheduledTaskCompletion,
 };
 
 /// Scheduled task table name.
@@ -247,6 +247,13 @@ impl aster_forge_tasks::ScheduledTaskStore for ScheduledTaskDbStore {
         self.claim_due(request).await
     }
 
+    async fn renew_scheduled_task_claim(
+        &self,
+        renewal: ScheduledTaskClaimRenewal<'_>,
+    ) -> std::result::Result<bool, Self::Error> {
+        self.renew_claim(renewal).await
+    }
+
     async fn complete_scheduled_task(
         &self,
         completion: ScheduledTaskCompletion,
@@ -272,6 +279,11 @@ impl ScheduledTaskDbStore {
         request: ScheduledTaskClaimRequest<'_>,
     ) -> crate::Result<Option<ScheduledTaskClaim>> {
         claim_due(&self.db, request).await
+    }
+
+    /// Renews an owned claim while the task body is still running.
+    pub async fn renew_claim(&self, renewal: ScheduledTaskClaimRenewal<'_>) -> crate::Result<bool> {
+        renew_claim(&self.db, renewal).await
     }
 
     /// Completes a claimed firing and advances the next due timestamp.
@@ -403,6 +415,30 @@ async fn claim_due(
     }))
 }
 
+async fn renew_claim(
+    db: &DatabaseConnection,
+    renewal: ScheduledTaskClaimRenewal<'_>,
+) -> crate::Result<bool> {
+    validate_renewal(&renewal)?;
+    let claim_expires_at = renewal
+        .now
+        .checked_add_signed(chrono_duration_from_std(renewal.claim_ttl)?)
+        .ok_or_else(|| DbError::non_retryable("scheduled task claim expiry overflow"))?;
+    // The owner + claim-timestamp predicate matches completion: a firing another
+    // runtime reclaimed (new owner or newer last_claimed_at) can never be revived.
+    let update = Entity::update_many()
+        .col_expr(Column::ClaimExpiresAt, Expr::value(Some(claim_expires_at)))
+        .col_expr(Column::UpdatedAt, Expr::value(renewal.now))
+        .filter(Column::TaskId.eq(renewal.claim.task_id.clone()))
+        .filter(Column::ClaimOwnerId.eq(renewal.claim.owner_id.clone()))
+        .filter(Column::LastClaimedAt.eq(renewal.claim.claimed_at))
+        .exec(db)
+        .await
+        .map_err(DbError::from)?;
+
+    Ok(update.rows_affected == 1)
+}
+
 async fn complete_claim(
     db: &DatabaseConnection,
     completion: ScheduledTaskCompletion,
@@ -502,6 +538,21 @@ fn validate_completion(completion: &ScheduledTaskCompletion) -> crate::Result<()
     Ok(())
 }
 
+fn validate_renewal(renewal: &ScheduledTaskClaimRenewal<'_>) -> crate::Result<()> {
+    validate_non_empty("scheduled task owner id", &renewal.claim.owner_id)?;
+    validate_max_len(
+        "scheduled task owner id",
+        &renewal.claim.owner_id,
+        SCHEDULED_TASK_OWNER_ID_MAX_LEN,
+    )?;
+    if renewal.claim_ttl.is_zero() {
+        return Err(DbError::non_retryable(
+            "scheduled task claim TTL must not be zero",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_non_empty(name: &str, value: &str) -> crate::Result<()> {
     if value.trim().is_empty() {
         return Err(DbError::non_retryable(format!("{name} must not be empty")));
@@ -530,9 +581,10 @@ mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Schema};
 
     use super::{
-        Entity, ScheduledTaskCatalogEntry, ScheduledTaskClaimRequest, ScheduledTaskCompletion,
-        ScheduledTaskDbStore, create_scheduled_tasks_namespace_name_unique_index,
-        create_scheduled_tasks_next_run_index, create_scheduled_tasks_table,
+        Entity, ScheduledTaskCatalogEntry, ScheduledTaskClaimRenewal, ScheduledTaskClaimRequest,
+        ScheduledTaskCompletion, ScheduledTaskDbStore,
+        create_scheduled_tasks_namespace_name_unique_index, create_scheduled_tasks_next_run_index,
+        create_scheduled_tasks_table,
     };
 
     async fn sqlite_store() -> ScheduledTaskDbStore {
@@ -904,5 +956,178 @@ mod tests {
             .expect_err("non-advancing next run should be rejected");
 
         assert!(error.to_string().contains("must be after"));
+    }
+
+    #[tokio::test]
+    async fn renew_claim_extends_expiry_and_blocks_reclaim_while_fresh() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+        let claim = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim should succeed")
+            .expect("task should be due");
+
+        // Renew near the end of the original window: expiry moves to now+55.
+        assert!(
+            store
+                .renew_claim(ScheduledTaskClaimRenewal {
+                    claim: &claim,
+                    now: now + ChronoDuration::seconds(25),
+                    claim_ttl: std::time::Duration::from_secs(30),
+                })
+                .await
+                .expect("renewal should succeed")
+        );
+
+        // Past the original expiry, the renewed claim still blocks other runtimes.
+        let blocked = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-b",
+                now: now + ChronoDuration::seconds(40),
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim check should succeed");
+        assert!(blocked.is_none());
+
+        // Past the renewed expiry, the firing is reclaimable again.
+        let reclaimed = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-b",
+                now: now + ChronoDuration::seconds(56),
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("expired claim should be reclaimable")
+            .expect("task should still be due");
+        assert_eq!(reclaimed.owner_id, "runtime-b");
+    }
+
+    #[tokio::test]
+    async fn renew_claim_requires_matching_owner_and_claim_timestamp() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+        let claim = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim should succeed")
+            .expect("task should be due");
+
+        let mut wrong_owner = claim.clone();
+        wrong_owner.owner_id = "runtime-b".to_string();
+        assert!(
+            !store
+                .renew_claim(ScheduledTaskClaimRenewal {
+                    claim: &wrong_owner,
+                    now: now + ChronoDuration::seconds(10),
+                    claim_ttl: std::time::Duration::from_secs(30),
+                })
+                .await
+                .expect("wrong owner renewal should query")
+        );
+
+        let mut wrong_claim_time = claim.clone();
+        wrong_claim_time.claimed_at += ChronoDuration::seconds(1);
+        assert!(
+            !store
+                .renew_claim(ScheduledTaskClaimRenewal {
+                    claim: &wrong_claim_time,
+                    now: now + ChronoDuration::seconds(10),
+                    claim_ttl: std::time::Duration::from_secs(30),
+                })
+                .await
+                .expect("wrong claim timestamp renewal should query")
+        );
+    }
+
+    #[tokio::test]
+    async fn renew_claim_after_expiry_without_contestation_revives_claim() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+        let claim = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim should succeed")
+            .expect("task should be due");
+
+        // The ownership row is untouched past expiry, so a stalled worker that
+        // recovers before anyone reclaims resumes its own claim instead of
+        // abandoning the firing to a duplicate execution.
+        assert!(
+            store
+                .renew_claim(ScheduledTaskClaimRenewal {
+                    claim: &claim,
+                    now: now + ChronoDuration::seconds(40),
+                    claim_ttl: std::time::Duration::from_secs(30),
+                })
+                .await
+                .expect("late renewal should succeed while the row is uncontested")
+        );
+    }
+
+    #[tokio::test]
+    async fn renew_claim_rejects_zero_ttl() {
+        let store = sqlite_store().await;
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        store
+            .ensure_task(entry(now))
+            .await
+            .expect("scheduled task should insert");
+        let claim = store
+            .claim_due(ScheduledTaskClaimRequest {
+                namespace: "aster_yggdrasil",
+                task_name: "audit-cleanup",
+                owner_id: "runtime-a",
+                now,
+                claim_ttl: std::time::Duration::from_secs(30),
+            })
+            .await
+            .expect("claim should succeed")
+            .expect("task should be due");
+
+        let error = store
+            .renew_claim(ScheduledTaskClaimRenewal {
+                claim: &claim,
+                now: now + ChronoDuration::seconds(10),
+                claim_ttl: std::time::Duration::ZERO,
+            })
+            .await
+            .expect_err("zero TTL renewal should be rejected");
+        assert!(error.to_string().contains("must not be zero"));
     }
 }

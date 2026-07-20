@@ -245,9 +245,22 @@ async fn exchange_microsoft_callback(
             "OIDC ID token verification failed",
             ExternalAuthError::auth_invalid_credentials,
         )?;
-    let profile = profile_from_id_token(claims)?;
+    let mut profile = profile_from_id_token(claims)?;
+    apply_microsoft_profile_overrides(&mut profile);
     validate_microsoft_token_issuer(provider.require_issuer_url()?, &profile.identity_namespace)?;
     Ok(profile)
+}
+
+/// Applies Microsoft-specific trust overrides to the extracted profile.
+///
+/// Microsoft ID tokens may carry `email` and `email_verified` claims, but in multi-tenant
+/// deployments (`common` / `organizations`) any Entra tenant administrator controls the
+/// claims their tenant emits through claims-mapping policies. The flag therefore says
+/// nothing about mailbox ownership, and products must never auto-link accounts on it. The
+/// descriptor already declares `supports_email_verified_claim: false`; enforce it here so
+/// the untrusted claim can never pass through.
+fn apply_microsoft_profile_overrides(profile: &mut ExternalAuthProfile) {
+    profile.email_verified = false;
 }
 
 async fn test_microsoft_provider(
@@ -599,6 +612,25 @@ mod tests {
             avatar_url_claim: Some("picture".to_string()),
             outbound_http_user_agent: None,
         }
+    }
+
+    #[test]
+    fn microsoft_profile_overrides_force_email_unverified() {
+        // Multi-tenant Entra tokens can carry attacker-controlled `email_verified: true`
+        // claims; the override must strip them regardless of what the token said.
+        let mut profile = ExternalAuthProfile {
+            identity_namespace: format!("https://login.microsoftonline.com/{TENANT_ID}/v2.0"),
+            subject: "subject".to_string(),
+            email: Some("user@example.com".to_string()),
+            email_verified: true,
+            display_name: Some("User".to_string()),
+            preferred_username: None,
+        };
+
+        apply_microsoft_profile_overrides(&mut profile);
+
+        assert!(!profile.email_verified);
+        assert_eq!(profile.email.as_deref(), Some("user@example.com"));
     }
 
     #[test]

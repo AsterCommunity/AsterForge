@@ -2,7 +2,9 @@
 //!
 //! Operations are bounded by short timeouts so a slow Redis instance does not stall request paths.
 //! When Redis becomes unavailable, writes are mirrored into an in-memory fallback and availability
-//! checks are rate-limited until the cooldown expires.
+//! checks are rate-limited until the cooldown expires. Only connectivity failures and transient
+//! server states open the fallback circuit; deterministic command errors (for example WRONGTYPE)
+//! are logged and fall back for that single operation without degrading the backend.
 
 use super::{CacheBackend, CacheError, Result, memory::MemoryCache};
 use async_trait::async_trait;
@@ -232,6 +234,14 @@ where
     }
 
     fn mark_redis_error(&self, operation: &'static str, error: &redis::RedisError) {
+        if !redis_error_indicates_unavailability(error) {
+            tracing::warn!(
+                operation,
+                error = %error,
+                "redis cache command error; leaving fallback circuit closed"
+            );
+            return;
+        }
         if self
             .availability
             .mark_failure(Instant::now(), REDIS_CACHE_FALLBACK_COOLDOWN)
@@ -320,6 +330,13 @@ where
 
     async fn set_bytes(&self, key: &str, value: Vec<u8>, ttl_secs: Option<u64>) {
         let ttl = ttl_secs.unwrap_or(self.default_ttl);
+        if ttl == 0 {
+            // Redis rejects SETEX with a zero TTL. An immediate delete produces the
+            // documented "expires immediately" observable state without issuing an
+            // invalid command.
+            self.delete(key).await;
+            return;
+        }
         if self
             .redis_operation("set", self.redis.set_ex(key, value.clone(), ttl))
             .await
@@ -333,6 +350,20 @@ where
 
     async fn set_bytes_if_absent(&self, key: &str, value: Vec<u8>, ttl_secs: Option<u64>) -> bool {
         let ttl = ttl_secs.unwrap_or(self.default_ttl);
+        if ttl == 0 {
+            // A zero-TTL insert expires immediately, so the outcome only depends on
+            // whether a live value exists; nothing is retained either way.
+            return match self
+                .redis_operation("set_if_absent", self.redis.get(key))
+                .await
+            {
+                Some(existing) => {
+                    self.delete_local(key).await;
+                    existing.is_none()
+                }
+                None => self.set_local_bytes_if_absent(key, value, Some(0)).await,
+            };
+        }
         match self
             .redis_operation(
                 "set_if_absent",
@@ -442,6 +473,24 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Returns whether a Redis error indicates the server is unreachable or in a transient
+/// state, as opposed to a deterministic command, data, or configuration error that a
+/// fallback circuit cannot fix.
+fn redis_error_indicates_unavailability(error: &redis::RedisError) -> bool {
+    match error.kind() {
+        redis::ErrorKind::Io | redis::ErrorKind::ClusterConnectionNotFound => true,
+        redis::ErrorKind::Server(kind) => matches!(
+            kind,
+            redis::ServerErrorKind::BusyLoading
+                | redis::ServerErrorKind::TryAgain
+                | redis::ServerErrorKind::ClusterDown
+                | redis::ServerErrorKind::MasterDown
+                | redis::ServerErrorKind::ReadOnly
+        ),
+        _ => false,
+    }
+}
+
 #[derive(Default)]
 struct RedisAvailability {
     unavailable_until: Mutex<Option<Instant>>,
@@ -498,6 +547,7 @@ mod tests {
         entries: Mutex<HashMap<String, Vec<u8>>>,
         scan_pages: Mutex<HashMap<u64, Vec<String>>>,
         fail_operations: AtomicBool,
+        fail_command_errors: AtomicBool,
         next_scan_cursor: AtomicU64,
         get_calls: AtomicUsize,
         take_calls: AtomicUsize,
@@ -512,6 +562,10 @@ mod tests {
     impl FakeRedisClient {
         fn set_fail_operations(&self, fail: bool) {
             self.fail_operations.store(fail, Ordering::SeqCst);
+        }
+
+        fn set_fail_command_errors(&self, fail: bool) {
+            self.fail_command_errors.store(fail, Ordering::SeqCst);
         }
 
         fn insert(&self, key: &str, value: &[u8]) {
@@ -565,6 +619,11 @@ mod tests {
                 Err(redis::RedisError::from((
                     redis::ErrorKind::Io,
                     "fake redis unavailable",
+                )))
+            } else if self.fail_command_errors.load(Ordering::SeqCst) {
+                Err(redis::RedisError::from((
+                    redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError),
+                    "ERR invalid expire time in 'setex' command",
                 )))
             } else {
                 Ok(())
@@ -1109,5 +1168,208 @@ mod tests {
                 .contains("redis cache is in fallback mode")
         );
         assert_eq!(redis.ping_call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_set_deletes_key_instead_of_issuing_set_ex() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        redis.insert("ephemeral", b"old");
+
+        cache.set_bytes("ephemeral", b"new".to_vec(), Some(0)).await;
+
+        assert_eq!(
+            redis.set_call_count(),
+            0,
+            "zero-TTL set must not issue SETEX"
+        );
+        assert_eq!(redis.delete_call_count(), 1);
+        assert!(!redis.contains_key("ephemeral"));
+        assert!(
+            cache.availability.unavailable_for(Instant::now()).is_none(),
+            "zero-TTL set must not open the fallback circuit"
+        );
+        assert_eq!(cache.get_bytes("ephemeral").await, None);
+        assert_eq!(
+            redis.get_call_count(),
+            1,
+            "circuit stays closed, so the read reaches Redis"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_set_if_absent_reports_absence_without_storing() {
+        let (cache, redis) = cache_with_fake_redis(60);
+
+        assert!(
+            cache
+                .set_bytes_if_absent("nonce", b"v".to_vec(), Some(0))
+                .await
+        );
+        assert_eq!(
+            redis.set_nx_call_count(),
+            0,
+            "zero-TTL insert must not issue SET NX EX"
+        );
+        assert!(!redis.contains_key("nonce"));
+        assert_eq!(cache.get_bytes("nonce").await, None);
+        assert!(
+            cache
+                .set_bytes_if_absent("nonce", b"v2".to_vec(), Some(0))
+                .await,
+            "nothing is retained, so a second zero-TTL insert also succeeds"
+        );
+
+        redis.insert("live", b"real");
+        assert!(
+            !cache
+                .set_bytes_if_absent("live", b"v".to_vec(), Some(0))
+                .await,
+            "an existing live value rejects the insert"
+        );
+        assert_eq!(cache.get_bytes("live").await, Some(b"real".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_set_if_absent_with_open_circuit_uses_local_semantics() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        open_fallback_circuit(&cache);
+
+        assert!(
+            cache
+                .set_bytes_if_absent("nonce", b"v".to_vec(), Some(0))
+                .await
+        );
+        assert_eq!(
+            redis.get_call_count(),
+            0,
+            "circuit-open existence check should skip Redis"
+        );
+        assert_eq!(cache.get_bytes("nonce").await, None);
+        assert!(
+            cache
+                .set_bytes_if_absent("nonce", b"v2".to_vec(), Some(0))
+                .await,
+            "local zero-TTL entries expire immediately and stay insertable"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_set_with_open_circuit_only_clears_local_shadow() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        open_fallback_circuit(&cache);
+        cache.set_bytes("shadow", b"local".to_vec(), Some(60)).await;
+
+        cache.set_bytes("shadow", b"gone".to_vec(), Some(0)).await;
+
+        assert_eq!(
+            redis.delete_call_count(),
+            0,
+            "circuit-open zero-TTL set should skip the Redis delete"
+        );
+        assert_eq!(cache.local.get_bytes("shadow").await, None);
+        assert_eq!(cache.get_bytes("shadow").await, None);
+    }
+
+    #[tokio::test]
+    async fn zero_default_ttl_treats_missing_ttl_as_immediate_expiry() {
+        let (cache, redis) = cache_with_fake_redis(0);
+
+        cache.set_bytes("key", b"value".to_vec(), None).await;
+
+        assert_eq!(redis.set_call_count(), 0);
+        assert_eq!(redis.delete_call_count(), 1);
+        assert_eq!(cache.get_bytes("key").await, None);
+    }
+
+    #[tokio::test]
+    async fn command_error_falls_back_for_single_operation_without_opening_circuit() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        redis.set_fail_command_errors(true);
+
+        cache
+            .set_bytes("session", b"fallback".to_vec(), Some(60))
+            .await;
+
+        assert_eq!(redis.set_call_count(), 1);
+        assert_eq!(
+            cache.local.get_bytes("session").await,
+            Some(b"fallback".to_vec()),
+            "the failed operation still falls back locally"
+        );
+        assert!(
+            cache.availability.unavailable_for(Instant::now()).is_none(),
+            "command errors must not open the fallback circuit"
+        );
+
+        redis.set_fail_command_errors(false);
+        redis.insert("session", b"redis-value");
+        assert_eq!(
+            cache.get_bytes("session").await,
+            Some(b"redis-value".to_vec()),
+            "later operations keep reaching Redis"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_server_error_opens_fallback_circuit() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        redis.set_fail_operations(true);
+
+        cache
+            .set_bytes("session", b"value".to_vec(), Some(60))
+            .await;
+
+        assert!(
+            cache.availability.unavailable_for(Instant::now()).is_some(),
+            "I/O errors still open the fallback circuit"
+        );
+    }
+
+    #[test]
+    fn redis_error_indicates_unavailability_classifies_error_kinds() {
+        use redis::{ErrorKind, ServerErrorKind};
+
+        fn error(kind: ErrorKind) -> redis::RedisError {
+            redis::RedisError::from((kind, "fake error"))
+        }
+
+        for kind in [
+            ErrorKind::Io,
+            ErrorKind::ClusterConnectionNotFound,
+            ErrorKind::Server(ServerErrorKind::BusyLoading),
+            ErrorKind::Server(ServerErrorKind::TryAgain),
+            ErrorKind::Server(ServerErrorKind::ClusterDown),
+            ErrorKind::Server(ServerErrorKind::MasterDown),
+            ErrorKind::Server(ServerErrorKind::ReadOnly),
+        ] {
+            assert!(
+                super::redis_error_indicates_unavailability(&error(kind)),
+                "{kind:?} should indicate unavailability"
+            );
+        }
+
+        for kind in [
+            ErrorKind::Server(ServerErrorKind::ResponseError),
+            ErrorKind::Server(ServerErrorKind::ExecAbort),
+            ErrorKind::Server(ServerErrorKind::NoScript),
+            ErrorKind::Server(ServerErrorKind::Moved),
+            ErrorKind::Server(ServerErrorKind::Ask),
+            ErrorKind::Server(ServerErrorKind::CrossSlot),
+            ErrorKind::Server(ServerErrorKind::NotBusy),
+            ErrorKind::Server(ServerErrorKind::NoSub),
+            ErrorKind::Server(ServerErrorKind::NoPerm),
+            ErrorKind::AuthenticationFailed,
+            ErrorKind::InvalidClientConfig,
+            ErrorKind::UnexpectedReturnType,
+            ErrorKind::Client,
+            ErrorKind::Extension,
+            ErrorKind::RESP3NotSupported,
+            ErrorKind::Parse,
+        ] {
+            assert!(
+                !super::redis_error_indicates_unavailability(&error(kind)),
+                "{kind:?} should not indicate unavailability"
+            );
+        }
     }
 }

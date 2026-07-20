@@ -10,6 +10,7 @@ publish = false
 
 [features]
 default = ["memory"]
+bloom = ["dep:bloomfilter", "dep:parking_lot"]
 memory = []
 redis = ["memory", "dep:redis"]
 runtime-component = ["dep:aster_forge_runtime"]
@@ -17,8 +18,10 @@ runtime-component = ["dep:aster_forge_runtime"]
 [dependencies]
 aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
 async-trait.workspace = true
+bloomfilter = { workspace = true, optional = true }
 dashmap.workspace = true
 moka.workspace = true
+parking_lot = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -27,10 +30,22 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+aster_forge_test = { path = "../aster_forge_test", features = ["redis"] }
+criterion.workspace = true
 futures.workspace = true
-testcontainers.workspace = true
+
+[[bench]]
+name = "cache"
+path = "benches/cache.rs"
+harness = false
+required-features = ["bloom", "memory"]
 
 [[test]]
 name = "cache"
 path = "tests/cache.rs"
 required-features = ["memory"]
+
+[[test]]
+name = "redis_container"
+path = "tests/redis_container.rs"
+required-features = ["redis"]

@@ -18,6 +18,7 @@
 - URL 解析、origin/base URL 规范化。
 - public-site origin 列表解析和 origin/path 拼接。
 - 不可信 XML 的非递归结构校验、嵌套深度限制和 DTD/ENTITY 拒绝。
+- 指数退避的纯机械计算和随机抖动；重试条件、取消、日志与业务状态仍由调用方负责。
 
 不适合放在这里的内容：
 
@@ -34,7 +35,8 @@
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-当前没有 feature flag。
+当前没有 feature flag。退避模块默认可用，使用 `rand` 生成抖动；需要可重复测试时使用
+确定性的 `apply_jitter`。
 
 ## 模块
 
@@ -55,6 +57,19 @@ Gravatar。
 ### bool_like
 
 `parse_bool_like(value)` 支持常见布尔字符串。适合环境变量和兼容配置读取。
+
+### backoff
+
+主要 API：
+
+- `exponential_delay(initial_delay, retry_index)`：按 0-based 索引计算未封顶的指数延迟，使用饱和加法。
+- `cap_delay(delay, max_delay)`：应用硬上限。
+- `apply_jitter(delay, percent)`：应用确定性的百分比，适合测试和明确的策略组合。
+- `randomized_jitter(delay, min_percent, max_percent)`：在包含边界内采样百分比并应用抖动。
+
+这些函数只处理时间算术。数据库重试、配置订阅重连和事务重试可以复用它们，但必须在
+产品或领域 crate 中保留各自的 retryability、sleep/shutdown、attempt 起点、cap/jitter
+顺序、稳定连接重置和观测语义。不要把它们包装成一个会吞掉这些差异的万能 retry runner。
 
 ### fs
 

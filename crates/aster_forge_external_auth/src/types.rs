@@ -208,7 +208,9 @@ pub fn serialize_external_auth_provider_options(
 
 #[cfg(test)]
 mod tests {
-    use super::{EXTERNAL_AUTH_TYPE_STORAGE_LEN, ExternalAuthProtocol, ExternalAuthProviderKind};
+    #[cfg(feature = "sea-orm")]
+    use super::EXTERNAL_AUTH_TYPE_STORAGE_LEN;
+    use super::{ExternalAuthProtocol, ExternalAuthProviderKind};
 
     #[test]
     fn provider_kind_parses_canonical_and_legacy_values() {

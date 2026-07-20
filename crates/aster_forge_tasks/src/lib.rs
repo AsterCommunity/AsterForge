@@ -86,9 +86,9 @@ pub use runtime_metadata::{RegisteredRuntimeTaskKind, RuntimeTaskDefinition, Run
 #[cfg(feature = "runtime")]
 pub use schedule::{
     LeasedScheduledRuntimeConfig, ScheduledPeriodicTask, ScheduledRuntimeTaskGroup,
-    ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,
-    ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
-    run_scheduled_periodic_task,
+    ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRenewal,
+    ScheduledTaskClaimRequest, ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
+    run_scheduled_claim_renewal_loop, run_scheduled_periodic_task, scheduled_claim_renew_interval,
 };
 pub use spec::{
     BackgroundTaskSpec, ErasedBackgroundTaskSpec, TaskProcessFuture, TaskSpecAdapter,

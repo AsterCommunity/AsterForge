@@ -16,6 +16,8 @@
     )
 )]
 
+#[cfg(feature = "bloom")]
+pub mod bloom;
 #[cfg(feature = "runtime-component")]
 mod health;
 #[cfg(feature = "memory")]
@@ -137,8 +139,15 @@ pub trait CacheBackend: Send + Sync {
     /// Atomically reads and removes a raw byte value by key when supported.
     async fn take_bytes(&self, key: &str) -> Option<Vec<u8>>;
     /// Writes a raw byte value by key with an optional TTL in seconds.
+    ///
+    /// `None` uses the backend default TTL. A TTL of `0` expires immediately, so the
+    /// observable result matches deleting the key (Redis rejects `SETEX 0`; backends
+    /// normalize the contract instead of issuing an invalid command).
     async fn set_bytes(&self, key: &str, value: Vec<u8>, ttl_secs: Option<u64>);
     /// Writes a raw byte value only when the key is absent.
+    ///
+    /// With a TTL of `0` the value expires immediately, so the call reports whether a
+    /// live value existed and retains nothing either way.
     async fn set_bytes_if_absent(&self, key: &str, value: Vec<u8>, ttl_secs: Option<u64>) -> bool;
     /// Removes a key from the cache.
     async fn delete(&self, key: &str);

@@ -137,6 +137,20 @@ fn runtime_provider_config(
 
 不要为 `start_authorization()`、`exchange_callback()` 或 `test_provider()` 分别增加产品侧纯转发函数。
 
+## Profile 信任语义
+
+`ExternalAuthProfile.email_verified` 的最终值由 provider driver 决定，不是 id token 原始声明的透传：
+
+- **GitHub**：只有 emails API 返回的 verified primary email 才把 `email_verified` 置 `true`。
+- **QQ**：永远是 `false`（QQ 不提供邮箱语义）。
+- **Microsoft**：永远是 `false`。多租户 Entra（`common`/`organizations`）下，任何租户管理员都能通过
+  claims-mapping policy 控制自己租户签发的 `email`/`email_verified` 声明，该标志不代表邮箱所有权；
+  driver 在提取 profile 后强制覆盖，即使 token 带着 `email_verified: true` 也不会穿透。
+- **Google / 通用 OIDC**：采用 id token 标准 `email_verified` 声明（descriptor 的
+  `supports_email_verified_claim: true`），产品应自行评估所接 IdP 的声明可信度。
+
+产品侧只有 `email_verified == true` 时才应执行"已验证邮箱自动绑定账号"这类敏感动作。
+
 ## 规范化规则
 
 模块：`aster_forge_external_auth::normalize`

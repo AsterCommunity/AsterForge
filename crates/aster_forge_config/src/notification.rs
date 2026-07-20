@@ -5,13 +5,20 @@
 //! authoritative store. This module defines that signal and provides both an
 //! in-memory notifier for tests/single-process deployments and an optional
 //! Redis pub/sub transport for multi-process deployments.
+//!
+//! Subscription loops are supervised: subscribe failures, transport stream
+//! endings, and local broadcast lag all trigger a bounded backoff, a fresh
+//! subscription, and one authoritative reconcile, so a Redis hiccup or a slow
+//! reload handler cannot permanently kill cross-process synchronization. The
+//! loop only exits when its shutdown token is cancelled.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::{ConfigCoreError, Result};
@@ -98,11 +105,26 @@ impl ConfigChangeEvent {
 /// Subscription returned by config notifiers.
 pub struct ConfigNotification {
     receiver: broadcast::Receiver<ConfigChangeEvent>,
+    _task: Option<ConfigNotificationTask>,
 }
 
 impl ConfigNotification {
     fn new(receiver: broadcast::Receiver<ConfigChangeEvent>) -> Self {
-        Self { receiver }
+        Self {
+            receiver,
+            _task: None,
+        }
+    }
+
+    #[cfg(feature = "redis-pubsub")]
+    fn with_task(
+        receiver: broadcast::Receiver<ConfigChangeEvent>,
+        task: tokio::task::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            receiver,
+            _task: Some(ConfigNotificationTask { task }),
+        }
     }
 
     /// Waits for the next notification.
@@ -111,6 +133,16 @@ impl ConfigNotification {
             .recv()
             .await
             .map_err(|error| ConfigCoreError::notification(error.to_string()))
+    }
+}
+
+struct ConfigNotificationTask {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ConfigNotificationTask {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
 
@@ -169,6 +201,52 @@ impl ConfigReloadObservation {
     }
 }
 
+/// Connection lifecycle state for a config-sync subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSyncConnectionState {
+    /// The initial subscription connected successfully.
+    Connected,
+    /// An initial connection attempt failed or an active subscription ended.
+    Disconnected,
+    /// The supervisor is waiting before another subscription attempt.
+    Reconnecting,
+    /// A subscription was re-established after at least one failure.
+    Recovered,
+}
+
+impl ConfigSyncConnectionState {
+    /// Returns the stable metrics label for this state.
+    pub const fn as_label(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+            Self::Reconnecting => "reconnecting",
+            Self::Recovered => "recovered",
+        }
+    }
+}
+
+/// Low-cardinality observation emitted for config-sync connection transitions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigSyncConnectionObservation {
+    /// Connection lifecycle state.
+    pub state: ConfigSyncConnectionState,
+    /// One-based reconnect attempt number, or zero outside reconnect attempts.
+    pub reconnect_attempt: u32,
+    /// Planned backoff for a reconnect attempt, or zero for other states.
+    pub backoff_seconds: f64,
+}
+
+impl ConfigSyncConnectionObservation {
+    fn new(state: ConfigSyncConnectionState, reconnect_attempt: u32, backoff: Duration) -> Self {
+        Self {
+            state,
+            reconnect_attempt,
+            backoff_seconds: backoff.as_secs_f64(),
+        }
+    }
+}
+
 /// Receives config reload observability events.
 pub trait ConfigReloadObserver: Send + Sync {
     /// Records one reload observation.
@@ -181,6 +259,38 @@ where
 {
     fn observe_config_reload(&self, observation: ConfigReloadObservation) {
         self(observation);
+    }
+}
+
+/// Receives config-sync connection lifecycle observations.
+pub trait ConfigSyncConnectionObserver: Send + Sync {
+    /// Records one connection transition.
+    fn observe_config_sync_connection(&self, observation: ConfigSyncConnectionObservation);
+}
+
+impl<F> ConfigSyncConnectionObserver for F
+where
+    F: Fn(ConfigSyncConnectionObservation) + Send + Sync,
+{
+    fn observe_config_sync_connection(&self, observation: ConfigSyncConnectionObservation) {
+        self(observation);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConfigReloadReconnectPolicy {
+    initial_delay: Duration,
+    max_delay: Duration,
+    stable_reset_after: Duration,
+}
+
+impl Default for ConfigReloadReconnectPolicy {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(30),
+            stable_reset_after: Duration::from_secs(30),
+        }
     }
 }
 
@@ -394,6 +504,10 @@ where
 /// notification only tells this process to reload from its authoritative store.
 /// Reload errors are logged and the loop keeps listening, because one failed DB
 /// read should not permanently break cross-process synchronization.
+///
+/// The loop is supervised like [`run_config_reload_supervisor`] with a no-op
+/// reconcile: subscription failures, stream endings, and broadcast lag trigger
+/// a bounded reconnect instead of exiting.
 pub async fn run_config_reload_worker<N, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -428,56 +542,308 @@ where
     F: FnMut(ConfigReloadMessage) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let mut subscription = notifier.subscribe().await?;
+    let mut reconcile = || async { Ok(()) };
+    run_config_reload_supervisor_inner(
+        notifier,
+        config,
+        ConfigReloadReconnectPolicy::default(),
+        shutdown,
+        &mut reconcile,
+        &mut reload,
+        observer,
+        None,
+    )
+    .await
+}
+
+/// Runs a reconnecting reload subscription with authoritative reconciliation.
+///
+/// `reconcile` runs after every successful subscription, including the initial
+/// connection. This closes the race between the product's startup snapshot load
+/// and the moment pub/sub begins receiving notifications. After a disconnect it
+/// also repairs any changes missed while the transient transport was unavailable.
+///
+/// A disconnect is any of: subscribe failure, transport stream error or ending,
+/// and local broadcast lag (the receiver fell behind and events were dropped).
+/// Each one is observed, waited out with bounded exponential backoff (250 ms
+/// initial, 30 s cap, jittered; the failure counter resets after a subscription
+/// stays stable for 30 s), then followed by a fresh subscription and reconcile.
+/// The loop only returns when `shutdown` is cancelled.
+pub async fn run_config_reload_supervisor<N, R, RFut, F, Fut>(
+    notifier: Arc<N>,
+    config: ConfigReloadWorkerConfig,
+    shutdown: CancellationToken,
+    reconcile: R,
+    reload: F,
+) -> Result<()>
+where
+    N: ConfigChangeNotifier + ?Sized,
+    R: FnMut() -> RFut,
+    RFut: Future<Output = Result<()>>,
+    F: FnMut(ConfigReloadMessage) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    run_config_reload_supervisor_with_observers(
+        notifier, config, shutdown, reconcile, reload, None, None,
+    )
+    .await
+}
+
+/// Runs a reconnecting reload subscription and reports reload and connection observations.
+pub async fn run_config_reload_supervisor_with_observers<N, R, RFut, F, Fut>(
+    notifier: Arc<N>,
+    config: ConfigReloadWorkerConfig,
+    shutdown: CancellationToken,
+    mut reconcile: R,
+    mut reload: F,
+    reload_observer: Option<&dyn ConfigReloadObserver>,
+    connection_observer: Option<&dyn ConfigSyncConnectionObserver>,
+) -> Result<()>
+where
+    N: ConfigChangeNotifier + ?Sized,
+    R: FnMut() -> RFut,
+    RFut: Future<Output = Result<()>>,
+    F: FnMut(ConfigReloadMessage) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    run_config_reload_supervisor_inner(
+        notifier,
+        config,
+        ConfigReloadReconnectPolicy::default(),
+        shutdown,
+        &mut reconcile,
+        &mut reload,
+        reload_observer,
+        connection_observer,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_config_reload_supervisor_inner<N, R, RFut, F, Fut>(
+    notifier: Arc<N>,
+    config: ConfigReloadWorkerConfig,
+    reconnect_policy: ConfigReloadReconnectPolicy,
+    shutdown: CancellationToken,
+    reconcile: &mut R,
+    reload: &mut F,
+    reload_observer: Option<&dyn ConfigReloadObserver>,
+    connection_observer: Option<&dyn ConfigSyncConnectionObserver>,
+) -> Result<()>
+where
+    N: ConfigChangeNotifier + ?Sized,
+    R: FnMut() -> RFut,
+    RFut: Future<Output = Result<()>>,
+    F: FnMut(ConfigReloadMessage) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let mut consecutive_failures = 0_u32;
+
     loop {
-        tokio::select! {
-            () = shutdown.cancelled() => {
-                return Ok(());
+        let subscription = tokio::select! {
+            () = shutdown.cancelled() => return Ok(()),
+            subscription = notifier.subscribe() => subscription,
+        };
+        let mut subscription = match subscription {
+            Ok(subscription) => subscription,
+            Err(error) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                observe_config_sync_connection(
+                    connection_observer,
+                    ConfigSyncConnectionState::Disconnected,
+                    consecutive_failures,
+                    Duration::ZERO,
+                );
+                tracing::warn!(
+                    error = %error,
+                    reconnect_attempt = consecutive_failures,
+                    "failed to subscribe to config reload notifications"
+                );
+                if wait_for_config_reload_reconnect(
+                    reconnect_policy,
+                    consecutive_failures,
+                    &shutdown,
+                    connection_observer,
+                )
+                .await
+                {
+                    return Ok(());
+                }
+                continue;
             }
-            event = subscription.recv() => {
-                let event = event?;
-                match event {
-                    ConfigChangeEvent::Reload(message) => {
-                        let changed_keys = message.keys.len();
-                        let started = Instant::now();
-                        match handle_config_reload_notification(&config, message, &mut reload).await {
-                            Ok(ConfigReloadDecision::Reloaded) => {
-                                observe_config_reload(
-                                    observer,
-                                    ConfigReloadDecision::Reloaded,
-                                    "ok",
-                                    changed_keys,
-                                    started,
-                                );
-                                tracing::debug!("runtime config reloaded after remote notification");
-                            }
-                            Ok(decision @ (ConfigReloadDecision::IgnoredNamespace | ConfigReloadDecision::IgnoredOrigin)) => {
-                                observe_config_reload(
-                                    observer,
-                                    decision,
-                                    "ok",
-                                    changed_keys,
-                                    started,
-                                );
-                            }
-                            Err(error) => {
-                                observe_config_reload(
-                                    observer,
-                                    ConfigReloadDecision::Reloaded,
-                                    "error",
-                                    changed_keys,
-                                    started,
-                                );
-                                tracing::warn!(
-                                    error = %error,
-                                    "failed to reload runtime config after remote notification"
-                                );
-                            }
-                        }
+        };
+
+        if consecutive_failures == 0 {
+            observe_config_sync_connection(
+                connection_observer,
+                ConfigSyncConnectionState::Connected,
+                0,
+                Duration::ZERO,
+            );
+        } else {
+            observe_config_sync_connection(
+                connection_observer,
+                ConfigSyncConnectionState::Recovered,
+                consecutive_failures,
+                Duration::ZERO,
+            );
+            tracing::info!(
+                reconnect_attempt = consecutive_failures,
+                "config reload subscription recovered"
+            );
+        }
+
+        if let Err(error) = reconcile().await {
+            tracing::warn!(
+                error = %error,
+                "failed to reconcile runtime config after subscription connected"
+            );
+        } else {
+            tracing::debug!("runtime config reconciled after subscription connected");
+        }
+
+        let subscribed_at = Instant::now();
+        loop {
+            let event = tokio::select! {
+                () = shutdown.cancelled() => return Ok(()),
+                event = subscription.recv() => event,
+            };
+            match event {
+                Ok(ConfigChangeEvent::Reload(message)) => {
+                    consecutive_failures = 0;
+                    process_config_reload_message(&config, message, reload, reload_observer).await;
+                }
+                Err(error) => {
+                    if subscribed_at.elapsed() >= reconnect_policy.stable_reset_after {
+                        consecutive_failures = 0;
                     }
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    observe_config_sync_connection(
+                        connection_observer,
+                        ConfigSyncConnectionState::Disconnected,
+                        consecutive_failures,
+                        Duration::ZERO,
+                    );
+                    tracing::warn!(
+                        error = %error,
+                        reconnect_attempt = consecutive_failures,
+                        "config reload subscription disconnected"
+                    );
+                    if wait_for_config_reload_reconnect(
+                        reconnect_policy,
+                        consecutive_failures,
+                        &shutdown,
+                        connection_observer,
+                    )
+                    .await
+                    {
+                        return Ok(());
+                    }
+                    break;
                 }
             }
         }
+    }
+}
+
+async fn process_config_reload_message<F, Fut>(
+    config: &ConfigReloadWorkerConfig,
+    message: ConfigReloadMessage,
+    reload: &mut F,
+    observer: Option<&dyn ConfigReloadObserver>,
+) where
+    F: FnMut(ConfigReloadMessage) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let changed_keys = message.keys.len();
+    let started = Instant::now();
+    match handle_config_reload_notification(config, message, reload).await {
+        Ok(ConfigReloadDecision::Reloaded) => {
+            observe_config_reload(
+                observer,
+                ConfigReloadDecision::Reloaded,
+                "ok",
+                changed_keys,
+                started,
+            );
+            tracing::debug!("runtime config reloaded after remote notification");
+        }
+        Ok(
+            decision @ (ConfigReloadDecision::IgnoredNamespace
+            | ConfigReloadDecision::IgnoredOrigin),
+        ) => {
+            observe_config_reload(observer, decision, "ok", changed_keys, started);
+        }
+        Err(error) => {
+            observe_config_reload(
+                observer,
+                ConfigReloadDecision::Reloaded,
+                "error",
+                changed_keys,
+                started,
+            );
+            tracing::warn!(
+                error = %error,
+                "failed to reload runtime config after remote notification"
+            );
+        }
+    }
+}
+
+async fn wait_for_config_reload_reconnect(
+    policy: ConfigReloadReconnectPolicy,
+    reconnect_attempt: u32,
+    shutdown: &CancellationToken,
+    observer: Option<&dyn ConfigSyncConnectionObserver>,
+) -> bool {
+    let delay = config_reload_reconnect_delay(policy, reconnect_attempt);
+    observe_config_sync_connection(
+        observer,
+        ConfigSyncConnectionState::Reconnecting,
+        reconnect_attempt,
+        delay,
+    );
+    tracing::warn!(
+        reconnect_attempt,
+        backoff_ms = duration_millis_u64(delay),
+        "waiting before config reload subscription reconnect"
+    );
+    tokio::select! {
+        () = shutdown.cancelled() => true,
+        () = sleep(delay) => false,
+    }
+}
+
+fn config_reload_reconnect_delay(
+    policy: ConfigReloadReconnectPolicy,
+    reconnect_attempt: u32,
+) -> Duration {
+    use aster_forge_utils::backoff::{cap_delay, exponential_delay, randomized_jitter};
+
+    let retry_index = reconnect_attempt.saturating_sub(1);
+    let capped = cap_delay(
+        exponential_delay(policy.initial_delay, retry_index),
+        policy.max_delay,
+    );
+    cap_delay(randomized_jitter(capped, 50, 100), policy.max_delay)
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn observe_config_sync_connection(
+    observer: Option<&dyn ConfigSyncConnectionObserver>,
+    state: ConfigSyncConnectionState,
+    reconnect_attempt: u32,
+    backoff: Duration,
+) {
+    if let Some(observer) = observer {
+        observer.observe_config_sync_connection(ConfigSyncConnectionObservation::new(
+            state,
+            reconnect_attempt,
+            backoff,
+        ));
     }
 }
 
@@ -659,6 +1025,61 @@ impl ConfigSyncRuntime {
         )
         .await
     }
+
+    /// Runs a reconnecting subscription with an authoritative reconcile callback.
+    ///
+    /// `reconcile` runs after each successful subscription. Product code should
+    /// reload its full snapshot and invalidate all derived configuration caches.
+    pub async fn run_reload_subscription_with_reconcile<R, RFut, F, Fut>(
+        &self,
+        shutdown: CancellationToken,
+        reconcile: R,
+        reload: F,
+    ) -> Result<()>
+    where
+        R: FnMut() -> RFut,
+        RFut: Future<Output = Result<()>>,
+        F: FnMut(ConfigReloadMessage) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        let Some(notifier) = self.notifier().cloned() else {
+            shutdown.cancelled().await;
+            return Ok(());
+        };
+        run_config_reload_supervisor(notifier, self.worker_config(), shutdown, reconcile, reload)
+            .await
+    }
+
+    /// Runs a reconnecting subscription and reports reload and connection observations.
+    pub async fn run_reload_subscription_with_reconcile_and_observers<R, RFut, F, Fut>(
+        &self,
+        shutdown: CancellationToken,
+        reconcile: R,
+        reload: F,
+        reload_observer: Option<&dyn ConfigReloadObserver>,
+        connection_observer: Option<&dyn ConfigSyncConnectionObserver>,
+    ) -> Result<()>
+    where
+        R: FnMut() -> RFut,
+        RFut: Future<Output = Result<()>>,
+        F: FnMut(ConfigReloadMessage) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        let Some(notifier) = self.notifier().cloned() else {
+            shutdown.cancelled().await;
+            return Ok(());
+        };
+        run_config_reload_supervisor_with_observers(
+            notifier,
+            self.worker_config(),
+            shutdown,
+            reconcile,
+            reload,
+            reload_observer,
+            connection_observer,
+        )
+        .await
+    }
 }
 
 /// In-memory notifier for single-process deployments and tests.
@@ -700,6 +1121,7 @@ mod redis_transport {
     use futures::StreamExt;
     use redis::AsyncCommands;
     use tokio::sync::broadcast;
+    use tokio::task::JoinHandle;
 
     use super::{ConfigChangeEvent, ConfigChangeNotifier, ConfigNotification, ConfigReloadMessage};
     use crate::{ConfigCoreError, Result};
@@ -759,7 +1181,8 @@ mod redis_transport {
 
     /// Background Redis pub/sub listener.
     pub struct RedisConfigReloadListener {
-        receiver: broadcast::Receiver<ConfigChangeEvent>,
+        receiver: Option<broadcast::Receiver<ConfigChangeEvent>>,
+        task: Option<JoinHandle<()>>,
     }
 
     impl RedisConfigReloadListener {
@@ -780,7 +1203,7 @@ mod redis_transport {
             })?;
 
             let (sender, receiver) = broadcast::channel(capacity.max(1));
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 let mut stream = pubsub.on_message();
                 while let Some(message) = stream.next().await {
                     let payload = match message.get_payload::<String>() {
@@ -803,16 +1226,48 @@ mod redis_transport {
                             continue;
                         }
                     };
-                    let _ = sender.send(decoded);
+                    if sender.send(decoded).is_err() {
+                        tracing::debug!(
+                            channel = %channel,
+                            "Redis config reload listener stopped after downstream receiver closed"
+                        );
+                        return;
+                    }
                 }
+                tracing::warn!(
+                    channel = %channel,
+                    "Redis config reload listener stream ended unexpectedly"
+                );
             });
 
-            Ok(Self { receiver })
+            Ok(Self {
+                receiver: Some(receiver),
+                task: Some(task),
+            })
         }
 
         /// Converts this listener into a notification receiver.
-        pub fn into_notification(self) -> ConfigNotification {
-            ConfigNotification::new(self.receiver)
+        pub fn into_notification(mut self) -> ConfigNotification {
+            let receiver = match self.receiver.take() {
+                Some(receiver) => receiver,
+                None => {
+                    let (sender, receiver) = broadcast::channel(1);
+                    drop(sender);
+                    receiver
+                }
+            };
+            let Some(task) = self.task.take() else {
+                return ConfigNotification::new(receiver);
+            };
+            ConfigNotification::with_task(receiver, task)
+        }
+    }
+
+    impl Drop for RedisConfigReloadListener {
+        fn drop(&mut self) {
+            if let Some(task) = self.task.take() {
+                task.abort();
+            }
         }
     }
 }
@@ -827,17 +1282,22 @@ mod tests {
     use super::{
         CONFIG_SYNC_BACKEND_DISABLED, ConfigChangeEvent, ConfigChangeNotifier,
         ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,
-        ConfigReloadWorkerConfig, ConfigSyncConfig, ConfigSyncRuntime, InMemoryConfigNotifier,
-        SharedConfigChangeNotifier, build_config_sync_runtime,
-        build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
-        default_config_sync_topic, handle_config_reload_notification, redis_channel_from_topic,
-        run_config_reload_worker, run_config_reload_worker_with_observer,
+        ConfigReloadReconnectPolicy, ConfigReloadWorkerConfig, ConfigSyncConfig,
+        ConfigSyncConnectionObservation, ConfigSyncConnectionState, ConfigSyncRuntime,
+        InMemoryConfigNotifier, SharedConfigChangeNotifier, build_config_sync_runtime,
+        build_config_sync_runtime_with_runtime_id, config_reload_reconnect_delay,
+        decode_config_reload_transport_payload, default_config_sync_topic,
+        handle_config_reload_notification, redis_channel_from_topic,
+        run_config_reload_supervisor_inner, run_config_reload_worker,
+        run_config_reload_worker_with_observer,
     };
     use crate::ConfigCoreError;
+    use std::collections::VecDeque;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
+    use tokio::sync::broadcast;
     use tokio::time::{Duration, timeout};
     use tokio_util::sync::CancellationToken;
 
@@ -849,6 +1309,79 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    enum SubscribeStep {
+        Fail(&'static str),
+        Channel(broadcast::Sender<ConfigChangeEvent>),
+        Pending,
+    }
+
+    struct ScriptedConfigNotifier {
+        steps: Mutex<VecDeque<SubscribeStep>>,
+        subscribe_attempts: AtomicUsize,
+    }
+
+    impl ScriptedConfigNotifier {
+        fn new(steps: impl IntoIterator<Item = SubscribeStep>) -> Self {
+            Self {
+                steps: Mutex::new(steps.into_iter().collect()),
+                subscribe_attempts: AtomicUsize::new(0),
+            }
+        }
+
+        fn subscribe_attempts(&self) -> usize {
+            self.subscribe_attempts.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ConfigChangeNotifier for ScriptedConfigNotifier {
+        async fn publish_reload(&self, _message: ConfigReloadMessage) -> super::Result<()> {
+            Ok(())
+        }
+
+        async fn subscribe(&self) -> super::Result<super::ConfigNotification> {
+            self.subscribe_attempts.fetch_add(1, Ordering::SeqCst);
+            let step = self
+                .steps
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(SubscribeStep::Pending);
+            match step {
+                SubscribeStep::Fail(message) => Err(ConfigCoreError::notification(message)),
+                SubscribeStep::Channel(sender) => {
+                    Ok(super::ConfigNotification::new(sender.subscribe()))
+                }
+                SubscribeStep::Pending => std::future::pending().await,
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct TestConnectionObserver {
+        observations: Mutex<Vec<ConfigSyncConnectionObservation>>,
+    }
+
+    impl super::ConfigSyncConnectionObserver for TestConnectionObserver {
+        fn observe_config_sync_connection(&self, observation: ConfigSyncConnectionObservation) {
+            self.observations.lock().unwrap().push(observation);
+        }
+    }
+
+    impl TestConnectionObserver {
+        fn snapshot(&self) -> Vec<ConfigSyncConnectionObservation> {
+            self.observations.lock().unwrap().clone()
+        }
+    }
+
+    fn zero_reconnect_policy() -> ConfigReloadReconnectPolicy {
+        ConfigReloadReconnectPolicy {
+            initial_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            stable_reset_after: Duration::from_secs(30),
+        }
     }
 
     #[tokio::test]
@@ -968,6 +1501,51 @@ mod tests {
         runtime
             .publish_reload(["feature"], ConfigNotificationSource::Api)
             .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn disabled_config_sync_waits_for_shutdown_without_invoking_callbacks() {
+        let runtime = ConfigSyncRuntime::disabled_with_runtime_id("aster_test", "runtime-a");
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let reconciles = Arc::new(AtomicUsize::new(0));
+        let reloads = Arc::new(AtomicUsize::new(0));
+        let worker_reconciles = reconciles.clone();
+        let worker_reloads = reloads.clone();
+
+        let worker = tokio::spawn(async move {
+            runtime
+                .run_reload_subscription_with_reconcile(
+                    worker_shutdown,
+                    move || {
+                        let worker_reconciles = worker_reconciles.clone();
+                        async move {
+                            worker_reconciles.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    },
+                    move |_| {
+                        let worker_reloads = worker_reloads.clone();
+                        async move {
+                            worker_reloads.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    },
+                )
+                .await
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!worker.is_finished());
+        assert_eq!(reconciles.load(Ordering::SeqCst), 0);
+        assert_eq!(reloads.load(Ordering::SeqCst), 0);
+
+        shutdown.cancel();
+        timeout(Duration::from_millis(100), worker)
+            .await
+            .unwrap()
+            .unwrap()
             .unwrap();
     }
 
@@ -1149,6 +1727,532 @@ mod tests {
         .unwrap();
         assert_eq!(decision, ConfigReloadDecision::Reloaded);
         assert_eq!(reloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn reload_supervisor_recovers_from_initial_subscribe_failures_and_reconciles() {
+        let (sender, _) = broadcast::channel(8);
+        let notifier = Arc::new(ScriptedConfigNotifier::new([
+            SubscribeStep::Fail("redis unavailable"),
+            SubscribeStep::Channel(sender.clone()),
+        ]));
+        let shutdown = CancellationToken::new();
+        let reconciles = Arc::new(AtomicUsize::new(0));
+        let observer = Arc::new(TestConnectionObserver::default());
+        let worker_notifier = notifier.clone();
+        let worker_shutdown = shutdown.clone();
+        let worker_reconciles = reconciles.clone();
+        let worker_observer = observer.clone();
+
+        let worker = tokio::spawn(async move {
+            let mut reconcile = move || {
+                let worker_reconciles = worker_reconciles.clone();
+                async move {
+                    worker_reconciles.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            };
+            let mut reload = |_| async { Ok(()) };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                zero_reconnect_policy(),
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                Some(worker_observer.as_ref()),
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while reconciles.load(Ordering::SeqCst) != 1 || notifier.subscribe_attempts() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let observations = observer.snapshot();
+        let states = observations
+            .iter()
+            .map(|observation| observation.state)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            vec![
+                ConfigSyncConnectionState::Disconnected,
+                ConfigSyncConnectionState::Reconnecting,
+                ConfigSyncConnectionState::Recovered,
+            ]
+        );
+        assert_eq!(
+            observations
+                .iter()
+                .map(|observation| observation.reconnect_attempt)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1]
+        );
+        assert!(
+            observations
+                .iter()
+                .all(|observation| observation.backoff_seconds == 0.0)
+        );
+
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+        drop(sender);
+    }
+
+    #[tokio::test]
+    async fn reload_supervisor_subscribes_before_reconcile_to_close_startup_race() {
+        let notifier = Arc::new(InMemoryConfigNotifier::default());
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let worker_notifier = notifier.clone();
+        let reloads = Arc::new(AtomicUsize::new(0));
+        let worker_reloads = reloads.clone();
+
+        let worker = tokio::spawn(async move {
+            let reconcile_notifier = worker_notifier.clone();
+            let mut reconcile = move || {
+                let reconcile_notifier = reconcile_notifier.clone();
+                async move {
+                    reconcile_notifier
+                        .publish_reload(ConfigReloadMessage::new(
+                            "aster_test",
+                            "node-b",
+                            ["during_reconcile"],
+                            ConfigNotificationSource::Api,
+                        ))
+                        .await
+                }
+            };
+            let mut reload = move |_| {
+                let worker_reloads = worker_reloads.clone();
+                async move {
+                    worker_reloads.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                zero_reconnect_policy(),
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                None,
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while reloads.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn lagged_subscription_reconnects_and_reconciles_without_reload_observation() {
+        let (first_sender, _) = broadcast::channel(1);
+        let (second_sender, _) = broadcast::channel(1);
+        let notifier = Arc::new(ScriptedConfigNotifier::new([
+            SubscribeStep::Channel(first_sender.clone()),
+            SubscribeStep::Channel(second_sender.clone()),
+        ]));
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let worker_notifier = notifier.clone();
+        let reconciles = Arc::new(AtomicUsize::new(0));
+        let worker_reconciles = reconciles.clone();
+        let reload_observer = Arc::new(TestReloadObserver::default());
+        let worker_reload_observer = reload_observer.clone();
+
+        let worker = tokio::spawn(async move {
+            let lag_sender = first_sender.clone();
+            let mut reconcile = move || {
+                let lag_sender = lag_sender.clone();
+                let worker_reconciles = worker_reconciles.clone();
+                async move {
+                    let attempt = worker_reconciles.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        for key in ["first", "second"] {
+                            lag_sender
+                                .send(ConfigChangeEvent::Reload(ConfigReloadMessage::new(
+                                    "aster_test",
+                                    "node-b",
+                                    [key],
+                                    ConfigNotificationSource::Api,
+                                )))
+                                .expect("lag test subscription should still exist");
+                        }
+                    }
+                    Ok(())
+                }
+            };
+            let mut reload = |_| async { Ok(()) };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                zero_reconnect_policy(),
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                Some(worker_reload_observer.as_ref()),
+                None,
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while reconciles.load(Ordering::SeqCst) != 2 || notifier.subscribe_attempts() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(reload_observer.snapshot().is_empty());
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+        drop(second_sender);
+    }
+
+    #[tokio::test]
+    async fn stable_subscription_resets_reconnect_attempt_sequence() {
+        let (first_sender, _) = broadcast::channel(8);
+        let (second_sender, _) = broadcast::channel(8);
+        let notifier = Arc::new(ScriptedConfigNotifier::new([
+            SubscribeStep::Fail("initial outage"),
+            SubscribeStep::Channel(first_sender.clone()),
+            SubscribeStep::Channel(second_sender.clone()),
+        ]));
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let worker_notifier = notifier.clone();
+        let reconciles = Arc::new(AtomicUsize::new(0));
+        let worker_reconciles = reconciles.clone();
+        let observer = Arc::new(TestConnectionObserver::default());
+        let worker_observer = observer.clone();
+        let policy = ConfigReloadReconnectPolicy {
+            initial_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            stable_reset_after: Duration::ZERO,
+        };
+
+        let worker = tokio::spawn(async move {
+            let mut reconcile = move || {
+                let worker_reconciles = worker_reconciles.clone();
+                async move {
+                    worker_reconciles.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            };
+            let mut reload = |_| async { Ok(()) };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                policy,
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                Some(worker_observer.as_ref()),
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while reconciles.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(first_sender);
+        timeout(Duration::from_secs(1), async {
+            while reconciles.load(Ordering::SeqCst) != 2 || notifier.subscribe_attempts() != 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let recovered_attempts = observer
+            .snapshot()
+            .into_iter()
+            .filter(|observation| observation.state == ConfigSyncConnectionState::Recovered)
+            .map(|observation| observation.reconnect_attempt)
+            .collect::<Vec<_>>();
+        assert_eq!(recovered_attempts, vec![1, 1]);
+
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+        drop(second_sender);
+    }
+
+    #[tokio::test]
+    async fn reload_supervisor_reconnects_after_subscription_closes_and_reconciles_again() {
+        let (first_sender, _) = broadcast::channel(8);
+        let (second_sender, _) = broadcast::channel(8);
+        let notifier = Arc::new(ScriptedConfigNotifier::new([
+            SubscribeStep::Channel(first_sender.clone()),
+            SubscribeStep::Channel(second_sender.clone()),
+        ]));
+        let shutdown = CancellationToken::new();
+        let reconciles = Arc::new(AtomicUsize::new(0));
+        let observer = Arc::new(TestConnectionObserver::default());
+        let worker_notifier = notifier.clone();
+        let worker_shutdown = shutdown.clone();
+        let worker_reconciles = reconciles.clone();
+        let worker_observer = observer.clone();
+
+        let worker = tokio::spawn(async move {
+            let mut reconcile = move || {
+                let worker_reconciles = worker_reconciles.clone();
+                async move {
+                    worker_reconciles.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            };
+            let mut reload = |_| async { Ok(()) };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                zero_reconnect_policy(),
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                Some(worker_observer.as_ref()),
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while reconciles.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(first_sender);
+
+        timeout(Duration::from_secs(1), async {
+            while reconciles.load(Ordering::SeqCst) != 2 || notifier.subscribe_attempts() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let states = observer
+            .snapshot()
+            .into_iter()
+            .map(|observation| observation.state)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            vec![
+                ConfigSyncConnectionState::Connected,
+                ConfigSyncConnectionState::Disconnected,
+                ConfigSyncConnectionState::Reconnecting,
+                ConfigSyncConnectionState::Recovered,
+            ]
+        );
+
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+        drop(second_sender);
+    }
+
+    #[tokio::test]
+    async fn reload_supervisor_keeps_subscription_after_reconcile_error() {
+        let (sender, _) = broadcast::channel(8);
+        let notifier = Arc::new(ScriptedConfigNotifier::new([SubscribeStep::Channel(
+            sender.clone(),
+        )]));
+        let shutdown = CancellationToken::new();
+        let reconcile_attempts = Arc::new(AtomicUsize::new(0));
+        let reloads = Arc::new(AtomicUsize::new(0));
+        let worker_notifier = notifier.clone();
+        let worker_shutdown = shutdown.clone();
+        let worker_reconcile_attempts = reconcile_attempts.clone();
+        let worker_reloads = reloads.clone();
+
+        let worker = tokio::spawn(async move {
+            let mut reconcile = move || {
+                let worker_reconcile_attempts = worker_reconcile_attempts.clone();
+                async move {
+                    worker_reconcile_attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(ConfigCoreError::store("temporary reconcile failure"))
+                }
+            };
+            let mut reload = move |_| {
+                let worker_reloads = worker_reloads.clone();
+                async move {
+                    worker_reloads.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                zero_reconnect_policy(),
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                None,
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while reconcile_attempts.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        sender
+            .send(ConfigChangeEvent::Reload(ConfigReloadMessage::new(
+                "aster_test",
+                "node-b",
+                ["feature"],
+                ConfigNotificationSource::Api,
+            )))
+            .unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            while reloads.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(notifier.subscribe_attempts(), 1);
+
+        shutdown.cancel();
+        worker.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn reload_supervisor_shutdown_interrupts_reconnect_backoff() {
+        let notifier = Arc::new(ScriptedConfigNotifier::new([SubscribeStep::Fail(
+            "redis unavailable",
+        )]));
+        let shutdown = CancellationToken::new();
+        let observer = Arc::new(TestConnectionObserver::default());
+        let worker_shutdown = shutdown.clone();
+        let worker_observer = observer.clone();
+        let policy = ConfigReloadReconnectPolicy {
+            initial_delay: Duration::from_secs(60),
+            max_delay: Duration::from_secs(60),
+            stable_reset_after: Duration::from_secs(30),
+        };
+
+        let worker = tokio::spawn(async move {
+            let mut reconcile = || async { Ok(()) };
+            let mut reload = |_| async { Ok(()) };
+            run_config_reload_supervisor_inner(
+                notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                policy,
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                Some(worker_observer.as_ref()),
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while !observer
+                .snapshot()
+                .iter()
+                .any(|observation| observation.state == ConfigSyncConnectionState::Reconnecting)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        shutdown.cancel();
+        timeout(Duration::from_millis(100), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reload_supervisor_shutdown_interrupts_pending_subscribe() {
+        let notifier = Arc::new(ScriptedConfigNotifier::new([SubscribeStep::Pending]));
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let worker_notifier = notifier.clone();
+
+        let worker = tokio::spawn(async move {
+            let mut reconcile = || async { Ok(()) };
+            let mut reload = |_| async { Ok(()) };
+            run_config_reload_supervisor_inner(
+                worker_notifier,
+                ConfigReloadWorkerConfig::new("aster_test", "node-a"),
+                zero_reconnect_policy(),
+                worker_shutdown,
+                &mut reconcile,
+                &mut reload,
+                None,
+                None,
+            )
+            .await
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while notifier.subscribe_attempts() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        shutdown.cancel();
+        timeout(Duration::from_millis(100), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn reconnect_delay_grows_with_equal_jitter_and_caps() {
+        let policy = ConfigReloadReconnectPolicy {
+            initial_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(250),
+            stable_reset_after: Duration::from_secs(30),
+        };
+        let expected_bounds = [(1, 50, 100), (2, 100, 200), (3, 125, 250), (64, 125, 250)];
+
+        for (attempt, min_ms, max_ms) in expected_bounds {
+            for _ in 0..64 {
+                let delay_ms =
+                    super::duration_millis_u64(config_reload_reconnect_delay(policy, attempt));
+                assert!(
+                    (min_ms..=max_ms).contains(&delay_ms),
+                    "attempt {attempt} produced {delay_ms}ms outside [{min_ms}, {max_ms}]"
+                );
+            }
+        }
     }
 
     #[tokio::test]

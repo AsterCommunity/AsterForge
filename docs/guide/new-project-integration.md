@@ -388,20 +388,36 @@ config_sync
     .await?;
 ```
 
-后台订阅任务只提供“从权威存储 reload”的回调：
+后台订阅任务提供两个回调：`reconcile` 在首次连接和每次重连成功后从权威存储全量 reload，`reload` 处理真实 pub/sub 通知。这样 Redis 短暂中断期间丢失的通知不会让本地 snapshot 长期停留在旧值：
 
 ```rust
 config_sync
-    .run_reload_subscription(shutdown, move |message| {
-        let state = state.clone();
-        async move {
-            tracing::debug!(keys = ?message.keys, "remote config reload");
-            state.runtime_config().reload(state.reader_db()).await?;
-            Ok(())
-        }
-    })
+    .run_reload_subscription_with_reconcile(
+        shutdown,
+        {
+            let state = state.clone();
+            move || {
+                let state = state.clone();
+                async move {
+                    state.runtime_config().reload(state.reader_db()).await?;
+                    product_state.invalidate_all_derived_config_caches();
+                    Ok(())
+                }
+            }
+        },
+        move |message| {
+            let state = state.clone();
+            async move {
+                tracing::debug!(keys = ?message.keys, "remote config reload");
+                state.runtime_config().reload(state.reader_db()).await?;
+                Ok(())
+            }
+        },
+    )
     .await?;
 ```
+
+supervisor 会在 subscribe/recv 错误后使用有界指数退避和 50%-100% 抖动重连；shutdown 会立即中断连接等待和退避。transport 恢复后不会重放 Redis 历史消息，而是执行一次全量 reconcile。`ConfigSyncConnectionObserver` 可记录 `connected`、`disconnected`、`reconnecting`、`recovered` 四种低基数状态。
 
 ## 错误边界
 

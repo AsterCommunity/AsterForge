@@ -78,6 +78,21 @@ pub struct ScheduledTaskCompletion {
     pub next_run_at: DateTime<Utc>,
 }
 
+/// Renewal update for a claim whose task body is still running.
+///
+/// The store must apply the same ownership predicate as completion (task id,
+/// owner id, and claim acquisition timestamp), so a renewal can never revive a
+/// claim another runtime has already reclaimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduledTaskClaimRenewal<'a> {
+    /// Owned claim to renew.
+    pub claim: &'a ScheduledTaskClaim,
+    /// Renewal timestamp.
+    pub now: DateTime<Utc>,
+    /// Fresh claim TTL applied from `now`.
+    pub claim_ttl: Duration,
+}
+
 /// Persistence contract used by scheduled task runners.
 #[async_trait::async_trait]
 pub trait ScheduledTaskStore: Clone + Send + Sync + 'static {
@@ -95,6 +110,16 @@ pub trait ScheduledTaskStore: Clone + Send + Sync + 'static {
         &self,
         request: ScheduledTaskClaimRequest<'_>,
     ) -> std::result::Result<Option<ScheduledTaskClaim>, Self::Error>;
+
+    /// Renews an owned claim while the task body is still running.
+    ///
+    /// Returning `Ok(false)` means the ownership predicate did not match, so
+    /// the worker must treat the claim as lost and stop renewing. Returning
+    /// `Err(_)` is treated as transient and retried on the next renewal tick.
+    async fn renew_scheduled_task_claim(
+        &self,
+        renewal: ScheduledTaskClaimRenewal<'_>,
+    ) -> std::result::Result<bool, Self::Error>;
 
     /// Completes a claimed firing and advances the next due timestamp.
     async fn complete_scheduled_task(
@@ -482,6 +507,11 @@ async fn run_leased_scheduled_runtime_tasks<
 /// not due, or another process owns a fresh claim, the worker skips that iteration. Successful and
 /// failed task outcomes both complete the claim and advance `next_run_at`; crashes and process
 /// exits before completion are recovered by claim expiry.
+///
+/// While the task body runs, a renewal loop extends the claim at
+/// [`scheduled_claim_renew_interval`] ticks, so a task that outlives `claim_ttl` is not reclaimed
+/// and executed twice by another runtime. Renewal failures never abort the task body: a lost
+/// claim only stops the renewal loop, and completion still guards on ownership.
 pub async fn run_scheduled_periodic_task<
     Name,
     State,
@@ -534,6 +564,70 @@ pub async fn run_scheduled_periodic_task<
         run_scheduled_periodic_iteration(&task)
             .instrument(tracing::info_span!("bg_task", task.name = task.task_name))
             .await;
+    }
+}
+
+/// Derives the claim renewal tick from the claim TTL.
+///
+/// Renewing three times per TTL window means two consecutive missed ticks still
+/// leave one renewal before expiry. The floor keeps `tokio::time::interval`
+/// away from a zero period for pathological TTLs.
+pub fn scheduled_claim_renew_interval(claim_ttl: Duration) -> Duration {
+    (claim_ttl / 3).max(Duration::from_millis(10))
+}
+
+/// Renews one owned scheduled task claim until stopped or the claim is lost.
+///
+/// Mirrors the background task heartbeat loop: `Ok(false)` means the ownership
+/// predicate no longer matches (another runtime reclaimed the firing), so the
+/// loop stops; `Err(_)` is logged and retried on the next tick. The loop never
+/// aborts the running task body — completion still guards on ownership.
+pub async fn run_scheduled_claim_renewal_loop<Store>(
+    store: Store,
+    claim: ScheduledTaskClaim,
+    claim_ttl: Duration,
+    interval: Duration,
+    stop_token: CancellationToken,
+) where
+    Store: ScheduledTaskStore,
+{
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = stop_token.cancelled() => return,
+            _ = ticker.tick() => {
+                let renewal = ScheduledTaskClaimRenewal {
+                    claim: &claim,
+                    now: Utc::now(),
+                    claim_ttl,
+                };
+                let result = tokio::select! {
+                    _ = stop_token.cancelled() => return,
+                    result = store.renew_scheduled_task_claim(renewal) => result,
+                };
+
+                match result {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::warn!(
+                            task.name = claim.task_name,
+                            "scheduled task claim lost; stopping claim renewal"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            task.name = claim.task_name,
+                            error = %error,
+                            "scheduled task claim renewal failed; retrying next tick"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -607,6 +701,15 @@ async fn run_scheduled_periodic_iteration<
         }
     };
 
+    let renewal_stop = task.shutdown_token.child_token();
+    let renewal_handle = tokio::spawn(run_scheduled_claim_renewal_loop(
+        task.store.clone(),
+        claim.clone(),
+        task.claim_ttl,
+        scheduled_claim_renew_interval(task.claim_ttl),
+        renewal_stop.clone(),
+    ));
+
     let started_at = Utc::now();
     let outcome = match std::panic::AssertUnwindSafe((task.hooks.task_fn)(task.state.clone()))
         .catch_unwind()
@@ -623,6 +726,15 @@ async fn run_scheduled_periodic_iteration<
         }
     };
     let finished_at = Utc::now();
+
+    renewal_stop.cancel();
+    if let Err(error) = renewal_handle.await {
+        tracing::warn!(
+            task.name = task.task_name,
+            error = %error,
+            "scheduled task claim renewal worker stopped unexpectedly"
+        );
+    }
 
     let record_result = std::panic::AssertUnwindSafe((task.hooks.record_outcome)(
         task.state.clone(),
@@ -701,7 +813,8 @@ mod tests {
         LeasedScheduledRuntimeConfig, ScheduledPeriodicTask, ScheduledRuntimeTaskGroup,
         ScheduledTaskCatalogEntry, ScheduledTaskClaim, ScheduledTaskClaimRequest,
         ScheduledTaskCompletion, ScheduledTaskStore, next_scheduled_run_at,
-        run_scheduled_periodic_task,
+        run_scheduled_claim_renewal_loop, run_scheduled_periodic_task,
+        scheduled_claim_renew_interval,
     };
     use crate::{RecordedTaskHooks, RegisteredRuntimeTaskKind};
 
@@ -709,6 +822,8 @@ mod tests {
     struct MemoryScheduleStore {
         calls: Arc<AtomicUsize>,
         completions: Arc<AtomicUsize>,
+        renewals: Arc<AtomicUsize>,
+        renewal_script: Arc<Mutex<std::collections::VecDeque<Result<bool, String>>>>,
     }
 
     fn test_interval(_: &()) -> std::time::Duration {
@@ -808,6 +923,21 @@ mod tests {
             }))
         }
 
+        async fn renew_scheduled_task_claim(
+            &self,
+            renewal: super::ScheduledTaskClaimRenewal<'_>,
+        ) -> Result<bool, Self::Error> {
+            assert_eq!(renewal.claim.task_name, "cleanup");
+            assert!(!renewal.claim_ttl.is_zero());
+            self.renewals.fetch_add(1, Ordering::SeqCst);
+            let scripted = self
+                .renewal_script
+                .lock()
+                .expect("renewal script should lock")
+                .pop_front();
+            scripted.unwrap_or(Ok(true))
+        }
+
         async fn complete_scheduled_task(
             &self,
             completion: ScheduledTaskCompletion,
@@ -823,6 +953,8 @@ mod tests {
         MemoryScheduleStore {
             calls: Arc::new(AtomicUsize::new(0)),
             completions: Arc::new(AtomicUsize::new(0)),
+            renewals: Arc::new(AtomicUsize::new(0)),
+            renewal_script: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         }
     }
 
@@ -1055,6 +1187,171 @@ mod tests {
         assert_eq!(
             next_scheduled_run_at(finished_at, std::time::Duration::from_secs(60)),
             Some(Utc.with_ymd_and_hms(2026, 6, 26, 1, 3, 3).unwrap())
+        );
+    }
+
+    fn test_claim() -> ScheduledTaskClaim {
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        ScheduledTaskClaim {
+            task_id: "aster_test:cleanup".to_string(),
+            namespace: "aster_test".to_string(),
+            task_name: "cleanup".to_string(),
+            owner_id: "runtime-a".to_string(),
+            scheduled_at: now,
+            claimed_at: now,
+            claim_expires_at: now,
+        }
+    }
+
+    #[test]
+    fn claim_renew_interval_is_one_third_of_ttl_with_floor() {
+        assert_eq!(
+            scheduled_claim_renew_interval(std::time::Duration::from_secs(120)),
+            std::time::Duration::from_secs(40)
+        );
+        assert_eq!(
+            scheduled_claim_renew_interval(std::time::Duration::from_millis(30)),
+            std::time::Duration::from_millis(10)
+        );
+        // A zero TTL never reaches the store, but the interval must not panic.
+        assert_eq!(
+            scheduled_claim_renew_interval(std::time::Duration::ZERO),
+            std::time::Duration::from_millis(10)
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_renewal_loop_renews_until_stopped() {
+        let store = memory_store();
+        let renewals = store.renewals.clone();
+        let stop = CancellationToken::new();
+
+        let handle = tokio::spawn(run_scheduled_claim_renewal_loop(
+            store,
+            test_claim(),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(1),
+            stop.clone(),
+        ));
+
+        while renewals.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        stop.cancel();
+        handle.await.expect("renewal loop should stop cleanly");
+        assert!(renewals.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn claim_renewal_loop_stops_when_claim_is_lost() {
+        let store = memory_store();
+        store
+            .renewal_script
+            .lock()
+            .expect("renewal script should lock")
+            .push_back(Ok(false));
+        let renewals = store.renewals.clone();
+
+        // Ok(false) means the ownership predicate no longer matches: the loop
+        // must stop on its own instead of hammering a reclaimed row.
+        run_scheduled_claim_renewal_loop(
+            store,
+            test_claim(),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(1),
+            CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(renewals.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn claim_renewal_loop_retries_after_transient_errors() {
+        let store = memory_store();
+        {
+            let mut script = store
+                .renewal_script
+                .lock()
+                .expect("renewal script should lock");
+            script.push_back(Err("database temporarily unavailable".to_string()));
+            script.push_back(Err("database temporarily unavailable".to_string()));
+        }
+        let renewals = store.renewals.clone();
+        let stop = CancellationToken::new();
+
+        let handle = tokio::spawn(run_scheduled_claim_renewal_loop(
+            store,
+            test_claim(),
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(1),
+            stop.clone(),
+        ));
+
+        while renewals.load(Ordering::SeqCst) < 3 {
+            tokio::task::yield_now().await;
+        }
+        stop.cancel();
+        handle.await.expect("renewal loop should stop cleanly");
+        assert!(renewals.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[tokio::test]
+    async fn scheduled_periodic_task_renews_claim_while_task_body_runs() {
+        let shutdown = CancellationToken::new();
+        let store = memory_store();
+        let renewals = store.renewals.clone();
+        let completions = store.completions.clone();
+        let renewals_for_task = renewals.clone();
+        let shutdown_for_hook = shutdown.clone();
+
+        run_scheduled_periodic_task(ScheduledPeriodicTask {
+            name: "cleanup",
+            namespace: "aster_test",
+            task_name: "cleanup",
+            display_name: "Cleanup",
+            owner_id: "runtime-a".to_string(),
+            // 30ms TTL derives a 10ms renewal interval, so a body that waits for
+            // two renewals provably outlives the original claim window.
+            claim_ttl: std::time::Duration::from_millis(30),
+            interval_fn: test_interval,
+            jitter_cap: None,
+            shutdown_token: shutdown.clone(),
+            state: (),
+            store,
+            hooks: RecordedTaskHooks::new(
+                move |()| {
+                    let renewals = renewals_for_task.clone();
+                    async move {
+                        tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                            while renewals.load(Ordering::SeqCst) < 2 {
+                                tokio::task::yield_now().await;
+                            }
+                        })
+                        .await
+                        .expect("claim should be renewed while the task body runs");
+                        "ok"
+                    }
+                },
+                |_| "panic",
+                move |(), _name, _claim, _started_at, _finished_at, _outcome| {
+                    let shutdown = shutdown_for_hook.clone();
+                    async move {
+                        shutdown.cancel();
+                    }
+                },
+            ),
+        })
+        .await;
+
+        assert_eq!(completions.load(Ordering::SeqCst), 1);
+        let renewed = renewals.load(Ordering::SeqCst);
+        assert!(renewed >= 2);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            renewals.load(Ordering::SeqCst),
+            renewed,
+            "renewal loop must stop before the claim is completed"
         );
     }
 }

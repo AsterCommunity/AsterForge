@@ -6,13 +6,9 @@
 
 use aster_forge_cache::{CacheConfig, CacheExt, create_cache};
 #[cfg(feature = "redis")]
-use std::sync::Arc;
+use aster_forge_test::{redis::RedisTestContainer, suite::TestContainerSuite};
 #[cfg(feature = "redis")]
-use testcontainers::{
-    GenericImage,
-    core::{IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
+use std::sync::Arc;
 #[cfg(feature = "redis")]
 use tokio::time::{Duration, Instant, sleep};
 
@@ -22,6 +18,24 @@ fn cache_config(backend: &str, default_ttl: u64) -> CacheConfig {
         endpoint: String::new(),
         default_ttl,
     }
+}
+
+#[cfg(feature = "redis")]
+fn test_suite() -> &'static TestContainerSuite {
+    static SUITE: std::sync::OnceLock<TestContainerSuite> = std::sync::OnceLock::new();
+    SUITE.get_or_init(|| TestContainerSuite::new("asterforge-cache"))
+}
+
+/// The shared container keeps data across runs, so keys must be unique per test process.
+#[cfg(feature = "redis")]
+fn unique_key(name: &str) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    format!(
+        "asterforge-cache-test:{}:{}:{name}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    )
 }
 
 #[cfg(feature = "redis")]
@@ -185,52 +199,56 @@ async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
 #[cfg(feature = "redis")]
 #[tokio::test]
 async fn test_redis_cache_round_trips_against_real_redis_container() {
-    let container = GenericImage::new("redis", "7-alpine")
-        .with_exposed_port(IntoContainerPort::tcp(6379))
-        .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
-        .start()
-        .await
-        .expect("failed to start Redis test container");
-    let port = container
-        .get_host_port_ipv4(IntoContainerPort::tcp(6379))
-        .await
-        .expect("resolve mapped Redis port");
-    let cache = wait_for_redis_cache(format!("redis://127.0.0.1:{port}/0")).await;
+    let container = RedisTestContainer::start(test_suite()).await;
+    let cache = wait_for_redis_cache(container.url().to_string()).await;
 
     assert_eq!(cache.backend_name(), "redis");
     cache.health_check().await.unwrap();
 
-    cache.set("json", &vec!["alpha", "beta"], Some(60)).await;
+    let json_key = unique_key("json");
+    let bytes_key = unique_key("bytes");
+    let nonce_key = unique_key("nonce");
+    let prefix_base = unique_key("folder");
+
+    cache.set(&json_key, &vec!["alpha", "beta"], Some(60)).await;
     assert_eq!(
-        cache.get::<Vec<String>>("json").await.unwrap(),
+        cache.get::<Vec<String>>(&json_key).await.unwrap(),
         vec!["alpha".to_string(), "beta".to_string()]
     );
 
-    cache.set_bytes("bytes", b"value".to_vec(), Some(60)).await;
-    assert_eq!(cache.get_bytes("bytes").await, Some(b"value".to_vec()));
+    cache
+        .set_bytes(&bytes_key, b"value".to_vec(), Some(60))
+        .await;
+    assert_eq!(cache.get_bytes(&bytes_key).await, Some(b"value".to_vec()));
 
     assert!(
         cache
-            .set_bytes_if_absent("nonce", b"first".to_vec(), Some(60))
+            .set_bytes_if_absent(&nonce_key, b"first".to_vec(), Some(60))
             .await
     );
     assert!(
         !cache
-            .set_bytes_if_absent("nonce", b"second".to_vec(), Some(60))
+            .set_bytes_if_absent(&nonce_key, b"second".to_vec(), Some(60))
             .await
     );
-    assert_eq!(cache.get_bytes("nonce").await, Some(b"first".to_vec()));
+    assert_eq!(cache.get_bytes(&nonce_key).await, Some(b"first".to_vec()));
 
-    cache.set_bytes("folder:1", b"one".to_vec(), Some(60)).await;
-    cache.set_bytes("folder:2", b"two".to_vec(), Some(60)).await;
+    let folder_prefix = format!("{prefix_base}:folder:");
+    let other_key = format!("{prefix_base}:other:1");
     cache
-        .set_bytes("other:1", b"three".to_vec(), Some(60))
+        .set_bytes(&format!("{folder_prefix}1"), b"one".to_vec(), Some(60))
         .await;
-    cache.invalidate_prefix("folder:").await;
-    assert_eq!(cache.get_bytes("folder:1").await, None);
-    assert_eq!(cache.get_bytes("folder:2").await, None);
-    assert_eq!(cache.get_bytes("other:1").await, Some(b"three".to_vec()));
+    cache
+        .set_bytes(&format!("{folder_prefix}2"), b"two".to_vec(), Some(60))
+        .await;
+    cache
+        .set_bytes(&other_key, b"three".to_vec(), Some(60))
+        .await;
+    cache.invalidate_prefix(&folder_prefix).await;
+    assert_eq!(cache.get_bytes(&format!("{folder_prefix}1")).await, None);
+    assert_eq!(cache.get_bytes(&format!("{folder_prefix}2")).await, None);
+    assert_eq!(cache.get_bytes(&other_key).await, Some(b"three".to_vec()));
 
-    cache.delete("other:1").await;
-    assert_eq!(cache.get_bytes("other:1").await, None);
+    cache.delete(&other_key).await;
+    assert_eq!(cache.get_bytes(&other_key).await, None);
 }

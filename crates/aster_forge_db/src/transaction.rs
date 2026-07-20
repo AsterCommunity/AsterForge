@@ -85,34 +85,13 @@ fn database_operation_with_context(error: sea_orm::DbErr, context: &str) -> DbEr
     }
 }
 
-/// Bounded transaction retry settings. Products choose which classified errors are retryable.
-#[derive(Clone, Debug)]
-pub struct TransactionRetryConfig {
-    /// Maximum number of retries after the initial transaction attempt.
-    pub max_retries: u32,
-    /// Exponential backoff base in milliseconds.
-    pub base_delay_ms: u64,
-    /// Maximum backoff delay in milliseconds.
-    pub max_delay_ms: u64,
-}
-
-impl Default for TransactionRetryConfig {
-    fn default() -> Self {
-        Self {
-            max_retries: 3,
-            base_delay_ms: 5,
-            max_delay_ms: 50,
-        }
-    }
-}
-
-fn transaction_delay(config: &TransactionRetryConfig, attempt: u32) -> Duration {
-    let multiplier = 1_u64.checked_shl(attempt).unwrap_or(u64::MAX);
-    Duration::from_millis(
-        config
-            .base_delay_ms
-            .saturating_mul(multiplier)
-            .min(config.max_delay_ms),
+fn transaction_delay(config: &crate::retry::RetryConfig, attempt: u32) -> Duration {
+    aster_forge_utils::backoff::cap_delay(
+        aster_forge_utils::backoff::exponential_delay(
+            Duration::from_millis(config.base_delay_ms),
+            attempt,
+        ),
+        Duration::from_millis(config.max_delay_ms),
     )
 }
 
@@ -155,9 +134,12 @@ fn commit_outcome_known_rolled_back(kind: Option<crate::DatabaseErrorKind>) -> b
 /// transaction. Any commit error with an uncertain server-side outcome is returned as
 /// `DbError::CommitOutcomeUnknown`, because the server may have committed the transaction even
 /// though the client did not receive a success response.
+///
+/// Use [`crate::retry::RetryConfig::deadlock`] as the config profile: deadlock and
+/// serialization conflicts resolve inside short lock-wait windows, so the fast profile fits.
 pub async fn with_transaction_retry<C, F, T, E, P>(
     db: &C,
-    config: &TransactionRetryConfig,
+    config: &crate::retry::RetryConfig,
     mut operation: F,
     should_retry: P,
 ) -> std::result::Result<T, E>
@@ -293,7 +275,7 @@ where
 mod tests {
     use super::{
         CommitFailureAction, commit_failure_action, commit_outcome_known_rolled_back, rollback,
-        with_transaction,
+        transaction_delay, with_transaction,
     };
     use crate::{DbError, connection::DatabaseConfig};
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
@@ -416,7 +398,7 @@ mod tests {
 
         let db = sqlite_db().await;
         let attempts = Arc::new(AtomicUsize::new(0));
-        let config = super::TransactionRetryConfig {
+        let config = crate::retry::RetryConfig {
             max_retries: 2,
             base_delay_ms: 0,
             max_delay_ms: 0,
@@ -444,6 +426,84 @@ mod tests {
 
         assert_eq!(result.unwrap(), "ok");
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn transaction_delay_doubles_caps_and_handles_boundaries() {
+        let config = crate::retry::RetryConfig {
+            max_retries: 3,
+            base_delay_ms: 100,
+            max_delay_ms: 250,
+        };
+        assert_eq!(
+            transaction_delay(&config, 0),
+            std::time::Duration::from_millis(100)
+        );
+        assert_eq!(
+            transaction_delay(&config, 1),
+            std::time::Duration::from_millis(200)
+        );
+        assert_eq!(
+            transaction_delay(&config, 2),
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(
+            transaction_delay(&config, u32::MAX),
+            std::time::Duration::from_millis(250)
+        );
+
+        let zero_max = crate::retry::RetryConfig {
+            max_retries: 1,
+            base_delay_ms: 100,
+            max_delay_ms: 0,
+        };
+        assert_eq!(transaction_delay(&zero_max, 0), std::time::Duration::ZERO);
+
+        let initial_above_max = crate::retry::RetryConfig {
+            max_retries: 1,
+            base_delay_ms: 1_000,
+            max_delay_ms: 250,
+        };
+        assert_eq!(
+            transaction_delay(&initial_above_max, 0),
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    #[tokio::test]
+    async fn with_transaction_retry_zero_budget_runs_callback_once() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let db = sqlite_db().await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let config = crate::retry::RetryConfig {
+            max_retries: 0,
+            base_delay_ms: 0,
+            max_delay_ms: 0,
+        };
+        let error = {
+            let attempts = attempts.clone();
+            super::with_transaction_retry(
+                &db,
+                &config,
+                move |_txn| {
+                    let attempts = attempts.clone();
+                    Box::pin(async move {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        Err::<(), _>(DbError::database_operation("temporary failure"))
+                    })
+                },
+                |error| matches!(error, DbError::DatabaseOperation(_)),
+            )
+            .await
+            .unwrap_err()
+        };
+
+        assert!(matches!(error, DbError::DatabaseOperation(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     #[test]

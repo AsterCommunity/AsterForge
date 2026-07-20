@@ -31,10 +31,12 @@ pub use notification::{
     CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigChangeEvent,
     ConfigChangeNotifier, ConfigNotification, ConfigNotificationSource, ConfigReloadDecision,
     ConfigReloadMessage, ConfigReloadObservation, ConfigReloadObserver, ConfigReloadWorkerConfig,
-    ConfigSyncConfig, ConfigSyncRuntime, InMemoryConfigNotifier, SharedConfigChangeNotifier,
-    build_config_sync_runtime, build_config_sync_runtime_with_runtime_id,
-    decode_config_reload_transport_payload, default_config_sync_topic,
-    handle_config_reload_notification, run_config_reload_worker,
+    ConfigSyncConfig, ConfigSyncConnectionObservation, ConfigSyncConnectionObserver,
+    ConfigSyncConnectionState, ConfigSyncRuntime, InMemoryConfigNotifier,
+    SharedConfigChangeNotifier, build_config_sync_runtime,
+    build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
+    default_config_sync_topic, handle_config_reload_notification, run_config_reload_supervisor,
+    run_config_reload_supervisor_with_observers, run_config_reload_worker,
     run_config_reload_worker_with_observer,
 };
 #[cfg(feature = "redis-pubsub")]
