@@ -13,20 +13,24 @@
 <p align="center">
   <a href="https://forge.astercosm.com/"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-VitePress-0F766E?logo=vitepress&logoColor=white"></a>
   <a href="https://codecov.io/github/AsterCommunity/AsterForge"><img alt="Coverage" src="https://codecov.io/github/AsterCommunity/AsterForge/graph/badge.svg?token=IefDQVj2y6"></a>
-  <a href="docs/guide/index.md"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
-  <a href="docs/en/index.md"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
-  <a href="docs/crates/aster_forge_actix_middleware.md"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
+  <a href="https://forge.astercosm.com/guide/index"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
+  <a href="https://forge.astercosm.com/en/index"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
+  <a href="https://forge.astercosm.com/crates/aster_forge_actix_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
   <img alt="Rust 1.94+" src="https://img.shields.io/badge/rust-1.94%2B-B7410E?logo=rust&logoColor=white">
   <img alt="License MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-0F172A">
 </p>
 
+<p align="center">
+  English | <a href="README.zh.md">中文</a>
+</p>
+
 ## What is AsterForge?
 
-AsterForge is the shared runtime foundation for Aster products. It is no longer just a place for duplicated helper functions; it is the product-neutral infrastructure kernel that Aster services plug into for lifecycle, component registration, health reporting, shutdown ordering, configuration reload, cache backends, database-owned infrastructure tables, mail outbox dispatch, audit log mechanics, scheduled tasks, runtime leases, logging, metrics, panic handling, API helpers, Actix middleware, external-auth connectors, storage key helpers, and validation.
+AsterForge is the shared runtime foundation for Aster products. What started as a home for duplicated helper functions is now the product-neutral infrastructure kernel that Aster services plug into. Forge covers lifecycle management, component registration, health reporting, shutdown ordering, configuration reload, cache backends, database-owned infrastructure tables, mail outbox dispatch, audit log mechanics, scheduled tasks, runtime leases, logging, metrics, panic handling, API helpers, Actix middleware, external-auth connectors, storage key helpers, and validation.
 
-Forge is not a product business framework. Product-specific code, permissions, user-facing API semantics, product entities, task payloads/results, audit action enums, presentation rules, and business repositories should stay in the owning application repositories. Product-neutral runtime mechanics, common database schemas/stores, component graph contracts, retry/claim/lease rules, and cross-process coordination belong in Forge when multiple Aster services need the same behavior.
+Forge is not a product business framework. Product-specific code — permissions, user-facing API semantics, product entities, task payloads/results, audit action enums, presentation rules, and business repositories — stays in the owning application repositories. Forge only owns what multiple Aster services need in common: product-neutral runtime mechanics, shared database schemas/stores, component graph contracts, retry/claim/lease rules, and cross-process coordination.
 
-The target shape for new products is a thin product entrypoint:
+The target shape for a new product is a thin entrypoint:
 
 ```rust
 aster_forge_runtime::AsterRuntime::builder()
@@ -41,17 +45,17 @@ aster_forge_runtime::AsterRuntime::builder()
 
 Product code still owns resource creation and business semantics; Forge owns the reusable lifecycle and persistence mechanics behind those components.
 
-All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+`, edition 2024, and uses dual `MIT OR Apache-2.0` license metadata.
+All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+` and edition 2024, and is dual-licensed under `MIT OR Apache-2.0`.
 
 ## Crates
 
 | Area | Crates |
 | --- | --- |
-| Runtime kernel | [`aster_forge_runtime`](docs/crates/aster_forge_runtime.md), [`aster_forge_config`](docs/crates/aster_forge_config.md), [`aster_forge_logging`](docs/crates/aster_forge_logging.md), [`aster_forge_metrics`](docs/crates/aster_forge_metrics.md), [`aster_forge_panic`](docs/crates/aster_forge_panic.md), [`aster_forge_alloc`](docs/crates/aster_forge_alloc.md) |
-| Web and API | [`aster_forge_api`](docs/crates/aster_forge_api.md), [`aster_forge_api_docs_macros`](docs/crates/aster_forge_api_docs_macros.md), [`aster_forge_actix_middleware`](docs/crates/aster_forge_actix_middleware.md), [`aster_forge_actix_observability`](docs/crates/aster_forge_actix_observability.md), [`aster_forge_external_auth`](docs/crates/aster_forge_external_auth.md) |
-| Data, coordination, and background work | [`aster_forge_db`](docs/crates/aster_forge_db.md), [`aster_forge_cache`](docs/crates/aster_forge_cache.md), [`aster_forge_tasks`](docs/crates/aster_forge_tasks.md), [`aster_forge_mail`](docs/crates/aster_forge_mail.md), [`aster_forge_audit`](docs/crates/aster_forge_audit.md) |
-| Storage and domain-neutral helpers | [`aster_forge_storage_core`](docs/crates/aster_forge_storage_core.md), [`aster_forge_file_classification`](docs/crates/aster_forge_file_classification.md) |
-| Utilities | [`aster_forge_crypto`](docs/crates/aster_forge_crypto.md), [`aster_forge_utils`](docs/crates/aster_forge_utils.md), [`aster_forge_validation`](docs/crates/aster_forge_validation.md) |
+| Runtime kernel | [`aster_forge_runtime`](https://forge.astercosm.com/crates/aster_forge_runtime), [`aster_forge_config`](https://forge.astercosm.com/crates/aster_forge_config), [`aster_forge_logging`](https://forge.astercosm.com/crates/aster_forge_logging), [`aster_forge_metrics`](https://forge.astercosm.com/crates/aster_forge_metrics), [`aster_forge_panic`](https://forge.astercosm.com/crates/aster_forge_panic), [`aster_forge_alloc`](https://forge.astercosm.com/crates/aster_forge_alloc) |
+| Web and API | [`aster_forge_api`](https://forge.astercosm.com/crates/aster_forge_api), [`aster_forge_api_docs_macros`](https://forge.astercosm.com/crates/aster_forge_api_docs_macros), [`aster_forge_actix_middleware`](https://forge.astercosm.com/crates/aster_forge_actix_middleware), [`aster_forge_actix_observability`](https://forge.astercosm.com/crates/aster_forge_actix_observability), [`aster_forge_external_auth`](https://forge.astercosm.com/crates/aster_forge_external_auth) |
+| Data, coordination, and background work | [`aster_forge_db`](https://forge.astercosm.com/crates/aster_forge_db), [`aster_forge_cache`](https://forge.astercosm.com/crates/aster_forge_cache), [`aster_forge_tasks`](https://forge.astercosm.com/crates/aster_forge_tasks), [`aster_forge_mail`](https://forge.astercosm.com/crates/aster_forge_mail), [`aster_forge_audit`](https://forge.astercosm.com/crates/aster_forge_audit) |
+| Storage and domain-neutral helpers | [`aster_forge_storage_core`](https://forge.astercosm.com/crates/aster_forge_storage_core), [`aster_forge_file_classification`](https://forge.astercosm.com/crates/aster_forge_file_classification) |
+| Utilities | [`aster_forge_crypto`](https://forge.astercosm.com/crates/aster_forge_crypto), [`aster_forge_utils`](https://forge.astercosm.com/crates/aster_forge_utils), [`aster_forge_validation`](https://forge.astercosm.com/crates/aster_forge_validation) |
 
 ## Integration rules
 
@@ -62,11 +66,11 @@ All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94
 - Write explicit product-side adapters for metrics, runtime config, permission, audit presentation, and policy decisions.
 - Use AsterDrive and AsterYggdrasil as references, not as reasons to move business logic into Forge.
 
-See [`docs/guide/new-project-integration.md`](docs/guide/new-project-integration.md) for the target new-product shape and [`docs/guide/integration-principles.md`](docs/guide/integration-principles.md) for the detailed boundary rules.
+See [`New Project Integration`](https://forge.astercosm.com/guide/new-project-integration) for the target new-product shape and [`Integration Principles`](https://forge.astercosm.com/guide/integration-principles) for the detailed boundary rules.
 
 ## Service template
 
-New Aster services can start from the bundled `cargo generate` template:
+Start a new Aster service from the bundled `cargo generate` template:
 
 ```bash
 cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
@@ -75,18 +79,20 @@ cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
   --define server_port=3000
 ```
 
-The template wires a thin product entrypoint to Forge runtime components, keeps generation prompts to package description and HTTP port, uses the official AsterForge Git repository for Forge dependencies, uses conservative defaults for server/database/cache/config-sync/logging, derives project-name based defaults for database URL and config sync topic, leaves file logging disabled by default, includes a migration crate for Forge-owned infrastructure tables, and uses Cargo metadata such as `env!("CARGO_PKG_NAME")` for process, health, panic, and placeholder mail display names. Its build and CI maintenance follows AsterDrive: a pinned toolchain and split dev profile, isolated debug/test frontend fallbacks, release-time frontend enforcement, tracked OpenAPI/TypeScript artifacts with drift checks, coverage summaries, dependency-triggered audits, and PostgreSQL/MySQL migration smoke jobs. Product repositories still own their business routes, product migrations, config registry, audit enums/details, task payloads/results, and mail template rendering.
+The template wires a thin product entrypoint to Forge runtime components. Generation prompts are limited to the package description and HTTP port. Forge dependencies point at the official AsterForge Git repository, with conservative defaults for the server, database, cache, config sync, and logging. The database URL and config sync topic derive from the project name, and file logging stays disabled by default. A migration crate for Forge-owned infrastructure tables is included, and Cargo metadata such as `env!("CARGO_PKG_NAME")` provides the process, health, panic, and placeholder mail display names.
+
+Build and CI follow the AsterDrive model: a pinned toolchain with a split dev profile, isolated debug/test frontend fallbacks, release-time frontend enforcement, tracked OpenAPI/TypeScript artifacts with drift checks, coverage summaries, dependency-triggered audits, and PostgreSQL/MySQL migration smoke jobs. Product repositories still own their business routes, product migrations, config registry, audit enums/details, task payloads/results, and mail template rendering.
 
 ## Documentation
 
 - [Documentation site](https://forge.astercosm.com/)
-- [Chinese guide](docs/guide/index.md)
-- [New project integration guide](docs/guide/new-project-integration.md)
-- [English overview](docs/en/index.md)
-- [Crate reference pages](docs/crates/aster_forge_actix_middleware.md)
-- [Reference projects](docs/guide/reference-projects.md)
+- [Chinese guide](https://forge.astercosm.com/guide/index)
+- [New project integration guide](https://forge.astercosm.com/guide/new-project-integration)
+- [English overview](https://forge.astercosm.com/en/index)
+- [Crate reference pages](https://forge.astercosm.com/crates/aster_forge_actix_middleware)
+- [Reference projects](https://forge.astercosm.com/guide/reference-projects)
 
-The Chinese crate pages are currently the authoritative integration reference. English pages provide entry points while the crate-by-crate documentation is being mirrored.
+For now, the Chinese crate pages are the authoritative integration reference; the English pages serve as entry points while the crate-by-crate documentation is being mirrored.
 
 ## Development
 
