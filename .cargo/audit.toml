@@ -7,4 +7,14 @@ ignore = [
     # 仅通过 validator_derive / sea-orm-macros 的 proc-macro 编译期路径引入
     # RustSec 标记为 unmaintained，非已知漏洞；不进入服务运行时攻击面
     "RUSTSEC-2026-0173",
+    # rsa 0.9.10 Marvin Attack（计时侧信道，medium 5.9）
+    # 仅通过 openidconnect 4.x 引入，且只用于 OIDC JWKS 公钥验签；
+    # Marvin Attack 需要攻击者可探测的 RSA 私钥解密/签名预言机，
+    # 本项目任何代码路径都不持有 RSA 私钥，不存在解密预言机，不可利用。
+    # 上游无修复版本（No fixed upgrade is available），待 openidconnect 迁移后移除
+    "RUSTSEC-2023-0071",
+    # paste 1.0.15 unmaintained
+    # 仅通过 tikv-jemalloc-ctl 的 proc-macro 编译期路径引入（Linux allocator）
+    # 非已知漏洞，不进入服务运行时攻击面
+    "RUSTSEC-2024-0436",
 ]

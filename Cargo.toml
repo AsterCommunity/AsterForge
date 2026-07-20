@@ -60,9 +60,9 @@ rand = { version = "0.10.2", default-features = false, features = ["std", "std_r
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 redis = { version = "1.4.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 reqwest = { version = "0.13", features = ["json"] }
-sea-orm = { version = "2.0.0-rc.43", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+sea-orm = { version = "2.0.0", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 sha2 = "0.11"
 prometheus = { version = "0.14", default-features = false }
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
