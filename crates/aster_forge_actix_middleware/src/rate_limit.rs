@@ -37,6 +37,11 @@ type StringKeyedLimiter =
 /// matches one of the trusted proxy CIDR entries, the leftmost `X-Forwarded-For`
 /// address is used as the client key. Invalid or missing forwarded addresses
 /// fall back to the direct peer address.
+///
+/// Deployments without a peer address (e.g. Unix domain sockets) fall back to
+/// `127.0.0.1`, so every client shares one rate-limit bucket and a single
+/// burst rejects all of them. Products serving over UDS should disable IP
+/// rate limiting or use [`NormalizedStringRateLimiter`] business keys instead.
 type RejectionResponseFactory =
     dyn Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static;
 

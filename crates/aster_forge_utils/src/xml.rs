@@ -47,6 +47,14 @@ pub enum XmlSafetyError {
 }
 
 /// Validates XML without recursively constructing a document tree.
+///
+/// With `policy.reject_doctype`, a byte-level pre-scan rejects any
+/// `<!DOCTYPE` / `<!ENTITY` marker before parsing. The pre-scan does not
+/// understand CDATA sections or comments, so documents that legitimately
+/// contain those literals in text (e.g. `<![CDATA[<!DOCTYPE x>]]>`) are
+/// rejected too. That direction is fail-safe — no real declaration can slip
+/// through — and products that must accept such content should use a
+/// different parsing channel.
 pub fn validate_xml_input(
     bytes: &[u8],
     policy: XmlSafetyPolicy,

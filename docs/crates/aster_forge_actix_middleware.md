@@ -50,6 +50,7 @@ Forge 负责产品无关的 rate-limit 机械行为：
 
 - 解析可信代理 CIDR / 单 IP 列表。
 - 仅当 direct peer 是可信代理时，使用 `X-Forwarded-For` 最左侧地址作为客户端 IP。
+- 无 peer 地址的部署（Unix domain socket）所有客户端回落共享 `127.0.0.1` 这一个限流桶，一人突发全员被拒；UDS 形态的产品应禁用 IP 限流或改用 `NormalizedStringRateLimiter` 业务 key 限流。
 - 为 `actix-governor` 提供可复用 IP key extractor。
 - 从非零 `(seconds_per_request, burst_size)` 构造 governor quota。
 - 允许产品注入自己的 `429` response factory，同时继续复用可信代理和 client IP 提取。

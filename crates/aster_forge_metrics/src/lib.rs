@@ -174,6 +174,12 @@ pub type SharedDbMetricsRecorder = Arc<dyn DbMetricsRecorder>;
 #[allow(unused_variables)]
 pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
     /// Records an HTTP request.
+    ///
+    /// `method` and `route` become metric label values and MUST be low
+    /// cardinality: pass the route template (e.g. `/api/v1/files/{id}`),
+    /// never the raw request path. Raw paths containing IDs or UUIDs allocate
+    /// a new, never-freed time series per distinct value — a user-input-driven
+    /// memory bomb.
     fn record_http_request(&self, method: &str, route: &str, status: u16, duration_seconds: f64) {}
 
     /// Records an authentication event.

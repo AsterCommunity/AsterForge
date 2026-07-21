@@ -61,6 +61,8 @@ let classification = aster_forge_file_classification::classify_file(
 
 分类结果适合作为 API response 的派生字段。不要把它当成安全边界：用户可以上传伪造 MIME type 或奇怪扩展名，真正的处理器仍然要做自己的格式验证。
 
+扩展名冲突的裁决：`.ts` 归类为 Code（TypeScript 源码在存储产品里远多于 MPEG-TS 视频流）；真正的 MPEG transport stream 保留 `.m2ts` 扩展名和 `video/*` MIME 回退两条识别路径。
+
 ## 扩展名过滤
 
 `parse_extension_filters()` 适合用于管理端配置或搜索参数。它会：

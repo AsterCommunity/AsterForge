@@ -211,6 +211,10 @@ Unicode segmentation 策略。
 输入策略拒绝 `DOCTYPE` / `ENTITY` 声明，并把最大同时打开元素数限制为 128。校验同时要求
 输入是完整、格式正确、仅有一个根元素的 XML 文档。
 
+`reject_doctype` 策略会在解析前做字节级预扫描：预扫描不理解 CDATA 和注释，文本内容里合法出现
+`<!DOCTYPE` / `<!ENTITY` 字样的文档（如 `<![CDATA[<!DOCTYPE x>]]>`）也会被拒。误报方向是"拒绝"，
+属于 fail-safe；产品必须接受这类内容时应走其他解析通道。
+
 ```rust
 use aster_forge_utils::xml::{XmlSafetyPolicy, validate_xml_input};
 

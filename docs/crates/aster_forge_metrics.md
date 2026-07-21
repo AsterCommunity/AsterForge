@@ -53,6 +53,8 @@ aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 `MetricsRecorder` 包含数据库、HTTP、运行时配置、后台任务、外部系统等通用记录入口。产品可以实现自己的 recorder，把这些调用映射到实际后端。
 
+`record_http_request` 的 `method` / `route` 直接成为 Prometheus label 值，**必须传低基数路由模板**（如 `/api/v1/files/{id}`），禁止传原始请求路径——含 UUID/ID 的原始路径会让每个不同值分配一条永不释放的时间序列（用户输入驱动的内存炸弹）。Forge 自己的中间件调用点已经传模板；产品自实现调用点必须遵守同一约束。
+
 `PrometheusMetricsRecorder::enabled()` 与注册表初始化状态一致：未经 `init_metrics()` 构造的裸 recorder 返回 `false`（此时 `record_*` 全部早退），调用方可以据此跳过回调安装。
 
 数据库 query metrics 使用 `DbQueryMetric`，只包含 backend、低基数 query kind、status 和 elapsed duration。Forge 不把 SeaORM callback 类型或 SQL 全文暴露给 recorder；`aster_forge_db` 负责把 SeaORM metric callback 转成这个产品无关的结构。

@@ -139,9 +139,11 @@ const IMAGE_EXTENSIONS: &[&str] = &[
     "heif", "raw", "cr2", "nef", "orf", "rw2",
 ];
 
+// "ts" is deliberately absent: it collides with TypeScript source files and
+// code wins (see CODE_EXTENSIONS). MPEG transport streams keep the specific
+// "m2ts" extension and the `video/*` MIME fallback.
 const VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "m4v", "mov", "avi", "mkv", "webm", "flv", "wmv", "mpeg", "mpg", "3gp", "ts", "m2ts",
-    "ogv",
+    "mp4", "m4v", "mov", "avi", "mkv", "webm", "flv", "wmv", "mpeg", "mpg", "3gp", "m2ts", "ogv",
 ];
 
 const AUDIO_EXTENSIONS: &[&str] = &[
@@ -486,6 +488,24 @@ mod tests {
         assert_eq!(extension_from_name("report.pn g"), None);
         assert_eq!(extension_from_name("archive.tar.gz").as_deref(), Some("gz"));
         assert_eq!(extension_from_name("photo.JPEG").as_deref(), Some("jpeg"));
+    }
+
+    #[test]
+    fn classifies_ts_extension_as_code_not_video() {
+        // "ts" is TypeScript source in practice; MPEG transport streams keep
+        // the specific "m2ts" extension and the video/mp2t MIME fallback.
+        assert_eq!(
+            classify_file("index.ts", "video/mp2t").category,
+            FileCategory::Code
+        );
+        assert_eq!(
+            classify_file("stream.m2ts", "video/mp2t").category,
+            FileCategory::Video
+        );
+        assert_eq!(
+            classify_file("asset.unknown", "video/mp2t").category,
+            FileCategory::Video
+        );
     }
 
     #[test]
