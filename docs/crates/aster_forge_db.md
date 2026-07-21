@@ -544,7 +544,7 @@ aster_forge_runtime::AsterRuntime::builder()
 db_handles.close().await?;
 ```
 
-产品侧应把 `DbError` 映射到自己的启动错误或内部错误。不要吞掉 close 错误，至少要记录。
+产品侧应把 `DbError` 映射到自己的启动错误或内部错误。不要吞掉 close 错误，至少要记录。`close()` 总是尝试关闭所有池：split SQLite 配置下即使 reader 关闭失败，writer 池也会被关闭（`close` 消费句柄，提前返回会让 writer 池泄漏且无法重试），返回的是首个失败。
 
 ## 健康检查
 
@@ -606,6 +606,8 @@ registry.register_bundle(aster_forge_db::database_health_component(
 分类读取驱动提供的错误号、SQLSTATE 或 SQLx 的跨后端 `ErrorKind`，不匹配本地化的错误文本。`DbErr::sql_err()`
 只覆盖常见唯一键和外键约束；deadlock 等其他错误仍应通过 `RuntimeErr::SqlxError`
 下钻到驱动错误。Forge 只提供分类，不会替产品决定是否重跑事务。
+
+从 `sea_orm::DbErr` 构造 `DbError` 时统一走 `DbError::from`（自动携带分类），不要用 `DbError::database_operation`——后者会丢弃分类，让上层重试判断退化为"未分类错误不可重试"。audit_log helper、health check ping 和 PRAGMA 设置都遵循这条规则；只有携带产品自定义消息（无对应驱动错误）时才用 `database_operation`。
 
 所有重试层的可重试判断都从 `database_error_kind` 派生，任何一层都不读取错误消息文本：
 

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 const RESERVATION_MAX_ENTRIES: usize = 64 * 1024;
 
+#[derive(Debug)]
 pub struct ReservationSet {
     default_ttl: u64,
     entries: DashMap<String, Instant>,
@@ -47,6 +48,30 @@ impl ReservationSet {
         }
     }
 
+    /// Reserves `key` and returns a guard releasing the reservation on drop.
+    ///
+    /// Callers that lose an insert-if-absent race between reserving and
+    /// publishing the value must not keep the reservation: it would falsely
+    /// block every later caller until its TTL expired, including after the
+    /// winning value itself is evicted (TTL eviction never touches this set).
+    /// Returning early with the guard in scope releases it automatically;
+    /// call [`ReservationGuard::commit`] once the value is published to keep
+    /// the reservation for its co-lifetime with the value.
+    pub fn reserve_guarded<'a>(
+        &'a self,
+        key: &'a str,
+        ttl_secs: Option<u64>,
+    ) -> Option<ReservationGuard<'a>> {
+        if !self.reserve(key, ttl_secs) {
+            return None;
+        }
+        Some(ReservationGuard {
+            set: self,
+            key,
+            committed: false,
+        })
+    }
+
     pub fn remove(&self, key: &str) {
         self.entries.remove(key);
     }
@@ -66,6 +91,35 @@ impl ReservationSet {
 
     fn prune_expired(&self, now: Instant) {
         self.entries.retain(|_, expires_at| *expires_at > now);
+    }
+}
+
+/// RAII handle for one held reservation.
+///
+/// Dropping the guard releases the reservation unless it has been committed.
+/// This makes the lose-the-race path of insert-if-absent unable to leak the
+/// reservation by construction instead of by discipline at every return site.
+#[derive(Debug)]
+pub struct ReservationGuard<'a> {
+    set: &'a ReservationSet,
+    key: &'a str,
+    committed: bool,
+}
+
+impl ReservationGuard<'_> {
+    /// Keeps the reservation after the guard drops. Call once the value the
+    /// reservation protects has been published; the reservation then lives
+    /// for its co-lifetime with that value.
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ReservationGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.set.remove(self.key);
+        }
     }
 }
 
@@ -112,5 +166,32 @@ mod tests {
         // The value this reservation protected expired at insert, so the key must be
         // re-reservable immediately.
         assert!(reservations.reserve("nonce", Some(0)));
+    }
+
+    #[test]
+    fn uncommitted_guard_releases_reservation_on_drop() {
+        let reservations = ReservationSet::new(60);
+        let guard = reservations
+            .reserve_guarded("nonce", Some(60))
+            .expect("first reservation should succeed");
+        assert!(reservations.reserve_guarded("nonce", Some(60)).is_none());
+
+        drop(guard);
+
+        // Losing the race drops the guard uncommitted, so the key is reservable again.
+        assert!(reservations.reserve_guarded("nonce", Some(60)).is_some());
+    }
+
+    #[test]
+    fn committed_guard_keeps_reservation() {
+        let reservations = ReservationSet::new(60);
+        let guard = reservations
+            .reserve_guarded("nonce", Some(60))
+            .expect("first reservation should succeed");
+
+        guard.commit();
+
+        // The published value's co-lifetime reservation survives the guard.
+        assert!(reservations.reserve_guarded("nonce", Some(60)).is_none());
     }
 }

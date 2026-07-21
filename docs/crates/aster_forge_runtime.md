@@ -40,7 +40,7 @@ task processing lease -> 哪个 worker 正在执行某一条任务
 task dedupe key       -> 同一个计划触发点只能创建一条任务
 ```
 
-典型 singleton group 包括 background task dispatcher、mail outbox dispatch、system health refresh，以及 session、token、audit、task artifact cleanup 等周期维护任务。每个实例都可以启动 supervisor，但只有拿到 lease 的实例会启动 worker group；其他实例 standby 并按间隔重试。
+典型 singleton group 包括 background task dispatcher、mail outbox dispatch、system health refresh，以及 session、token、audit、task artifact cleanup 等周期维护任务。每个实例都可以启动 supervisor，但只有拿到 lease 的实例会启动 worker group；其他实例 standby 并按间隔重试。TTL 过大导致过期时间超出 `DateTime` 可表示范围时饱和到 `DateTime::<Utc>::MAX_UTC`（等价于永不过期），不会因 chrono 加法溢出 panic。
 
 ```rust
 let lease_config = aster_forge_runtime::RuntimeLeaseConfig::new(

@@ -73,12 +73,30 @@ impl DbHandles {
     /// Split SQLite handles own two independent pools, so both reader and writer must be closed.
     /// Single-handle configurations clone the same pool into both fields and only close the writer
     /// once.
+    ///
+    /// Both pools are always asked to close, even when the reader close fails: an early return
+    /// would leak the writer pool (SQLite WAL/file handles) with no way to retry, because `close`
+    /// consumes the handles. The reader error, being the first failure, is the one returned.
     pub async fn close(self) -> Result<()> {
-        if self.sqlite_read_write_split {
-            self.reader.close().await.map_err(DbError::from)?;
-        }
-        self.writer.close().await.map_err(DbError::from)
+        let reader_result = if self.sqlite_read_write_split {
+            Some(self.reader.close().await)
+        } else {
+            None
+        };
+        let writer_result = self.writer.close().await;
+        first_close_error(reader_result, writer_result)
     }
+}
+
+/// Returns the first close failure after both pools have been asked to close.
+fn first_close_error(
+    reader: Option<std::result::Result<(), sea_orm::DbErr>>,
+    writer: std::result::Result<(), sea_orm::DbErr>,
+) -> Result<()> {
+    if let Some(Err(error)) = reader {
+        return Err(DbError::from(error));
+    }
+    writer.map_err(DbError::from)
 }
 
 /// Connects to the configured database and installs a metrics callback.
@@ -332,11 +350,46 @@ fn db_query_metric_from_sea_orm(info: &sea_orm::metric::Info<'_>) -> DbQueryMetr
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_database_url;
+    use super::{first_close_error, normalize_database_url};
     use crate::connection::DatabaseConfig;
     use aster_forge_metrics::{DbQueryKind, NoopDbMetrics};
-    use sea_orm::{ConnectionTrait, TransactionTrait};
+    use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
     use std::sync::Arc;
+
+    #[test]
+    fn first_close_error_prefers_the_reader_failure() {
+        let error = first_close_error(
+            Some(Err(DbErr::Custom("reader blew up".to_string()))),
+            Err(DbErr::Custom("writer blew up".to_string())),
+        )
+        .expect_err("both pools failing must surface an error");
+        assert!(error.to_string().contains("reader blew up"));
+
+        let error = first_close_error(
+            Some(Err(DbErr::Custom("reader blew up".to_string()))),
+            Ok(()),
+        )
+        .expect_err("reader failure must surface even when the writer closes cleanly");
+        assert!(error.to_string().contains("reader blew up"));
+    }
+
+    #[test]
+    fn first_close_error_surfaces_writer_failure_and_clean_runs() {
+        let error = first_close_error(
+            Some(Ok(())),
+            Err(DbErr::Custom("writer blew up".to_string())),
+        )
+        .expect_err("writer failure must surface when the reader closed cleanly");
+        assert!(error.to_string().contains("writer blew up"));
+
+        // Single-handle configurations close only the writer.
+        let error = first_close_error(None, Err(DbErr::Custom("writer blew up".to_string())))
+            .expect_err("writer failure must surface without a split reader");
+        assert!(error.to_string().contains("writer blew up"));
+
+        assert!(first_close_error(Some(Ok(())), Ok(())).is_ok());
+        assert!(first_close_error(None, Ok(())).is_ok());
+    }
 
     #[test]
     fn sqlite_urls_without_query_default_to_rwc_mode() {

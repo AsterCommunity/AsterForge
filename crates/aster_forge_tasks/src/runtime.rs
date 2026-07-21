@@ -184,7 +184,9 @@ impl BackgroundTasks {
         } = self;
         shutdown_token.cancel();
 
-        let graceful_shutdown = async { while handles.join_next().await.is_some() {} };
+        let graceful_shutdown = async {
+            drain_task_handles(&mut handles).await;
+        };
         if tokio::time::timeout(shutdown_grace, graceful_shutdown)
             .await
             .is_err()
@@ -196,9 +198,28 @@ impl BackgroundTasks {
                 grace_secs = shutdown_grace.as_secs(),
                 "background tasks did not stop before the shutdown grace period; aborting remaining workers"
             );
-            while handles.join_next().await.is_some() {}
+            drain_task_handles(&mut handles).await;
         }
     }
+}
+
+/// Drains the join set, logging workers that exited by panic.
+///
+/// Cancellation is an expected outcome once `abort_all` has run, so only
+/// panics are reported. Returns how many workers panicked.
+async fn drain_task_handles(handles: &mut JoinSet<()>) -> usize {
+    let mut panicked = 0;
+    while let Some(result) = handles.join_next().await {
+        match result {
+            Ok(()) => {}
+            Err(error) if error.is_panic() => {
+                panicked += 1;
+                tracing::error!(%error, "background task worker panicked");
+            }
+            Err(_) => {}
+        }
+    }
+    panicked
 }
 
 impl Default for BackgroundTasks {
@@ -467,7 +488,20 @@ pub async fn run_dispatch_worker<State, BaseFn, MaxFn, WakeFn, WakeFut, Dispatch
 }
 
 /// Returns a periodic delay with bounded positive jitter.
+///
+/// A zero base interval would hot-spin the runner loop — and, for scheduled
+/// tasks, the database — so it is raised to the same one-second floor the
+/// dispatch worker enforces in [`effective_dispatch_base_interval`]. Non-zero
+/// sub-second intervals pass through untouched: they are a deliberate caller
+/// choice (fast tests, high-frequency in-memory polls), not the accident this
+/// floor guards against.
 pub fn periodic_sleep_duration(base_interval: Duration, jitter_cap: Option<Duration>) -> Duration {
+    let base_interval = if base_interval.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        base_interval
+    };
+
     let Some(jitter_cap) = jitter_cap else {
         return base_interval;
     };
@@ -534,9 +568,9 @@ mod tests {
     use super::{
         BACKGROUND_TASK_DISPATCH_ERROR_BACKOFF_CAP, BackgroundTaskDispatchBackoff,
         BackgroundTaskDispatchIteration, BackgroundTaskDispatchTrigger, BackgroundTasks,
-        PeriodicTask, RecordedTaskHooks, effective_jitter_cap, periodic_sleep_duration,
-        run_dispatch_worker, run_leased_background_tasks, run_periodic_task,
-        run_recorded_task_iteration,
+        PeriodicTask, RecordedTaskHooks, drain_task_handles, effective_jitter_cap,
+        periodic_sleep_duration, run_dispatch_worker, run_leased_background_tasks,
+        run_periodic_task, run_recorded_task_iteration,
     };
     use aster_forge_runtime::{
         RuntimeLeaseAcquire, RuntimeLeaseClaim, RuntimeLeaseConfig, RuntimeLeaseStore,
@@ -562,6 +596,43 @@ mod tests {
     fn periodic_sleep_duration_is_unchanged_without_jitter() {
         let base = Duration::from_secs(5);
         assert_eq!(periodic_sleep_duration(base, None), base);
+    }
+
+    #[test]
+    fn periodic_sleep_duration_raises_zero_interval_to_one_second_floor() {
+        // A zero interval would hot-spin the runner loop; the scheduled variant would
+        // tight-loop against the database. The dispatch worker already enforces the
+        // same floor via effective_dispatch_base_interval.
+        assert_eq!(
+            periodic_sleep_duration(Duration::ZERO, None),
+            Duration::from_secs(1)
+        );
+
+        // Jitter is derived from the clamped base, so the delay lands in [1s, 1.1s].
+        for _ in 0..64 {
+            let delay = periodic_sleep_duration(Duration::ZERO, Some(Duration::from_secs(30)));
+            assert!(delay >= Duration::from_secs(1));
+            assert!(delay <= Duration::from_millis(1_100));
+        }
+
+        // Non-zero sub-second intervals are a deliberate choice (e.g. tests) and pass through.
+        let tiny = Duration::from_millis(50);
+        assert_eq!(periodic_sleep_duration(tiny, None), tiny);
+    }
+
+    #[tokio::test]
+    async fn drain_task_handles_counts_panics_and_ignores_cancellation() {
+        let mut handles = tokio::task::JoinSet::new();
+        handles.spawn(async { panic!("worker exploded") });
+        handles.spawn(async {});
+        let abort_handle = handles.spawn(async { std::future::pending::<()>().await });
+        abort_handle.abort();
+
+        // The panicked worker is the only one reported: the aborted worker ends in
+        // cancellation, which is the expected outcome after abort_all.
+        let panicked = drain_task_handles(&mut handles).await;
+
+        assert_eq!(panicked, 1);
     }
 
     #[test]

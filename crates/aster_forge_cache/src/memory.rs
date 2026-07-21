@@ -110,8 +110,12 @@ impl CacheBackend for MemoryCache {
     async fn get_bytes(&self, key: &str) -> Option<Vec<u8>> {
         let value = self.cache.get(key).await?;
         if value.is_expired() {
+            // The value expired in the sliver between moka's read and ours. moka's
+            // per-entry expiry already hides the entry from future reads, so only the
+            // reservation co-lifetime needs help here. Do NOT `cache.remove`: between
+            // our get and that remove a concurrent `set_bytes` could insert a fresh
+            // value, and the remove would silently delete it.
             self.reservations.remove(key);
-            self.cache.remove(key).await;
             return None;
         }
         Some(value.bytes)
@@ -136,16 +140,23 @@ impl CacheBackend for MemoryCache {
         if self.get_bytes(key).await.is_some() {
             return false;
         }
-        if !self.reservations.reserve(key, ttl_secs) {
+        let Some(guard) = self.reservations.reserve_guarded(key, ttl_secs) else {
             return false;
-        }
+        };
         if self.get_bytes(key).await.is_some() {
+            // Lost the race to a concurrently inserted value. Dropping the guard
+            // releases our reservation: keeping it would falsely block every later
+            // `set_bytes_if_absent` until its TTL expired — including after the
+            // winning value itself is evicted (TTL eviction never touches the set).
             return false;
         }
 
         self.cache
             .insert(key.to_string(), self.cache_value(value, ttl_secs))
             .await;
+        // The value is published; the reservation now lives for its co-lifetime
+        // with the value instead of ending with this call.
+        guard.commit();
         true
     }
 
@@ -211,6 +222,37 @@ mod tests {
             .count();
 
         assert_eq!(successes, 1);
+    }
+
+    #[tokio::test]
+    async fn set_bytes_if_absent_keeps_reservation_after_successful_insert() {
+        let cache = MemoryCache::new(60);
+
+        assert!(
+            cache
+                .set_bytes_if_absent("nonce", b"claimed".to_vec(), Some(60))
+                .await
+        );
+
+        // The committed reservation outlives the call, co-living with the value.
+        assert!(!cache.reservations.reserve("nonce", Some(60)));
+    }
+
+    #[tokio::test]
+    async fn set_bytes_if_absent_takes_no_reservation_when_value_is_already_visible() {
+        let cache = MemoryCache::new(60);
+        cache.set_bytes("nonce", b"plain".to_vec(), Some(60)).await;
+
+        assert!(
+            !cache
+                .set_bytes_if_absent("nonce", b"claimed".to_vec(), Some(60))
+                .await
+        );
+
+        // The first visibility check lost before reserving, so the key stays
+        // reservable. The lose-after-reserving path releases its reservation via
+        // ReservationGuard (unit-tested in the reservation module).
+        assert!(cache.reservations.reserve("nonce", Some(60)));
     }
 
     #[tokio::test]

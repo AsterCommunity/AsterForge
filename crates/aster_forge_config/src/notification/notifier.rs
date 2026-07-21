@@ -93,10 +93,12 @@ impl Default for InMemoryConfigNotifier {
 #[async_trait]
 impl ConfigChangeNotifier for InMemoryConfigNotifier {
     async fn publish_reload(&self, message: ConfigReloadMessage) -> Result<()> {
-        self.sender
-            .send(ConfigChangeEvent::Reload(message))
-            .map(|_| ())
-            .map_err(|error| ConfigCoreError::notification(error.to_string()))
+        // broadcast::Sender::send fails only when no receivers exist. A reload
+        // notification nobody is listening to is not an error: the change itself
+        // already succeeded, and single-process deployments may legitimately run
+        // without a subscription worker.
+        let _ = self.sender.send(ConfigChangeEvent::Reload(message));
+        Ok(())
     }
 
     async fn subscribe(&self) -> Result<ConfigNotification> {

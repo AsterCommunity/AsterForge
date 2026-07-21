@@ -108,6 +108,24 @@ fn zero_reconnect_policy() -> ConfigReloadReconnectPolicy {
 }
 
 #[tokio::test]
+async fn in_memory_notifier_publish_without_subscribers_is_ok() {
+    let notifier = InMemoryConfigNotifier::default();
+
+    // broadcast::Sender::send fails only when no receivers exist. Single-process
+    // deployments may run no subscription worker, and a change that already
+    // succeeded must not report failure just because nobody is listening.
+    notifier
+        .publish_reload(ConfigReloadMessage::new(
+            "aster_test",
+            "runtime-a",
+            ["feature_enabled"],
+            ConfigNotificationSource::Api,
+        ))
+        .await
+        .expect("publishing without subscribers must succeed");
+}
+
+#[tokio::test]
 async fn in_memory_notifier_broadcasts_reload_messages() {
     let notifier = InMemoryConfigNotifier::default();
     let mut subscription = notifier.subscribe().await.unwrap();

@@ -378,9 +378,11 @@ pub fn validate_storage_value(value_type: ConfigValueType, value: &str) -> Resul
             }
         }
         ConfigValueType::Number => {
-            if trimmed.parse::<f64>().is_err() {
+            // f64 parsing accepts NaN/inf literals; storing them would propagate
+            // non-finite values into every reader's arithmetic.
+            if !trimmed.parse::<f64>().is_ok_and(f64::is_finite) {
                 return Err(ConfigCoreError::invalid_value(
-                    "number config must be a valid number",
+                    "number config must be a valid finite number",
                 ));
             }
         }
@@ -661,6 +663,13 @@ mod tests {
 
         assert!(validate_storage_value(ConfigValueType::Number, "1.5").is_ok());
         assert!(validate_storage_value(ConfigValueType::Number, "abc").is_err());
+
+        // f64 parsing accepts non-finite literals, but NaN/inf stored as config
+        // would propagate into every reader's arithmetic.
+        assert!(validate_storage_value(ConfigValueType::Number, "NaN").is_err());
+        assert!(validate_storage_value(ConfigValueType::Number, "inf").is_err());
+        assert!(validate_storage_value(ConfigValueType::Number, "-inf").is_err());
+        assert!(validate_storage_value(ConfigValueType::Number, "1e308").is_ok());
 
         assert!(validate_storage_value(ConfigValueType::StringArray, r#"["a"]"#).is_ok());
         assert!(validate_storage_value(ConfigValueType::StringArray, r#""a""#).is_err());

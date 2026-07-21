@@ -108,7 +108,13 @@ impl RuntimeLeaseConfig {
     }
 
     fn expires_at(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now + chrono::Duration::from_std(self.effective_ttl()).unwrap_or(chrono::Duration::MAX)
+        let ttl = chrono::Duration::from_std(self.effective_ttl()).unwrap_or(chrono::Duration::MAX);
+        // `now + ttl` would panic inside chrono's Add impl when the sum overflows
+        // DateTime's representable range (operator panics bypass clippy::panic).
+        // A lease expiring at the end of time is the correct saturated semantics
+        // for absurd TTLs.
+        now.checked_add_signed(ttl)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC)
     }
 }
 
@@ -358,9 +364,29 @@ mod tests {
         RuntimeLeaseStore, new_runtime_lease_owner_id, run_runtime_lease_supervisor,
     };
 
+    #[test]
+    fn expires_at_saturates_instead_of_panicking_on_absurd_ttl() {
+        let now = Utc::now();
+
+        // Beyond chrono::Duration's range: from_std fails and Duration::MAX is used.
+        let config =
+            RuntimeLeaseConfig::new("test.background", "node-a").ttl(Duration::from_secs(u64::MAX));
+        assert_eq!(config.expires_at(now), DateTime::<Utc>::MAX_UTC);
+
+        // Inside chrono::Duration's range but beyond DateTime's representable range:
+        // must saturate, not panic inside chrono's Add impl.
+        let config = RuntimeLeaseConfig::new("test.background", "node-a")
+            .ttl(Duration::from_secs(10_u64.pow(15)));
+        assert_eq!(config.expires_at(now), DateTime::<Utc>::MAX_UTC);
+
+        // Normal TTLs still add exactly.
+        let config =
+            RuntimeLeaseConfig::new("test.background", "node-a").ttl(Duration::from_secs(60));
+        assert_eq!(config.expires_at(now), now + chrono::Duration::seconds(60));
+    }
+
     #[derive(Debug, Clone)]
     struct TestLeaseError;
-
     impl fmt::Display for TestLeaseError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("test lease error")

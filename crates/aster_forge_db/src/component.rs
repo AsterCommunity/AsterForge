@@ -158,7 +158,7 @@ pub async fn check_database_component(db: &DatabaseConnection) -> HealthComponen
 /// Pings the database connection used by the standard health check.
 pub async fn ping_database(db: &DatabaseConnection) -> crate::Result<()> {
     tracing::debug!("pinging database health check");
-    db.ping().await.map_err(crate::DbError::database_operation)
+    db.ping().await.map_err(crate::DbError::from)
 }
 
 #[cfg(test)]

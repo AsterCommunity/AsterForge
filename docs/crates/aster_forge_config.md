@@ -50,7 +50,7 @@ aster_forge_config = {
 - `ConfigDefinition`：一个系统配置项的静态定义。
 - `ConfigRegistry`：配置定义注册表，负责 key 查找、结构验证、normalizer 调用、API value 到 storage value 的预处理、default seed 记录生成和 metadata overlay。
 - `ConfigValue`：API-facing 配置值，当前支持 scalar string 和 string array，并提供存储转换、展示脱敏和读取容错。
-- `ConfigValueType`：存储值类型，包括 `string`、`multiline`、`string_array`、`string_enum`、`string_enum_set`、`number`、`boolean`。
+- `ConfigValueType`：存储值类型，包括 `string`、`multiline`、`string_array`、`string_enum`、`string_enum_set`、`number`、`boolean`。`number` 的结构校验要求有限数值——`NaN`/`inf`/`-inf` 字面量虽然能被 f64 解析，但会被拒绝，防止非有限值传播进读取方的算术。
 - `parse_single_string_enum_selection()`：解析 `string_enum`，并兼容历史单元素 JSON array。
 - `parse_string_enum_set_selection()` / `normalize_string_enum_set_selection()`：解析和规范化 `string_enum_set`。
 - `parse_string_array_config_value()`：解析配置存储中的 JSON string array，让产品侧继续负责后续 URL、域名、枚举等业务规范化。
@@ -403,6 +403,8 @@ notifier.publish_reload(message).await?;
 ```
 
 收到通知的进程应该从权威存储重新加载配置，而不是信任消息里的旧值。这个设计避免 pub/sub 丢包、乱序或 stale payload 直接覆盖本地快照。
+
+`publish_reload` 在没有订阅者时返回 `Ok`：配置变更本身已经成功，单进程部署不起订阅 worker 是合法形态（Redis PUBLISH 对零接收者本来也不报错，两种 notifier 语义一致）。
 
 `redis-pubsub` feature 下可以用：
 

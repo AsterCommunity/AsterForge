@@ -496,7 +496,7 @@ where
         .into_active_model()?
         .insert(db)
         .await
-        .map_err(crate::DbError::database_operation)
+        .map_err(crate::DbError::from)
 }
 
 /// Inserts many validated audit log create requests.
@@ -528,7 +528,7 @@ where
     Entity::insert_many(models)
         .exec(db)
         .await
-        .map_err(crate::DbError::database_operation)?;
+        .map_err(crate::DbError::from)?;
     Ok(())
 }
 
@@ -546,7 +546,7 @@ where
         .filter(Column::CreatedAt.lt(end))
         .count(db)
         .await
-        .map_err(crate::DbError::database_operation)
+        .map_err(crate::DbError::from)
 }
 
 /// Counts audit log rows for any of the supplied action wire values in `[start, end)`.
@@ -568,7 +568,7 @@ where
         .filter(Column::Action.is_in(actions.iter().copied()))
         .count(db)
         .await
-        .map_err(crate::DbError::database_operation)
+        .map_err(crate::DbError::from)
 }
 
 /// Counts distinct positive user ids for any supplied action wire value in `[start, end)`.
@@ -597,7 +597,7 @@ where
         .into_tuple::<i64>()
         .one(db)
         .await
-        .map_err(crate::DbError::database_operation)?
+        .map_err(crate::DbError::from)?
         .unwrap_or(0);
 
     u64::try_from(count)
@@ -638,7 +638,7 @@ where
         .clone()
         .count(db)
         .await
-        .map_err(crate::DbError::database_operation)?;
+        .map_err(crate::DbError::from)?;
     if let Some((created_at, id)) = query.cursor {
         statement = statement.filter(
             Condition::any().add(Column::CreatedAt.lt(created_at)).add(
@@ -655,7 +655,7 @@ where
         .limit(limit.saturating_add(1))
         .all(db)
         .await
-        .map_err(crate::DbError::database_operation)?;
+        .map_err(crate::DbError::from)?;
     AuditLogCursorSlice::from_overfetch(items, total, limit)
 }
 
@@ -668,7 +668,7 @@ where
         .filter(Column::CreatedAt.lt(before))
         .exec(db)
         .await
-        .map_err(crate::DbError::database_operation)?;
+        .map_err(crate::DbError::from)?;
     Ok(result.rows_affected)
 }
 
@@ -741,12 +741,13 @@ mod tests {
     use super::{
         AUDIT_LOG_ACTION_CREATED_USER_INDEX, AUDIT_LOG_CREATED_ID_INDEX,
         AUDIT_LOG_ENTITY_TYPE_CREATED_ID_INDEX, AUDIT_LOG_USER_CREATED_ID_INDEX, ActiveModel,
-        AuditLogCreate, AuditLogDbStore, AuditLogQuery, Entity,
+        AuditLogCreate, AuditLogDbStore, AuditLogQuery, Entity, create_audit_log_rows,
         create_audit_logs_action_created_user_index, create_audit_logs_base_indexes,
         create_audit_logs_created_id_index, create_audit_logs_entity_type_created_id_index,
         create_audit_logs_query_indexes, create_audit_logs_table,
         create_audit_logs_user_created_id_index,
     };
+    use crate::DatabaseErrorKind;
 
     async fn sqlite_store() -> AuditLogDbStore {
         let db = sea_orm::Database::connect("sqlite::memory:")
@@ -780,6 +781,38 @@ mod tests {
             user_agent: Some("test".to_string()),
             created_at,
         }
+    }
+
+    #[tokio::test]
+    async fn create_audit_log_rows_preserves_driver_error_classification() {
+        let db = sea_orm::Database::connect("sqlite::memory:")
+            .await
+            .expect("audit log test database should connect");
+        db.execute(&create_audit_logs_table(DbBackend::Sqlite))
+            .await
+            .expect("audit logs table builder should execute");
+
+        let duplicate_row = || {
+            let mut model = create_request(Utc::now(), "audit.test")
+                .into_active_model()
+                .expect("create request should convert into an active model");
+            model.id = Set(1);
+            model
+        };
+
+        create_audit_log_rows(&db, vec![duplicate_row()])
+            .await
+            .expect("first insert should succeed");
+        let error = create_audit_log_rows(&db, vec![duplicate_row()])
+            .await
+            .expect_err("re-inserting the same id must violate the primary key");
+
+        // The helper must keep the driver-native classification (unique violation)
+        // instead of flattening the error into an unclassified operation failure.
+        assert_eq!(
+            error.database_error_kind(),
+            Some(DatabaseErrorKind::UniqueConstraint)
+        );
     }
 
     #[test]
