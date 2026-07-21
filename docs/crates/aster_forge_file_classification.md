@@ -45,8 +45,10 @@ aster_forge_file_classification = { git = "https://github.com/AsterCommunity/Ast
 - `normalize_extension_filter(raw)`
 - `parse_extension_filters(raw)`
 - `parse_file_category(raw)`
-- `extension_from_name(name)`
+- `extension_from_name(name)`（只接受 ASCII 字母数字候选；`"dir.ext/file"`、`"report.pn g"` 这类路径样或含空白/标点的输入返回 `None`，因为提取值可能入库和展示）
 - `compound_extension_from_name(name)`
+
+MIME 回退分类里 spreadsheet/csv 分支先于通用 `text/` 分支，未知扩展名的 `text/csv` 会正确归类为 Spreadsheet 而非 Document。
 
 ## 接入示例
 

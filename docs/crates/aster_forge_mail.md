@@ -72,7 +72,7 @@
 `MailRuntimeSettings` 是发送前的产品无关 SMTP 设置快照：
 
 - `is_configured()` 要求 `smtp_host` 和 `from_address` 非空；
-- `is_ready_for_delivery()` 在已配置基础上，要求 `smtp_username` 和 `smtp_password` 同时为空或同时非空。
+- `is_ready_for_delivery()` 在已配置基础上，要求 `smtp_username` 和 `smtp_password` 同时为空或同时非空（按 trim 后判定）；transport 构造侧用同一 trim 口径决定是否挂凭据，纯空白用户名不会触发认证。
 
 产品侧仍然负责：
 
@@ -374,9 +374,9 @@ let message = MailMessage {
 - `TemplatePlaceholderSet`
 - `RenderedMail`
 - `render_template(subject_template, html_template, placeholders)`
-- `render_placeholders(template, values)`
+- `render_placeholders(template, values)`（单遍扫描替换：值里出现的 `{{key}}` 不会被二次展开，未知或未闭合的 token 保持字面）
 - `escape_html(value)`
-- `html_to_text(html)`
+- `html_to_text(html)`（head/script/style/title 内容剔除，闭合标签弹到最近匹配项以容错误嵌套；HTML 实体单遍解码，`&amp;` 最后处理避免双重解码）
 
 Forge 不定义任何产品模板 code，也不解析产品 payload。产品侧把自己的模板注册成静态定义：
 

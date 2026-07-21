@@ -86,7 +86,7 @@ aster_forge_external_auth = {
 - `normalize::email_domain_allowed(raw, email)`
 - `normalize::state_hash(state)`
 - `normalize::token_hash(token)`
-- `normalize::normalize_return_path(value, max_len)`
+- `normalize::normalize_return_path(value, max_len)`（拒绝非 `/` 开头、`//` 开头、反斜杠和任何控制字符，防止 redirect/log 注入）
 - `normalize::normalize_flow_token(value, max_len)`
 
 错误层：

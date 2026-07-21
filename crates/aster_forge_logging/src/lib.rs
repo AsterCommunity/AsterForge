@@ -91,7 +91,10 @@ pub struct LoggingInitResult {
 ///
 /// File writer failures fall back to stdout and are reported through [`LoggingInitResult::warning`].
 /// `RUST_LOG` takes precedence over [`LoggingConfig::level`] and also produces a warning so startup
-/// logs can surface which setting actually won.
+/// logs can surface which setting actually won; an invalid `RUST_LOG` value warns and falls back to
+/// the configured level instead of being silently ignored. Installing a second global subscriber
+/// (embedded runtimes, shared test processes) keeps the existing subscriber and warns rather than
+/// panicking.
 pub fn init_logging(config: &LoggingConfig) -> LoggingInitResult {
     let (writer, warning) = build_writer(config);
     let (non_blocking_writer, guard) = tracing_appender::non_blocking(writer);
@@ -109,10 +112,21 @@ pub fn init_logging(config: &LoggingConfig) -> LoggingInitResult {
     #[cfg(debug_assertions)]
     let builder = builder.with_file(true).with_line_number(true);
 
-    if config.format == DEFAULT_JSON_FORMAT {
-        builder.json().init();
+    let init_result = if config.format == DEFAULT_JSON_FORMAT {
+        builder.json().try_init()
     } else {
-        builder.init();
+        builder.try_init()
+    };
+    if let Err(error) = init_result {
+        // A global subscriber already exists (embedded runtimes, tests sharing
+        // a process). Panicking would break the crate's graceful-degradation
+        // contract, so degrade to a startup warning like the other fallbacks.
+        push_warning(
+            &mut warning,
+            format!(
+                "Global tracing subscriber was already installed; keeping the existing subscriber: {error}"
+            ),
+        );
     }
 
     LoggingInitResult { guard, warning }
@@ -175,26 +189,54 @@ fn build_file_writer(file: &str) -> (Box<dyn Write + Send + Sync>, Option<String
 }
 
 fn build_filter(level: &str, warning: &mut Option<String>) -> EnvFilter {
-    match EnvFilter::try_from_default_env() {
-        Ok(filter) => {
-            push_warning(
-                warning,
-                format!(
-                    "RUST_LOG environment variable detected; config.toml logging.level='{level}' is overridden by RUST_LOG"
-                ),
-            );
-            filter
-        }
-        Err(_) => match EnvFilter::try_new(level) {
-            Ok(filter) => filter,
+    // Probe RUST_LOG explicitly: `EnvFilter::try_from_default_env` cannot
+    // distinguish "unset" from "invalid", and silently falling back to the
+    // config level would leave operators believing their override worked.
+    match std::env::var("RUST_LOG") {
+        Ok(value) => match EnvFilter::try_new(&value) {
+            Ok(filter) => {
+                push_warning(
+                    warning,
+                    format!(
+                        "RUST_LOG environment variable detected; config.toml logging.level='{level}' is overridden by RUST_LOG"
+                    ),
+                );
+                filter
+            }
             Err(error) => {
                 push_warning(
                     warning,
-                    format!("Invalid logging.level '{level}': {error}. Falling back to 'info'."),
+                    format!(
+                        "Invalid RUST_LOG value '{value}': {error}. Falling back to logging.level='{level}'."
+                    ),
                 );
-                EnvFilter::new("info")
+                build_config_filter(level, warning)
             }
         },
+        Err(std::env::VarError::NotPresent) => build_config_filter(level, warning),
+        Err(std::env::VarError::NotUnicode(value)) => {
+            push_warning(
+                warning,
+                format!(
+                    "Invalid RUST_LOG value '{}': not valid Unicode. Falling back to logging.level='{level}'.",
+                    value.to_string_lossy()
+                ),
+            );
+            build_config_filter(level, warning)
+        }
+    }
+}
+
+fn build_config_filter(level: &str, warning: &mut Option<String>) -> EnvFilter {
+    match EnvFilter::try_new(level) {
+        Ok(filter) => filter,
+        Err(error) => {
+            push_warning(
+                warning,
+                format!("Invalid logging.level '{level}': {error}. Falling back to 'info'."),
+            );
+            EnvFilter::new("info")
+        }
     }
 }
 
@@ -345,6 +387,62 @@ mod tests {
             warning.contains("Invalid logging.level")
                 || warning.contains("RUST_LOG environment variable detected"),
             "{warning}"
+        );
+    }
+
+    #[test]
+    fn init_logging_warns_instead_of_panicking_when_subscriber_already_installed() {
+        // The first install wins (this is the only in-process global init in
+        // the test binary; the other init test uses a child process).
+        let _first = init_logging(&LoggingConfig::default());
+
+        let second = init_logging(&LoggingConfig::default());
+        let warning = second
+            .warning
+            .expect("re-initializing should report a warning instead of panicking");
+        assert!(
+            warning.contains("already installed"),
+            "unexpected warning: {warning}"
+        );
+    }
+
+    #[test]
+    fn build_filter_warns_when_rust_log_is_invalid_in_child_process() {
+        if std::env::var("ASTER_FORGE_LOGGING_FILTER_CHILD").is_ok() {
+            run_build_filter_child();
+            return;
+        }
+
+        let current_exe = std::env::current_exe().expect("current test executable should resolve");
+        let output = std::process::Command::new(current_exe)
+            .arg("--exact")
+            .arg("tests::build_filter_warns_when_rust_log_is_invalid_in_child_process")
+            .arg("--nocapture")
+            .env("ASTER_FORGE_LOGGING_FILTER_CHILD", "1")
+            .env("RUST_LOG", "aster=not-a-level")
+            .output()
+            .expect("build_filter child process should run");
+
+        assert!(
+            output.status.success(),
+            "child process failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn run_build_filter_child() {
+        let mut warning = None;
+        let _filter = build_filter("debug", &mut warning);
+
+        let warning = warning.expect("invalid RUST_LOG should report warning");
+        assert!(
+            warning.contains("Invalid RUST_LOG"),
+            "unexpected warning: {warning}"
+        );
+        assert!(
+            warning.contains("logging.level='debug'"),
+            "fallback should name the config level: {warning}"
         );
     }
 

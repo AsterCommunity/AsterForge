@@ -271,6 +271,16 @@ fn validate_runtime_settings(settings: &MailRuntimeSettings) -> MailSendResult<(
     Ok(())
 }
 
+/// Returns whether SMTP auth credentials should be attached to the transport.
+///
+/// This must use the same trim semantics as
+/// [`MailRuntimeSettings::is_ready_for_delivery`]: a whitespace-only username
+/// counts as "no auth" there, so attaching it here would burn outbox retry
+/// budget on deliveries that can never authenticate.
+fn smtp_auth_enabled(settings: &MailRuntimeSettings) -> bool {
+    !settings.smtp_username.trim().is_empty()
+}
+
 fn build_transport(
     settings: &MailRuntimeSettings,
 ) -> MailSendResult<AsyncSmtpTransport<Tokio1Executor>> {
@@ -278,7 +288,7 @@ fn build_transport(
         smtp_host = %settings.smtp_host,
         smtp_port = settings.smtp_port,
         encryption_enabled = settings.encryption_enabled,
-        auth_enabled = !settings.smtp_username.is_empty(),
+        auth_enabled = smtp_auth_enabled(settings),
         "mail: building SMTP transport"
     );
     let mut transport = if settings.encryption_enabled {
@@ -296,7 +306,7 @@ fn build_transport(
             .port(settings.smtp_port)
     };
 
-    if !settings.smtp_username.is_empty() {
+    if smtp_auth_enabled(settings) {
         transport = transport.credentials(Credentials::new(
             settings.smtp_username.clone(),
             settings.smtp_password.clone(),
@@ -403,6 +413,22 @@ mod tests {
         assert_eq!(message.from.address, "ops@example.com");
         assert_eq!(message.from.display_name.as_deref(), Some("Aster Ops"));
         assert_eq!(message.to.display_name.as_deref(), Some("User"));
+    }
+
+    #[test]
+    fn smtp_auth_enabled_matches_readiness_trim_semantics() {
+        let mut trimmed = settings();
+        // Whitespace-only usernames count as "no auth" in readiness
+        // validation (config.rs trims), so transport construction must not
+        // attach credentials for them either.
+        trimmed.smtp_username = " ".to_string();
+        assert!(!super::smtp_auth_enabled(&trimmed));
+
+        trimmed.smtp_username = " mailer ".to_string();
+        assert!(super::smtp_auth_enabled(&trimmed));
+
+        trimmed.smtp_username = String::new();
+        assert!(!super::smtp_auth_enabled(&trimmed));
     }
 
     #[tokio::test]

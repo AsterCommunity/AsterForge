@@ -507,6 +507,7 @@ dependencies = [
  "rand 0.10.2",
  "sea-orm",
  "serde_json",
+ "subtle",
  "thiserror 2.0.19",
  "tracing",
  "uuid",

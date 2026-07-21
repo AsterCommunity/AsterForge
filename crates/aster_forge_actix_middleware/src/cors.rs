@@ -348,11 +348,14 @@ fn requested_headers_are_allowed(
         ))
     })?;
 
+    // Requested header names are lowercased before comparison (browsers send
+    // them that way), so the configured names must be normalized too —
+    // otherwise a configured "Content-Type" would never match a preflight.
     let allowed_headers = config
         .allowed_headers
         .iter()
-        .copied()
-        .collect::<BTreeSet<&'static str>>();
+        .map(|header| header.to_ascii_lowercase())
+        .collect::<BTreeSet<String>>();
 
     for requested in request_headers.split(',') {
         let requested = requested.trim().to_ascii_lowercase();
@@ -586,6 +589,46 @@ mod tests {
                 .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
             Some(&HeaderValue::from_static("true"))
         );
+    }
+
+    #[actix_web::test]
+    async fn cors_middleware_matches_configured_allowed_headers_case_insensitively() {
+        let config = RuntimeCorsConfig::new(
+            |_req| {
+                Ok(RuntimeCorsPolicy {
+                    enabled: true,
+                    allowed_origins: CorsAllowedOrigins::List(vec![
+                        "https://panel.example.com".to_string(),
+                    ]),
+                    allow_credentials: true,
+                    max_age_secs: 600,
+                })
+            },
+            |path| path == "/",
+            |error| actix_web::error::ErrorBadRequest(error.to_string()),
+        )
+        .allowed_methods(["GET", "POST", "OPTIONS"])
+        .allowed_headers(["Content-Type", "X-CSRF-Token"]);
+        let app = test::init_service(
+            App::new()
+                .wrap(RuntimeCors::new(config))
+                .route("/api/demo", web::post().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let req = test::TestRequest::default()
+            .method(actix_web::http::Method::OPTIONS)
+            .uri("/api/demo")
+            .insert_header((header::ORIGIN, "https://panel.example.com"))
+            .insert_header((header::ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+            .insert_header((
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "content-type, x-csrf-token",
+            ))
+            .to_request();
+        let response = test::call_service(&app, req).await;
+
+        assert_eq!(response.status(), 204);
     }
 
     #[actix_web::test]

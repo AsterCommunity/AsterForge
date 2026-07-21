@@ -134,15 +134,31 @@ pub fn install_panic_hook(config: PanicHookConfig) {
 
         let crash_log_path = crash_log_display_path(&config.crash_log_path);
         let crash_log_result = write_crash_report(&config.crash_log_path, &context);
-        if let Err(failure) = crash_log_result.as_ref() {
-            eprintln!("{}", failure.report.trim_end());
-        }
-
-        eprintln!(
-            "{}",
-            render_user_panic_notice(&context, &crash_log_path, crash_log_result.as_ref())
-        );
+        let failure_report = crash_log_result
+            .as_ref()
+            .err()
+            .map(|failure| failure.report.trim_end());
+        let notice = render_user_panic_notice(&context, &crash_log_path, crash_log_result.as_ref());
+        write_stderr_diagnostics(failure_report, &notice);
     }));
+}
+
+/// Prints panic diagnostics to stderr on a best-effort basis.
+fn write_stderr_diagnostics(failure_report: Option<&str>, notice: &str) {
+    write_diagnostics(&mut std::io::stderr().lock(), failure_report, notice);
+}
+
+/// Writes the crash report (when the log file failed) followed by the user
+/// notice, ignoring IO errors.
+///
+/// stderr may be closed or a broken pipe; a panicking write (`eprintln!`)
+/// inside the panic hook would abort the process via double panic and destroy
+/// the very diagnostics this hook exists to capture.
+fn write_diagnostics(mut writer: impl Write, failure_report: Option<&str>, notice: &str) {
+    if let Some(report) = failure_report {
+        let _ = writeln!(writer, "{report}");
+    }
+    let _ = writeln!(writer, "{notice}");
 }
 
 fn write_crash_report(
@@ -545,6 +561,41 @@ mod tests {
         assert!(
             contents.contains("Report:    https://example.test/hook/issues/new?template=panic.yml")
         );
+    }
+
+    struct FailingWriter;
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "stderr closed",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "stderr closed",
+            ))
+        }
+    }
+
+    #[test]
+    fn write_diagnostics_ignores_broken_stderr_and_captures_content() {
+        // A closed or broken-pipe stderr must not panic the panic hook (the
+        // old `eprintln!` would, aborting the process via double panic).
+        super::write_diagnostics(FailingWriter, Some("report-body"), "notice-body");
+
+        let mut captured = Vec::new();
+        super::write_diagnostics(&mut captured, Some("report-body"), "notice-body");
+        let output = String::from_utf8(captured).expect("diagnostics should be utf-8");
+        assert_eq!(output, "report-body\nnotice-body\n");
+
+        let mut captured = Vec::new();
+        super::write_diagnostics(&mut captured, None, "notice-body");
+        let output = String::from_utf8(captured).expect("diagnostics should be utf-8");
+        assert_eq!(output, "notice-body\n");
     }
 
     #[test]

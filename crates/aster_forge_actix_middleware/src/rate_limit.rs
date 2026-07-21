@@ -132,10 +132,14 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
 }
 
 /// Returns the retry delay in whole seconds for a governor rejection.
+///
+/// Sub-second waits round up to one second so clients never see a zero delay
+/// that invites an immediate retry.
 pub fn retry_after_seconds(not_until: &NotUntil<QuantaInstant>) -> u64 {
     not_until
         .wait_time_from(DefaultClock::default().now())
         .as_secs()
+        .max(1)
 }
 
 /// Builds an Actix governor config using the trusted-proxy-aware IP extractor.
@@ -228,7 +232,7 @@ pub struct RateLimitRejection {
 impl RateLimitRejection {
     fn from_not_until(not_until: NotUntil<QuantaInstant>) -> Self {
         Self {
-            retry_after_seconds: retry_after_seconds(&not_until).max(1),
+            retry_after_seconds: retry_after_seconds(&not_until),
         }
     }
 
@@ -256,7 +260,7 @@ fn build_string_keyed_limiter(
 mod tests {
     use super::{
         NormalizedStringRateLimiter, TrustedProxyIpKeyExtractor,
-        build_ip_governor_config_with_rejection_response,
+        build_ip_governor_config_with_rejection_response, retry_after_seconds,
     };
     use actix_governor::{Governor, KeyExtractor};
     use actix_web::{App, HttpResponse, http::StatusCode, test as actix_test, web};
@@ -357,6 +361,24 @@ mod tests {
         let body: serde_json::Value = actix_test::read_body_json(response).await;
         assert_eq!(body["code"], "rate_limited");
         assert!(body["retry_after"].as_u64().is_some_and(|value| value > 0));
+    }
+
+    #[test]
+    fn retry_after_seconds_rounds_sub_second_waits_up_to_one() {
+        let quota = governor::Quota::with_period(std::time::Duration::from_secs(1))
+            .unwrap()
+            .allow_burst(NonZeroU32::new(1).unwrap());
+        let limiter = governor::RateLimiter::keyed(quota);
+
+        assert!(limiter.check_key(&"key").is_ok());
+        let not_until = limiter
+            .check_key(&"key")
+            .expect_err("second immediate check should be rate limited");
+
+        // The remaining wait is strictly below one second (some nanoseconds have
+        // elapsed since the first check), so truncating whole seconds would
+        // report 0 and tell the client to retry immediately.
+        assert_eq!(retry_after_seconds(&not_until), 1);
     }
 
     #[test]

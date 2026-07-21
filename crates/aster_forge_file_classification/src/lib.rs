@@ -294,6 +294,10 @@ pub fn parse_file_category(raw: &str) -> Result<FileCategory> {
 }
 
 /// Extracts the lowercase final extension from a file name.
+///
+/// Only ASCII-alphanumeric candidates count as extensions; path-like input
+/// (`"dir.ext/file"`) or names whose suffix contains spaces/punctuation return
+/// `None`, because the extracted value can be persisted and shown in UIs.
 pub fn extension_from_name(name: &str) -> Option<String> {
     let trimmed = name.trim();
     let dot = trimmed.rfind('.')?;
@@ -301,7 +305,10 @@ pub fn extension_from_name(name: &str) -> Option<String> {
         return None;
     }
     let extension = &trimmed[dot + 1..];
-    if extension.is_empty() || extension.len() > MAX_EXTENSION_LEN {
+    if extension.is_empty()
+        || extension.len() > MAX_EXTENSION_LEN
+        || !extension.chars().all(|ch| ch.is_ascii_alphanumeric())
+    {
         return None;
     }
     Some(extension.to_ascii_lowercase())
@@ -357,10 +364,12 @@ fn classify_mime(mime_type: &str) -> FileCategory {
         FileCategory::Video
     } else if mime.starts_with("audio/") {
         FileCategory::Audio
+    } else if mime.contains("spreadsheet") || mime.contains("excel") || mime.ends_with("/csv") {
+        // This must precede the generic `text/` branch: `text/csv` starts
+        // with `text/` and would otherwise never reach the `/csv` check.
+        FileCategory::Spreadsheet
     } else if mime == "application/pdf" || mime.starts_with("text/") {
         FileCategory::Document
-    } else if mime.contains("spreadsheet") || mime.contains("excel") || mime.ends_with("/csv") {
-        FileCategory::Spreadsheet
     } else if mime.contains("presentation") || mime.contains("powerpoint") {
         FileCategory::Presentation
     } else if mime.contains("zip")
@@ -451,6 +460,32 @@ mod tests {
             classify_file("asset.unknown", "application/octet-stream").category,
             FileCategory::Other
         );
+    }
+
+    #[test]
+    fn classifies_text_csv_mime_as_spreadsheet_when_extension_is_unknown() {
+        // The spreadsheet branch must run before the generic `text/` branch,
+        // or `text/csv` always classifies as Document and the `/csv` arm is
+        // unreachable.
+        assert_eq!(
+            classify_file("data.unknown", "text/csv").category,
+            FileCategory::Spreadsheet
+        );
+        assert_eq!(
+            classify_file("notes.unknown", "text/markdown").category,
+            FileCategory::Document
+        );
+    }
+
+    #[test]
+    fn extension_from_name_rejects_path_like_and_spaced_candidates() {
+        // The extracted value can be persisted, so candidates that are clearly
+        // not extensions must be rejected instead of leaking garbage into DB
+        // rows, logs, and UI labels.
+        assert_eq!(extension_from_name("dir.ext/file"), None);
+        assert_eq!(extension_from_name("report.pn g"), None);
+        assert_eq!(extension_from_name("archive.tar.gz").as_deref(), Some("gz"));
+        assert_eq!(extension_from_name("photo.JPEG").as_deref(), Some("jpeg"));
     }
 
     #[test]

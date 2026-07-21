@@ -303,7 +303,11 @@ pub fn normalize_return_path(value: Option<&str>, max_len: usize) -> Result<Stri
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok("/".to_string());
     };
-    if !value.starts_with('/') || value.starts_with("//") || value.contains('\\') {
+    if !value.starts_with('/')
+        || value.starts_with("//")
+        || value.contains('\\')
+        || value.chars().any(char::is_control)
+    {
         return Err(ExternalAuthError::validation_error(
             "invalid external auth return_path",
         ));
@@ -421,6 +425,13 @@ mod tests {
         );
         assert!(normalize_return_path(Some("//evil.example.com"), 2048).is_err());
         assert!(normalize_return_path(Some("/bad\\path"), 2048).is_err());
+        // Control characters (CR/LF, TAB, NUL) must not pass: products may emit
+        // the stored path into redirects or logs where they become injection
+        // primitives. The scopes/claims/provider-key normalizers already reject
+        // `char::is_control`; return_path must match.
+        assert!(normalize_return_path(Some("/ok\r\nhttps://evil.example.com"), 2048).is_err());
+        assert!(normalize_return_path(Some("/tab\ttab"), 2048).is_err());
+        assert!(normalize_return_path(Some("/nul\0byte"), 2048).is_err());
 
         assert_eq!(normalize_flow_token(" token ", 128).unwrap(), "token");
         assert!(normalize_flow_token("bad token", 128).is_err());

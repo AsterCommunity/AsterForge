@@ -53,6 +53,8 @@ aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 `MetricsRecorder` 包含数据库、HTTP、运行时配置、后台任务、外部系统等通用记录入口。产品可以实现自己的 recorder，把这些调用映射到实际后端。
 
+`PrometheusMetricsRecorder::enabled()` 与注册表初始化状态一致：未经 `init_metrics()` 构造的裸 recorder 返回 `false`（此时 `record_*` 全部早退），调用方可以据此跳过回调安装。
+
 数据库 query metrics 使用 `DbQueryMetric`，只包含 backend、低基数 query kind、status 和 elapsed duration。Forge 不把 SeaORM callback 类型或 SQL 全文暴露给 recorder；`aster_forge_db` 负责把 SeaORM metric callback 转成这个产品无关的结构。
 
 运行时配置 metrics 使用两组 hook：
@@ -215,7 +217,7 @@ metrics
 低层 API 仍然保留，主要给框架适配、测试或动态 descriptor 场景使用：
 
 - `register_product_metric(descriptor)`：注册单个产品指标。
-- `register_product_metrics(descriptors)`：批量注册产品指标。
+- `register_product_metrics(descriptors)`：批量注册产品指标（全有或全无：中途失败会回滚本批已注册的族，修正后重试不会撞 `DuplicateRegistration`）。
 - `inc_product_counter(handle, labels, value)`：记录 counter。
 - `set_product_gauge(handle, labels, value)` / `add_product_gauge(handle, labels, value)`：记录 gauge。
 - `observe_product_histogram(handle, labels, value)`：记录 histogram。

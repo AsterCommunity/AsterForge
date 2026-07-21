@@ -652,14 +652,59 @@ pub fn register_product_metric(
 }
 
 /// Registers multiple product-owned metric families in order.
+///
+/// The batch is all-or-nothing: when any descriptor fails, the families this
+/// batch already registered are rolled back so fixing the failure and
+/// retrying does not trip over `DuplicateRegistration`.
 pub fn register_product_metrics<I>(descriptors: I) -> ProductMetricResult<Vec<ProductMetricHandle>>
 where
     I: IntoIterator<Item = MetricDescriptor>,
 {
-    descriptors
-        .into_iter()
-        .map(register_product_metric)
-        .collect()
+    let mut handles = Vec::new();
+    for descriptor in descriptors {
+        match register_product_metric(descriptor) {
+            Ok(handle) => handles.push(handle),
+            Err(error) => {
+                for handle in &handles {
+                    if let Err(rollback_error) =
+                        unregister_product_metric(handle.subsystem(), handle.name())
+                    {
+                        tracing::warn!(
+                            error = %rollback_error,
+                            subsystem = handle.subsystem(),
+                            name = handle.name(),
+                            "product metric rollback after batch registration failure failed"
+                        );
+                    }
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(handles)
+}
+
+/// Removes a product metric family from the shared registry.
+///
+/// Used to roll back partially-registered batches; a missing key is a no-op
+/// because there is nothing to roll back.
+fn unregister_product_metric(
+    subsystem: &'static str,
+    name: &'static str,
+) -> ProductMetricResult<()> {
+    let metrics = METRICS.get().ok_or(ProductMetricError::NotInitialized)?;
+    let key = ProductMetricKey { subsystem, name };
+    let mut product_metrics = metrics
+        .product_metrics
+        .lock()
+        .map_err(|_| ProductMetricError::LockPoisoned)?;
+    let Some(collector) = product_metrics.collectors.remove(&key) else {
+        return Ok(());
+    };
+    metrics
+        .registry
+        .unregister(product_collector_box(&collector))
+        .map_err(|error| ProductMetricError::Prometheus(error.to_string()))
 }
 
 /// Registers a product counter and returns a typed handle.
@@ -985,7 +1030,10 @@ pub struct PrometheusMetricsRecorder;
 
 impl DbMetricsRecorder for PrometheusMetricsRecorder {
     fn enabled(&self) -> bool {
-        true
+        // The recorder is a public unit struct and can be constructed without
+        // `init_metrics()`; in that state every `record_*` early-returns and
+        // drops data, so it must not report itself as enabled.
+        is_initialized()
     }
 
     fn record_db_query(&self, metric: &DbQueryMetric) {
@@ -1363,7 +1411,7 @@ mod tests {
     use super::{
         ProductCounter, ProductGauge, ProductHistogram, ProductMetricError, ProductMetricHandle,
         PrometheusMetricsRecorder, export_metrics, inc_product_counter, init_metrics,
-        observe_product_histogram, record_health_component, record_health_report,
+        is_initialized, observe_product_histogram, record_health_component, record_health_report,
         register_product_counter, register_product_gauge, register_product_histogram,
         register_product_metric, register_product_metrics, set_product_gauge,
     };
@@ -1403,6 +1451,46 @@ mod tests {
         assert!(body.contains("process_heap_memory_mib"));
         assert!(body.contains("kind=\"allocated\""));
         assert!(body.contains("kind=\"peak_or_resident\""));
+    }
+
+    #[test]
+    fn recorder_enabled_tracks_registry_initialization() {
+        init_metrics().expect("metrics registry should initialize");
+
+        // The contract: `enabled()` is true exactly when the shared registry
+        // is initialized. A bare `PrometheusMetricsRecorder` constructed
+        // without `init_metrics()` must report false instead of silently
+        // dropping every record while claiming to be enabled. (The false
+        // branch cannot be exercised in this process because the registry is
+        // a global OnceLock; it is pinned structurally by this assertion.)
+        assert_eq!(PrometheusMetricsRecorder.enabled(), is_initialized());
+    }
+
+    #[test]
+    fn register_product_metrics_rolls_back_partial_registrations_on_failure() {
+        init_metrics().expect("metrics registry should initialize");
+        let descriptor = || {
+            MetricDescriptor::counter(
+                "batch_rollback_test",
+                "events_total",
+                "Batch rollback test events.",
+                &[],
+            )
+        };
+
+        // The second descriptor duplicates the first, so the batch fails
+        // after the first metric was already registered...
+        let error = register_product_metrics(vec![descriptor(), descriptor()])
+            .expect_err("duplicate registration should fail the batch");
+        assert!(matches!(
+            error,
+            ProductMetricError::DuplicateRegistration { .. }
+        ));
+
+        // ...and the partial registration must have been rolled back, or this
+        // corrected retry would trip over DuplicateRegistration again.
+        register_product_metrics(vec![descriptor()])
+            .expect("retry after rollback should register cleanly");
     }
 
     #[test]

@@ -56,7 +56,7 @@ let logging = aster_forge_logging::init_logging(&aster_forge_logging::LoggingCon
 });
 ```
 
-`file` 为空字符串时输出到 stdout。`format` 为 `"json"` 时输出 JSON，其他值使用 text formatter。`RUST_LOG` 会覆盖 `level`，并通过 `LoggingInitResult::warning` 返回提示。
+`file` 为空字符串时输出到 stdout。`format` 为 `"json"` 时输出 JSON，其他值使用 text formatter。`RUST_LOG` 会覆盖 `level`，并通过 `LoggingInitResult::warning` 返回提示；`RUST_LOG` 值无效时同样告警并回落到配置的 `level`（"未设置" 与 "无效" 可区分，不会让运维误以为覆盖生效）。全局 subscriber 已存在时（嵌入式运行时、同进程测试）保留现有 subscriber 并告警，不再 panic。
 
 `LoggingInitResult` 持有 guard，产品 entrypoint 必须保存它到进程结束，不能初始化完立刻 drop。
 

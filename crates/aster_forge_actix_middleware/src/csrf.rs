@@ -18,6 +18,7 @@ use actix_web::{
 };
 use rand::RngExt;
 use std::sync::OnceLock;
+use subtle::ConstantTimeEq;
 
 /// Default CSRF cookie name used by compatibility helpers.
 ///
@@ -225,7 +226,12 @@ pub fn ensure_double_submit_token_with_names(
             )
         })?;
 
-    if header_token != cookie_token {
+    // The token length is not secret (issued tokens are fixed-length random
+    // values), so the length pre-check leaks nothing; the byte comparison runs
+    // in constant time to avoid a timing side channel on the token value.
+    let tokens_match = header_token.len() == cookie_token.len()
+        && bool::from(header_token.as_bytes().ct_eq(cookie_token.as_bytes()));
+    if !tokens_match {
         return Err(CsrfError::new(
             CsrfErrorKind::TokenInvalid,
             "invalid CSRF token",
@@ -842,6 +848,17 @@ mod tests {
             .insert_header((CSRF_HEADER, "token-b"))
             .to_http_request();
         let err = ensure_double_submit_token(&mismatch).unwrap_err();
+        assert_eq!(err.kind(), CsrfErrorKind::TokenInvalid);
+    }
+
+    #[test]
+    fn csrf_token_check_rejects_tokens_of_different_lengths() {
+        let req = actix_web::test::TestRequest::patch()
+            .uri("/api/v1/auth/profile")
+            .cookie(Cookie::new(CSRF_COOKIE, "token-a"))
+            .insert_header((CSRF_HEADER, "token-a-with-a-longer-value"))
+            .to_http_request();
+        let err = ensure_double_submit_token(&req).unwrap_err();
         assert_eq!(err.kind(), CsrfErrorKind::TokenInvalid);
     }
 

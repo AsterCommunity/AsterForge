@@ -374,12 +374,33 @@ pub fn render_template(
 }
 
 /// Replaces `{{key}}` placeholders with provided values.
-pub fn render_placeholders(mut template: String, values: &[(&'static str, String)]) -> String {
-    for (key, value) in values {
-        let placeholder = format!("{{{{{key}}}}}");
-        template = template.replace(&placeholder, value);
+///
+/// Replacement is a single left-to-right pass: substituted values are never
+/// re-scanned, so a user-controlled value containing `{{another_key}}` cannot
+/// trigger a second expansion. Unknown or unterminated tokens stay literal.
+pub fn render_placeholders(template: String, values: &[(&'static str, String)]) -> String {
+    let mut rendered = String::with_capacity(template.len());
+    let mut rest = template.as_str();
+
+    while let Some(open) = rest.find("{{") {
+        let key_start = open + 2;
+        let Some(close) = rest[key_start..].find("}}") else {
+            // Unterminated `{{`: emit the remainder literally.
+            break;
+        };
+        let token_end = key_start + close + 2;
+        let key = &rest[key_start..key_start + close];
+
+        rendered.push_str(&rest[..open]);
+        match values.iter().find(|(name, _)| *name == key) {
+            Some((_, value)) => rendered.push_str(value),
+            None => rendered.push_str(&rest[open..token_end]),
+        }
+        rest = &rest[token_end..];
     }
-    template
+
+    rendered.push_str(rest);
+    rendered
 }
 
 /// Escapes text for insertion into HTML templates.
@@ -489,8 +510,12 @@ fn update_ignored_tags(ignored_tags: &mut Vec<String>, tag: &ParsedTag) {
     }
 
     if tag.is_closing {
-        if ignored_tags.last().is_some_and(|name| name == &tag.name) {
-            ignored_tags.pop();
+        // Mis-nested ignored tags (e.g. `<script><style></script>`) must not
+        // wedge the stack: pop through the nearest matching open tag, or the
+        // rest of the document would be silently dropped from the text
+        // fallback.
+        if let Some(position) = ignored_tags.iter().rposition(|name| name == &tag.name) {
+            ignored_tags.truncate(position);
         }
         return;
     }
@@ -503,13 +528,16 @@ fn is_ignored_text_tag(name: &str) -> bool {
 }
 
 fn decode_html_entities(value: &str) -> String {
+    // "&amp;" must decode last: it is the escape introducer for every other
+    // entity, so decoding it first would double-decode inputs like "&amp;lt;"
+    // (the encoding of the literal text "&lt;") into a bare "<".
     value
         .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 fn normalize_text_fallback(value: &str) -> String {
@@ -547,7 +575,7 @@ mod tests {
     use super::{
         MailTemplateCatalog, MailTemplateCatalogBuilder, MailTemplateDefinition,
         MailTemplateRegistry, MailTemplateRegistryError, TemplatePlaceholderSet,
-        TemplateVariableSpec, escape_html, html_to_text, render_template,
+        TemplateVariableSpec, escape_html, html_to_text, render_placeholders, render_template,
     };
 
     const VARIABLES: &[TemplateVariableSpec] = &[
@@ -707,5 +735,53 @@ mod tests {
         let html = "<!doctype html><html><head><title>Ignore</title><style>.x {}</style></head><body><p>Hello</p><script>bad()</script><ul><li>One</li></ul></body></html>";
 
         assert_eq!(html_to_text(html), "Hello\n- One");
+    }
+
+    #[test]
+    fn render_placeholders_does_not_expand_placeholders_inside_values() {
+        // A user-controlled value must never be re-scanned: sequential
+        // replacement would expand the "{{reset_url}}" smuggled in via
+        // `username` and splice an href-only unescaped URL into the body.
+        let rendered = render_placeholders(
+            "Hello {{username}}, reset here: {{reset_url}}".to_string(),
+            &[
+                ("username", "{{reset_url}}".to_string()),
+                ("reset_url", "https://evil.example.com/reset".to_string()),
+            ],
+        );
+
+        assert_eq!(
+            rendered,
+            "Hello {{reset_url}}, reset here: https://evil.example.com/reset"
+        );
+    }
+
+    #[test]
+    fn render_placeholders_keeps_unknown_and_unterminated_tokens_literal() {
+        let rendered = render_placeholders(
+            "Hi {{username}}, {{unknown}} and {{unterminated".to_string(),
+            &[("username", "Aster".to_string())],
+        );
+
+        assert_eq!(rendered, "Hi Aster, {{unknown}} and {{unterminated");
+    }
+
+    #[test]
+    fn html_to_text_decodes_ampersand_entities_once() {
+        // "&amp;lt;" is the HTML encoding of the literal text "&lt;"; decoding
+        // "&amp;" before "&lt;" would double-decode it into a literal "<".
+        assert_eq!(
+            html_to_text("<p>&amp;lt; &amp;amp; &lt;</p>"),
+            "&lt; &amp; <"
+        );
+    }
+
+    #[test]
+    fn html_to_text_recovers_from_misnested_ignored_tags() {
+        // `<script><style></script>` mis-nesting must not wedge the ignore
+        // stack: the body text after it is still part of the message.
+        let html = "<script>bad()</script><p>Hello</p><script><style></script><p>Still here</p>";
+
+        assert_eq!(html_to_text(html), "Hello\nStill here");
     }
 }
