@@ -141,7 +141,14 @@ pub fn copy_name_template(name: &str) -> CopyNameTemplate {
         let after_paren = &stem[paren_start + 2..];
         if let Some(num_str) = after_paren.strip_suffix(')') {
             if let Ok(n) = num_str.parse::<u32>() {
-                (stem[..paren_start].to_string(), n + 1)
+                match n.checked_add(1) {
+                    Some(next) => (stem[..paren_start].to_string(), next),
+                    // The copy-number space is exhausted. Keep the full stem and start a
+                    // fresh " (1)" layer on top of it, exactly like the unparseable-suffix
+                    // branches: falling back to "file (1)" would produce a name that very
+                    // likely already exists and could be overwritten by one-shot callers.
+                    None => (stem.to_string(), 1),
+                }
             } else {
                 (stem.to_string(), 1)
             }
@@ -346,6 +353,29 @@ mod tests {
         assert_eq!(
             format_copy_name(&template, template.next_copy_number),
             "photo (42).jpg"
+        );
+    }
+
+    #[test]
+    fn copy_name_template_starts_fresh_layer_when_copy_number_space_is_exhausted() {
+        // u32::MAX + 1 must not panic (debug) or wrap to 0 (release). It also must not
+        // fall back to "file (1)", which almost certainly exists; the whole stem is kept
+        // and a fresh copy layer starts on top of it.
+        let template = copy_name_template("file (4294967295).txt");
+        assert_eq!(template.base_name, "file (4294967295)");
+        assert_eq!(template.next_copy_number, 1);
+        assert_eq!(
+            next_copy_name("file (4294967295).txt"),
+            "file (4294967295) (1).txt"
+        );
+
+        // The boundary just below still increments normally.
+        let template = copy_name_template("file (4294967294).txt");
+        assert_eq!(template.base_name, "file");
+        assert_eq!(template.next_copy_number, u32::MAX);
+        assert_eq!(
+            next_copy_name("file (4294967294).txt"),
+            "file (4294967295).txt"
         );
     }
 

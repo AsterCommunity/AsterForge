@@ -273,6 +273,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("background task shutdown should be registered")
                 .phase_name,
             BACKGROUND_TASKS_SHUTDOWN_PHASE

@@ -41,6 +41,35 @@ impl MemoryCacheValue {
     }
 }
 
+/// Bridges each value's absolute `expires_at` into moka's per-entry expiration policy.
+///
+/// A builder-level `time_to_live(default_ttl)` would apply one duration to every entry and
+/// silently evict entries whose per-entry TTL is longer than the default (and make the whole
+/// cache write-only when `default_ttl` is 0). Computing the duration from the value's own
+/// `expires_at` keeps per-entry TTLs exact, matching the Redis backend's SETEX semantics.
+struct MemoryCacheExpiry;
+
+impl moka::Expiry<String, MemoryCacheValue> for MemoryCacheExpiry {
+    fn expire_after_create(
+        &self,
+        _key: &String,
+        value: &MemoryCacheValue,
+        created_at: Instant,
+    ) -> Option<Duration> {
+        Some(value.expires_at.saturating_duration_since(created_at))
+    }
+
+    fn expire_after_update(
+        &self,
+        _key: &String,
+        value: &MemoryCacheValue,
+        updated_at: Instant,
+        _duration_until_expiry: Option<Duration>,
+    ) -> Option<Duration> {
+        Some(value.expires_at.saturating_duration_since(updated_at))
+    }
+}
+
 impl MemoryCache {
     /// Creates a memory cache with the provided default TTL in seconds.
     pub fn new(default_ttl: u64) -> Self {
@@ -49,7 +78,7 @@ impl MemoryCache {
             .weigher(|key: &String, value: &MemoryCacheValue| {
                 entry_weight(key.len(), value.bytes.len())
             })
-            .time_to_live(Duration::from_secs(default_ttl))
+            .expire_after(MemoryCacheExpiry)
             .build();
         Self {
             cache,
@@ -149,6 +178,7 @@ impl CacheBackend for MemoryCache {
 mod tests {
     use super::{CacheBackend, MemoryCache, entry_weight};
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn entry_weight_counts_key_and_value_bytes() {
@@ -204,6 +234,60 @@ mod tests {
         cache.set_bytes("short", b"value".to_vec(), Some(0)).await;
 
         assert_eq!(cache.get_bytes("short").await, None);
+    }
+
+    #[test]
+    fn expiry_derives_duration_from_absolute_expires_at() {
+        use moka::Expiry;
+
+        let expiry = super::MemoryCacheExpiry;
+        let value = super::MemoryCacheValue::new(b"value".to_vec(), 60);
+        let zero_ttl = super::MemoryCacheValue::new(b"value".to_vec(), 0);
+        // moka passes its insertion instant, which always follows value construction.
+        let created_at = std::time::Instant::now();
+
+        let ttl = expiry
+            .expire_after_create(&"key".to_string(), &value, created_at)
+            .expect("entry should carry an expiration");
+        assert!(ttl > Duration::from_secs(59) && ttl <= Duration::from_secs(60));
+
+        // A zero-TTL value is already expired at insertion, so no lifetime remains.
+        assert_eq!(
+            expiry.expire_after_create(&"key".to_string(), &zero_ttl, created_at),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[tokio::test]
+    async fn per_entry_ttl_outlives_shorter_default_ttl() {
+        let cache = MemoryCache::new(1);
+        cache.set_bytes("default", b"default".to_vec(), None).await;
+        cache.set_bytes("long", b"long".to_vec(), Some(2)).await;
+
+        // moka's expiration clock is real time, so this test must really wait.
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+
+        // The M1 bug: a builder-level time_to_live evicted "long" at the 1s default even
+        // though its per-entry TTL is 2s.
+        assert_eq!(cache.get_bytes("default").await, None);
+        assert_eq!(cache.get_bytes("long").await, Some(b"long".to_vec()));
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(cache.get_bytes("long").await, None);
+    }
+
+    #[tokio::test]
+    async fn zero_default_ttl_still_stores_explicit_entry_ttl() {
+        let cache = MemoryCache::new(0);
+
+        cache
+            .set_bytes("explicit", b"value".to_vec(), Some(60))
+            .await;
+        cache.set_bytes("implicit", b"value".to_vec(), None).await;
+
+        // Before per-entry expiry, time_to_live(0) made the whole cache write-only.
+        assert_eq!(cache.get_bytes("explicit").await, Some(b"value".to_vec()));
+        assert_eq!(cache.get_bytes("implicit").await, None);
     }
 
     #[tokio::test]

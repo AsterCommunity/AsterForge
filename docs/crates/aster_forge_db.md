@@ -640,6 +640,13 @@ if database_error_kind(&db_error) == Some(DatabaseErrorKind::Deadlock) {
 - 生成 SQL LIKE 转义条件。
 - 生成 SQLite FTS 或 MySQL boolean mode 查询。
 
+LIKE 转义语义（三端一致）：`escape_like_query` 先转义 `\` 自身、再转义 `%` 和 `_`
+（顺序不能换，否则已转义的 `\%` 会被二次转义成活通配符）；转义符约定为 `\`。MySQL 和
+PostgreSQL 默认转义符就是 `\`，SQLite 没有默认转义符，所以自建条件必须显式配
+`ESCAPE '\'` 子句（`search_query::lower_like_condition` 已通过
+`LikeExpr::escape('\\')` 声明，三端渲染结果有测试锁定）。sea-query 只提供 ESCAPE
+子句声明，不提供 pattern 内容转义，内容转义由 Forge 这一层负责。
+
 产品侧仍然负责字段白名单和索引设计。
 
 `sort::SortOrder` 直接重导出 `aster_forge_api::SortOrder`。API 查询参数和 repository

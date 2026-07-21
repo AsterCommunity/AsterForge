@@ -194,6 +194,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("database shutdown should be registered")
                 .phase_name,
             DATABASE_CONNECTIONS_SHUTDOWN_PHASE

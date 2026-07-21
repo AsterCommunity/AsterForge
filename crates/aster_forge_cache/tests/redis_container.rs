@@ -130,3 +130,28 @@ async fn one_second_ttl_expires_on_the_server() {
     tokio::time::sleep(std::time::Duration::from_millis(1_200)).await;
     assert_eq!(cache.get_bytes(&key).await, None);
 }
+
+#[tokio::test]
+async fn invalidate_prefix_treats_glob_metacharacters_as_literal() {
+    let (_container, cache) = redis_cache().await;
+    let base = unique_key("glob");
+    // `[ab]` is a glob character class: unescaped, the pattern would also match the
+    // decoy keys and delete them while the literal-bracket target survives.
+    let prefix = format!("{base}:[ab]");
+    let target = format!("{prefix}:target");
+    let decoy_a = format!("{base}:a:decoy");
+    let decoy_b = format!("{base}:b:decoy");
+
+    for key in [&target, &decoy_a, &decoy_b] {
+        cache.set_bytes(key, b"value".to_vec(), Some(60)).await;
+    }
+
+    cache.invalidate_prefix(&prefix).await;
+
+    assert_eq!(cache.get_bytes(&target).await, None);
+    assert_eq!(cache.get_bytes(&decoy_a).await, Some(b"value".to_vec()));
+    assert_eq!(cache.get_bytes(&decoy_b).await, Some(b"value".to_vec()));
+
+    cache.delete(&decoy_a).await;
+    cache.delete(&decoy_b).await;
+}

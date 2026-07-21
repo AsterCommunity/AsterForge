@@ -402,6 +402,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("audit logs shutdown should be registered")
                 .phase_name,
             SERVER_SHUTDOWN_AUDIT_PHASE
@@ -429,6 +430,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("audit logs shutdown should be registered")
                 .phase_name,
             SERVER_SHUTDOWN_AUDIT_PHASE
@@ -495,6 +497,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("audit manager shutdown should be registered")
                 .phase_name,
             AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE

@@ -11,6 +11,7 @@ members = [
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
     "crates/aster_forge_external_auth",
+    "crates/aster_forge_events",
     "crates/aster_forge_file_classification",
     "crates/aster_forge_logging",
     "crates/aster_forge_metrics",

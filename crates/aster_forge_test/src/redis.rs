@@ -50,9 +50,18 @@ impl RedisTestContainer {
             .expect("Redis test port should be exposed");
         drop(lock);
 
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let ready = wait_until(
+            Duration::from_secs(90),
+            Duration::from_millis(250),
+            || async { TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() },
+        )
+        .await;
+        assert!(ready, "Redis test container did not become ready");
+
         Self {
             url: format!("redis://127.0.0.1:{port}/0"),
-            address: SocketAddr::from(([127, 0, 0, 1], port)),
+            address,
             _container: container,
             _lease: ContainerLease::new(suite.clone(), "redis-fixed"),
         }

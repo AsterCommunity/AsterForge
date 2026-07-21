@@ -185,6 +185,8 @@ pub fn database_component(
 
 `RuntimeComponentRegistry::shutdown()` 会按 component dependency graph 执行 shutdown phase，而不是按注册顺序执行。依赖组件会先于依赖它的组件执行；没有 shutdown phase 的依赖只作为 descriptor metadata，不会阻塞低层 registry shutdown。`AsterRuntime::builder().build()` 会先调用 `RuntimeComponentRegistry::validate()`，因此产品入口里的缺失依赖和依赖环会作为 `AsterRuntimeError::ComponentGraph` 失败，而不是带着错误图进入生产。
 
+一个组件可以注册多个 shutdown phase（例如"停止接收 → flush 缓冲 → 关闭写入器"）：组件之间的执行顺序由依赖图决定，同一组件的多个 phase 按注册顺序执行，每个 phase 都有独立的状态和耗时报告。同一组件重复注册同名 phase 几乎一定是 bundle 被注册两次之类的事故，registry 会打 `WARN` 日志提示，但所有已注册 phase 仍会照常执行——注册阶段的异常迹象不应该影响运行时的正常清理。
+
 ```text
 background_tasks
 mail_outbox    -> depends_on background_tasks
@@ -248,6 +250,12 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge" }
 - component graph validation；
 - dependency-aware component shutdown；
 - shutdown report logging。
+
+required startup phase 失败导致 startup abort 时，`run()` 不会直接返回：它会先
+best-effort 执行一遍 `RuntimeComponentRegistry::shutdown()`（并记录 shutdown report），
+让已经完成 startup 的组件（连接池、已 spawn 的 worker、缓冲写入器）走完自己的
+shutdown phase，然后才返回 `AsterRuntimeError::Startup`。因此组件的 shutdown phase
+必须能容忍"对应 startup phase 从未执行"的情况——它可能对未启动的组件被调用。
 
 推荐的产品入口形态：
 

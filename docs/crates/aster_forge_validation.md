@@ -137,6 +137,10 @@ let stored = serde_json::to_string(&normalized)?;
 - `report (1).pdf`
 - `report (2).pdf`
 
+编号到 `u32::MAX` 耗尽时不会溢出，也不会回落到几乎必然已存在的 `(1)`：完整 stem 保留，
+在其上开启新一层副本序列（`file (4294967295).txt` → `file (4294967295) (1).txt`），
+一次性调用的产品侧也不会拿到一个大概率撞车的候选名。
+
 产品侧仍然负责在数据库里检查最终名称是否冲突。Forge 只生成候选名，不查询产品 repository。
 
 ## 错误边界

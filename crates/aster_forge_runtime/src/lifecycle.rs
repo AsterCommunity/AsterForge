@@ -403,9 +403,16 @@ where
     S: Future,
 {
     /// Runs startup, the main service, before-shutdown hooks, and component shutdown.
+    ///
+    /// When a required startup phase aborts, component shutdown phases still run
+    /// best-effort before the startup error is returned, so components that already
+    /// completed startup (connection pools, spawned workers, buffered writers) get
+    /// a chance to release their resources.
     pub async fn run(mut self) -> Result<S::Output, AsterRuntimeError> {
         let startup_report = self.registry.startup().await;
         if startup_report.aborted() {
+            let shutdown_report = self.registry.shutdown().await;
+            log_shutdown_report(&shutdown_report);
             return Err(AsterRuntimeError::Startup {
                 report: startup_report,
             });
@@ -623,6 +630,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aster_runtime_runs_component_shutdown_when_startup_aborts() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let started_events = Arc::clone(&events);
+        let shutdown_events = Arc::clone(&events);
+
+        let result = AsterRuntime::builder()
+            .component(RuntimeServiceComponent::new(
+                "http",
+                RuntimeComponentKind::Core,
+                std::future::pending::<()>(),
+                Default::default(),
+                || async {},
+            ))
+            .component(crate::runtime_component(
+                move |registry: &mut RuntimeComponentRegistry| {
+                    registry.component_startup(
+                        "database",
+                        RuntimeComponentKind::Core,
+                        "database_connect",
+                        crate::StartupPhaseFailurePolicy::Required,
+                        move || {
+                            let started_events = Arc::clone(&started_events);
+                            async move {
+                                started_events.lock().unwrap().push("database_started");
+                                Ok(())
+                            }
+                        },
+                    );
+                    registry.component_shutdown(
+                        "database",
+                        RuntimeComponentKind::Core,
+                        "database_close",
+                        None,
+                        move || {
+                            let shutdown_events = Arc::clone(&shutdown_events);
+                            async move {
+                                shutdown_events.lock().unwrap().push("database_shutdown");
+                                Ok(())
+                            }
+                        },
+                    );
+                    registry.component_startup(
+                        "cache",
+                        RuntimeComponentKind::Core,
+                        "cache_connect",
+                        crate::StartupPhaseFailurePolicy::Required,
+                        || async { Err("cache unavailable".to_string()) },
+                    );
+                },
+            ))
+            .run()
+            .await;
+
+        assert!(matches!(result, Err(AsterRuntimeError::Startup { .. })));
+        // The component that completed startup must still receive its shutdown phase,
+        // and the never-started service future must stay untouched.
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["database_started", "database_shutdown"]
+        );
+    }
+
+    #[tokio::test]
     async fn aster_runtime_builder_shares_shutdown_token_with_components() {
         let observed = Arc::new(AtomicBool::new(false));
         let observed_component = Arc::clone(&observed);
@@ -745,6 +815,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("shutdown phase should be registered")
                 .phase_name,
             "mail_outbox_drain"

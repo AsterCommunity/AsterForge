@@ -27,6 +27,8 @@ mod runtime;
 mod value;
 
 pub use error::{ConfigCoreError, Result};
+#[cfg(feature = "redis-pubsub")]
+pub use notification::RedisConfigChangeNotifier;
 pub use notification::{
     CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigChangeEvent,
     ConfigChangeNotifier, ConfigNotification, ConfigNotificationSource, ConfigReloadDecision,
@@ -39,8 +41,6 @@ pub use notification::{
     run_config_reload_supervisor_with_observers, run_config_reload_worker,
     run_config_reload_worker_with_observer,
 };
-#[cfg(feature = "redis-pubsub")]
-pub use notification::{RedisConfigChangeNotifier, RedisConfigReloadListener};
 pub use registry::{
     ConfigDefinition, ConfigDependencyValidator, ConfigNormalizer, ConfigRegistry,
     ConfigSeedRecord, ConfigValueLookup,

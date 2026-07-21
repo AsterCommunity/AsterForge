@@ -70,6 +70,7 @@ mod tests {
         assert_eq!(
             descriptor
                 .shutdown
+                .first()
                 .expect("mail outbox shutdown should be registered")
                 .phase_name,
             MAIL_OUTBOX_DRAIN_SHUTDOWN_PHASE

@@ -588,6 +588,8 @@ dependencies = [
 name = "aster_forge_config"
 version = "0.1.0"
 dependencies = [
+ "aster_forge_events",
+ "aster_forge_test",
  "aster_forge_utils",
  "async-trait",
  "futures",
@@ -600,6 +602,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]
@@ -628,6 +631,22 @@ dependencies = [
  "sea-orm",
  "thiserror 2.0.19",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "aster_forge_events"
+version = "0.1.0"
+dependencies = [
+ "aster_forge_test",
+ "aster_forge_utils",
+ "async-trait",
+ "futures",
+ "redis",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -728,6 +747,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "utoipa",
 ]
 

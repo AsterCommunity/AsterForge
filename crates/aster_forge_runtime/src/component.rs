@@ -124,8 +124,8 @@ pub struct RuntimeComponentDescriptor {
     pub health_checks: Vec<HealthCheckDescriptor>,
     /// Registered runtime tasks owned by this component.
     pub tasks: Vec<RuntimeTaskDescriptor>,
-    /// Registered shutdown phase owned by this component, if any.
-    pub shutdown: Option<RuntimeShutdownDescriptor>,
+    /// Registered shutdown phases owned by this component.
+    pub shutdown: Vec<RuntimeShutdownDescriptor>,
 }
 
 impl RuntimeComponentDescriptor {
@@ -137,7 +137,7 @@ impl RuntimeComponentDescriptor {
             startup: Vec::new(),
             health_checks: Vec::new(),
             tasks: Vec::new(),
-            shutdown: None,
+            shutdown: Vec::new(),
         }
     }
 }
@@ -428,7 +428,8 @@ impl RuntimeComponentRegistry {
     /// Runs registered shutdown phases in component dependency order.
     ///
     /// A component's dependencies run before that component when both sides
-    /// have shutdown phases. Dependencies without shutdown phases are kept as
+    /// have shutdown phases. Multiple phases registered by one component run in
+    /// registration order. Dependencies without shutdown phases are kept as
     /// descriptor metadata and do not block execution. Cycles are reported as
     /// warnings and the registry still makes best-effort progress without
     /// executing a phase more than once.
@@ -486,12 +487,13 @@ impl RuntimeComponentRegistry {
     }
 
     fn shutdown_order(&self) -> Vec<usize> {
-        let phase_by_component = self
-            .shutdown
-            .iter()
-            .enumerate()
-            .map(|(index, phase)| (phase.component_name, index))
-            .collect::<HashMap<_, _>>();
+        let mut phase_indices_by_component: HashMap<&'static str, Vec<usize>> = HashMap::new();
+        for (index, phase) in self.shutdown.iter().enumerate() {
+            phase_indices_by_component
+                .entry(phase.component_name)
+                .or_default()
+                .push(index);
+        }
         let descriptor_by_name = self
             .components
             .iter()
@@ -504,7 +506,7 @@ impl RuntimeComponentRegistry {
         for phase in &self.shutdown {
             self.push_shutdown_component_order(
                 phase.component_name,
-                &phase_by_component,
+                &phase_indices_by_component,
                 &descriptor_by_name,
                 &mut visiting,
                 &mut visited,
@@ -518,7 +520,7 @@ impl RuntimeComponentRegistry {
     fn push_shutdown_component_order(
         &self,
         component_name: &'static str,
-        phase_by_component: &HashMap<&'static str, usize>,
+        phase_indices_by_component: &HashMap<&'static str, Vec<usize>>,
         descriptor_by_name: &HashMap<&'static str, &RuntimeComponentDescriptor>,
         visiting: &mut HashSet<&'static str>,
         visited: &mut HashSet<&'static str>,
@@ -537,10 +539,10 @@ impl RuntimeComponentRegistry {
 
         if let Some(descriptor) = descriptor_by_name.get(component_name) {
             for dependency in &descriptor.dependencies {
-                if phase_by_component.contains_key(dependency) {
+                if phase_indices_by_component.contains_key(dependency) {
                     self.push_shutdown_component_order(
                         dependency,
-                        phase_by_component,
+                        phase_indices_by_component,
                         descriptor_by_name,
                         visiting,
                         visited,
@@ -552,8 +554,10 @@ impl RuntimeComponentRegistry {
 
         visiting.remove(component_name);
         visited.insert(component_name);
-        if let Some(index) = phase_by_component.get(component_name) {
-            ordered.push(*index);
+        // Dependencies are per-component, so the DFS stays per-component; when a
+        // component is emitted, every phase it registered runs in registration order.
+        if let Some(indices) = phase_indices_by_component.get(component_name) {
+            ordered.extend(indices);
         }
     }
 
@@ -656,6 +660,12 @@ impl RuntimeComponentBuilder<'_> {
     }
 
     /// Registers a component shutdown phase.
+    ///
+    /// A component may register multiple shutdown phases; they run in registration
+    /// order, after the shutdown phases of the component's dependencies. Registering
+    /// the same phase name twice for one component is almost always a duplicated
+    /// registration accident, so it is reported with a warning, but every registered
+    /// phase still runs.
     pub fn shutdown<F, Fut>(
         &mut self,
         phase_name: &'static str,
@@ -667,16 +677,27 @@ impl RuntimeComponentBuilder<'_> {
         Fut: Future<Output = Result<(), String>> + Send + 'static,
     {
         let component_name = self.descriptor_mut().name;
+        if self.registry.shutdown.iter().any(|registered| {
+            registered.component_name == component_name && registered.phase_name == phase_name
+        }) {
+            tracing::warn!(
+                component = component_name,
+                phase = phase_name,
+                "duplicate shutdown phase registration"
+            );
+        }
         self.registry.shutdown.push(RuntimeComponentShutdownPhase {
             component_name,
             phase_name,
             timeout,
             phase: Box::new(move || Box::pin(phase())),
         });
-        self.descriptor_mut().shutdown = Some(RuntimeShutdownDescriptor {
-            phase_name,
-            timeout,
-        });
+        self.descriptor_mut()
+            .shutdown
+            .push(RuntimeShutdownDescriptor {
+                phase_name,
+                timeout,
+            });
         self
     }
 
@@ -934,6 +955,160 @@ mod tests {
                 "database"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn registry_runs_all_shutdown_phases_of_one_component_in_registration_order() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::new();
+
+        {
+            let mut component = registry.component("audit");
+            for phase_name in ["audit_stop", "audit_flush", "audit_close"] {
+                component.shutdown(phase_name, None, {
+                    let order = Arc::clone(&order);
+                    move || {
+                        let order = Arc::clone(&order);
+                        async move {
+                            order.lock().unwrap().push(phase_name);
+                            Ok(())
+                        }
+                    }
+                });
+            }
+        }
+
+        let report = registry.shutdown().await;
+
+        assert!(!report.has_failures());
+        assert_eq!(
+            order.lock().unwrap().as_slice(),
+            ["audit_stop", "audit_flush", "audit_close"]
+        );
+        assert_eq!(
+            report
+                .phases
+                .iter()
+                .map(|phase| phase.name)
+                .collect::<Vec<_>>(),
+            vec!["audit_stop", "audit_flush", "audit_close"]
+        );
+        assert_eq!(
+            registry
+                .descriptor("audit")
+                .expect("audit component should exist")
+                .shutdown
+                .iter()
+                .map(|descriptor| descriptor.phase_name)
+                .collect::<Vec<_>>(),
+            vec!["audit_stop", "audit_flush", "audit_close"]
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_runs_dependency_phases_before_all_dependent_phases() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = RuntimeComponentRegistry::new();
+
+        {
+            let mut database = registry.component("database");
+            for phase_name in ["database_stop", "database_close"] {
+                database.shutdown(phase_name, None, {
+                    let order = Arc::clone(&order);
+                    move || {
+                        let order = Arc::clone(&order);
+                        async move {
+                            order.lock().unwrap().push(phase_name);
+                            Ok(())
+                        }
+                    }
+                });
+            }
+        }
+        {
+            let mut audit = registry.component("audit");
+            audit.depends_on("database");
+            for phase_name in ["audit_flush", "audit_close"] {
+                audit.shutdown(phase_name, None, {
+                    let order = Arc::clone(&order);
+                    move || {
+                        let order = Arc::clone(&order);
+                        async move {
+                            order.lock().unwrap().push(phase_name);
+                            Ok(())
+                        }
+                    }
+                });
+            }
+        }
+
+        let report = registry.shutdown().await;
+
+        assert!(!report.has_failures());
+        assert_eq!(
+            order.lock().unwrap().as_slice(),
+            [
+                "database_stop",
+                "database_close",
+                "audit_flush",
+                "audit_close"
+            ]
+        );
+    }
+
+    #[derive(Clone)]
+    struct SharedLogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedLogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_shutdown_phase_registration_warns_and_still_runs_both() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let buffer = SharedLogBuffer(Arc::new(Mutex::new(Vec::new())));
+        let writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+
+        let mut registry = RuntimeComponentRegistry::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let mut component = registry.component("audit");
+            for run in [1_u8, 2] {
+                component.shutdown("audit_flush", None, {
+                    let order = Arc::clone(&order);
+                    move || {
+                        let order = Arc::clone(&order);
+                        async move {
+                            order.lock().unwrap().push(run);
+                            Ok(())
+                        }
+                    }
+                });
+            }
+        });
+
+        let logs = String::from_utf8(buffer.0.lock().unwrap().clone())
+            .expect("log output should be valid UTF-8");
+        assert!(
+            logs.contains("duplicate shutdown phase registration"),
+            "expected duplicate registration warning, got: {logs}"
+        );
+
+        let report = registry.shutdown().await;
+        assert!(!report.has_failures());
+        assert_eq!(order.lock().unwrap().as_slice(), [1, 2]);
+        assert_eq!(report.phases.len(), 2);
     }
 
     #[tokio::test]

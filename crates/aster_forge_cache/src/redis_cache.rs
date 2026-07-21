@@ -20,6 +20,22 @@ const REDIS_CACHE_RECONNECT_MAX_DELAY: Duration = Duration::from_millis(500);
 const REDIS_CACHE_RECONNECT_RETRIES: usize = 1;
 const REDIS_CACHE_FALLBACK_COOLDOWN: Duration = Duration::from_secs(5);
 
+/// Escapes a literal key prefix for use inside a Redis `SCAN MATCH` glob pattern.
+///
+/// Redis glob patterns treat `*`, `?`, `[...]` (including ranges and negation) as
+/// metacharacters and `\` as the escape character, so a raw prefix containing any of
+/// them would match unintended keys — and `invalidate_prefix` would then delete those
+/// keys while the intended ones survive. Escaping `\` first, then every metacharacter,
+/// makes the prefix match verbatim before the trailing `*` is appended.
+fn escape_scan_glob_literal(prefix: &str) -> String {
+    prefix
+        .replace('\\', "\\\\")
+        .replace('*', "\\*")
+        .replace('?', "\\?")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+}
+
 /// Redis cache backend with a short-lived local memory fallback.
 pub struct RedisCache {
     inner: RedisCacheInner<RedisConnectionManager>,
@@ -313,7 +329,13 @@ where
 
     async fn get_bytes(&self, key: &str) -> Option<Vec<u8>> {
         match self.redis_operation("get", self.redis.get(key)).await {
-            Some(value) => value,
+            // A successful Redis read makes Redis authoritative for this key: a local
+            // shadow left by a previous outage is redundant at best and stale at worst,
+            // and keeping it would resurrect never-persisted data during the next outage.
+            Some(value) => {
+                self.delete_local(key).await;
+                value
+            }
             None => self.get_local_bytes(key).await,
         }
     }
@@ -402,7 +424,7 @@ where
     async fn invalidate_prefix(&self, prefix: &str) {
         self.invalidate_local_prefix(prefix).await;
 
-        let pattern = format!("{prefix}*");
+        let pattern = format!("{}*", escape_scan_glob_literal(prefix));
         let mut cursor: u64 = 0;
         loop {
             let Some((next_cursor, keys)) = self
@@ -531,7 +553,7 @@ impl RedisAvailability {
 mod tests {
     use super::{
         CacheBackend, REDIS_CACHE_FALLBACK_COOLDOWN, RedisAvailability, RedisCacheInner,
-        RedisClient,
+        RedisClient, escape_scan_glob_literal,
     };
     use async_trait::async_trait;
     use std::collections::HashMap;
@@ -867,6 +889,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn successful_redis_get_clears_local_shadow_so_it_cannot_resurrect() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        // Outage: the write lands only in the local fallback.
+        open_fallback_circuit(&cache);
+        cache
+            .set_bytes("snapshot", b"local-only".to_vec(), Some(60))
+            .await;
+        redis.set_fail_operations(false);
+        cache.availability.mark_success();
+
+        // Redis answers with a miss: the shadow must be deleted, not just bypassed.
+        assert_eq!(cache.get_bytes("snapshot").await, None);
+        assert_eq!(cache.local.get_bytes("snapshot").await, None);
+
+        // The next outage must not resurrect the never-persisted value.
+        open_fallback_circuit(&cache);
+        assert_eq!(cache.get_bytes("snapshot").await, None);
+    }
+
+    #[tokio::test]
+    async fn successful_redis_hit_clears_divergent_local_shadow() {
+        let (cache, redis) = cache_with_fake_redis(60);
+        redis.insert("profile", b"redis-value");
+        open_fallback_circuit(&cache);
+        cache
+            .set_bytes("profile", b"local-shadow".to_vec(), Some(60))
+            .await;
+        redis.set_fail_operations(false);
+        cache.availability.mark_success();
+
+        assert_eq!(
+            cache.get_bytes("profile").await,
+            Some(b"redis-value".to_vec())
+        );
+        assert_eq!(cache.local.get_bytes("profile").await, None);
+    }
+
+    #[tokio::test]
     async fn successful_redis_set_clears_local_fallback_shadow() {
         let (cache, redis) = cache_with_fake_redis(60);
         open_fallback_circuit(&cache);
@@ -1090,6 +1150,18 @@ mod tests {
             0,
             "circuit-open batch delete should skip Redis"
         );
+    }
+
+    #[test]
+    fn escape_scan_glob_literal_escapes_redis_glob_metacharacters() {
+        assert_eq!(escape_scan_glob_literal("plain:prefix:"), "plain:prefix:");
+        assert_eq!(escape_scan_glob_literal("a*b"), "a\\*b");
+        assert_eq!(escape_scan_glob_literal("a?b"), "a\\?b");
+        assert_eq!(escape_scan_glob_literal("[ab]"), "\\[ab\\]");
+        assert_eq!(escape_scan_glob_literal("a\\b"), "a\\\\b");
+        // The backslash must be doubled first, or an input backslash would end up
+        // escaping one of the escape sequences we add afterwards.
+        assert_eq!(escape_scan_glob_literal("\\*"), "\\\\\\*");
     }
 
     #[tokio::test]

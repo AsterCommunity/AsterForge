@@ -29,14 +29,14 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "backend-prometheus")]
 pub mod prometheus;
 
-const ENABLED_BACKEND_COUNT: usize = cfg!(feature = "backend-prometheus") as usize;
+// One more than the number of enabled backend-* features. The +1 offset keeps the
+// compile-time guard below from degenerating into a comparison against usize's
+// minimum value when every backend is disabled, which would trip
+// clippy::absurd_extreme_comparisons only in that one feature configuration.
+const ENABLED_BACKEND_SLOTS: usize = 1 + cfg!(feature = "backend-prometheus") as usize;
 
-#[expect(
-    clippy::absurd_extreme_comparisons,
-    reason = "only one backend-* feature exists today so the guard is vacuous, but it must keep compiling until a second backend feature makes it meaningful"
-)]
 const _: () = assert!(
-    ENABLED_BACKEND_COUNT <= 1,
+    ENABLED_BACKEND_SLOTS <= 2,
     "aster_forge_metrics allows only one backend-* feature at a time"
 );
 

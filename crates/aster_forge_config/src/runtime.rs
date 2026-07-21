@@ -283,9 +283,15 @@ where
     }
 
     /// Replaces the snapshot from a full record list and returns the diff.
+    ///
+    /// Restart-only rows keep their in-process record when the key already
+    /// exists (value and flags stay until restart), mirroring [`Self::apply`];
+    /// the diff does not report those keys as changed. Removals are applied
+    /// immediately, matching [`Self::remove`].
     pub fn replace(&self, configs: Vec<T>) -> Vec<RuntimeConfigChange<T>> {
-        let next = SyncConfigSnapshot::from_configs(configs);
+        let mut next = SyncConfigSnapshot::from_configs(configs);
         let mut guard = self.write_snapshot();
+        preserve_restart_only_records(&guard.values, &mut next.values);
         let changes = diff_sync_snapshots(&guard, &next);
         *guard = next;
         changes
@@ -401,12 +407,18 @@ impl AsyncRuntimeConfig {
     }
 
     /// Reloads all values from `store` and returns the diff.
+    ///
+    /// Restart-only rows keep their in-process record when the key already
+    /// exists (value and flags stay until restart), mirroring [`Self::apply`];
+    /// the diff does not report those keys as changed. Removals are applied
+    /// immediately, matching [`Self::remove`].
     pub async fn reload<S>(&self, store: &S) -> Result<Vec<RuntimeConfigChange>>
     where
         S: AsyncConfigStore + ?Sized,
     {
-        let next = AsyncConfigSnapshot::from_configs(store.load_all().await?);
+        let mut next = AsyncConfigSnapshot::from_configs(store.load_all().await?);
         let mut guard = self.snapshot.write().await;
+        preserve_restart_only_records(&guard.values, &mut next.values);
         let changes = diff_snapshots(&guard, &next);
         *guard = next;
         Ok(changes)
@@ -449,6 +461,25 @@ impl AsyncRuntimeConfig {
             .values
             .remove(key)
             .map(|_| RuntimeConfigChange::Removed(key.to_string()))
+    }
+}
+
+/// Keeps the in-process record for restart-only keys across a full snapshot
+/// replacement, mirroring the single-row guard in `apply`: when the incoming
+/// record is marked `requires_restart` and the key already exists, the stored
+/// record (value and flags) is kept until the process restarts. Removals are
+/// not guarded, matching `remove`.
+fn preserve_restart_only_records<T>(previous: &HashMap<String, T>, next: &mut HashMap<String, T>)
+where
+    T: RuntimeConfigRecord,
+{
+    for (key, incoming) in next.iter_mut() {
+        if !incoming.config_requires_restart() {
+            continue;
+        }
+        if let Some(existing) = previous.get(key) {
+            *incoming = existing.clone();
+        }
     }
 }
 
@@ -883,6 +914,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reload_preserves_restart_required_existing_values() {
+        let runtime_config = AsyncRuntimeConfig::new();
+        // First load inserts restart-only keys normally: nothing to preserve yet.
+        runtime_config
+            .reload(&StaticStore(vec![
+                config("static_key", "old", true),
+                config("hot_key", "v1", false),
+            ]))
+            .await
+            .unwrap();
+
+        let changes = runtime_config
+            .reload(&StaticStore(vec![
+                // Restart-only and already present: kept until restart.
+                config("static_key", "new", true),
+                // Hot key updates as usual.
+                config("hot_key", "v2", false),
+                // Restart-only but new: inserted on first sight.
+                config("fresh_static", "fresh", true),
+            ]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            changes,
+            vec![
+                RuntimeConfigChange::Upserted(config("fresh_static", "fresh", true)),
+                RuntimeConfigChange::Upserted(config("hot_key", "v2", false)),
+            ]
+        );
+        assert_eq!(
+            runtime_config.get("static_key").await.as_deref(),
+            Some("old")
+        );
+        assert_eq!(runtime_config.get("hot_key").await.as_deref(), Some("v2"));
+        assert_eq!(
+            runtime_config.get("fresh_static").await.as_deref(),
+            Some("fresh")
+        );
+    }
+
     #[test]
     fn sync_runtime_config_supports_hot_reads_and_diffs() {
         let runtime_config = SyncRuntimeConfig::new();
@@ -914,6 +987,45 @@ mod tests {
 
         assert_eq!(change, None);
         assert_eq!(runtime_config.get("static_key").as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn sync_replace_preserves_restart_required_existing_values() {
+        let runtime_config = SyncRuntimeConfig::new();
+        // First load inserts restart-only keys normally: nothing to preserve yet.
+        runtime_config.replace(vec![
+            config("static_key", "old", true),
+            config("flagged_key", "old", false),
+            config("hot_key", "v1", false),
+        ]);
+
+        let changes = runtime_config.replace(vec![
+            // Restart-only and already present: kept until restart.
+            config("static_key", "new", true),
+            // The incoming row's flag decides, so this row is also kept;
+            // the restart-required flag update itself is deferred.
+            config("flagged_key", "new", true),
+            // Hot key updates as usual.
+            config("hot_key", "v2", false),
+            // Restart-only but new: inserted on first sight.
+            config("fresh_static", "fresh", true),
+        ]);
+
+        assert_eq!(
+            changes,
+            vec![
+                RuntimeConfigChange::Upserted(config("fresh_static", "fresh", true)),
+                RuntimeConfigChange::Upserted(config("hot_key", "v2", false)),
+            ]
+        );
+        assert_eq!(runtime_config.get("static_key").as_deref(), Some("old"));
+        assert_eq!(runtime_config.get("hot_key").as_deref(), Some("v2"));
+        assert_eq!(runtime_config.get("fresh_static").as_deref(), Some("fresh"));
+        // The whole record is preserved, including its flags.
+        assert_eq!(
+            runtime_config.get_model("flagged_key"),
+            Some(config("flagged_key", "old", false))
+        );
     }
 
     #[test]

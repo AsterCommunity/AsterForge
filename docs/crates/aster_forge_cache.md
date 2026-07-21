@@ -94,15 +94,21 @@ let cache = aster_forge_cache::create_cache(&config).await;
 
 JSON 反序列化失败时返回 `None`，不会抛出产品错误。对关键业务状态不要只靠这个静默行为，产品侧应该有兜底或重建逻辑。
 
+`invalidate_prefix(prefix)` 的前缀按**字面**语义处理。Redis backend 用 SCAN MATCH（glob 语法）实现，内部会先转义前缀里的 `\`、`*`、`?`、`[`、`]` 再拼通配符——产品侧可以安全地把含用户可控部分的 key 前缀传进来，不会因为 glob 元字符误删非预期 key 或漏删目标 key。
+
 ## TTL 契约
 
 - `ttl_secs: None` 使用 backend 构造时的默认 TTL。
 - `ttl_secs: Some(0)` 表示立即过期。`set_bytes` 等价于删除该 key（Redis 会拒绝 `SETEX 0`，backend 统一归一化为这个语义而不是发出非法命令）；`set_bytes_if_absent` 只报告 key 当前是否有存活值，无论结果如何都不会留下值。
-- memory 和 Redis backend 对这两个边界的行为一致，单元测试和真实 Redis 容器测试共同锁定契约。
+- per-entry TTL 是精确的：memory backend 通过 moka 的 per-entry `Expiry` 以每个值的绝对过期时间判定，比默认 TTL 更长的条目不会被提前驱逐，`default_ttl = 0` 也不会让整个缓存变成只写不存——与 Redis SETEX 的语义一致。
+- insert-if-absent 的本地 reservation 与被保护值同寿命：值过期后 key 立即可被重新 reserve 插入（零 TTL 值的 reservation 也随之立即失效，因为谁"赢得"一个立即过期的值本就不可观测）。
+- memory 和 Redis backend 对这些边界的行为一致，单元测试和真实 Redis 容器测试共同锁定契约。
 
 ## Redis fallback
 
 Redis backend 有健康检查和 fallback circuit。fallback circuit 只对可用性故障打开：连接 IO 错误、cluster 连接缺失，以及 `LOADING`/`TRYAGAIN`/`CLUSTERDOWN`/`MASTERDOWN`/`READONLY` 等瞬时服务端错误。确定性命令错误（如 WRONGTYPE、非法参数）只会记录 warn 并对单次操作走 fallback，不会把整个 backend 切到降级状态。
+
+故障期写入只落在本地影子副本里。任何**成功**的 Redis 操作（`get`/`set`/`take`/`set_if_absent`）都会清除该 key 的本地影子：Redis 恢复权威地位后，影子不是冗余就是陈旧，留着它会在下一次故障时复活从未持久化的数据。
 
 产品侧应该决定：
 

@@ -32,7 +32,7 @@ aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge" }
 可选 feature：
 
 - `openapi`：在 debug + openapi 构建下为公共 API 类型派生 `utoipa::ToSchema`。
-- `redis-pubsub`：启用 `RedisConfigChangeNotifier` 和 `RedisConfigReloadListener`，只用于跨进程 reload 通知，不表示配置值存储在 Redis。
+- `redis-pubsub`：启用 `RedisConfigChangeNotifier`，并通过 `aster_forge_events` 复用 Redis transport 和可重连 subscription supervisor；它只用于跨进程 reload 通知，不表示配置值存储在 Redis。
 
 ```toml
 aster_forge_config = {
@@ -331,7 +331,7 @@ Forge 提供两条 runtime cache 路径：
 
 已有产品如果已经有大量同步读取配置的 helper，应优先接入 `SyncRuntimeConfig`，不要为了使用公共 runtime cache 把读路径强行改成 async。
 
-两条路径都保持同一套 `requires_restart` 语义：如果 key 已经存在，之后收到 `requires_restart=true` 的热更新会被忽略，直到进程重启后通过完整 reload 加载新值。
+两条路径都保持同一套 `requires_restart` 语义：如果 key 已经存在，之后收到 `requires_restart=true` 的更新会被忽略（整条记录保留，含标志位本身），直到进程重启后加载新值。这套语义由入站行的标志决定，对所有写入路径一致生效——单行 `apply`、全量 `SyncRuntimeConfig::replace` 和 `AsyncRuntimeConfig::reload`（包括 pub/sub 通知触发的权威 reconcile）；被保留的 key 不会出现在 reload diff 里，监听器不会收到"restart-only 值已变化"的假信号。删除不在这套保护内：`remove` 和全量重载中消失的 key 都立即生效。
 
 产品如果保留本地 runtime，也应该保持同样语义，避免配置在不同服务中表现不一致。
 
@@ -407,7 +407,8 @@ notifier.publish_reload(message).await?;
 `redis-pubsub` feature 下可以用：
 
 - `RedisConfigChangeNotifier`
-- `RedisConfigReloadListener`
+
+Redis 连接、单次 subscription、断线状态、退避、jitter 和 shutdown cancellation 由 `aster_forge_events` 提供。`aster_forge_config` 只负责 `ConfigReloadMessage` 编解码、namespace/origin 过滤、reload 观测，以及每次 `Connected` / `Recovered` 后的权威 reconcile。
 
 如果产品需要完整订阅循环，优先使用：
 
@@ -443,7 +444,7 @@ notifier.publish_reload(message).await?;
 
 底层 `ConfigReloadWorkerConfig`、`handle_config_reload_notification()`、`decode_config_reload_transport_payload()` 和 `run_config_reload_worker()` 仍然保留给特殊运行器、transport adapter 或测试使用；普通产品不应该自己拼 reload message、notifier subscribe、namespace 过滤或 backend match。
 
-这组 API 负责统一静态 config shape、backend factory、runtime ID 生成、namespace/topic 默认值、过滤 namespace、忽略本进程发出的消息、调用产品传入的 reload 回调，并在订阅建立失败或运行中断线后使用有界指数退避和 50%-100% 抖动自动重连。重连等待、正在建立订阅和接收循环都响应 shutdown cancellation。
+这组 API 负责统一静态 config shape、backend factory、runtime ID 生成、namespace/topic 默认值、过滤 namespace、忽略本进程发出的消息、调用产品传入的 reload 回调。底层通过 `aster_forge_events::supervise_event_subscription()` 在订阅建立失败或运行中断线后使用有界指数退避和 50%-100% 抖动自动重连；重连等待、正在建立订阅和接收循环都响应 shutdown cancellation。
 
 "断线"覆盖三类事件，supervisor 对它们统一走"观测 `disconnected` → 退避 → 重新订阅 → reconcile"的路径：
 
@@ -454,7 +455,7 @@ notifier.publish_reload(message).await?;
 退避参数：250ms 起始、30s 上限、50%-100% 抖动；订阅稳定运行 30s 后失败计数重置。supervisor 只在 shutdown cancellation 时退出——单次 reload 失败、reconcile 失败、广播 lag、Redis 抖动都不会杀死 worker，避免一次故障让跨进程配置同步永久瘫痪。
 
 `run_config_reload_supervisor*` 在每次订阅成功后调用一次 `reconcile`，因此启动竞态和 Pub/Sub 断线期间丢失的通知（包括 lag 丢弃的事件）都由权威数据库全量加载补齐。Redis Pub/Sub 不重放历史消息；reconcile 是最终状态修复机制。
-Forge 不假设 transport 只能是 Redis；后续 RabbitMQ、NATS 或其他 broker 可以实现同一个 `ConfigChangeNotifier` 边界，并接入 `build_config_sync_runtime()` 的 backend 分支。
+Forge 不假设 transport 只能是 Redis；后续 RabbitMQ、NATS 或其他 broker 可以实现同一个 `ConfigChangeNotifier` 边界，并通过 `EventSubscriptionSource` 接入共享 supervisor 和 `build_config_sync_runtime()` 的 backend 分支。
 
 transport adapter 接收到原始 payload 时，应该先调用 `decode_config_reload_transport_payload(payload)`。解析失败只记录 warning 并继续监听，不应该让一个 malformed message 杀掉订阅 worker。
 
