@@ -19,13 +19,16 @@ Forge 负责：
 
 - `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝。
 - WebDAV 方法、`Depth`、`Overwrite`、`Destination`、`If`、`Timeout` 和 `Lock-Token` header 解析。
+- 每个 DAV 方法的 empty/bounded XML/stream/unused body policy，以及 Actix bounded-body adapter。
 - HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
+- GET/HEAD 的 200/206/304/416 response planning、单段 byte range 选择与读取区间。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
 - PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
 - `DavXmlElement` XML 表示与序列化边界；具体 XML crate 是 Forge 私有实现，产品不直接依赖。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - `DavResourceBackend`、`DavPropertyBackend`、`DavLockBackend` 和可选 `DavVersionBackend` port。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
+- OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
 
 产品负责：
 

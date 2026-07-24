@@ -1,12 +1,13 @@
 use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{
-    DavMethod, DavPath, DavPathError, DavPrecondition, DavRequestHead, DavRequestOrigin, Depth,
-    IfStateCondition, child_relative_path, destination_relative_path,
-    evaluate_http_download_preconditions, evaluate_http_etag_preconditions, href_for_relative,
-    parent_relative_path, parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth,
-    parse_lock_timeout, parse_lock_token_header, parse_move_depth, parse_propfind_depth,
-    submitted_lock_tokens, submitted_lock_tokens_for_path,
+    DAV_ALLOW_HEADER, DavBodyPolicy, DavMethod, DavPath, DavPathError, DavPrecondition,
+    DavRequestHead, DavRequestOrigin, Depth, IfStateCondition, child_relative_path,
+    destination_relative_path, evaluate_http_download_preconditions,
+    evaluate_http_etag_preconditions, href_for_relative, parent_relative_path, parse_copy_depth,
+    parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
+    parse_lock_token_header, parse_move_depth, parse_propfind_depth, submitted_lock_tokens,
+    submitted_lock_tokens_for_path,
 };
 use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use http::{Method, Uri};
@@ -91,6 +92,41 @@ fn method_parser_recognizes_webdav_extensions() {
         Some(DavMethod::Propfind)
     );
     assert_eq!(DavMethod::from_method(&Method::PATCH), None);
+}
+
+#[test]
+fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_separate() {
+    for method in [
+        DavMethod::Options,
+        DavMethod::Mkcol,
+        DavMethod::Delete,
+        DavMethod::Copy,
+        DavMethod::Move,
+        DavMethod::Unlock,
+    ] {
+        assert_eq!(method.body_policy(), DavBodyPolicy::Empty);
+    }
+    for method in [
+        DavMethod::Propfind,
+        DavMethod::Proppatch,
+        DavMethod::Lock,
+        DavMethod::Report,
+    ] {
+        assert_eq!(method.body_policy(), DavBodyPolicy::BoundedXml);
+    }
+    assert_eq!(DavMethod::Put.body_policy(), DavBodyPolicy::Stream);
+    for method in [DavMethod::Get, DavMethod::Head, DavMethod::VersionControl] {
+        assert_eq!(method.body_policy(), DavBodyPolicy::Unused);
+    }
+}
+
+#[test]
+fn advertised_methods_are_exactly_the_methods_recognized_by_the_protocol_layer() {
+    let methods = DAV_ALLOW_HEADER.split(", ").collect::<Vec<_>>();
+    assert_eq!(methods.len(), 14);
+    for method in methods {
+        assert!(DavMethod::from_name(method).is_some(), "{method}");
+    }
 }
 
 #[test]

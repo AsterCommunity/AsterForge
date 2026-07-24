@@ -8,6 +8,7 @@
 - Gravatar hash 和 URL 拼接。
 - best-effort 临时文件和目录清理。
 - HTML 和 inline script 占位符 escaping。
+- 单段 HTTP byte range 解析与 representation-relative 区间计算。
 - HTTP date 和条件请求 ETag 比较。
 - UUID 和 token 生成。
 - 网络地址和 trusted proxy 解析。
@@ -113,6 +114,19 @@ Spotlight/Finder 或文件监听器在删除过程中短暂写入目录的情况
 - `UNIQUE_UUID_MAX_ATTEMPTS`
 
 唯一 UUID 生成流程通过 `UniqueUuidAttempt` 把“候选冲突”和“成功结果”表达出来。产品侧决定冲突如何查询数据库。
+
+### http_range
+
+主要 API：
+
+- `parse_single_byte_range(raw, total_size)`
+- `HttpByteRange`
+- `HttpRangeError`
+
+该模块只处理 transport-neutral 的单段 `bytes=` range：支持 bounded、open-ended 和 suffix
+形式，按 representation 长度截断越界 end，并明确区分非法 unit、多段 range、数字错误、空
+representation 和 unsatisfiable range。它不决定 HTTP 状态码，也不打开 storage stream；REST、
+WebDAV 或内部传输协议应在自己的响应边界映射错误和选择读取方式。
 
 ### http_validators
 
@@ -265,6 +279,8 @@ let report_type = xml_root_local_name(body, XmlSafetyPolicy::untrusted())?;
 - 每个产品接入点覆盖非法输入。
 - 数值转换测试要包含负数、超上限和边界值。
 - URL/origin 测试要覆盖 loopback HTTP、HTTPS、wildcard。
+- HTTP range 测试要覆盖 bounded/open-ended/suffix、end 截断、空文件、零 suffix、多段请求、
+  `u64` 上界和 unsatisfiable offset。
 - trusted proxy 测试要覆盖多代理链。
 - XML 测试要覆盖正常输入、精确深度上限、超限一层、空文档、多个根元素、标签错配、
   DTD/ENTITY 大小写变体、尾部不完整 markup，以及允许 DTD 的显式策略分支。

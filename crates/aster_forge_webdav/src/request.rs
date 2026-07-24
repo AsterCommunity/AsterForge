@@ -29,6 +29,19 @@ pub enum DavMethod {
     VersionControl,
 }
 
+/// How the transport adapter must handle a request body before product code runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DavBodyPolicy {
+    /// Reject the first non-empty body chunk.
+    Empty,
+    /// Collect the body up to the product-supplied XML limit.
+    BoundedXml,
+    /// Leave the body as a stream for the product storage adapter.
+    Stream,
+    /// Preserve the existing method behavior without consuming the body.
+    Unused,
+}
+
 impl DavMethod {
     /// Parses a supported HTTP/WebDAV method.
     #[must_use]
@@ -76,6 +89,21 @@ impl DavMethod {
             Self::Unlock => DavOperation::Unlock,
             Self::Report => DavOperation::Report,
             Self::VersionControl => DavOperation::VersionControl,
+        }
+    }
+
+    /// Returns the body handling contract for this method.
+    #[must_use]
+    pub const fn body_policy(self) -> DavBodyPolicy {
+        match self {
+            Self::Options | Self::Mkcol | Self::Delete | Self::Copy | Self::Move | Self::Unlock => {
+                DavBodyPolicy::Empty
+            }
+            Self::Propfind | Self::Proppatch | Self::Lock | Self::Report => {
+                DavBodyPolicy::BoundedXml
+            }
+            Self::Put => DavBodyPolicy::Stream,
+            Self::Get | Self::Head | Self::VersionControl => DavBodyPolicy::Unused,
         }
     }
 }

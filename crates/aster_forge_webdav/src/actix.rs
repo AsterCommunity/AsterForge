@@ -6,7 +6,9 @@ use futures::StreamExt;
 use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 
 use crate::protocol::DavProtocolError;
-use crate::{DavMethod, DavRequestHead, DavRequestOrigin, DavResponse, DavResponseBody};
+use crate::{
+    DavBodyError, DavMethod, DavRequestHead, DavRequestOrigin, DavResponse, DavResponseBody,
+};
 
 /// Parses an Actix request into the transport-neutral request head.
 pub fn request_head(
@@ -65,4 +67,35 @@ pub fn convert_header_map(source: &actix_header::HeaderMap) -> Result<HeaderMap,
         headers.append(name, value);
     }
     Ok(headers)
+}
+
+/// Rejects the first non-empty request body chunk without buffering the remaining payload.
+pub async fn ensure_empty_body(payload: &mut actix_web::web::Payload) -> Result<(), DavBodyError> {
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk.map_err(|_| DavBodyError::ReadFailed)?;
+        if !chunk.is_empty() {
+            return Err(DavBodyError::BodyNotAllowed);
+        }
+    }
+    Ok(())
+}
+
+/// Collects a bounded XML request body for grammar parsing by the protocol layer.
+pub async fn collect_bounded_xml_body(
+    payload: &mut actix_web::web::Payload,
+    maximum: usize,
+) -> Result<Vec<u8>, DavBodyError> {
+    let mut body = Vec::with_capacity(maximum.min(4096));
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk.map_err(|_| DavBodyError::ReadFailed)?;
+        let next_len = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(DavBodyError::XmlTooLarge)?;
+        if next_len > maximum {
+            return Err(DavBodyError::XmlTooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }

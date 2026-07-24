@@ -46,8 +46,12 @@ pub use protocol::{
     parse_lock_token_header, parse_move_depth, parse_overwrite, parse_propfind_depth,
     submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
-pub use request::{DavMethod, DavRequestHead, DavRequestOrigin};
-pub use response::{DavResponse, DavResponseBody};
+pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin};
+pub use response::{
+    DAV_ALLOW_HEADER, DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError,
+    DavResponse, DavResponseBody, body_error_response, method_not_allowed_response,
+    options_response, plan_download_response, range_not_satisfiable_response,
+};
 pub use xml::{
     DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,
     DavRequestedProperty, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
