@@ -1,141 +1,141 @@
 # AGENTS.md
 
-本文件给在 AsterForge 仓库工作的 agent 使用。先看清楚项目边界再动手。Forge 现在不是重复函数收纳箱，而是 Aster 产品共用的运行时地基；但这不等于可以把业务逻辑塞进共享 crate，后面拆起来会很烦。
+This file is for agents working in the AsterForge repository. Understand the project boundaries before changing code. Forge is no longer a dumping ground for duplicated functions; it is the shared runtime foundation for Aster products. That still does not make it a place for product business logic, because pulling that logic back out later is a miserable job.
 
-## 项目定位
+## Project Positioning
 
-AsterForge 是 Aster 项目的共享 Rust crate workspace 和产品无关运行时内核，用来沉淀跨项目复用的基础设施机制、component lifecycle、共享 schema/store、后台任务运行机制、配置同步、cache backend、mail outbox、audit log 机械层和健康/关闭报告。
+AsterForge is the shared Rust crate workspace and product-neutral runtime kernel for Aster projects. It consolidates reusable infrastructure mechanics, component lifecycle management, shared schemas and stores, background-task runtime mechanics, configuration synchronization, cache backends, mail outbox handling, audit-log mechanics, and health and shutdown reporting.
 
-它正在向 Aster 产品公共 framework foundation 演进，但不是 AsterDrive / AsterYggdrasil 的业务层搬运仓库。产品仓库仍然拥有业务语义，Forge 拥有可复用机械层。
+It is evolving into a common framework foundation for Aster products, but it is not a repository for relocating the business layers of AsterDrive or AsterYggdrasil. Product repositories continue to own business semantics; Forge owns reusable mechanics.
 
-Forge 应该承载：
+Forge should own:
 
-- `AsterRuntime`、runtime component registry、health check、startup/shutdown phase、signal handling 等生命周期内核。
-- API helper、分页、cursor、排序、OpenAPI 宏等产品无关结构。
-- 缓存、数据库连接、事务、重试、指标、日志、panic hook 等基础设施机制。
-- runtime leases、scheduled task catalog、mail outbox、audit logs 等产品无关数据库 schema、index builder 和 store。
-- 后台任务 lease、heartbeat、dispatch、runtime、step 状态、scheduled task due-run claim 等通用机械流程。
-- mail sender、outbox dispatch、retry decision、template catalog 等产品无关邮件机制。
-- audit runtime component、audit log write/query/count/delete 等产品无关审计机械层。
-- 配置 registry、结构化值转换、runtime snapshot、reload notification 等运行时配置内核。
-- validation、crypto、storage key、S3 endpoint normalization 等可复用工具。
+- Lifecycle infrastructure such as `AsterRuntime`, the runtime component registry, health checks, startup and shutdown phases, and signal handling.
+- Product-neutral API helpers, pagination, cursors, sorting, and OpenAPI macros.
+- Infrastructure mechanics such as caching, database connections, transactions, retries, metrics, logging, and panic hooks.
+- Product-neutral database schemas, index builders, and stores for runtime leases, the scheduled-task catalog, mail outbox, and audit logs.
+- Generic background-task mechanics such as leases, heartbeats, dispatch, runtime workers, step state, and scheduled-task due-run claims.
+- Product-neutral mail mechanics such as senders, outbox dispatch, retry decisions, and template catalogs.
+- Product-neutral audit mechanics such as the audit runtime component and audit-log write, query, count, and delete operations.
+- Runtime configuration infrastructure such as the configuration registry, structured value conversion, runtime snapshots, and reload notifications.
+- Reusable utilities for validation, cryptography, storage keys, and S3 endpoint normalization.
 
-Forge 不应该承载：
+Forge should not own:
 
-- 产品业务实体、产品 API DTO、产品 permission model、用户/团队/组织规则。
-- 产品历史 migration。新 migration 可以调用 Forge schema builders，但不要把产品 migration ownership 迁进 Forge。
-- 产品业务 repository SQL。Forge 可以承接产品无关 store/query 机械层，例如 audit cursor query、mail outbox claim、scheduled task claim。
-- 产品 audit action enum、detail schema、presentation、权限和业务统计口径。
-- 产品业务状态机。
-- 产品 API 错误文案、状态码、本地化、前端展示策略。
-- AsterDrive 或 AsterYggdrasil 的具体任务 kind、payload/result、存储策略、外部认证账号绑定规则。
-- “为了看起来统一”而没有语义价值的薄封装。
+- Product business entities, product API DTOs, product permission models, or user, team, and organization rules.
+- Historical product migrations. New migrations may call Forge schema builders, but migration ownership must remain in the product repository.
+- Product repository SQL. Forge may own product-neutral store and query mechanics such as audit cursor queries, mail-outbox claims, and scheduled-task claims.
+- Product audit-action enums, detail schemas, presentation, permissions, or business-statistics definitions.
+- Product business state machines.
+- Product API error text, status codes, localization, or frontend presentation policy.
+- AsterDrive- or AsterYggdrasil-specific task kinds, payloads and results, storage policies, or external-auth account-binding rules.
+- Thin wrappers with no semantic value that exist only to make code look uniform.
 
-## 开始工作前必须阅读
+## Required Reading Before Making Changes
 
-任何实现前都要先读文档，再读代码，再判断下游替换点。顺序不要反，猫猫别偷懒。
+Before implementing anything, read the documentation first, then the code, and only then inspect downstream replacement points. Do not reverse that order. Do not be lazy, kitty.
 
-1. 先读入口文档：
+1. Read the entry-point documentation:
    - `README.md`
    - `docs/guide/index.md`
    - `docs/guide/new-project-integration.md`
    - `docs/guide/integration-principles.md`
    - `docs/guide/reference-projects.md`
 
-2. 再读相关 crate 文档：
+2. Read the relevant crate documentation:
    - `docs/crates/aster_forge_api.md`
    - `docs/crates/aster_forge_config.md`
    - `docs/crates/aster_forge_tasks.md`
-   - 或本次任务实际涉及的 `docs/crates/*.md`
+   - Or the `docs/crates/*.md` pages directly involved in the task.
 
-3. 然后读对应 crate 代码：
+3. Read the corresponding crate code:
    - `crates/<crate>/Cargo.toml`
    - `crates/<crate>/src/lib.rs`
    - `crates/<crate>/src/**/*.rs`
    - `crates/<crate>/tests/**/*.rs`
 
-4. 最后才去看参考项目或下游接入点：
-   - AsterYggdrasil：优先看边界清晰的轻量接入。
-   - AsterDrive：适合看功能完整但更复杂的接入。
+4. Only then inspect reference projects or downstream integration points:
+   - Prefer AsterYggdrasil for lightweight integrations with clear boundaries.
+   - Use AsterDrive for complete but more complex integrations.
 
-参考项目只能用来确认接入方式，不能作为把业务逻辑抽进 Forge 的理由。
+Reference projects may confirm an integration pattern. They are not justification for moving business logic into Forge.
 
-## 接入与替换工作流
+## Integration and Replacement Workflow
 
-当任务是“接入 Forge”“替换现有函数”“抽公共模块”时，必须先整理替换关系，再改代码。现在不要只问“有没有重复函数”，还要问能不能把 component、schema builder、store、runner、registry、query 机械层一起收进 Forge。
+For tasks such as "integrate Forge," "replace the existing function," or "extract a shared module," map the replacement relationship before changing code. Do not ask only whether functions are duplicated. Also determine whether Forge should own a complete mechanism consisting of a component, schema builder, store, runner, registry, and query layer.
 
-替换前至少确认：
+Before replacing anything, confirm at least the following:
 
-- 现有函数/模块解决的是共享机制，还是产品语义。
-- 是否应该只抽函数，还是应该抽完整机制：component、schema/index builder、store、runner、registry、hook、测试模型。
-- Forge 中是否已有等价 API。
-- Forge API 的错误类型应该在哪一层映射成产品错误。
-- 产品侧是否需要保留 adapter、trait impl、metrics、audit、permission check。
-- 测试应该覆盖哪些旧行为，避免替换后语义变了。
+- Does the existing function or module implement shared mechanics or product semantics?
+- Should the work extract only a function, or a complete mechanism such as a component, schema or index builder, store, runner, registry, hook, and test model?
+- Does Forge already provide an equivalent API?
+- At which layer should Forge errors be mapped into product errors?
+- Does the product need to retain an adapter, trait implementation, metrics, audit behavior, or permission check?
+- Which existing behaviors need test coverage to prevent semantic drift during replacement?
 
-建议在动手前列出这四列：
+Before editing, write down these four columns:
 
 ```text
-旧函数/旧模块 -> Forge API/组件/schema/store -> 产品侧保留职责 -> 必测行为
+Old function/module -> Forge API/component/schema/store -> Product-owned responsibility -> Required behavior tests
 ```
 
-如果旧函数只是无意义薄封装，例如只调用 Forge API、不映射错误、不注入配置、不记录指标、不表达产品语义，就删掉薄封装，直接使用 Forge API。
+If an old function is a meaningless thin wrapper that only calls Forge without mapping errors, injecting configuration, recording metrics, or expressing product semantics, remove the wrapper and call Forge directly.
 
-如果旧函数承担产品边界职责，例如错误映射、配置注入、审计、指标、权限判断，就保留产品侧 adapter，不要把这些职责移进 Forge。
+If an old function carries a product-boundary responsibility such as error mapping, configuration injection, audit, metrics, or permission checks, retain the product-side adapter and keep those responsibilities out of Forge.
 
-## 代码边界规则
+## Code-Boundary Rules
 
-- 共享机制和产品无关 runtime foundation 放 Forge，产品语义留产品仓库。
-- Forge 错误类型只表达基础设施或机制失败；产品 API 层自己决定状态码、文案和错误 envelope。
-- trait 适配显式写在产品侧，不要靠隐藏全局状态或产品 crate 反向依赖 Forge 内部实现。
-- 不要为了减少几行代码引入全局 singleton、隐式 registry 或产品不可测试的静态状态。
-- 不要让 `aster_forge_api` 依赖 Actix、Axum 或具体产品实体。
-- `aster_forge_db` 可以拥有产品无关基础设施表和 store，例如 runtime leases、scheduled tasks、mail outbox、audit logs；不要让它持有产品业务 entity、产品历史 migration 或业务 repository query。
-- 不要让 `aster_forge_tasks` 定义产品 task kind、payload/result、管理 API 或具体任务实现。
-- 不要让 `aster_forge_config` 定义产品配置 key、category、i18n 文案、管理 API 或业务 normalizer。
-- 不要把 Drive/Yggdrasil 的业务枚举、权限规则、审计字段复制到 Forge。
+- Shared mechanics and the product-neutral runtime foundation belong in Forge; product semantics remain in product repositories.
+- Forge error types describe infrastructure or mechanism failures only. Product API layers decide status codes, messages, and error envelopes.
+- Write trait adapters explicitly in product code. Do not rely on hidden global state or make product crates depend on Forge implementation details.
+- Do not introduce global singletons, implicit registries, or untestable static product state merely to remove a few lines of code.
+- Do not make `aster_forge_api` depend on Actix, Axum, or concrete product entities.
+- `aster_forge_db` may own product-neutral infrastructure tables and stores such as runtime leases, scheduled tasks, mail outbox, and audit logs. It must not own product business entities, historical product migrations, or business repository queries.
+- Do not let `aster_forge_tasks` define product task kinds, payloads and results, administration APIs, or concrete task implementations.
+- Do not let `aster_forge_config` define product configuration keys, categories, i18n text, administration APIs, or business normalizers.
+- Do not copy Drive or Yggdrasil business enums, permission rules, or audit fields into Forge.
 
-## Crate 使用导向
+## Crate Adoption Order
 
-优先按产品地基顺序接入，不再把 Forge 当零散工具箱：
+Integrate Forge in foundation order instead of treating it as a loose utility collection:
 
-- 入口地基：`aster_forge_runtime`、`aster_forge_logging`、`aster_forge_metrics`、`aster_forge_panic`、`aster_forge_alloc`。
-- 数据和协调：`aster_forge_db`、`aster_forge_cache`、`aster_forge_config`。
-- 后台机制：`aster_forge_tasks`、`aster_forge_mail`、`aster_forge_audit`。
-- Web/API：`aster_forge_api`、`aster_forge_api_docs_macros`、`aster_forge_actix_middleware`、`aster_forge_external_auth`。
-- 工具和存储基础：`aster_forge_validation`、`aster_forge_utils`、`aster_forge_crypto`、`aster_forge_file_classification`、`aster_forge_storage_core`。
+- Entry-point foundation: `aster_forge_runtime`, `aster_forge_logging`, `aster_forge_metrics`, `aster_forge_panic`, and `aster_forge_alloc`.
+- Data and coordination: `aster_forge_db`, `aster_forge_cache`, and `aster_forge_config`.
+- Background mechanics: `aster_forge_tasks`, `aster_forge_mail`, and `aster_forge_audit`.
+- Web and API: `aster_forge_api`, `aster_forge_api_docs_macros`, `aster_forge_actix_middleware`, and `aster_forge_external_auth`.
+- Utility and storage foundation: `aster_forge_validation`, `aster_forge_utils`, `aster_forge_crypto`, `aster_forge_file_classification`, and `aster_forge_storage_core`.
 
-高影响模块接入时必须更谨慎，因为它们会影响启动、关闭、错误处理、并发、测试隔离和数据一致性。优先追求最终形态，不保留没有边界价值的兼容 facade。
+Be more careful when integrating high-impact modules because they affect startup, shutdown, error handling, concurrency, test isolation, and data consistency. Prefer the final intended shape; do not retain compatibility facades that have no boundary value.
 
-## 文档同步规则
+## Documentation Synchronization
 
-新增或改变 public API 时，通常也要同步文档。每个 crate 文档应保持这套结构：
+Adding or changing a public API normally requires documentation updates. Each crate document should retain the following structure:
 
-- 用途边界。
-- 适用场景。
-- Cargo feature / 接入方式。
-- 最小接入示例。
-- 新项目接入形态或 runtime component 形态。
-- 错误边界。
-- 测试要求。
-- 参考项目。
+- Purpose and ownership boundary.
+- Appropriate use cases.
+- Cargo features and integration method.
+- Minimal integration example.
+- New-project or runtime-component integration shape.
+- Error boundary.
+- Testing requirements.
+- Reference projects.
 
-如果代码行为和文档冲突，先判断是代码错还是文档过期。不要只改一边。
+When code and documentation disagree, determine whether the code is wrong or the documentation is stale. Do not update only one side by reflex.
 
-## Rust 代码规范
+## Rust Conventions
 
-- Workspace 使用 Rust 1.94+、edition 2024。
-- 依赖尽量放到 root `Cargo.toml` 的 `[workspace.dependencies]`，crate 内按需引用 workspace 依赖。
-- 新 crate 命名使用 `aster_forge_*`。
-- public API 要有清晰边界，避免暴露内部实现细节。
-- 默认不使用 `unwrap`、`expect`、`panic`、`todo`、`unimplemented`。多数 crate 已在非 test 编译下 deny 这些 clippy lint。
-- unsafe 只能在确实必要时使用，并写清楚 `SAFETY:` 说明；`aster_forge_alloc` 对 unsafe 要求更严格。
-- 错误类型优先用 `thiserror`，并提供产品侧可映射的分类，不要把产品文案写死在 Forge。
-- 测试代码可以更直接，但不能掩盖真实边界问题。
+- The workspace uses Rust 1.94+ and edition 2024.
+- Prefer declaring dependencies in the root `Cargo.toml` under `[workspace.dependencies]`, then reference workspace dependencies from individual crates as needed.
+- Name new crates with the `aster_forge_*` prefix.
+- Public APIs must have explicit boundaries and should avoid exposing implementation details.
+- Do not use `unwrap`, `expect`, `panic`, `todo`, or `unimplemented` by default. Most crates deny these Clippy lints in non-test builds.
+- Use unsafe only when genuinely necessary and include an accurate `SAFETY:` explanation. `aster_forge_alloc` applies stricter unsafe requirements.
+- Prefer `thiserror` for error types and expose classifications that product layers can map. Do not hard-code product-facing text in Forge.
+- Test code may be more direct, but it must not hide real boundary problems.
 
-## 测试与验证
+## Testing and Validation
 
-常用命令：
+Common commands:
 
 ```bash
 cargo check --workspace
@@ -143,40 +143,40 @@ cargo test --workspace
 cargo fmt --all
 ```
 
-根据改动范围选择验证：
+Choose validation according to the change scope:
 
-- 只改文档：检查链接、路径和 crate 名称是否正确。
-- 只改纯函数 helper：跑相关 crate 测试，必要时跑 workspace check。
-- 改 public API 或 feature：跑相关 crate 的默认 feature 和目标 feature 编译。
-- 改任务、配置、缓存、数据库、外部认证：至少跑相关 crate 测试和 `cargo check --workspace`，风险高时跑 `cargo test --workspace`。
-- 改 runtime component、schema/store、task/mail/audit/config/cache 这类地基：相关 crate test/clippy 必跑；如果接了 Yggdrasil，也要用本地 patch 跑 Yggdrasil 对应测试。
+- Documentation-only changes: verify links, paths, and crate names.
+- Pure-function helpers: run the relevant crate tests and, when needed, a workspace check.
+- Public API or feature changes: compile the relevant crate with its default and target feature sets.
+- Task, configuration, cache, database, or external-auth changes: run at least the relevant crate tests and `cargo check --workspace`; use `cargo test --workspace` for higher-risk changes.
+- Foundation changes involving runtime components, schemas and stores, tasks, mail, audit, configuration, or cache: run the relevant crate tests and Clippy. If Yggdrasil is integrated, run its corresponding tests through a local patch as well.
 
-接入高影响模块时，测试至少覆盖：
+High-impact integrations must test at least:
 
-- 成功路径。
-- 失败路径。
-- 错误映射边界。
-- 重试、降级或 cancellation。
-- 并发、lease、token fence 或 shutdown 行为。
+- Success paths.
+- Failure paths.
+- Error-mapping boundaries.
+- Retry, degradation, or cancellation behavior.
+- Concurrency, lease, token-fence, or shutdown behavior.
 
 ## Code Review Fixes
 
-如果用户粘贴 Greptile、CodeRabbit、Gemini 等 review comments：
+When the user provides review comments from Greptile, CodeRabbit, Gemini, or similar tools:
 
-1. 逐条判断是真问题还是误报。
-2. 先修真实问题，不要为了满足 bot 修改正确代码。
-3. 每一批修复后做编译或测试验证。
-4. 最终回复里说明哪些评论已修、哪些是误报以及验证命令。
+1. Classify each comment as a real issue or a false positive.
+2. Fix real issues first. Do not change correct code merely to satisfy a bot.
+3. Run compilation or tests after each batch of fixes.
+4. In the final response, state which comments were fixed, which were false positives, and which validation commands were run.
 
-## 工作方式
+## Working Style
 
-- 改代码前先读现有模式；模式不清楚就继续查，不要猜。
-- 搜索优先用 `rg` / `rg --files`。
-- 保持改动聚焦，不做顺手重构。
-- 不要回滚用户已有改动。
-- 不要改 `target/`、`docs/node_modules/` 或其他生成/依赖目录。
-- 除非明确要求，不主动写长篇使用说明；但 public API 变化要维护 crate 文档。
+- Read existing patterns before changing code. If the pattern is unclear, keep investigating rather than guessing.
+- Prefer `rg` and `rg --files` for searches.
+- Keep changes focused and avoid opportunistic refactors.
+- Do not revert the user's existing changes.
+- Do not edit `target/`, `docs/node_modules/`, or other generated or dependency directories.
+- Do not proactively write long usage documents unless explicitly requested, but keep crate documentation current when public APIs change.
 
-如果一个功能看起来“可以抽”，但抽出来会让产品仓库失去自己的业务边界，那就先别抽。
+If a feature appears extractable but extracting it would prevent the product repository from expressing its own business boundary, leave it in the product.
 
-如果一个功能已经明显是多个产品共享的 runtime/component/schema/store 机械层，不要只抽一个小函数糊弄过去。把公共内核收完整，产品侧只留下明确的业务边界。
+If a feature is clearly a shared runtime, component, schema, store, runner, or query mechanism used by multiple products, do not extract only a token helper function. Move the complete shared kernel and leave only explicit business boundaries in product code.
