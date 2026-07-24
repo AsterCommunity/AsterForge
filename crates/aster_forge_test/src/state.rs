@@ -210,12 +210,23 @@ impl Drop for ContainerLease {
     }
 }
 
-#[cfg(unix)]
 fn process_is_running(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
 
+    // `kill` reserves zero and negative values for process-group or broadcast semantics. Some
+    // implementations parse values above `i32::MAX` into a signed `pid_t` (for example,
+    // `u32::MAX` becomes `-1`), which can make an invalid state-file entry look alive.
+    if pid == 0 || i32::try_from(pid).is_err() {
+        return false;
+    }
+
+    platform_process_is_running(pid)
+}
+
+#[cfg(unix)]
+fn platform_process_is_running(pid: u32) -> bool {
     std::process::Command::new("/bin/kill")
         .arg("-0")
         .arg(pid.to_string())
@@ -225,7 +236,7 @@ fn process_is_running(pid: u32) -> bool {
 }
 
 #[cfg(not(unix))]
-fn process_is_running(pid: u32) -> bool {
+fn platform_process_is_running(pid: u32) -> bool {
     // Without a portable liveness probe, assume processes are alive so entries are kept.
     let _ = pid;
     true
