@@ -33,7 +33,9 @@ Forge 负责：
 - DeltaV `DAV:version-tree` REPORT 选择、file-only/unsupported mapping、version multistatus 和 VERSION-CONTROL response selection。
 - `DavXmlElement` XML 表示与序列化边界；具体 XML crate 是 Forge 私有实现，产品不直接依赖。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
-- `DavResourceBackend`、`DavPropertyBackend`、`DavLockBackend` 和可选 `DavVersionBackend` port。
+- 唯一 backend contract：`DavFileSystem`、`DavMetaData`、`DavFile`、`DavDirEntry`、
+  `DavLockSystem`、`FsError` 和 `OpenOptions`；产品只实现这些 Forge port，不再复制协议 trait。
+- `DavPropertyTarget` 只携带资源种类与产品侧不透明 ID，用于批量 dead-property 读取；Forge 不解释数据库身份。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
 

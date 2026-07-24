@@ -1,19 +1,23 @@
-//! Product adapter ports consumed by a WebDAV protocol engine.
+//! Product adapter ports consumed by the WebDAV protocol layer.
 
+use std::collections::HashMap;
+use std::future::Future;
+use std::io::SeekFrom;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::Stream;
+use http::StatusCode;
 
-use crate::{DavPath, DavXmlElement, Depth};
+use crate::{DavPath, DavXmlElement};
 
 /// Stream used for product-independent WebDAV content transfer.
 pub type DavContentStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, DavBackendError>> + Send + 'static>>;
 
-/// Stable backend failure categories that the protocol layer can map to WebDAV responses.
+/// Stable backend failure categories mapped by the protocol layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavBackendErrorKind {
     NotFound,
@@ -32,163 +36,317 @@ pub enum DavBackendErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("WebDAV backend operation failed: {kind:?}")]
 pub struct DavBackendError {
-    /// Stable failure category. Product details stay in product logs and errors.
     pub kind: DavBackendErrorKind,
 }
 
 impl DavBackendError {
-    /// Creates a classified backend error.
     #[must_use]
     pub const fn new(kind: DavBackendErrorKind) -> Self {
         Self { kind }
     }
 }
 
+/// Low-level file-system failure exposed by the product adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FsError {
+    #[error("not found")]
+    NotFound,
+    #[error("forbidden")]
+    Forbidden,
+    #[error("general failure")]
+    GeneralFailure,
+    #[error("already exists")]
+    Exists,
+    #[error("insufficient storage")]
+    InsufficientStorage,
+    #[error("too large")]
+    TooLarge,
+    #[error("bad request")]
+    BadRequest,
+}
+
+impl From<FsError> for DavBackendError {
+    fn from(error: FsError) -> Self {
+        let kind = match error {
+            FsError::NotFound => DavBackendErrorKind::NotFound,
+            FsError::Forbidden => DavBackendErrorKind::Forbidden,
+            FsError::GeneralFailure => DavBackendErrorKind::Internal,
+            FsError::Exists => DavBackendErrorKind::AlreadyExists,
+            FsError::InsufficientStorage => DavBackendErrorKind::InsufficientStorage,
+            FsError::TooLarge => DavBackendErrorKind::PayloadTooLarge,
+            FsError::BadRequest => DavBackendErrorKind::InvalidInput,
+        };
+        Self::new(kind)
+    }
+}
+
+pub type FsResult<T> = Result<T, FsError>;
+pub type FsFuture<'a, T> = Pin<Box<dyn Future<Output = FsResult<T>> + Send + 'a>>;
+pub type FsStream<T> = Pin<Box<dyn Stream<Item = FsResult<T>> + Send>>;
+
 /// WebDAV resource type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DavResourceKind {
     File,
     Collection,
 }
 
-/// Protocol-visible resource metadata supplied by the product adapter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavResourceMetadata {
+/// Opaque product-side identity used to batch dead-property reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DavPropertyTarget {
     pub kind: DavResourceKind,
-    pub content_length: u64,
-    pub content_type: Option<String>,
-    pub etag: Option<String>,
-    pub created_at: Option<SystemTime>,
-    pub modified_at: Option<SystemTime>,
+    pub id: i64,
 }
 
-/// Protocol-visible state used to evaluate one resource referenced by a WebDAV `If` header.
+/// Protocol-visible state used to evaluate one resource referenced by an `If` header.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DavIfResourceState {
     pub etag: Option<String>,
     pub lock_tokens: Vec<String>,
 }
 
-/// Product adapter used by the protocol layer while evaluating WebDAV `If` conditions.
+/// Product adapter used while evaluating WebDAV `If` conditions.
 #[async_trait]
 pub trait DavIfStateResolver: Send + Sync {
     async fn resolve_if_state(&self, path: &DavPath)
     -> Result<DavIfResourceState, DavBackendError>;
 }
 
-/// One child returned by a collection listing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavDirectoryEntry {
-    pub path: DavPath,
-    pub metadata: DavResourceMetadata,
+/// Metadata loading mode for directory entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadDirMeta {
+    Data,
 }
 
-/// Result of opening resource content for a WebDAV response.
-pub struct DavReadOutcome {
-    pub metadata: DavResourceMetadata,
-    pub content: DavContentStream,
-}
-
-/// Parameters for a WebDAV `PUT` operation.
-pub struct DavWriteRequest {
-    pub path: DavPath,
-    pub content_length: Option<u64>,
-    pub content_type: Option<String>,
+/// File open contract selected by the protocol planner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpenOptions {
+    pub read: bool,
+    pub write: bool,
+    pub append: bool,
+    pub truncate: bool,
+    pub create: bool,
+    pub create_new: bool,
+    pub size: Option<u64>,
     pub checksum: Option<String>,
-    pub overwrite: bool,
-    pub content: DavContentStream,
 }
 
-/// Result of a successful `PUT` operation.
+impl OpenOptions {
+    #[must_use]
+    pub fn read() -> Self {
+        Self {
+            read: true,
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn write() -> Self {
+        Self {
+            write: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// Protocol-visible resource metadata supplied by the product adapter.
+pub trait DavMetaData: Send + Sync {
+    fn len(&self) -> u64;
+    fn modified(&self) -> FsResult<SystemTime>;
+    fn is_dir(&self) -> bool;
+    fn etag(&self) -> Option<String>;
+    fn content_type(&self) -> Option<&str> {
+        None
+    }
+    fn created(&self) -> FsResult<SystemTime>;
+    fn property_target(&self) -> Option<DavPropertyTarget> {
+        None
+    }
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn is_file(&self) -> bool {
+        !self.is_dir()
+    }
+}
+
+/// One directory entry returned by a product adapter.
+pub trait DavDirEntry: Send {
+    fn name(&self) -> Vec<u8>;
+    fn metadata<'a>(&'a self) -> FsFuture<'a, Box<dyn DavMetaData>>;
+}
+
+/// Open file handle supplied by a product adapter.
+pub trait DavFile: Send {
+    fn metadata<'a>(&'a mut self) -> FsFuture<'a, Box<dyn DavMetaData>>;
+    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, Bytes>;
+    fn write_bytes(&mut self, buf: Bytes) -> FsFuture<'_, ()>;
+    fn write_buf(&mut self, buf: Box<dyn Buf + Send>) -> FsFuture<'_, ()>;
+    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64>;
+    fn flush(&mut self) -> FsFuture<'_, ()>;
+}
+
+/// Stored dead property exchanged with the product adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavWriteOutcome {
-    pub created: bool,
-    pub metadata: DavResourceMetadata,
-}
-
-/// Resource operations that remain authoritative in the product adapter.
-#[async_trait]
-pub trait DavResourceBackend: Send + Sync {
-    async fn metadata(&self, path: &DavPath) -> Result<DavResourceMetadata, DavBackendError>;
-    async fn list(
-        &self,
-        path: &DavPath,
-        depth: Depth,
-    ) -> Result<Vec<DavDirectoryEntry>, DavBackendError>;
-    async fn read(&self, path: &DavPath) -> Result<DavReadOutcome, DavBackendError>;
-    async fn write(&self, request: DavWriteRequest) -> Result<DavWriteOutcome, DavBackendError>;
-    async fn create_collection(&self, path: &DavPath) -> Result<(), DavBackendError>;
-    async fn delete(&self, path: &DavPath, depth: Depth) -> Result<(), DavBackendError>;
-    async fn copy(
-        &self,
-        source: &DavPath,
-        destination: &DavPath,
-        depth: Depth,
-        overwrite: bool,
-    ) -> Result<(), DavBackendError>;
-    async fn move_resource(
-        &self,
-        source: &DavPath,
-        destination: &DavPath,
-        overwrite: bool,
-    ) -> Result<(), DavBackendError>;
-    async fn quota(&self) -> Result<(u64, Option<u64>), DavBackendError>;
-}
-
-/// Expanded DAV property name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DavPropertyName {
+pub struct DavProp {
+    pub name: String,
+    pub prefix: Option<String>,
     pub namespace: Option<String>,
-    pub local_name: String,
+    pub xml: Option<Vec<u8>>,
 }
 
-/// Stored dead-property value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavProperty {
-    pub name: DavPropertyName,
-    pub xml: Option<DavXmlElement>,
+/// Canonical resource and dead-property backend port.
+pub trait DavFileSystem: Send + Sync {
+    fn open<'a>(
+        &'a self,
+        path: &'a DavPath,
+        options: OpenOptions,
+    ) -> FsFuture<'a, Box<dyn DavFile>>;
+    fn read_dir<'a>(
+        &'a self,
+        path: &'a DavPath,
+        meta: ReadDirMeta,
+    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>>;
+    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>>;
+    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
+    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
+    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
+    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()>;
+    fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()>;
+
+    fn get_quota(&self) -> FsFuture<'_, (u64, Option<u64>)> {
+        Box::pin(async { Ok((0, None)) })
+    }
+
+    fn have_props<'a>(
+        &'a self,
+        _path: &'a DavPath,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async { false })
+    }
+
+    fn get_props<'a>(
+        &'a self,
+        _path: &'a DavPath,
+        _do_content: bool,
+    ) -> FsFuture<'a, Vec<DavProp>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn get_props_many<'a>(
+        &'a self,
+        paths: &'a [DavPath],
+        do_content: bool,
+    ) -> FsFuture<'a, HashMap<DavPath, Vec<DavProp>>> {
+        Box::pin(async move {
+            let mut result = HashMap::with_capacity(paths.len());
+            for path in paths {
+                result.insert(path.clone(), self.get_props(path, do_content).await?);
+            }
+            Ok(result)
+        })
+    }
+
+    fn get_props_many_for_targets<'a>(
+        &'a self,
+        targets: &'a [(DavPath, DavPropertyTarget)],
+        do_content: bool,
+    ) -> FsFuture<'a, HashMap<DavPath, Vec<DavProp>>> {
+        Box::pin(async move {
+            let paths = targets
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>();
+            self.get_props_many(&paths, do_content).await
+        })
+    }
+
+    fn patch_props<'a>(
+        &'a self,
+        _path: &'a DavPath,
+        _patches: Vec<(bool, DavProp)>,
+    ) -> FsFuture<'a, Vec<(StatusCode, DavProp)>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
-/// One property set/remove mutation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavPropertyPatch {
-    pub remove: bool,
-    pub property: DavProperty,
-}
-
-/// Result of one property mutation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavPropertyPatchOutcome {
-    pub name: DavPropertyName,
-    pub status: http::StatusCode,
-}
-
-/// Dead-property persistence supplied by the product adapter.
-#[async_trait]
-pub trait DavPropertyBackend: Send + Sync {
-    async fn properties(
-        &self,
-        path: &DavPath,
-        include_values: bool,
-    ) -> Result<Vec<DavProperty>, DavBackendError>;
-    async fn patch_properties(
-        &self,
-        path: &DavPath,
-        patches: Vec<DavPropertyPatch>,
-    ) -> Result<Vec<DavPropertyPatchOutcome>, DavBackendError>;
-}
-
-/// Parameters for acquiring a WebDAV lock.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavLockRequest {
-    pub path: DavPath,
-    pub owner_xml: Option<DavXmlElement>,
+/// Protocol-visible lock state persisted by the product adapter.
+#[derive(Debug, Clone)]
+pub struct DavLock {
+    pub token: String,
+    pub path: Box<DavPath>,
+    pub principal: Option<String>,
+    pub owner: Option<Box<DavXmlElement>>,
+    pub timeout_at: Option<SystemTime>,
     pub timeout: Option<Duration>,
     pub shared: bool,
     pub deep: bool,
 }
 
-/// Protocol-visible lock state supplied by the product adapter.
+pub type LsFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DavLockPreflightError {
+    LimitExceeded,
+    GeneralFailure,
+}
+
+#[derive(Debug, Clone)]
+pub enum DavLockError {
+    Conflict(DavLock),
+    LimitExceeded,
+    Backend,
+}
+
+/// Canonical lock persistence and conflict backend port.
+pub trait DavLockSystem: Send + Sync {
+    fn prepare_lock(&self, _path: &DavPath) -> LsFuture<'_, Result<(), DavLockPreflightError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn lock(
+        &self,
+        path: &DavPath,
+        principal: Option<&str>,
+        owner: Option<&DavXmlElement>,
+        timeout: Option<Duration>,
+        shared: bool,
+        deep: bool,
+    ) -> LsFuture<'_, Result<DavLock, DavLockError>>;
+
+    fn unlock(&self, path: &DavPath, token: &str) -> LsFuture<'_, Result<(), ()>>;
+    fn refresh(
+        &self,
+        path: &DavPath,
+        token: &str,
+        timeout: Option<Duration>,
+    ) -> LsFuture<'_, Result<DavLock, ()>>;
+    fn check(
+        &self,
+        path: &DavPath,
+        principal: Option<&str>,
+        ignore_principal: bool,
+        deep: bool,
+        submitted_tokens: &[String],
+    ) -> LsFuture<'_, Result<(), DavLock>>;
+    fn discover(&self, path: &DavPath) -> LsFuture<'_, Vec<DavLock>>;
+    fn discover_many<'a>(
+        &'a self,
+        paths: &'a [DavPath],
+    ) -> LsFuture<'a, HashMap<DavPath, Vec<DavLock>>> {
+        Box::pin(async move {
+            let mut result = HashMap::with_capacity(paths.len());
+            for path in paths {
+                result.insert(path.clone(), self.discover(path).await);
+            }
+            result
+        })
+    }
+    fn conflicting_locks(&self, path: &DavPath, deep: bool) -> LsFuture<'_, Vec<DavLock>>;
+    fn delete(&self, path: &DavPath) -> LsFuture<'_, Result<(), ()>>;
+}
+
+/// Lock value used by protocol response composition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavLockInfo {
     pub token: String,
@@ -199,44 +357,3 @@ pub struct DavLockInfo {
     pub shared: bool,
     pub deep: bool,
 }
-
-/// Lock persistence supplied by the product adapter.
-#[async_trait]
-pub trait DavLockBackend: Send + Sync {
-    async fn acquire(&self, request: DavLockRequest) -> Result<DavLockInfo, DavBackendError>;
-    async fn refresh(
-        &self,
-        path: &DavPath,
-        token: &str,
-        timeout: Option<Duration>,
-    ) -> Result<DavLockInfo, DavBackendError>;
-    async fn release(&self, path: &DavPath, token: &str) -> Result<(), DavBackendError>;
-    async fn discover(&self, path: &DavPath) -> Result<Vec<DavLockInfo>, DavBackendError>;
-    async fn check_write(
-        &self,
-        path: &DavPath,
-        deep: bool,
-        submitted_tokens: &[String],
-    ) -> Result<(), DavBackendError>;
-}
-
-/// One protocol-visible resource version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavVersionInfo {
-    pub version_id: String,
-    pub href: String,
-    pub created_at: Option<SystemTime>,
-    pub etag: Option<String>,
-}
-
-/// Optional DeltaV capability supplied by the product adapter.
-#[async_trait]
-pub trait DavVersionBackend: Send + Sync {
-    async fn versions(&self, path: &DavPath) -> Result<Vec<DavVersionInfo>, DavBackendError>;
-    async fn enable_version_control(&self, path: &DavPath) -> Result<(), DavBackendError>;
-}
-
-/// Aggregate capability boundary required by a complete WebDAV protocol engine.
-pub trait DavBackend: DavResourceBackend + DavPropertyBackend + DavLockBackend {}
-
-impl<T> DavBackend for T where T: DavResourceBackend + DavPropertyBackend + DavLockBackend {}
