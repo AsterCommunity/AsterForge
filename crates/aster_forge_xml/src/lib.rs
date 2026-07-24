@@ -19,6 +19,7 @@ mod document;
 mod error;
 mod parser;
 mod stream;
+mod syntax;
 mod writer;
 
 pub use document::{

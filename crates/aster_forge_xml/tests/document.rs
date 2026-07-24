@@ -107,6 +107,19 @@ fn ordered_nodes_and_parent_links_are_preserved() {
 }
 
 #[test]
+fn descendants_preserve_depth_first_document_order() {
+    let source = b"<root><a><b/><c/></a><d/></root>";
+    let document = BorrowedDocument::parse(source.as_slice()).expect("document should parse");
+    let names: Vec<_> = document
+        .root()
+        .descendants()
+        .map(|element| element.name())
+        .collect();
+
+    assert_eq!(names, ["root", "a", "b", "c", "d"]);
+}
+
+#[test]
 fn validated_xml_owns_exact_bytes_and_clones_cheaply() {
     let source = br#"<owner xmlns="DAV:"><href>mailto:a@example.test</href></owner>"#.to_vec();
     let validated = ValidatedXml::new(source.clone()).expect("validated XML");

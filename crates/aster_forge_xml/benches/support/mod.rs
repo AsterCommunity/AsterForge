@@ -9,7 +9,9 @@ use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 use quick_xml::writer::Writer;
 
-pub(crate) fn fixtures() -> Vec<(&'static str, Vec<u8>)> {
+pub(crate) fn cpu_fixtures() -> Vec<(&'static str, Vec<u8>)> {
+    // The 10,000-response fixture is reserved for one-shot heap/RSS probes. Generating it here
+    // would add about 2.5 MiB of unused setup to every multi-sample Criterion benchmark.
     vec![
         (
             "propfind",
@@ -18,8 +20,16 @@ pub(crate) fn fixtures() -> Vec<(&'static str, Vec<u8>)> {
         ),
         ("wopi", wopi_discovery(250).into_bytes()),
         ("multistatus_1000", multistatus(1_000).into_bytes()),
-        ("multistatus_10000", multistatus(10_000).into_bytes()),
     ]
+}
+
+#[allow(dead_code)] // This shared module is also compiled into the CPU-only bench target.
+pub(crate) fn memory_fixtures() -> Vec<(&'static str, Vec<u8>)> {
+    let mut fixtures = cpu_fixtures();
+    // This fixture remains below the default 10 MiB input, 100,000-element, one-million-event,
+    // and 64 MiB writer limits; it is retained here specifically for large-document memory data.
+    fixtures.push(("multistatus_10000", multistatus(10_000).into_bytes()));
+    fixtures
 }
 
 pub(crate) fn wopi_discovery(actions: usize) -> String {
@@ -148,14 +158,8 @@ fn namespace_len(namespace: ResolveResult<'_>) -> usize {
 }
 
 pub(crate) fn walk_forge_stream(input: &[u8]) -> usize {
-    let policy = XmlSafetyPolicy {
-        max_input_bytes: input.len().max(1),
-        max_elements: 1_000_000,
-        max_text_bytes: input.len().max(1),
-        max_events: 10_000_000,
-        ..XmlSafetyPolicy::untrusted()
-    };
-    let mut reader = XmlStreamReader::new(input, policy).expect("benchmark policy is valid");
+    let mut reader =
+        XmlStreamReader::new(input, stream_policy(input)).expect("benchmark policy is valid");
     let mut checksum = 0usize;
     loop {
         match reader.read_event().expect("benchmark fixture is valid XML") {
@@ -196,14 +200,8 @@ pub(crate) fn walk_forge_stream(input: &[u8]) -> usize {
 }
 
 pub(crate) fn validate_forge_stream(input: &[u8]) -> usize {
-    let policy = XmlSafetyPolicy {
-        max_input_bytes: input.len().max(1),
-        max_elements: 1_000_000,
-        max_text_bytes: input.len().max(1),
-        max_events: 10_000_000,
-        ..XmlSafetyPolicy::untrusted()
-    };
-    let mut reader = XmlStreamReader::new(input, policy).expect("benchmark policy is valid");
+    let mut reader =
+        XmlStreamReader::new(input, stream_policy(input)).expect("benchmark policy is valid");
     let mut events = 0usize;
     loop {
         let event = reader.read_event().expect("benchmark fixture is valid XML");
@@ -211,6 +209,16 @@ pub(crate) fn validate_forge_stream(input: &[u8]) -> usize {
             return events;
         }
         events = events.wrapping_add(1);
+    }
+}
+
+fn stream_policy(input: &[u8]) -> XmlSafetyPolicy {
+    XmlSafetyPolicy {
+        max_input_bytes: input.len().max(1),
+        max_elements: 1_000_000,
+        max_text_bytes: input.len().max(1),
+        max_events: 10_000_000,
+        ..XmlSafetyPolicy::untrusted()
     }
 }
 

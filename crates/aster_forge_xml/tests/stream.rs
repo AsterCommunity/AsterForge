@@ -37,8 +37,7 @@ fn streams_namespace_resolved_names_attributes_and_text() {
 
 #[test]
 fn reuses_validated_values_and_captures_equivalent_mixed_content() {
-    let input =
-        br#"<root escaped="a&amp;b"><target><![CDATA[x<y]]><!--note-->&#65;&amp;</target></root>"#;
+    let input = br#"<root escaped="a&amp;b"><target><![CDATA[x<y]]><!--a &amp; b < c-->&#65;&amp;</target></root>"#;
     let mut reader = reader(input);
     let XmlStreamEvent::Start(root) = reader.read_event().expect("root") else {
         panic!("expected root start");
@@ -58,7 +57,7 @@ fn reuses_validated_values_and_captures_equivalent_mixed_content() {
     assert_eq!(captured.document().root().text().as_deref(), Some("x<yA&"));
     let captured = String::from_utf8_lossy(captured.as_bytes());
     assert!(captured.contains("<![CDATA[x<y]]>"));
-    assert!(captured.contains("<!--note-->"));
+    assert!(captured.contains("<!--a &amp; b < c-->"));
     assert!(captured.contains("A&amp;"));
 }
 

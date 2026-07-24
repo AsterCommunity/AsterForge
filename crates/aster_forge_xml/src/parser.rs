@@ -7,6 +7,10 @@ use quick_xml::XmlVersion;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 
+use crate::syntax::{
+    XML_NAMESPACE_URI, map_quick_xml_error, split_qualified_name, utf8, validate_namespace_binding,
+    validate_qualified_name,
+};
 use crate::{DEFAULT_XML_MAX_DEPTH, Error, XmlSafetyError};
 
 const DEFAULT_MAX_INPUT_BYTES: usize = 10 * 1024 * 1024;
@@ -14,8 +18,6 @@ const DEFAULT_MAX_ELEMENTS: usize = 100_000;
 const DEFAULT_MAX_ATTRIBUTES_PER_ELEMENT: usize = 1_024;
 const DEFAULT_MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
 const DEFAULT_MAX_EVENTS: usize = 1_000_000;
-const XML_NAMESPACE_URI: &str = "http://www.w3.org/XML/1998/namespace";
-const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
 
 /// Finite resource and declaration limits applied to untrusted XML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,9 +240,7 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
     let mut state = ScanState::default();
 
     loop {
-        let event = reader
-            .read_event()
-            .map_err(|error| Error::InvalidXml(error.to_string()))?;
+        let event = reader.read_event().map_err(map_quick_xml_error)?;
         if !matches!(event, Event::Eof) {
             state.count_event(options.safety)?;
         }
@@ -359,7 +359,7 @@ fn scan_element(
         if name == "xmlns" || name.starts_with("xmlns:") {
             continue;
         }
-        let (prefix, _) = validate_qualified_name(name)?;
+        let (prefix, _) = split_qualified_name(name);
         if let Some(prefix) = prefix
             && prefix != "xml"
             && state.namespace(prefix).is_none()
@@ -395,69 +395,4 @@ fn decode_reference<'a>(
         "quot" => "\"",
         _ => return Err(XmlSafetyError::ExternalEntity.into()),
     }))
-}
-
-fn utf8(bytes: &[u8]) -> Result<&str, Error> {
-    std::str::from_utf8(bytes).map_err(|_| XmlSafetyError::InvalidEncoding.into())
-}
-
-fn validate_qualified_name(name: &str) -> Result<(Option<&str>, &str), Error> {
-    let (prefix, local) = match name.split_once(':') {
-        Some((prefix, local)) => (Some(prefix), local),
-        None => (None, name),
-    };
-    if !valid_name(local)
-        || prefix.is_some_and(|prefix| !valid_name(prefix))
-        || name.matches(':').count() > 1
-    {
-        return Err(XmlSafetyError::Malformed.into());
-    }
-    Ok((prefix, local))
-}
-
-fn valid_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    characters.next().is_some_and(is_name_start) && characters.all(is_name_char)
-}
-
-fn is_name_start(character: char) -> bool {
-    matches!(
-        character,
-        'A'..='Z'
-            | '_'
-            | 'a'..='z'
-            | '\u{00C0}'..='\u{00D6}'
-            | '\u{00D8}'..='\u{00F6}'
-            | '\u{00F8}'..='\u{02FF}'
-            | '\u{0370}'..='\u{037D}'
-            | '\u{037F}'..='\u{1FFF}'
-            | '\u{200C}'..='\u{200D}'
-            | '\u{2070}'..='\u{218F}'
-            | '\u{2C00}'..='\u{2FEF}'
-            | '\u{3001}'..='\u{D7FF}'
-            | '\u{F900}'..='\u{FDCF}'
-            | '\u{FDF0}'..='\u{FFFD}'
-            | '\u{10000}'..='\u{EFFFF}'
-    )
-}
-
-fn is_name_char(character: char) -> bool {
-    is_name_start(character)
-        || character.is_ascii_digit()
-        || matches!(character, '-' | '.' | '\u{B7}')
-        || ('\u{300}'..='\u{36F}').contains(&character)
-        || ('\u{203F}'..='\u{2040}').contains(&character)
-}
-
-fn validate_namespace_binding(prefix: &str, uri: &str) -> Result<(), Error> {
-    if prefix == "xmlns"
-        || uri == XMLNS_NAMESPACE_URI
-        || (prefix == "xml" && uri != XML_NAMESPACE_URI)
-        || (prefix != "xml" && uri == XML_NAMESPACE_URI)
-        || (!prefix.is_empty() && uri.is_empty())
-    {
-        Err(XmlSafetyError::Malformed.into())
-    } else {
-        Ok(())
-    }
 }

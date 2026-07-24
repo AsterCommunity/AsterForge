@@ -549,7 +549,7 @@ impl<R: BufRead> XmlStreamReader<R> {
                 XmlStreamEvent::Comment(comment) => {
                     write_capture_event(
                         &mut writer,
-                        Event::Comment(BytesText::new(comment.value())),
+                        Event::Comment(BytesText::from_escaped(comment.value())),
                     )?;
                 }
                 XmlStreamEvent::ProcessingInstruction(pi) => {

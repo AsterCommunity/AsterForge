@@ -65,7 +65,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Safety(error) => error.fmt(f),
+            Self::Safety(error) => write!(f, "XML safety error: {error}"),
             Self::InvalidXml(message) => write!(f, "invalid XML: {message}"),
             Self::InvalidData(message) => write!(f, "invalid XML data: {message}"),
             Self::Io(error) => write!(f, "XML I/O error: {error}"),
@@ -92,5 +92,30 @@ impl From<XmlSafetyError> for Error {
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapped_error_display_is_distinct_from_its_source() {
+        let safety = Error::Safety(XmlSafetyError::TextTooLarge);
+        assert_eq!(
+            safety.to_string(),
+            "XML safety error: XML text size exceeds the configured limit"
+        );
+        assert_eq!(
+            std::error::Error::source(&safety).map(ToString::to_string),
+            Some("XML text size exceeds the configured limit".into())
+        );
+
+        let io = Error::Io(std::io::Error::other("fixture failure"));
+        assert_eq!(io.to_string(), "XML I/O error: fixture failure");
+        assert_eq!(
+            std::error::Error::source(&io).map(ToString::to_string),
+            Some("fixture failure".into())
+        );
     }
 }

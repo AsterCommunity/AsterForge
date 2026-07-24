@@ -7,10 +7,11 @@ use std::hint::black_box;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use aster_forge_utils::numbers::i64_to_u64;
 use aster_forge_xml::{BorrowedDocument, ValidatedXml, XmlSafetyPolicy, validate_xml_input};
 use support::{
-    fixtures, validate_forge_stream, walk_forge_stream, walk_quick_xml_events,
+    memory_fixtures, validate_forge_stream, walk_forge_stream, walk_quick_xml_events,
     walk_quick_xml_ns_buffered, write_forge_multistatus, write_quick_xml_multistatus,
     write_xmltree_multistatus,
 };
@@ -108,55 +109,55 @@ fn finish_measurement() -> AllocationSnapshot {
 }
 
 fn run_child(mode: &str, fixture_name: &str) {
-    let input = fixtures()
+    let input = memory_fixtures()
         .into_iter()
         .find_map(|(name, input)| (name == fixture_name).then_some(input))
         .unwrap_or_else(|| panic!("unknown fixture `{fixture_name}`"));
     begin_measurement();
-    match mode {
+    let allocation = match mode {
         "forge_arena_borrowed" => {
             let document = BorrowedDocument::parse(input.as_slice()).expect("fixture should parse");
             black_box(&document);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "forge_validated_owned" => {
             let document = ValidatedXml::new(input.clone()).expect("fixture should parse");
             black_box(&document);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "xmltree_owned" => {
             let document = xmltree::Element::parse(input.as_slice()).expect("fixture should parse");
             black_box(&document);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "roxmltree_borrowed" => {
             let input = std::str::from_utf8(&input).expect("fixture should be UTF-8");
             let document = roxmltree::Document::parse(input).expect("fixture should parse");
             black_box(&document);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "validate_plus_xmltree" => {
             validate_xml_input(&input, XmlSafetyPolicy::untrusted())
                 .expect("fixture should validate");
             let document = xmltree::Element::parse(input.as_slice()).expect("fixture should parse");
             black_box(&document);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "quick_xml_borrowed_events" => {
             black_box(walk_quick_xml_events(&input));
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "quick_xml_ns_buffered_decoded" => {
             black_box(walk_quick_xml_ns_buffered(&input));
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "forge_stream_reader" => {
             black_box(walk_forge_stream(&input));
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "forge_stream_validation" => {
             black_box(validate_forge_stream(&input));
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "forge_arena_original" => {
             ENABLED.store(false, Ordering::SeqCst);
@@ -167,7 +168,7 @@ fn run_child(mode: &str, fixture_name: &str) {
                 .write_original(&mut output)
                 .expect("fixture should write");
             black_box(&output);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "xmltree_write" => {
             ENABLED.store(false, Ordering::SeqCst);
@@ -183,32 +184,33 @@ fn run_child(mode: &str, fixture_name: &str) {
                 .write_with_config(&mut output, options)
                 .expect("fixture should write");
             black_box(&output);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "forge_stream_writer_vec" => {
             let responses = multistatus_responses(fixture_name);
             let output = write_forge_multistatus(Vec::new(), responses);
             black_box(&output);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "forge_stream_writer_sink" => {
             let responses = multistatus_responses(fixture_name);
             black_box(write_forge_multistatus(std::io::sink(), responses));
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "quick_xml_writer_sink" => {
             let responses = multistatus_responses(fixture_name);
             black_box(write_quick_xml_multistatus(std::io::sink(), responses));
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         "xmltree_build_and_write" => {
             let responses = multistatus_responses(fixture_name);
             let output = write_xmltree_multistatus(responses);
             black_box(&output);
-            print_result(mode, fixture_name, input.len(), finish_measurement());
+            finish_measurement()
         }
         _ => panic!("unknown mode `{mode}`"),
-    }
+    };
+    print_result(mode, fixture_name, input.len(), allocation);
 }
 
 fn multistatus_responses(fixture_name: &str) -> usize {
@@ -296,7 +298,11 @@ fn main() {
                 .args(["--child", mode, fixture_name])
                 .output()
                 .expect("memory benchmark child should start");
-            assert!(output.status.success(), "memory benchmark child failed");
+            assert!(
+                output.status.success(),
+                "memory benchmark child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             print!("{}", String::from_utf8_lossy(&output.stdout));
         }
         if fixture_name.starts_with("multistatus_") {
@@ -310,7 +316,11 @@ fn main() {
                     .args(["--child", mode, fixture_name])
                     .output()
                     .expect("memory benchmark child should start");
-                assert!(output.status.success(), "memory benchmark child failed");
+                assert!(
+                    output.status.success(),
+                    "memory benchmark child failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
                 print!("{}", String::from_utf8_lossy(&output.stdout));
             }
         }

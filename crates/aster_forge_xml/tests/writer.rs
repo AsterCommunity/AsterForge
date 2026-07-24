@@ -153,6 +153,10 @@ fn rejects_invalid_document_state_namespaces_names_and_values() {
 fn rejects_duplicate_attributes_and_mismatched_writer_lifecycle() {
     let mut writer = XmlStreamWriter::new(Vec::new()).expect("writer");
     assert_invalid_data(writer.start_element("root", [("id", "1"), ("id", "2")]));
+    assert_invalid_data(
+        writer.start_element("root", [("xmlns:a", "urn:one"), ("xmlns:a", "urn:one")]),
+    );
+    assert_invalid_data(writer.start_element("root", [("xmlns", "urn:one"), ("xmlns", "urn:two")]));
     assert_invalid_data(writer.start_element(
         "root",
         [
@@ -167,6 +171,38 @@ fn rejects_duplicate_attributes_and_mismatched_writer_lifecycle() {
 
     let writer = XmlStreamWriter::new(Vec::new()).expect("writer");
     assert!(matches!(writer.finish(), Err(Error::InvalidData(_))));
+}
+
+#[test]
+fn validated_subtree_does_not_inherit_the_writer_default_namespace() {
+    let unqualified = ValidatedXml::new(b"<child><leaf/></child>".to_vec()).expect("subtree");
+    let prefixed =
+        ValidatedXml::new(br#"<x:child xmlns:x="urn:child"><x:leaf/></x:child>"#.to_vec())
+            .expect("prefixed subtree");
+
+    let mut writer = XmlStreamWriter::new(Vec::new()).expect("writer");
+    writer
+        .start_element("root", [("xmlns", "urn:caller")])
+        .expect("root");
+    assert_invalid_data(writer.validated_subtree(&unqualified));
+    writer
+        .validated_subtree(&prefixed)
+        .expect("prefixed subtree remains self-contained");
+    writer.end_element().expect("root end");
+
+    let output = finish(writer);
+    let document = BorrowedDocument::parse(output.as_slice()).expect("parse output");
+    assert!(document.root().get_child_ns("child", "urn:child").is_some());
+
+    let mut writer = XmlStreamWriter::new(Vec::new()).expect("writer");
+    writer.start("root").expect("root");
+    writer
+        .validated_subtree(&unqualified)
+        .expect("no caller default namespace");
+    writer.end_element().expect("root end");
+    let output = finish(writer);
+    let document = BorrowedDocument::parse(output.as_slice()).expect("parse output");
+    assert!(document.root().get_child("child").is_some());
 }
 
 #[test]

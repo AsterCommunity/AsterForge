@@ -247,7 +247,17 @@ impl<W: Write> XmlStreamWriter<W> {
                 "validated subtree requires an open parent element".into(),
             ));
         }
+        let caller_has_default_namespace = self.resolve_namespace("").is_some();
         for element in subtree.document().root().descendants() {
+            if caller_has_default_namespace
+                && element.prefix().is_none()
+                && element.namespace().is_none()
+            {
+                return Err(Error::InvalidData(
+                    "unprefixed validated subtree element would inherit the writer default namespace"
+                        .into(),
+                ));
+            }
             if element.attributes().count() > self.options.max_attributes_per_element {
                 return Err(XmlSafetyError::TooManyAttributes.into());
             }
@@ -431,10 +441,13 @@ impl<W: Write> XmlStreamWriter<W> {
     }
 
     fn attributes_share_expanded_name(&self, left: &str, right: &str) -> bool {
-        if namespace_declaration_prefix(left).is_some()
-            || namespace_declaration_prefix(right).is_some()
-        {
-            return false;
+        match (
+            namespace_declaration_prefix(left),
+            namespace_declaration_prefix(right),
+        ) {
+            (Some(left_prefix), Some(right_prefix)) => return left_prefix == right_prefix,
+            (Some(_), None) | (None, Some(_)) => return false,
+            (None, None) => {}
         }
         let (left_prefix, left_local) = left.split_once(':').unwrap_or(("", left));
         let (right_prefix, right_local) = right.split_once(':').unwrap_or(("", right));

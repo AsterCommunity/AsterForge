@@ -12,11 +12,13 @@ use quick_xml::XmlVersion;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 
+use crate::syntax::{
+    XML_NAMESPACE_URI, map_quick_xml_error, split_qualified_name, utf8, validate_namespace_binding,
+    validate_qualified_name,
+};
 use crate::{Error, ParseOptions, XmlSafetyError, XmlSafetyPolicy};
 
 const OWNED_VALUE_OFFSET: u64 = u64::MAX;
-const XML_NAMESPACE_URI: &str = "http://www.w3.org/XML/1998/namespace";
-const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
 
 /// Stable identifier for a node in an [`XmlDocument`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -142,6 +144,71 @@ struct NamespaceBinding {
     uri: Option<ValueRef>,
 }
 
+#[derive(Clone, Copy)]
+struct ArenaView<'a> {
+    source: &'a [u8],
+    namespace_scopes: &'a [NamespaceScope],
+    namespace_bindings: &'a [NamespaceBinding],
+    owned_values: &'a [Box<str>],
+}
+
+impl<'a> ArenaView<'a> {
+    fn value(self, value: ValueRef) -> &'a str {
+        let resolved = self.checked_value(value);
+        debug_assert!(resolved.is_some(), "invalid internal XML value reference");
+        resolved.unwrap_or("")
+    }
+
+    fn checked_value(self, value: ValueRef) -> Option<&'a str> {
+        let length = u32_to_usize(value.length, "XML value length").ok()?;
+        if value.offset == OWNED_VALUE_OFFSET {
+            let index = u32_to_usize(value.owned_index, "owned XML value index").ok()?;
+            let value = self.owned_values.get(index)?.as_ref();
+            return (value.len() == length).then_some(value);
+        }
+
+        let start = u64_to_usize(value.offset, "XML value offset").ok()?;
+        let end = start.checked_add(length)?;
+        std::str::from_utf8(self.source.get(start..end)?).ok()
+    }
+
+    fn resolve_namespace(self, scope: Option<ScopeId>, prefix: &str) -> Option<&'a str> {
+        match self.checked_resolve_namespace(scope, prefix) {
+            Ok(namespace) => namespace,
+            Err(()) => {
+                debug_assert!(false, "invalid internal XML namespace reference");
+                None
+            }
+        }
+    }
+
+    fn checked_resolve_namespace(
+        self,
+        mut scope: Option<ScopeId>,
+        prefix: &str,
+    ) -> Result<Option<&'a str>, ()> {
+        if prefix == "xml" {
+            return Ok(Some(XML_NAMESPACE_URI));
+        }
+        while let Some(scope_id) = scope {
+            let scope_data = self.namespace_scopes.get(scope_id.index()).ok_or(())?;
+            for binding_index in scope_data.bindings.clone().rev() {
+                let binding_index =
+                    u32_to_usize(binding_index, "XML namespace binding index").map_err(|_| ())?;
+                let binding = self.namespace_bindings.get(binding_index).ok_or(())?;
+                if self.checked_value(binding.prefix).ok_or(())? == prefix {
+                    return binding
+                        .uri
+                        .map(|uri| self.checked_value(uri).ok_or(()))
+                        .transpose();
+                }
+            }
+            scope = scope_data.parent;
+        }
+        Ok(None)
+    }
+}
+
 /// An immutable XML tree whose nodes reference ranges in `source` whenever possible.
 ///
 /// `S` may be `&[u8]`, `Arc<[u8]>`, `Vec<u8>`, or another byte container.
@@ -244,13 +311,7 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
     }
 
     fn value(&self, value: ValueRef) -> &str {
-        if value.offset == OWNED_VALUE_OFFSET {
-            return &self.owned_values[stored_index(value.owned_index, "owned XML value index")];
-        }
-        let start = u64_to_usize(value.offset, "XML value offset").unwrap_or(0);
-        let end = start + stored_index(value.length, "XML value length");
-        // Values are validated as UTF-8 when their ValueRef is created.
-        std::str::from_utf8(&self.source.as_ref()[start..end]).unwrap_or("")
+        self.arena_view().value(value)
     }
 
     fn element_data(&self, id: NodeId) -> Option<&ElementData> {
@@ -260,22 +321,17 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
         }
     }
 
-    fn resolve_namespace(&self, mut scope: Option<ScopeId>, prefix: &str) -> Option<&str> {
-        if prefix == "xml" {
-            return Some(XML_NAMESPACE_URI);
+    fn resolve_namespace(&self, scope: Option<ScopeId>, prefix: &str) -> Option<&str> {
+        self.arena_view().resolve_namespace(scope, prefix)
+    }
+
+    fn arena_view(&self) -> ArenaView<'_> {
+        ArenaView {
+            source: self.source.as_ref(),
+            namespace_scopes: &self.namespace_scopes,
+            namespace_bindings: &self.namespace_bindings,
+            owned_values: &self.owned_values,
         }
-        while let Some(scope_id) = scope {
-            let scope_data = &self.namespace_scopes[scope_id.index()];
-            for binding_index in scope_data.bindings.clone().rev() {
-                let binding = &self.namespace_bindings
-                    [stored_index(binding_index, "XML namespace binding index")];
-                if self.value(binding.prefix) == prefix {
-                    return binding.uri.map(|uri| self.value(uri));
-                }
-            }
-            scope = scope_data.parent;
-        }
-        None
     }
 }
 
@@ -527,8 +583,9 @@ impl<'document, S: AsRef<[u8]>> Iterator for DescendantElements<'document, S> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let element = self.stack.pop()?;
-        let children: Vec<_> = element.child_elements().collect();
-        self.stack.extend(children.into_iter().rev());
+        let child_start = self.stack.len();
+        self.stack.extend(element.child_elements());
+        self.stack[child_start..].reverse();
         Some(element)
     }
 }
@@ -569,8 +626,16 @@ impl<S> Clone for AttributeRef<'_, S> {
 }
 
 impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
-    fn data(self) -> &'document AttributeData {
-        &self.document().attributes[stored_index(self.index, "XML attribute index")]
+    fn data(self) -> Option<&'document AttributeData> {
+        let data = self.checked_data();
+        debug_assert!(data.is_some(), "invalid internal XML attribute index");
+        data
+    }
+
+    fn checked_data(self) -> Option<&'document AttributeData> {
+        self.document()
+            .attributes
+            .get(stored_index(self.index, "XML attribute index"))
     }
 
     fn document(self) -> &'document XmlDocument<S> {
@@ -578,7 +643,9 @@ impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
     }
 
     pub fn qualified_name(self) -> &'document str {
-        self.document().value(self.data().qualified_name)
+        self.data()
+            .map(|data| self.document().value(data.qualified_name))
+            .unwrap_or("")
     }
 
     pub fn prefix(self) -> Option<&'document str> {
@@ -599,7 +666,9 @@ impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
     }
 
     pub fn value(self) -> &'document str {
-        self.document().value(self.data().value)
+        self.data()
+            .map(|data| self.document().value(data.value))
+            .unwrap_or("")
     }
 }
 
@@ -641,6 +710,7 @@ impl<'a> DocumentBuilder<'a> {
     fn parse(&mut self) -> Result<(), Error> {
         let mut reader = Reader::from_reader(self.source);
         reader.config_mut().trim_text(false);
+        reader.config_mut().check_end_names = true;
         loop {
             let event_start = reader.buffer_position();
             let event = reader.read_event().map_err(map_quick_xml_error)?;
@@ -790,6 +860,7 @@ impl<'a> DocumentBuilder<'a> {
             }
             let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
             let name = utf8(attribute.key.as_ref())?;
+            validate_qualified_name(name)?;
             if name == "xmlns" || name.starts_with("xmlns:") {
                 let namespace_prefix = name.strip_prefix("xmlns:").unwrap_or("");
                 let uri = attribute
@@ -824,7 +895,10 @@ impl<'a> DocumentBuilder<'a> {
             Some(id)
         };
         if let Some(prefix) = prefix
-            && self.resolve_namespace(namespace_scope, prefix).is_none()
+            && self
+                .arena_view()
+                .resolve_namespace(namespace_scope, prefix)
+                .is_none()
         {
             return Err(XmlSafetyError::Malformed.into());
         }
@@ -836,10 +910,13 @@ impl<'a> DocumentBuilder<'a> {
             if name == "xmlns" || name.starts_with("xmlns:") {
                 continue;
             }
-            let (prefix, _) = validate_qualified_name(name)?;
+            let (prefix, _) = split_qualified_name(name);
             if let Some(prefix) = prefix
                 && prefix != "xml"
-                && self.resolve_namespace(namespace_scope, prefix).is_none()
+                && self
+                    .arena_view()
+                    .resolve_namespace(namespace_scope, prefix)
+                    .is_none()
             {
                 return Err(XmlSafetyError::Malformed.into());
             }
@@ -901,6 +978,13 @@ impl<'a> DocumentBuilder<'a> {
     }
 
     fn text_node(&mut self, value: Cow<'_, str>, cdata: bool) -> Result<(), Error> {
+        self.text_bytes = self
+            .text_bytes
+            .checked_add(value.len())
+            .ok_or(XmlSafetyError::TextTooLarge)?;
+        if self.text_bytes > self.options.safety.max_text_bytes {
+            return Err(XmlSafetyError::TextTooLarge.into());
+        }
         let value = if self.options.trim_whitespace {
             match value {
                 Cow::Borrowed(value) => Cow::Borrowed(value.trim()),
@@ -911,13 +995,6 @@ impl<'a> DocumentBuilder<'a> {
         };
         if value.is_empty() {
             return Ok(());
-        }
-        self.text_bytes = self
-            .text_bytes
-            .checked_add(value.len())
-            .ok_or(XmlSafetyError::TextTooLarge)?;
-        if self.text_bytes > self.options.safety.max_text_bytes {
-            return Err(XmlSafetyError::TextTooLarge.into());
         }
         if self.open.is_empty() {
             if value.chars().all(char::is_whitespace) {
@@ -989,101 +1066,13 @@ impl<'a> DocumentBuilder<'a> {
         }
     }
 
-    fn resolve_namespace(&self, mut scope: Option<ScopeId>, prefix: &str) -> Option<&str> {
-        if prefix == "xml" {
-            return Some(XML_NAMESPACE_URI);
+    fn arena_view(&self) -> ArenaView<'_> {
+        ArenaView {
+            source: self.source,
+            namespace_scopes: &self.namespace_scopes,
+            namespace_bindings: &self.namespace_bindings,
+            owned_values: &self.owned_values,
         }
-        while let Some(scope_id) = scope {
-            let scope_data = &self.namespace_scopes[scope_id.index()];
-            for binding_index in scope_data.bindings.clone().rev() {
-                let binding = &self.namespace_bindings
-                    [stored_index(binding_index, "XML namespace binding index")];
-                if self.builder_value(binding.prefix) == prefix {
-                    return binding.uri.map(|uri| self.builder_value(uri));
-                }
-            }
-            scope = scope_data.parent;
-        }
-        None
-    }
-
-    fn builder_value(&self, value: ValueRef) -> &str {
-        if value.offset == OWNED_VALUE_OFFSET {
-            &self.owned_values[stored_index(value.owned_index, "owned XML value index")]
-        } else {
-            let start = u64_to_usize(value.offset, "XML value offset").unwrap_or(0);
-            let end = start + stored_index(value.length, "XML value length");
-            std::str::from_utf8(&self.source[start..end]).unwrap_or("")
-        }
-    }
-}
-
-fn utf8(bytes: &[u8]) -> Result<&str, Error> {
-    std::str::from_utf8(bytes).map_err(|_| XmlSafetyError::InvalidEncoding.into())
-}
-
-fn validate_qualified_name(name: &str) -> Result<(Option<&str>, &str), Error> {
-    let (prefix, local) = split_qualified_name(name);
-    if !valid_name(local) || prefix.is_some_and(|prefix| !valid_name(prefix)) {
-        return Err(XmlSafetyError::Malformed.into());
-    }
-    if name.matches(':').count() > 1 {
-        return Err(XmlSafetyError::Malformed.into());
-    }
-    Ok((prefix, local))
-}
-
-fn split_qualified_name(name: &str) -> (Option<&str>, &str) {
-    match name.split_once(':') {
-        Some((prefix, local)) => (Some(prefix), local),
-        None => (None, name),
-    }
-}
-
-fn valid_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    characters.next().is_some_and(is_name_start) && characters.all(is_name_char)
-}
-
-fn is_name_start(character: char) -> bool {
-    matches!(
-        character,
-        'A'..='Z'
-            | '_'
-            | 'a'..='z'
-            | '\u{00C0}'..='\u{00D6}'
-            | '\u{00D8}'..='\u{00F6}'
-            | '\u{00F8}'..='\u{02FF}'
-            | '\u{0370}'..='\u{037D}'
-            | '\u{037F}'..='\u{1FFF}'
-            | '\u{200C}'..='\u{200D}'
-            | '\u{2070}'..='\u{218F}'
-            | '\u{2C00}'..='\u{2FEF}'
-            | '\u{3001}'..='\u{D7FF}'
-            | '\u{F900}'..='\u{FDCF}'
-            | '\u{FDF0}'..='\u{FFFD}'
-            | '\u{10000}'..='\u{EFFFF}'
-    )
-}
-
-fn is_name_char(character: char) -> bool {
-    is_name_start(character)
-        || character.is_ascii_digit()
-        || matches!(character, '-' | '.' | '\u{B7}')
-        || ('\u{300}'..='\u{36F}').contains(&character)
-        || ('\u{203F}'..='\u{2040}').contains(&character)
-}
-
-fn validate_namespace_binding(prefix: &str, uri: &str) -> Result<(), Error> {
-    if prefix == "xmlns"
-        || uri == XMLNS_NAMESPACE_URI
-        || (prefix == "xml" && uri != XML_NAMESPACE_URI)
-        || (prefix != "xml" && uri == XML_NAMESPACE_URI)
-        || (!prefix.is_empty() && uri.is_empty())
-    {
-        Err(XmlSafetyError::Malformed.into())
-    } else {
-        Ok(())
     }
 }
 
@@ -1095,13 +1084,6 @@ fn stored_index(value: u32, label: &str) -> usize {
     // Rust's supported platforms can represent every u32 as usize. Keep the checked Forge
     // conversion at the representation boundary and make malformed internal state fail indexing.
     u32_to_usize(value, label).unwrap_or(usize::MAX)
-}
-
-fn map_quick_xml_error(error: quick_xml::Error) -> Error {
-    match error {
-        quick_xml::Error::Encoding(_) => XmlSafetyError::InvalidEncoding.into(),
-        error => Error::InvalidXml(error.to_string()),
-    }
 }
 
 #[cfg(test)]
@@ -1121,6 +1103,43 @@ mod layout_tests {
                 .iter()
                 .map(|value| value.len())
                 .sum::<usize>()
+    }
+
+    #[test]
+    fn arena_view_rejects_invalid_value_ranges_and_namespace_indices() {
+        let source = b"value\xFF";
+        let owned_values = [Box::<str>::from("owned")];
+        let scope = ScopeId::from_index(0).expect("scope id");
+        let namespace_scopes = [NamespaceScope {
+            parent: None,
+            bindings: 0..1,
+        }];
+        let view = ArenaView {
+            source,
+            namespace_scopes: &namespace_scopes,
+            namespace_bindings: &[],
+            owned_values: &owned_values,
+        };
+
+        assert_eq!(view.checked_value(ValueRef::source(0, 5)), Some("value"));
+        assert_eq!(view.checked_value(ValueRef::owned(0, 5)), Some("owned"));
+        assert_eq!(view.checked_value(ValueRef::source(5, 1)), None);
+        assert_eq!(view.checked_value(ValueRef::source(u64::MAX, 2)), None);
+        assert_eq!(view.checked_value(ValueRef::owned(1, 5)), None);
+        assert_eq!(view.checked_value(ValueRef::owned(0, 4)), None);
+        assert_eq!(view.checked_resolve_namespace(Some(scope), "p"), Err(()));
+    }
+
+    #[test]
+    fn attribute_lookup_reports_invalid_internal_indices_without_indexing() {
+        let document = BorrowedDocument::parse(br#"<root id="7"/>"#.as_slice())
+            .expect("document should parse");
+        let attribute = AttributeRef {
+            element: document.root(),
+            index: u32::MAX,
+        };
+
+        assert!(attribute.checked_data().is_none());
     }
 
     #[test]

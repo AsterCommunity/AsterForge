@@ -9,7 +9,7 @@ use aster_forge_utils::numbers::usize_to_u64;
 use aster_forge_xml::{BorrowedDocument, XmlSafetyPolicy, validate_xml_input};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use support::{
-    fixtures, validate_forge_stream, walk_forge_stream, walk_quick_xml_events,
+    cpu_fixtures, validate_forge_stream, walk_forge_stream, walk_quick_xml_events,
     walk_quick_xml_ns_buffered, write_forge_multistatus, write_quick_xml_multistatus,
     write_xmltree_multistatus,
 };
@@ -20,10 +20,7 @@ fn bench_parse(c: &mut Criterion) {
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(2))
         .sample_size(20);
-    for (name, input) in fixtures()
-        .into_iter()
-        .filter(|(name, _)| *name != "multistatus_10000")
-    {
+    for (name, input) in cpu_fixtures() {
         group.throughput(Throughput::Bytes(
             usize_to_u64(input.len(), "benchmark input length")
                 .expect("benchmark input length should fit in u64"),
@@ -100,10 +97,7 @@ fn bench_write(c: &mut Criterion) {
     xmltree_options.pad_self_closing = false;
     xmltree_options.autopad_comments = false;
 
-    for (name, input) in fixtures()
-        .into_iter()
-        .filter(|(name, _)| *name != "multistatus_10000")
-    {
+    for (name, input) in cpu_fixtures() {
         let arena = BorrowedDocument::parse(input.as_slice()).expect("fixture should parse");
         let xmltree = xmltree::Element::parse(input.as_slice()).expect("fixture should parse");
         group.throughput(Throughput::Bytes(

@@ -278,6 +278,7 @@ fn rejects_invalid_or_unbound_namespace_prefixes() {
         br#"<root p:id="1"/>"#,
         br#"<root xmlns:xml="urn:not-xml"/>"#,
         br#"<root xmlns:xmlns="urn:no"/>"#,
+        br#"<root xmlns:1x="urn:no"/>"#,
         br#"<root xmlns:p=""/>"#,
     ] {
         assert_eq!(
@@ -285,6 +286,24 @@ fn rejects_invalid_or_unbound_namespace_prefixes() {
             Err(XmlSafetyError::Malformed)
         );
     }
+    assert!(matches!(
+        BorrowedDocument::parse(br#"<root xmlns:1x="urn:no"/>"#.as_slice()),
+        Err(Error::Safety(XmlSafetyError::Malformed))
+    ));
+}
+
+#[test]
+fn arena_and_validator_classify_invalid_encoding_consistently() {
+    let input = b"<root>\xFF</root>";
+
+    assert_eq!(
+        validate_xml_input(input, XmlSafetyPolicy::untrusted()),
+        Err(XmlSafetyError::InvalidEncoding)
+    );
+    assert!(matches!(
+        BorrowedDocument::parse(input.as_slice()),
+        Err(Error::Safety(XmlSafetyError::InvalidEncoding))
+    ));
 }
 
 #[test]
@@ -317,6 +336,27 @@ fn trim_whitespace_is_explicit_and_source_backed_when_possible() {
     assert!(matches!(nodes[0], NodeRef::Text("before")));
     assert!(matches!(nodes[2], NodeRef::Text("after")));
     assert_eq!(document.allocated_value_count(), 0);
+}
+
+#[test]
+fn trim_whitespace_counts_original_decoded_text_against_the_limit() {
+    let input = b"<root>  x  </root>";
+    let policy = XmlSafetyPolicy {
+        max_text_bytes: 4,
+        ..XmlSafetyPolicy::untrusted()
+    };
+    let options = ParseOptions::new()
+        .safety_policy(policy)
+        .trim_whitespace(true);
+
+    assert_eq!(
+        validate_xml_input(input, policy),
+        Err(XmlSafetyError::TextTooLarge)
+    );
+    assert!(matches!(
+        BorrowedDocument::parse_with_options(input.as_slice(), &options),
+        Err(Error::Safety(XmlSafetyError::TextTooLarge))
+    ));
 }
 
 #[test]
