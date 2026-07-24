@@ -5,7 +5,8 @@ use aster_forge_webdav::{
     IfStateCondition, child_relative_path, destination_relative_path,
     evaluate_http_download_preconditions, evaluate_http_etag_preconditions, href_for_relative,
     parent_relative_path, parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth,
-    parse_move_depth, parse_propfind_depth, submitted_lock_tokens_for_path,
+    parse_lock_timeout, parse_lock_token_header, parse_move_depth, parse_propfind_depth,
+    submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
 use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use http::{Method, Uri};
@@ -292,6 +293,104 @@ fn submitted_tokens_ignore_other_resources_and_lock_token_header() {
         submitted_lock_tokens_for_path(&headers, "/webdav/current.txt", "http", "localhost"),
         ["urn:uuid:current".to_string()]
     );
+}
+
+#[test]
+fn submitted_tokens_from_parsed_if_header_preserve_scope_and_deduplicate() {
+    let untagged = parse_if_header(&headers("If", r#"(<urn:uuid:untagged>)"#))
+        .expect("untagged If header should parse")
+        .expect("If header should exist");
+    assert_eq!(
+        submitted_lock_tokens(
+            &untagged,
+            "/webdav/current file.txt",
+            "https",
+            "dav.example"
+        ),
+        ["urn:uuid:untagged".to_string()]
+    );
+
+    let tagged = parse_if_header(&headers(
+        "If",
+        r#"</webdav/current%20file.txt> (<urn:uuid:current>) (<urn:uuid:current>) (Not <urn:uuid:negated>) </webdav/other.txt> (<urn:uuid:other>) <https://remote.example/webdav/current%20file.txt> (<urn:uuid:remote>)"#,
+    ))
+    .expect("If header should parse")
+    .expect("If header should exist");
+
+    assert_eq!(
+        submitted_lock_tokens(&tagged, "/webdav/current file.txt", "https", "dav.example"),
+        [
+            "urn:uuid:current".to_string(),
+            "urn:uuid:negated".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn lock_timeout_uses_bounded_server_policy() {
+    let maximum = Duration::from_secs(604_800);
+    assert_eq!(
+        parse_lock_timeout(&HeaderMap::new(), maximum).expect("missing timeout should use maximum"),
+        maximum
+    );
+    assert_eq!(
+        parse_lock_timeout(&headers("Timeout", "Infinite"), maximum)
+            .expect("Infinite should use maximum"),
+        maximum
+    );
+    assert_eq!(
+        parse_lock_timeout(&headers("Timeout", "Second-3600"), maximum)
+            .expect("bounded timeout should parse"),
+        Duration::from_secs(3600)
+    );
+    assert_eq!(
+        parse_lock_timeout(&headers("Timeout", "Second-604800"), maximum)
+            .expect("exact maximum should parse"),
+        maximum
+    );
+    assert_eq!(
+        parse_lock_timeout(&headers("Timeout", "Extension, Second-60"), maximum)
+            .expect("unknown candidate should not hide a valid timeout"),
+        Duration::from_secs(60)
+    );
+
+    for value in ["Second-604801", "Second-18446744073709551615", "Extension"] {
+        assert!(
+            parse_lock_timeout(&headers("Timeout", value), maximum).is_err(),
+            "{value} should be rejected"
+        );
+    }
+
+    let mut non_utf8 = HeaderMap::new();
+    non_utf8.insert(
+        HeaderName::from_static("timeout"),
+        HeaderValue::from_bytes(&[0xff]).expect("test header value"),
+    );
+    assert!(parse_lock_timeout(&non_utf8, maximum).is_err());
+}
+
+#[test]
+fn lock_token_header_requires_one_nonempty_angle_bracketed_token() {
+    assert_eq!(
+        parse_lock_token_header(&headers("Lock-Token", " <urn:uuid:lock> "))
+            .expect("valid lock token should parse"),
+        "urn:uuid:lock"
+    );
+
+    for value in ["", "<>", "urn:uuid:lock", "<<urn:uuid:lock>>", "<one><two>"] {
+        assert!(
+            parse_lock_token_header(&headers("Lock-Token", value)).is_err(),
+            "{value:?} should be rejected"
+        );
+    }
+    assert!(parse_lock_token_header(&HeaderMap::new()).is_err());
+
+    let mut non_utf8 = HeaderMap::new();
+    non_utf8.insert(
+        HeaderName::from_static("lock-token"),
+        HeaderValue::from_bytes(&[0xff]).expect("test header value"),
+    );
+    assert!(parse_lock_token_header(&non_utf8).is_err());
 }
 
 #[test]

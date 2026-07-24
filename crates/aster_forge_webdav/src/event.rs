@@ -27,12 +27,38 @@ pub enum DavOperation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavEventOutcome {
     Succeeded {
-        status: http::StatusCode,
+        /// HTTP/WebDAV response status without leaking a transport crate version.
+        status: u16,
     },
     Failed {
-        status: http::StatusCode,
+        /// HTTP/WebDAV response status without leaking a transport crate version.
+        status: u16,
         backend_error: Option<DavBackendErrorKind>,
     },
+}
+
+impl DavEventOutcome {
+    /// Classifies a completed response. Informational, success, and redirection statuses are
+    /// successful protocol outcomes; client and server errors are failures.
+    #[must_use]
+    pub const fn from_status(status: u16, backend_error: Option<DavBackendErrorKind>) -> Self {
+        if status < 400 {
+            Self::Succeeded { status }
+        } else {
+            Self::Failed {
+                status,
+                backend_error,
+            }
+        }
+    }
+
+    /// Returns the completed HTTP/WebDAV status.
+    #[must_use]
+    pub const fn status(self) -> u16 {
+        match self {
+            Self::Succeeded { status } | Self::Failed { status, .. } => status,
+        }
+    }
 }
 
 /// One completed WebDAV operation.

@@ -1,6 +1,6 @@
 //! WebDAV header parsing and protocol precondition rules.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{StatusCode, Uri};
@@ -265,6 +265,17 @@ pub fn submitted_lock_tokens_for_path(
     let Some(if_header) = parse_if_header(headers).ok().flatten() else {
         return Vec::new();
     };
+    submitted_lock_tokens(&if_header, request_path, request_scheme, request_host)
+}
+
+/// Extracts submitted lock tokens from an already parsed `If` header.
+#[must_use]
+pub fn submitted_lock_tokens(
+    if_header: &IfHeader,
+    request_path: &str,
+    request_scheme: &str,
+    request_host: &str,
+) -> Vec<String> {
     let mut tokens = Vec::new();
     for group in &if_header.groups {
         match group.tagged_path.as_deref() {
@@ -285,6 +296,55 @@ pub fn submitted_lock_tokens_for_path(
     tokens.sort();
     tokens.dedup();
     tokens
+}
+
+/// Parses a bounded LOCK timeout using a product-supplied maximum duration.
+pub fn parse_lock_timeout(
+    headers: &HeaderMap,
+    maximum: Duration,
+) -> Result<Duration, DavProtocolError> {
+    let Some(value) = headers.get("Timeout") else {
+        return Ok(maximum);
+    };
+    let raw = value
+        .to_str()
+        .map_err(|_| DavProtocolError::bad_request("Invalid Timeout header"))?;
+    for candidate in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if candidate.eq_ignore_ascii_case("Infinite") {
+            return Ok(maximum);
+        }
+        if let Some(seconds) = candidate
+            .strip_prefix("Second-")
+            .and_then(|seconds| seconds.parse::<u64>().ok())
+        {
+            let timeout = Duration::from_secs(seconds);
+            if timeout > maximum {
+                return Err(DavProtocolError::bad_request("Invalid Timeout header"));
+            }
+            return Ok(timeout);
+        }
+    }
+    Err(DavProtocolError::bad_request("Invalid Timeout header"))
+}
+
+/// Parses the required angle-bracketed `Lock-Token` request header.
+pub fn parse_lock_token_header(headers: &HeaderMap) -> Result<String, DavProtocolError> {
+    let raw = headers
+        .get("Lock-Token")
+        .ok_or_else(|| DavProtocolError::bad_request("Missing Lock-Token header"))?
+        .to_str()
+        .map_err(|_| DavProtocolError::bad_request("Invalid Lock-Token header"))?
+        .trim();
+    let token = raw
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+        .filter(|token| !token.is_empty() && !token.contains(['<', '>']))
+        .ok_or_else(|| DavProtocolError::bad_request("Invalid Lock-Token header"))?;
+    Ok(token.to_owned())
 }
 
 /// Evaluates `If-Match` and `If-None-Match` for a resource operation.

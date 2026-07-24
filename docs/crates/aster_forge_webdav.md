@@ -18,7 +18,7 @@ aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", fea
 Forge 负责：
 
 - `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝。
-- WebDAV 方法、`Depth`、`Overwrite`、`Destination` 和 `If` header 解析。
+- WebDAV 方法、`Depth`、`Overwrite`、`Destination`、`If`、`Timeout` 和 `Lock-Token` header 解析。
 - HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
 - PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
@@ -39,7 +39,7 @@ Forge 负责：
 
 产品应把已认证、已限定 workspace 的 adapter 交给协议层。backend 调用必须同步完成影响协议正确性的操作；quota、blob 引用、lock 持久化和必要的缓存失效不能依赖事件补写。
 
-`DavEventSink` 只观察已经完成的协议操作，适合 tracing、metrics、审计适配和通知。事件不包含请求正文、凭据或 lock token。
+`DavEventSink` 只观察已经完成的协议操作，适合 tracing、metrics、审计适配和通知。事件使用 transport-neutral `u16` 状态码，不包含请求正文、凭据或 lock token。
 
 ## 错误边界
 

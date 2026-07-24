@@ -42,8 +42,9 @@ pub use protocol::{
     DavPrecondition, DavProtocolError, DavProtocolErrorKind, Depth, Destination, IfHeader,
     IfResourceGroup, IfStateCondition, IfStateList, destination_relative_path,
     evaluate_http_download_preconditions, evaluate_http_etag_preconditions, parse_copy_depth,
-    parse_delete_depth, parse_if_header, parse_lock_depth, parse_move_depth, parse_overwrite,
-    parse_propfind_depth, submitted_lock_tokens_for_path,
+    parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
+    parse_lock_token_header, parse_move_depth, parse_overwrite, parse_propfind_depth,
+    submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
 pub use request::{DavMethod, DavRequestHead, DavRequestOrigin};
 pub use response::{DavResponse, DavResponseBody};
