@@ -30,7 +30,6 @@ pub mod paths;
 pub mod raii;
 pub mod text;
 pub mod url;
-pub mod xml;
 
 /// Result type returned by utility helpers.
 pub type Result<T> = std::result::Result<T, UtilsError>;

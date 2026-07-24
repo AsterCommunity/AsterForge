@@ -1,744 +1,463 @@
-//! XML parser — powered by `quick-xml::Reader`
-//!
-//! Uses a recursive-descent algorithm to convert an XML byte stream into an
-//! `Element` tree. Supports safety checks: depth limit, element count limit,
-//! input size limit, and DTD/ENTITY rejection.
+//! Event-based XML validation and shared parsing limits.
 
-use std::io::{BufRead, Read};
+use std::borrow::Cow;
 
-use quick_xml::escape::unescape as unescape_entities;
-use quick_xml::events::Event;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
+use quick_xml::escape::unescape;
+use quick_xml::events::{BytesStart, Event};
 
-use crate::error::Error;
-use crate::{Element, PI};
+use crate::{DEFAULT_XML_MAX_DEPTH, Error, XmlSafetyError};
 
-fn check_size<R: BufRead>(reader: R, options: &ParseOptions) -> Result<Vec<u8>, Error> {
-    if let Some(max_size) = options.max_size {
-        let mut buf = Vec::new();
-        let mut take = reader.take((max_size + 1) as u64);
-        let n = take
-            .read_to_end(&mut buf)
-            .map_err(|e| Error::Io(e.to_string()))?;
-        if n > max_size {
-            return Err(Error::MaxSizeExceeded);
+const DEFAULT_MAX_INPUT_BYTES: usize = 10 * 1024 * 1024;
+const DEFAULT_MAX_ELEMENTS: usize = 100_000;
+const DEFAULT_MAX_ATTRIBUTES_PER_ELEMENT: usize = 1_024;
+const DEFAULT_MAX_TEXT_BYTES: usize = 10 * 1024 * 1024;
+const DEFAULT_MAX_EVENTS: usize = 1_000_000;
+const XML_NAMESPACE_URI: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
+
+/// Finite resource and declaration limits applied to untrusted XML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XmlSafetyPolicy {
+    pub max_input_bytes: usize,
+    pub max_depth: usize,
+    pub max_elements: usize,
+    pub max_attributes_per_element: usize,
+    pub max_text_bytes: usize,
+    pub max_events: usize,
+    pub reject_doctype: bool,
+}
+
+impl XmlSafetyPolicy {
+    /// A conservative policy suitable for network and storage protocol input.
+    pub const fn untrusted() -> Self {
+        Self {
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
+            max_depth: DEFAULT_XML_MAX_DEPTH,
+            max_elements: DEFAULT_MAX_ELEMENTS,
+            max_attributes_per_element: DEFAULT_MAX_ATTRIBUTES_PER_ELEMENT,
+            max_text_bytes: DEFAULT_MAX_TEXT_BYTES,
+            max_events: DEFAULT_MAX_EVENTS,
+            reject_doctype: true,
         }
-        Ok(buf)
-    } else {
-        let mut buf = Vec::new();
-        let mut reader = reader;
-        reader
-            .read_to_end(&mut buf)
-            .map_err(|e| Error::Io(e.to_string()))?;
-        Ok(buf)
+    }
+
+    pub(crate) fn validate(self) -> Result<(), XmlSafetyError> {
+        if self.max_input_bytes == 0
+            || self.max_depth == 0
+            || self.max_elements == 0
+            || self.max_attributes_per_element == 0
+            || self.max_text_bytes == 0
+            || self.max_events == 0
+        {
+            Err(XmlSafetyError::InvalidPolicy)
+        } else {
+            Ok(())
+        }
     }
 }
 
-#[derive(Debug, Clone)]
+impl Default for XmlSafetyPolicy {
+    fn default() -> Self {
+        Self::untrusted()
+    }
+}
+
+/// Tree parsing behavior. Safety limits remain finite by default.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParseOptions {
-    /// Maximum nesting depth (default: 128)
-    pub max_depth: usize,
-    /// Maximum number of elements (default: 100,000)
-    pub max_elements: usize,
-    /// Maximum input size in bytes. `None` means unlimited (default: 10 MB)
-    pub max_size: Option<usize>,
-    /// Whether DTD declarations are allowed (default: false, security)
-    pub allow_dtd: bool,
-    /// Whether ENTITY declarations are allowed (default: false, security)
-    pub allow_entity: bool,
-    /// Whether to trim leading/trailing whitespace from text nodes (default: true)
+    pub safety: XmlSafetyPolicy,
+    /// Drops whitespace-only text nodes and trims retained text nodes.
     pub trim_whitespace: bool,
 }
 
-impl Default for ParseOptions {
-    fn default() -> Self {
-        ParseOptions {
-            max_depth: 128,
-            max_elements: 100_000,
-            max_size: Some(10 * 1024 * 1024), // 10 MB
-            allow_dtd: false,
-            allow_entity: false,
-            trim_whitespace: true,
-        }
-    }
-}
-
 impl ParseOptions {
-    /// Creates default `ParseOptions`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Sets the maximum nesting depth.
-    pub fn max_depth(mut self, depth: usize) -> Self {
-        self.max_depth = depth;
+    pub fn safety_policy(mut self, policy: XmlSafetyPolicy) -> Self {
+        self.safety = policy;
         self
     }
 
-    /// Sets the maximum number of elements.
-    pub fn max_elements(mut self, count: usize) -> Self {
-        self.max_elements = count;
+    pub fn max_depth(mut self, value: usize) -> Self {
+        self.safety.max_depth = value;
         self
     }
 
-    /// Sets the maximum input size in bytes. Pass `None` for unlimited.
-    pub fn max_size(mut self, size: impl Into<Option<usize>>) -> Self {
-        self.max_size = size.into();
+    pub fn max_elements(mut self, value: usize) -> Self {
+        self.safety.max_elements = value;
         self
     }
 
-    /// Sets whether DTD is allowed.
+    pub fn max_size(mut self, value: usize) -> Self {
+        self.safety.max_input_bytes = value;
+        self
+    }
+
+    pub fn max_attributes_per_element(mut self, value: usize) -> Self {
+        self.safety.max_attributes_per_element = value;
+        self
+    }
+
+    pub fn max_text_bytes(mut self, value: usize) -> Self {
+        self.safety.max_text_bytes = value;
+        self
+    }
+
+    pub fn max_events(mut self, value: usize) -> Self {
+        self.safety.max_events = value;
+        self
+    }
+
     pub fn allow_dtd(mut self, allow: bool) -> Self {
-        self.allow_dtd = allow;
+        self.safety.reject_doctype = !allow;
         self
     }
 
-    /// Sets whether ENTITY is allowed.
-    pub fn allow_entity(mut self, allow: bool) -> Self {
-        self.allow_entity = allow;
-        self
-    }
-
-    /// Sets whether text whitespace should be trimmed.
     pub fn trim_whitespace(mut self, trim: bool) -> Self {
         self.trim_whitespace = trim;
         self
     }
 }
 
-pub(crate) fn parse<R: BufRead>(
-    reader: R,
-    options: &ParseOptions,
-) -> Result<Element, Error> {
-    // Security: read all input first and check size limit.
-    // This catches oversized documents (e.g. XML bombs) before parsing.
-    let bytes = check_size(reader, options)?;
+/// Validates one complete XML document without constructing a DOM.
+pub fn validate_xml_input(bytes: &[u8], policy: XmlSafetyPolicy) -> Result<(), XmlSafetyError> {
+    scan_xml(bytes, &ParseOptions::new().safety_policy(policy))
+        .map(|_| ())
+        .map_err(safety_error)
+}
 
-    let mut reader = Reader::from_reader(bytes.as_slice());
+/// Returns the local name of a validated document root.
+pub fn xml_root_local_name(
+    bytes: &[u8],
+    policy: XmlSafetyPolicy,
+) -> Result<String, XmlSafetyError> {
+    scan_xml(bytes, &ParseOptions::new().safety_policy(policy))
+        .map_err(safety_error)?
+        .ok_or(XmlSafetyError::Malformed)
+}
 
-    reader.config_mut().trim_text(options.trim_whitespace);
+fn safety_error(error: Error) -> XmlSafetyError {
+    match error {
+        Error::Safety(error) => error,
+        Error::InvalidXml(_) | Error::InvalidData(_) | Error::Io(_) => XmlSafetyError::Malformed,
+    }
+}
 
-    let mut buf = Vec::new();
-    let mut element_count = 0usize;
+#[derive(Debug)]
+struct Frame {
+    qualified_name: String,
+    binding_start: usize,
+}
 
-    // Skip non-root events (comments, PIs, etc.) before the root element
+#[derive(Debug)]
+struct NamespaceBinding {
+    prefix: String,
+    uri: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ScanState {
+    frames: Vec<Frame>,
+    bindings: Vec<NamespaceBinding>,
+    root_name: Option<String>,
+    root_complete: bool,
+    elements: usize,
+    text_bytes: usize,
+    events: usize,
+}
+
+impl ScanState {
+    fn count_event(&mut self, policy: XmlSafetyPolicy) -> Result<(), Error> {
+        self.events = self
+            .events
+            .checked_add(1)
+            .ok_or(XmlSafetyError::TooManyEvents)?;
+        if self.events > policy.max_events {
+            return Err(XmlSafetyError::TooManyEvents.into());
+        }
+        Ok(())
+    }
+
+    fn count_element(&mut self, policy: XmlSafetyPolicy) -> Result<(), Error> {
+        let depth = self
+            .frames
+            .len()
+            .checked_add(1)
+            .ok_or(XmlSafetyError::TooDeep)?;
+        if depth > policy.max_depth {
+            return Err(XmlSafetyError::TooDeep.into());
+        }
+        self.elements = self
+            .elements
+            .checked_add(1)
+            .ok_or(XmlSafetyError::TooManyElements)?;
+        if self.elements > policy.max_elements {
+            return Err(XmlSafetyError::TooManyElements.into());
+        }
+        Ok(())
+    }
+
+    fn count_text(&mut self, text: &str, policy: XmlSafetyPolicy) -> Result<(), Error> {
+        self.text_bytes = self
+            .text_bytes
+            .checked_add(text.len())
+            .ok_or(XmlSafetyError::TextTooLarge)?;
+        if self.text_bytes > policy.max_text_bytes {
+            return Err(XmlSafetyError::TextTooLarge.into());
+        }
+        if self.frames.is_empty() && !text.chars().all(char::is_whitespace) {
+            return Err(XmlSafetyError::Malformed.into());
+        }
+        Ok(())
+    }
+
+    fn namespace(&self, prefix: &str) -> Option<&str> {
+        if prefix == "xml" {
+            return Some(XML_NAMESPACE_URI);
+        }
+        self.bindings
+            .iter()
+            .rev()
+            .find(|binding| binding.prefix == prefix)
+            .and_then(|binding| binding.uri.as_deref())
+    }
+}
+
+fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Error> {
+    options.safety.validate()?;
+    if bytes.len() > options.safety.max_input_bytes {
+        return Err(XmlSafetyError::InputTooLarge.into());
+    }
+
+    let mut reader = Reader::from_reader(bytes);
+    reader.config_mut().trim_text(false);
+    let mut state = ScanState::default();
+
     loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Start(e) => {
-                // Key pattern: extract all data inside a block, then clear buf.
-                // This releases `e`'s borrow on buf before the recursive call.
-                let elem = {
-                    let name = extract_name(e.name().as_ref());
-                    let attrs = extract_attributes(&e)?;
-
-                    buf.clear();
-
-                    build_tree(
-                        &mut reader,
-                        name,
-                        attrs,
-                        &mut Vec::new(),
-                        1,
-                        options,
-                        &mut element_count,
-                    )?
-                };
-                buf.clear();
-                return Ok(elem);
+        let event = reader
+            .read_event()
+            .map_err(|error| Error::InvalidXml(error.to_string()))?;
+        if !matches!(event, Event::Eof) {
+            state.count_event(options.safety)?;
+        }
+        match event {
+            Event::Start(start) => {
+                state.count_element(options.safety)?;
+                let frame = scan_element(&reader, &mut state, &start, options.safety)?;
+                state.frames.push(frame);
             }
-            Event::Empty(e) => {
-                let elem = {
-                    let name = extract_name(e.name().as_ref());
-                    let attrs = extract_attributes(&e)?;
-                    buf.clear();
-                    check_element_count(&mut element_count, options)?;
-                    Element {
-                        name,
-                        attributes: attrs,
-                        children: Vec::new(),
-                        text: None,
-                        pi: Vec::new(),
-                        namespace: None,
-                    }
-                };
-                buf.clear();
-                return Ok(elem);
+            Event::Empty(start) => {
+                state.count_element(options.safety)?;
+                let frame = scan_element(&reader, &mut state, &start, options.safety)?;
+                state.bindings.truncate(frame.binding_start);
+                if state.frames.is_empty() {
+                    state.root_complete = true;
+                }
+            }
+            Event::End(end) => {
+                let end_name = end.name();
+                let qualified_name = utf8(end_name.as_ref())?;
+                let frame = state.frames.pop().ok_or(XmlSafetyError::Malformed)?;
+                if frame.qualified_name != qualified_name {
+                    return Err(XmlSafetyError::Malformed.into());
+                }
+                state.bindings.truncate(frame.binding_start);
+                if state.frames.is_empty() {
+                    state.root_complete = true;
+                }
+            }
+            Event::Text(text) => {
+                let raw = utf8(text.as_ref())?;
+                let value = unescape(raw).map_err(|error| Error::InvalidXml(error.to_string()))?;
+                state.count_text(value.as_ref(), options.safety)?;
+            }
+            Event::CData(text) => state.count_text(utf8(text.as_ref())?, options.safety)?,
+            Event::GeneralRef(reference) => {
+                let value = decode_reference(reference.as_ref(), &reference)?;
+                state.count_text(value.as_ref(), options.safety)?;
             }
             Event::Decl(_) => {
-                buf.clear();
-                continue;
-            }
-            Event::PI(_) => {
-                buf.clear();
-                continue;
-            }
-            Event::Comment(_) => {
-                buf.clear();
-                continue;
+                if state.root_name.is_some() || !state.frames.is_empty() || state.root_complete {
+                    return Err(XmlSafetyError::Malformed.into());
+                }
             }
             Event::DocType(_) => {
-                if !options.allow_dtd {
-                    buf.clear();
-                    return Err(Error::DtdNotAllowed);
+                if options.safety.reject_doctype {
+                    return Err(XmlSafetyError::ExternalEntity.into());
                 }
-                if !options.allow_entity {
-                    buf.clear();
-                    return Err(Error::EntityNotAllowed);
+                if state.root_name.is_some() || !state.frames.is_empty() || state.root_complete {
+                    return Err(XmlSafetyError::Malformed.into());
                 }
-                buf.clear();
-                continue;
+            }
+            Event::Comment(comment) => {
+                utf8(comment.as_ref())?;
+            }
+            Event::PI(pi) => {
+                utf8(pi.target())?;
+                utf8(pi.content())?;
             }
             Event::Eof => {
-                return Err(Error::InvalidXml("empty document or no root element found".into()));
-            }
-            _ => {
-                buf.clear();
-                continue;
+                if !state.frames.is_empty() || !state.root_complete {
+                    return Err(XmlSafetyError::Malformed.into());
+                }
+                return Ok(state.root_name);
             }
         }
     }
 }
 
-fn build_tree<R: BufRead>(
-    reader: &mut Reader<R>,
-    name: String,
-    attributes: std::collections::HashMap<String, String>,
-    buf: &mut Vec<u8>,
-    depth: usize,
-    options: &ParseOptions,
-    count: &mut usize,
-) -> Result<Element, Error> {
-    if depth > options.max_depth {
-        return Err(Error::MaxDepthExceeded);
+fn scan_element(
+    reader: &Reader<&[u8]>,
+    state: &mut ScanState,
+    start: &BytesStart<'_>,
+    policy: XmlSafetyPolicy,
+) -> Result<Frame, Error> {
+    if state.frames.is_empty() && state.root_complete {
+        return Err(XmlSafetyError::Malformed.into());
     }
+    let start_name = start.name();
+    let qualified_name = utf8(start_name.as_ref())?;
+    let (prefix, local_name) = validate_qualified_name(qualified_name)?;
+    let binding_start = state.bindings.len();
+    let mut attribute_count = 0usize;
 
-    let mut current_text: Option<String> = None;
-    let mut children: Vec<Element> = Vec::new();
-    let mut pi_list: Vec<PI> = Vec::new();
-
-    loop {
-        match reader.read_event_into(buf)? {
-            // Child element start → recurse
-            Event::Start(e) => {
-                let (child_name, child_attrs) = {
-                    let name = extract_name(e.name().as_ref());
-                    let attrs = extract_attributes(&e)?;
-                    buf.clear();
-                    (name, attrs)
-                };
-                let child = build_tree(reader, child_name, child_attrs, buf, depth + 1, options, count)?;
-                children.push(child);
-            }
-
-            // Current element end → return to parent
-            Event::End(_) => {
-                buf.clear();
-                break;
-            }
-
-            // Self-closing child element
-            Event::Empty(e) => {
-                let (child_name, child_attrs) = {
-                    let name = extract_name(e.name().as_ref());
-                    let attrs = extract_attributes(&e)?;
-                    buf.clear();
-                    (name, attrs)
-                };
-                check_element_count(count, options)?;
-                children.push(Element {
-                    name: child_name,
-                    attributes: child_attrs,
-                    children: Vec::new(),
-                    text: None,
-                    pi: Vec::new(),
-                    namespace: None,
-                });
-            }
-
-            // Text content (decoded encoding + unescaped entities)
-            Event::Text(e) => {
-                let decoded = e.decode()?;
-                let unescaped = unescape_entities(decoded.as_ref())?;
-                if !unescaped.is_empty() {
-                    match current_text.as_mut() {
-                        Some(ref mut s) => s.push_str(unescaped.as_ref()),
-                        None => current_text = Some(unescaped.into_owned()),
-                    }
-                }
-                buf.clear();
-            }
-
-            // CDATA section
-            Event::CData(e) => {
-                let text_str = String::from_utf8_lossy(e.as_ref());
-                if !text_str.is_empty() {
-                    match current_text.as_mut() {
-                        Some(ref mut s) => s.push_str(&text_str),
-                        None => current_text = Some(text_str.into_owned()),
-                    }
-                }
-                buf.clear();
-            }
-
-            // Processing instruction
-            Event::PI(e) => {
-                let target = String::from_utf8_lossy(e.target()).into_owned();
-                let content = String::from_utf8_lossy(e.content()).into_owned();
-                pi_list.push(PI {
-                    name: target,
-                    content,
-                });
-                buf.clear();
-            }
-
-            // XML declaration (<?xml ...?>) — ignore
-            Event::Decl(_) => {
-                buf.clear();
-            }
-
-            // Comment — ignore
-            Event::Comment(_) => {
-                buf.clear();
-            }
-
-            // DTD
-            Event::DocType(_) => {
-                if !options.allow_dtd {
-                    buf.clear();
-                    return Err(Error::DtdNotAllowed);
-                }
-                if !options.allow_entity {
-                    buf.clear();
-                    return Err(Error::EntityNotAllowed);
-                }
-                buf.clear();
-            }
-
-            // Entity reference/character reference (&amp; → &, &#60; → <)
-            Event::GeneralRef(e) => {
-                let name = e.decode()?;
-                let entity_ref = format!("&{};", name);
-                let resolved = unescape_entities(&entity_ref)?;
-                if !resolved.is_empty() {
-                    match current_text.as_mut() {
-                        Some(ref mut s) => s.push_str(resolved.as_ref()),
-                        None => current_text = Some(resolved.into_owned()),
-                    }
-                }
-                buf.clear();
-            }
-
-            // Unexpected EOF
-            Event::Eof => {
-                return Err(Error::InvalidXml(
-                    "unexpected end of XML: element was not closed".into(),
-                ));
-            }
+    for attribute in start.attributes() {
+        attribute_count = attribute_count
+            .checked_add(1)
+            .ok_or(XmlSafetyError::TooManyAttributes)?;
+        if attribute_count > policy.max_attributes_per_element {
+            return Err(XmlSafetyError::TooManyAttributes.into());
+        }
+        let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
+        let name = utf8(attribute.key.as_ref())?;
+        validate_qualified_name(name)?;
+        if name == "xmlns" || name.starts_with("xmlns:") {
+            let namespace_prefix = name.strip_prefix("xmlns:").unwrap_or("");
+            let uri = attribute
+                .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+                .map_err(|error| Error::InvalidXml(error.to_string()))?;
+            validate_namespace_binding(namespace_prefix, &uri)?;
+            state.bindings.push(NamespaceBinding {
+                prefix: namespace_prefix.to_owned(),
+                uri: (!uri.is_empty()).then(|| uri.into_owned()),
+            });
         }
     }
 
-    Ok(Element {
-        name,
-        attributes,
-        children,
-        text: current_text,
-        pi: pi_list,
-        namespace: None,
+    if let Some(prefix) = prefix
+        && state.namespace(prefix).is_none()
+    {
+        return Err(XmlSafetyError::Malformed.into());
+    }
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
+        let name = utf8(attribute.key.as_ref())?;
+        if name == "xmlns" || name.starts_with("xmlns:") {
+            continue;
+        }
+        let (prefix, _) = validate_qualified_name(name)?;
+        if let Some(prefix) = prefix
+            && prefix != "xml"
+            && state.namespace(prefix).is_none()
+        {
+            return Err(XmlSafetyError::Malformed.into());
+        }
+    }
+
+    if state.root_name.is_none() {
+        state.root_name = Some(local_name.to_owned());
+    }
+    Ok(Frame {
+        qualified_name: qualified_name.to_owned(),
+        binding_start,
     })
 }
 
-fn extract_name(name_bytes: &[u8]) -> String {
-    String::from_utf8_lossy(name_bytes).into_owned()
+fn decode_reference<'a>(
+    bytes: &'a [u8],
+    reference: &quick_xml::events::BytesRef<'a>,
+) -> Result<Cow<'a, str>, Error> {
+    if let Some(character) = reference
+        .resolve_char_ref()
+        .map_err(|error| Error::InvalidXml(error.to_string()))?
+    {
+        return Ok(Cow::Owned(character.to_string()));
+    }
+    Ok(Cow::Borrowed(match utf8(bytes)? {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "apos" => "'",
+        "quot" => "\"",
+        _ => return Err(XmlSafetyError::ExternalEntity.into()),
+    }))
 }
 
-fn extract_attributes(
-    start: &quick_xml::events::BytesStart,
-) -> Result<std::collections::HashMap<String, String>, Error> {
-    let mut attrs = std::collections::HashMap::new();
-    for attr_result in start.attributes() {
-        let attr = attr_result?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let value = attr.normalized_value(XmlVersion::Explicit1_0)?.into_owned();
-        attrs.insert(key, value);
-    }
-    Ok(attrs)
+fn utf8(bytes: &[u8]) -> Result<&str, Error> {
+    std::str::from_utf8(bytes).map_err(|_| XmlSafetyError::InvalidEncoding.into())
 }
 
-fn check_element_count(count: &mut usize, options: &ParseOptions) -> Result<(), Error> {
-    *count += 1;
-    if *count > options.max_elements {
-        return Err(Error::MaxElementsExceeded);
+fn validate_qualified_name(name: &str) -> Result<(Option<&str>, &str), Error> {
+    let (prefix, local) = match name.split_once(':') {
+        Some((prefix, local)) => (Some(prefix), local),
+        None => (None, name),
+    };
+    if !valid_name(local)
+        || prefix.is_some_and(|prefix| !valid_name(prefix))
+        || name.matches(':').count() > 1
+    {
+        return Err(XmlSafetyError::Malformed.into());
     }
-    Ok(())
+    Ok((prefix, local))
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
+fn valid_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters.next().is_some_and(is_name_start) && characters.all(is_name_char)
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Element;
+fn is_name_start(character: char) -> bool {
+    matches!(
+        character,
+        'A'..='Z'
+            | '_'
+            | 'a'..='z'
+            | '\u{00C0}'..='\u{00D6}'
+            | '\u{00D8}'..='\u{00F6}'
+            | '\u{00F8}'..='\u{02FF}'
+            | '\u{0370}'..='\u{037D}'
+            | '\u{037F}'..='\u{1FFF}'
+            | '\u{200C}'..='\u{200D}'
+            | '\u{2070}'..='\u{218F}'
+            | '\u{2C00}'..='\u{2FEF}'
+            | '\u{3001}'..='\u{D7FF}'
+            | '\u{F900}'..='\u{FDCF}'
+            | '\u{FDF0}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{EFFFF}'
+    )
+}
 
-    // -----------------------------------------------------------------------
-    // Basic parsing
-    // -----------------------------------------------------------------------
+fn is_name_char(character: char) -> bool {
+    is_name_start(character)
+        || character.is_ascii_digit()
+        || matches!(character, '-' | '.' | '\u{B7}')
+        || ('\u{300}'..='\u{36F}').contains(&character)
+        || ('\u{203F}'..='\u{2040}').contains(&character)
+}
 
-    #[test]
-    fn test_self_closing_element() {
-        let xml = "<root/>";
-        let elem = Element::from_str(xml).expect("should parse self-closing tag");
-        assert_eq!(elem.name, "root");
-        assert!(elem.attributes.is_empty());
-        assert!(elem.children.is_empty());
-        assert!(elem.text.is_none());
-    }
-
-    #[test]
-    fn test_element_with_text() {
-        let xml = "<root>hello world</root>";
-        let elem = Element::from_str(xml).expect("should parse element with text");
-        assert_eq!(elem.name, "root");
-        assert_eq!(elem.get_text(), Some("hello world"));
-    }
-
-    #[test]
-    fn test_nested_elements() {
-        let xml = "<root><child>text</child></root>";
-        let elem = Element::from_str(xml).expect("should parse nested elements");
-        assert_eq!(elem.name, "root");
-        assert_eq!(elem.children.len(), 1);
-        assert_eq!(elem.children[0].name, "child");
-        assert_eq!(elem.children[0].get_text(), Some("text"));
-    }
-
-    #[test]
-    fn test_multiple_children() {
-        let xml = "<root><a/><b/><c/></root>";
-        let elem = Element::from_str(xml).expect("should parse multiple children");
-        assert_eq!(elem.children.len(), 3);
-        assert_eq!(elem.children[0].name, "a");
-        assert_eq!(elem.children[1].name, "b");
-        assert_eq!(elem.children[2].name, "c");
-    }
-
-    // -----------------------------------------------------------------------
-    // Attributes
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_single_attribute() {
-        let xml = r#"<root name="value"/>"#;
-        let elem = Element::from_str(xml).expect("should parse element with attribute");
-        assert_eq!(elem.get_attr("name"), Some("value"));
-    }
-
-    #[test]
-    fn test_multiple_attributes() {
-        let xml = r#"<root a="1" b="2" c="3"/>"#;
-        let elem = Element::from_str(xml).expect("should parse element with multiple attributes");
-        assert_eq!(elem.get_attr("a"), Some("1"));
-        assert_eq!(elem.get_attr("b"), Some("2"));
-        assert_eq!(elem.get_attr("c"), Some("3"));
-    }
-
-    #[test]
-    fn test_attribute_with_escape() {
-        let xml = r#"<root text="a&amp;b&quot;c"/>"#;
-        let elem = Element::from_str(xml).expect("should decode escaped attribute values");
-        assert_eq!(elem.get_attr("text"), Some("a&b\"c"));
-    }
-
-    #[test]
-    fn test_empty_attribute_value() {
-        let xml = r#"<root empty=""/>"#;
-        let elem = Element::from_str(xml).expect("should parse empty attribute value");
-        assert_eq!(elem.get_attr("empty"), Some(""));
-    }
-
-    // -----------------------------------------------------------------------
-    // Deep nesting
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_deeply_nested() {
-        let mut xml = String::from("<root>");
-        for i in 0..10 {
-            xml.push_str(&format!("<level{}>", i));
-        }
-        xml.push_str("deep");
-        for i in (0..10).rev() {
-            xml.push_str(&format!("</level{}>", i));
-        }
-        xml.push_str("</root>");
-
-        let elem = Element::from_str(&xml).expect("should parse deeply nested XML");
-        assert_eq!(elem.name, "root");
-
-        let mut current = &elem.children[0];
-        for _ in 0..9 {
-            current = &current.children[0];
-        }
-        assert_eq!(current.get_text(), Some("deep"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Safety checks
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_max_depth_exceeded() {
-        let depth = ParseOptions::default().max_depth + 1;
-        let mut xml = String::from("<root>");
-        for _ in 0..depth {
-            xml.push_str("<a>");
-        }
-        xml.push_str("x");
-        for _ in 0..depth {
-            xml.push_str("</a>");
-        }
-        xml.push_str("</root>");
-
-        let options = ParseOptions::default();
-        let result = Element::from_reader(xml.as_bytes(), &options);
-        assert!(
-            matches!(result, Err(Error::MaxDepthExceeded)),
-            "depth exceeded should return MaxDepthExceeded, got {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_dtd_rejected_by_default() {
-        let xml = r#"<!DOCTYPE foo><root/>"#;
-        let result = Element::from_str(xml);
-        assert!(
-            matches!(result, Err(Error::DtdNotAllowed)),
-            "DTD should be rejected by default, got {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_dtd_allowed_with_option() {
-        let xml = r#"<!DOCTYPE foo><root/>"#;
-        let options = ParseOptions::new()
-            .allow_dtd(true)
-            .allow_entity(true);
-        let elem = Element::from_reader(xml.as_bytes(), &options)
-            .expect("setting allow_dtd(true) and allow_entity(true) should allow DTD");
-        assert_eq!(elem.name, "root");
-    }
-
-    #[test]
-    fn test_max_size_exceeded() {
-        let xml = "<root><child>hello</child></root>";
-        let options = ParseOptions::new().max_size(5);
-        let result = Element::from_reader(xml.as_bytes(), &options);
-        assert!(
-            matches!(result, Err(Error::MaxSizeExceeded)),
-            "size exceeded should return MaxSizeExceeded, got {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_max_size_no_limit_when_none() {
-        let xml = "<root><child>hello</child></root>";
-        let options = ParseOptions::new().max_size(None::<usize>);
-        let elem = Element::from_reader(xml.as_bytes(), &options)
-            .expect("no limit should parse normally");
-        assert_eq!(elem.name, "root");
-    }
-
-    // -----------------------------------------------------------------------
-    // Processing instructions
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_pi_inside_element() {
-        let xml = "<root><?pi data?></root>";
-        let elem = Element::from_str(xml).expect("should parse PI inside element");
-        assert_eq!(elem.pi.len(), 1);
-        assert_eq!(elem.pi[0].name, "pi");
-        assert_eq!(elem.pi[0].content, " data");
-    }
-
-    // -----------------------------------------------------------------------
-    // CDATA
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_cdata_section() {
-        let xml = "<root><![CDATA[<raw> & stuff]]></root>";
-        let elem = Element::from_str(xml).expect("should parse CDATA");
-        assert_eq!(elem.get_text(), Some("<raw> & stuff"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Escaped characters
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_escaped_characters_in_text() {
-        let xml = "<root>&amp;&lt;&gt;&quot;&apos;</root>";
-        let elem = Element::from_str(xml).expect("should decode escaped characters in text");
-        assert_eq!(elem.get_text(), Some("&<>\"'"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Error handling
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_malformed_xml() {
-        let xml = "<root><unclosed>";
-        let result = Element::from_str(xml);
-        assert!(result.is_err(), "malformed XML should return an error");
-    }
-
-    #[test]
-    fn test_empty_document() {
-        let xml = "";
-        let result = Element::from_str(xml);
-        assert!(
-            matches!(result, Err(Error::InvalidXml(_))),
-            "empty document should return InvalidXml, got {:?}",
-            result
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // XML declaration
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_xml_declaration() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><root/>"#;
-        let elem = Element::from_str(xml).expect("should skip XML declaration");
-        assert_eq!(elem.name, "root");
-    }
-
-    // -----------------------------------------------------------------------
-    // Comments
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_comment_ignored() {
-        let xml = "<root><!-- comment --></root>";
-        let elem = Element::from_str(xml).expect("should ignore comments");
-        assert!(elem.text.is_none());
-    }
-
-    #[test]
-    fn test_comment_before_root() {
-        let xml = "<!-- comment --><root/>";
-        let elem = Element::from_str(xml).expect("should skip comments before root");
-        assert_eq!(elem.name, "root");
-    }
-
-    // -----------------------------------------------------------------------
-    // Mixed content
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_mixed_text_and_children() {
-        let xml = "<root>before<child/>after</root>";
-        let elem = Element::from_str(xml).expect("should parse mixed content");
-        assert_eq!(elem.get_text(), Some("beforeafter"));
-        assert_eq!(elem.children.len(), 1);
-        assert_eq!(elem.children[0].name, "child");
-    }
-
-    #[test]
-    fn test_multiple_text_nodes() {
-        let xml = "<root>a<b/>c</root>";
-        let elem = Element::from_str(xml).expect("should parse multiple text nodes");
-        assert_eq!(elem.get_text(), Some("ac"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Empty element
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_element_no_text() {
-        let xml = "<root></root>";
-        let elem = Element::from_str(xml).expect("should parse empty element");
-        assert!(elem.text.is_none());
-        assert!(elem.children.is_empty());
-    }
-
-    // -----------------------------------------------------------------------
-    // Query methods
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_has_attr() {
-        let xml = r#"<root a="1"/>"#;
-        let elem = Element::from_str(xml).unwrap();
-        assert!(elem.has_attr("a"));
-        assert!(!elem.has_attr("b"));
-    }
-
-    #[test]
-    fn test_get_child() {
-        let xml = "<root><child>text</child></root>";
-        let elem = Element::from_str(xml).unwrap();
-        let child = elem.get_child("child").expect("child should be found");
-        assert_eq!(child.get_text(), Some("text"));
-    }
-
-    #[test]
-    fn test_get_child_not_found() {
-        let xml = "<root/>";
-        let elem = Element::from_str(xml).unwrap();
-        assert!(elem.get_child("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_get_children_multiple() {
-        let xml = "<root><item/><item/><item/></root>";
-        let elem = Element::from_str(xml).unwrap();
-        let items = elem.get_children("item");
-        assert_eq!(items.len(), 3);
-    }
-
-    // -----------------------------------------------------------------------
-    // From bytes
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_from_bytes() {
-        let xml = b"<root>bytes</root>";
-        let elem = Element::from_bytes(xml).expect("should parse byte slice");
-        assert_eq!(elem.get_text(), Some("bytes"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Namespaced attribute
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_namespaced_attribute() {
-        let xml = r#"<root xml:lang="en"/>"#;
-        let elem = Element::from_str(xml).expect("should parse namespaced attribute");
-        assert_eq!(elem.get_attr("xml:lang"), Some("en"));
-    }
-
-    // -----------------------------------------------------------------------
-    // Indented XML (trim_whitespace enabled by default)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_indented_xml() {
-        let xml = "<root>\n  <child>text</child>\n</root>";
-        let elem = Element::from_str(xml).expect("should parse indented XML");
-        assert_eq!(elem.name, "root");
-        assert!(elem.text.is_none() || elem.get_text().unwrap().trim().is_empty());
-        assert_eq!(elem.children.len(), 1);
-        assert_eq!(elem.children[0].get_text(), Some("text"));
+fn validate_namespace_binding(prefix: &str, uri: &str) -> Result<(), Error> {
+    if prefix == "xmlns"
+        || uri == XMLNS_NAMESPACE_URI
+        || (prefix == "xml" && uri != XML_NAMESPACE_URI)
+        || (prefix != "xml" && uri == XML_NAMESPACE_URI)
+        || (!prefix.is_empty() && uri.is_empty())
+    {
+        Err(XmlSafetyError::Malformed.into())
+    } else {
+        Ok(())
     }
 }

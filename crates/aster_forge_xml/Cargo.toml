@@ -9,12 +9,20 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+aster_forge_utils = { path = "../aster_forge_utils" }
 quick-xml = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+libc = "0.2"
+proptest = "1.11.0"
+roxmltree = "0.21.1"
+xmltree = "0.12.0"
 
 [[bench]]
 name = "xml_bench"
-path = "benches/xml_bench.rs"
+harness = false
+
+[[bench]]
+name = "xml_memory"
 harness = false
