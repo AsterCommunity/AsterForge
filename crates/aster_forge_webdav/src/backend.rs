@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 
-use crate::{DavPath, Depth};
+use crate::{DavPath, DavXmlElement, Depth};
 
 /// Stream used for product-independent WebDAV content transfer.
 pub type DavContentStream =
@@ -132,7 +132,7 @@ pub struct DavPropertyName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavProperty {
     pub name: DavPropertyName,
-    pub xml: Option<Vec<u8>>,
+    pub xml: Option<DavXmlElement>,
 }
 
 /// One property set/remove mutation.
@@ -168,7 +168,7 @@ pub trait DavPropertyBackend: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavLockRequest {
     pub path: DavPath,
-    pub owner_xml: Option<Vec<u8>>,
+    pub owner_xml: Option<DavXmlElement>,
     pub timeout: Option<Duration>,
     pub shared: bool,
     pub deep: bool,
@@ -179,7 +179,7 @@ pub struct DavLockRequest {
 pub struct DavLockInfo {
     pub token: String,
     pub path: DavPath,
-    pub owner_xml: Option<Vec<u8>>,
+    pub owner_xml: Option<DavXmlElement>,
     pub timeout_at: Option<SystemTime>,
     pub timeout: Option<Duration>,
     pub shared: bool,

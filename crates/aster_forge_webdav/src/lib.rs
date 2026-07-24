@@ -24,6 +24,7 @@ pub mod path;
 pub mod protocol;
 pub mod request;
 pub mod response;
+pub mod xml;
 
 pub use backend::{
     DavBackend, DavBackendError, DavBackendErrorKind, DavContentStream, DavDirectoryEntry,
@@ -45,3 +46,8 @@ pub use protocol::{
 };
 pub use request::{DavMethod, DavRequestHead, DavRequestOrigin};
 pub use response::{DavResponse, DavResponseBody};
+pub use xml::{
+    DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,
+    DavRequestedProperty, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
+    parse_propfind_request, parse_proppatch_request, parse_report_root,
+};

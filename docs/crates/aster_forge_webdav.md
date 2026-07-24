@@ -21,6 +21,8 @@ Forge 负责：
 - WebDAV 方法、`Depth`、`Overwrite`、`Destination` 和 `If` header 解析。
 - HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
+- PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
+- `DavXmlElement` XML 表示与序列化边界；具体 XML crate 是 Forge 私有实现，产品不直接依赖。
 - `DavResourceBackend`、`DavPropertyBackend`、`DavLockBackend` 和可选 `DavVersionBackend` port。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
 
@@ -47,10 +49,10 @@ Forge 负责：
 ## 测试要求
 
 - 协议 crate 测试路径逃逸、header grammar、同源 `Destination`、条件请求和 request-head 解析。
+- XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、深度临界、UTF-8、转义和大属性值。
 - 产品仓库保留真实认证、数据库、存储、quota、audit 和客户端集成测试。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 
 ## 参考项目
 
 - AsterDrive：`src/webdav/` 保留产品 adapter；`tests/webdav/` 和 WebDAV compatibility workflow 验证完整产品行为。
-

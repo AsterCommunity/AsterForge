@@ -88,3 +88,4 @@ utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
+xmltree = "0.12"
