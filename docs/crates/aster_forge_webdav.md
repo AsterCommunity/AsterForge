@@ -23,6 +23,7 @@ Forge 负责：
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
 - PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
 - `DavXmlElement` XML 表示与序列化边界；具体 XML crate 是 Forge 私有实现，产品不直接依赖。
+- DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - `DavResourceBackend`、`DavPropertyBackend`、`DavLockBackend` 和可选 `DavVersionBackend` port。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
 
@@ -50,6 +51,7 @@ Forge 负责：
 
 - 协议 crate 测试路径逃逸、header grammar、同源 `Destination`、条件请求和 request-head 解析。
 - XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、深度临界、UTF-8、转义和大属性值。
+- XML response 矩阵覆盖状态行、元素顺序、QName、命名空间声明、锁字段、死属性重建和异常旧值转义。
 - 产品仓库保留真实认证、数据库、存储、quota、audit 和客户端集成测试。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 

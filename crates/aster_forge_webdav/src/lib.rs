@@ -25,6 +25,7 @@ pub mod protocol;
 pub mod request;
 pub mod response;
 pub mod xml;
+pub mod xml_response;
 
 pub use backend::{
     DavBackend, DavBackendError, DavBackendErrorKind, DavContentStream, DavDirectoryEntry,
@@ -50,4 +51,12 @@ pub use xml::{
     DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,
     DavRequestedProperty, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
     parse_propfind_request, parse_proppatch_request, parse_report_root,
+};
+pub use xml_response::{
+    DavErrorCondition, DavLockXml, DavMultiStatusItem, DavPropStat, DavVersionXml,
+    dav_dead_property_element, dav_element, dav_error_element, dav_lock_discovery_element,
+    dav_lock_response_element, dav_multistatus_element, dav_property_child_element,
+    dav_property_name_element, dav_property_text_element, dav_propstat_element,
+    dav_response_element, dav_status_element, dav_supported_lock_element, dav_text_element,
+    dav_version_multistatus_element,
 };
