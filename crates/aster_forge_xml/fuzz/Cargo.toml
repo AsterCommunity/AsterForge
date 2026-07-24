@@ -1,0 +1,29 @@
+[package]
+name = "aster_forge_xml-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+aster_forge_xml = { path = ".." }
+libfuzzer-sys = "0.4.13"
+
+[[bin]]
+name = "parse_stream"
+path = "fuzz_targets/parse_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "writer_roundtrip"
+path = "fuzz_targets/writer_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

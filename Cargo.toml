@@ -24,6 +24,7 @@ members = [
     "crates/aster_forge_utils",
     "crates/aster_forge_validation",
     "crates/aster_forge_webdav",
+    "crates/aster_forge_xml",
 ]
 resolver = "3"
 

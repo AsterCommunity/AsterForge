@@ -6,6 +6,7 @@ on:
       - '**/*.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'crates/aster_forge_xml/fuzz/Cargo.toml'
       - 'templates/aster-service/**'
       - 'scripts/coverage-summary.mjs'
       - '.github/workflows/rust.yml'
@@ -15,6 +16,7 @@ on:
       - '**/*.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'crates/aster_forge_xml/fuzz/Cargo.toml'
       - 'templates/aster-service/**'
       - 'scripts/coverage-summary.mjs'
       - '.github/workflows/rust.yml'
@@ -47,6 +49,12 @@ jobs:
 
       - name: Build
         run: cargo build --verbose
+
+      - name: Install nightly Rust toolchain for fuzzing
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Build XML fuzz harness
+        run: cargo +nightly build --manifest-path crates/aster_forge_xml/fuzz/Cargo.toml --bins
 
       - name: Format check
         run: cargo fmt --all -- --check

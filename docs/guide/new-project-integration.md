@@ -84,6 +84,7 @@ aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", pack
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
 aster_forge_validation = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_validation" }
 aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_webdav", features = ["actix"] }
+aster_forge_xml = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_xml" }
 ```
 
 按需开启 feature：
