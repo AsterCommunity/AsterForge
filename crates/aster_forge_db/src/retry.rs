@@ -278,13 +278,16 @@ mod tests {
 
     #[tokio::test]
     async fn sea_orm_retryability_classifies_real_sqlite_busy_as_retryable() {
-        use sea_orm::{ConnectionTrait, Database};
+        use aster_forge_test::temp::SqliteTestDatabase;
+        use sea_orm::{ConnectOptions, ConnectionTrait, SqlxSqliteConnector};
 
-        let path =
-            std::env::temp_dir().join(format!("aster_forge_db_retry_{}.db", uuid::Uuid::new_v4()));
-        let url = format!("sqlite://{}?mode=rwc", path.to_string_lossy());
-        let locker = Database::connect(&url).await.unwrap();
-        let contender = Database::connect(&url).await.unwrap();
+        let database = SqliteTestDatabase::new("retry-busy");
+        let locker = SqlxSqliteConnector::connect(ConnectOptions::new(database.url()))
+            .await
+            .unwrap();
+        let contender = SqlxSqliteConnector::connect(ConnectOptions::new(database.url()))
+            .await
+            .unwrap();
         contender
             .execute_unprepared("PRAGMA busy_timeout=0;")
             .await
@@ -305,10 +308,8 @@ mod tests {
             .unwrap_err();
 
         locker.execute_unprepared("ROLLBACK;").await.unwrap();
-        drop(contender);
-        drop(locker);
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(path.with_extension("db-journal"));
+        contender.close().await.unwrap();
+        locker.close().await.unwrap();
 
         assert!(
             is_retryable_sea_orm_error(&error),

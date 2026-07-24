@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::temp::TestTempDir;
+
 /// Reserves an ephemeral loopback port and releases it for a child process to bind.
 pub fn available_loopback_port() -> u16 {
     TcpListener::bind(("127.0.0.1", 0))
@@ -20,7 +22,7 @@ pub fn available_loopback_port() -> u16 {
 pub struct TestProcess {
     name: String,
     child: Option<Child>,
-    runtime_dir: PathBuf,
+    runtime_dir: TestTempDir,
     stdout_log: PathBuf,
     stderr_log: PathBuf,
 }
@@ -32,16 +34,7 @@ impl TestProcess {
     /// process lifecycle and diagnostics.
     pub fn spawn(name: &str, command: &mut Command) -> Self {
         assert_valid_process_name(name);
-        let runtime_dir = std::env::temp_dir().join(format!(
-            "aster-test-process-{name}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&runtime_dir).unwrap_or_else(|error| {
-            panic!(
-                "failed to create test process runtime directory {}: {error}",
-                runtime_dir.display()
-            )
-        });
+        let runtime_dir = TestTempDir::new(&format!("process-{name}"));
         let stdout_log = runtime_dir.join("stdout.log");
         let stderr_log = runtime_dir.join("stderr.log");
         let stdout = File::create(&stdout_log)
@@ -50,7 +43,7 @@ impl TestProcess {
             .unwrap_or_else(|error| panic!("failed to create {}: {error}", stderr_log.display()));
 
         let child = command
-            .current_dir(&runtime_dir)
+            .current_dir(runtime_dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
@@ -73,7 +66,7 @@ impl TestProcess {
 
     /// Returns the isolated working directory.
     pub fn runtime_dir(&self) -> &Path {
-        &self.runtime_dir
+        self.runtime_dir.path()
     }
 
     /// Kills the child process and waits for it to exit. Repeated calls are harmless.
@@ -149,7 +142,6 @@ impl TestProcess {
 impl Drop for TestProcess {
     fn drop(&mut self) {
         self.terminate();
-        let _ = std::fs::remove_dir_all(&self.runtime_dir);
     }
 }
 

@@ -353,6 +353,7 @@ mod tests {
     use super::{first_close_error, normalize_database_url};
     use crate::connection::DatabaseConfig;
     use aster_forge_metrics::{DbQueryKind, NoopDbMetrics};
+    use aster_forge_test::temp::SqliteTestDatabase;
     use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
     use std::sync::Arc;
 
@@ -539,12 +540,9 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_reader_pool_is_query_only() {
-        let url = format!(
-            "sqlite:///tmp/asterdrive-reader-pool-{}.db?mode=rwc",
-            uuid::Uuid::new_v4()
-        );
+        let database = SqliteTestDatabase::new("reader-pool");
         let cfg = DatabaseConfig {
-            url,
+            url: database.url().to_string(),
             pool_size: 4,
             retry_count: 0,
         };
@@ -577,12 +575,9 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_reader_pool_reads_while_writer_connection_is_busy() {
-        let url = format!(
-            "sqlite:///tmp/asterdrive-reader-writer-split-{}.db?mode=rwc",
-            uuid::Uuid::new_v4()
-        );
+        let database = SqliteTestDatabase::new("reader-writer-split");
         let cfg = DatabaseConfig {
-            url,
+            url: database.url().to_string(),
             pool_size: 4,
             retry_count: 0,
         };

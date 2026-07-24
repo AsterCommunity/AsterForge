@@ -7,7 +7,7 @@ use actix_web::{http::StatusCode, test};
 
 #[actix_web::test]
 async fn health_and_ready_routes_return_ok() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let health =
@@ -36,7 +36,7 @@ async fn health_and_ready_routes_return_ok() {
 
 #[actix_web::test]
 async fn health_head_routes_return_probe_status_without_body() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     for path in ["/health", "/health/ready"] {
@@ -56,7 +56,7 @@ async fn health_head_routes_return_probe_status_without_body() {
 
 #[actix_web::test]
 async fn api_scope_returns_json_404_instead_of_frontend_fallback() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response = test::call_service(
@@ -82,7 +82,7 @@ async fn api_scope_returns_json_404_instead_of_frontend_fallback() {
 
 #[actix_web::test]
 async fn api_scope_root_returns_json_404_instead_of_frontend_fallback() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response =
@@ -94,7 +94,7 @@ async fn api_scope_root_returns_json_404_instead_of_frontend_fallback() {
 
 #[actix_web::test]
 async fn frontend_fallback_still_serves_spa_routes() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response = test::call_service(
@@ -118,7 +118,7 @@ async fn frontend_fallback_still_serves_spa_routes() {
 async fn frontend_index_sets_csp_header_and_meta_without_header_only_directives() {
     use {{crate_name}}::api::routes::frontend::{FRONTEND_CSP_HEADER, FRONTEND_CSP_META};
 
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response = test::call_service(&app, test::TestRequest::get().uri("/").to_request()).await;
@@ -174,7 +174,7 @@ async fn frontend_csp_constants_split_header_only_directives() {
 
 #[actix_web::test]
 async fn frontend_assets_use_expected_content_types_and_cache_headers() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let favicon = test::call_service(
@@ -212,7 +212,7 @@ async fn frontend_assets_use_expected_content_types_and_cache_headers() {
 
 #[actix_web::test]
 async fn frontend_asset_traversal_is_rejected() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response = test::call_service(
@@ -227,7 +227,7 @@ async fn frontend_asset_traversal_is_rejected() {
 
 #[actix_web::test]
 async fn base_http_middleware_adds_request_id_and_security_headers() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response =
@@ -260,7 +260,7 @@ async fn base_http_middleware_adds_request_id_and_security_headers() {
 #[cfg(feature = "metrics")]
 #[actix_web::test]
 async fn metrics_route_exports_prometheus_text() {
-    let state = common::setup().await;
+    let (state, _database) = common::setup().await;
     let app = create_test_app!(state);
 
     let response = test::call_service(

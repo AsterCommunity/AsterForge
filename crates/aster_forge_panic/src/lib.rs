@@ -309,13 +309,11 @@ mod tests {
         open_crash_log_file, panic_payload_message, render_crash_report, render_user_panic_notice,
         write_crash_report_to_file,
     };
-    use std::sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use aster_forge_test::temp::TestTempDir;
+    use std::sync::{Mutex, OnceLock};
 
-    static PANIC_HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
-    static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    const PANIC_HOOK_CHILD_ENV: &str = "ASTER_FORGE_PANIC_HOOK_CHILD";
+    const PANIC_HOOK_PATH_ENV: &str = "ASTER_FORGE_PANIC_HOOK_PATH";
 
     fn write_crash_report_with_log(
         crash_log: &OnceLock<Result<Mutex<std::fs::File>, String>>,
@@ -351,24 +349,10 @@ mod tests {
         }
     }
 
-    fn unique_crash_log_path(test_name: &str) -> std::path::PathBuf {
-        let thread = std::thread::current();
-        let thread_name = thread.name().unwrap_or("unnamed");
-        let counter = TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock should be after unix epoch")
-            .as_nanos();
-        std::env::temp_dir()
-            .join("aster_forge_panic_tests")
-            .join(format!(
-                "{}-{}-{}-{}-{}.log",
-                test_name,
-                std::process::id(),
-                thread_name.replace(':', "_"),
-                timestamp,
-                counter
-            ))
+    fn crash_log_fixture(scope: &str) -> (TestTempDir, std::path::PathBuf) {
+        let directory = TestTempDir::new(scope);
+        let path = directory.join("crash.log");
+        (directory, path)
     }
 
     fn write_parent_file_fixture(path: &std::path::Path) {
@@ -448,8 +432,8 @@ mod tests {
 
     #[test]
     fn crash_log_file_creates_parent_directory_and_reuses_file() {
+        let (_directory, path) = crash_log_fixture("panic-reused-file");
         let crash_log = OnceLock::new();
-        let path = unique_crash_log_path("crash_log_file_creates_parent_directory_and_reuses_file");
 
         let first = crash_log_file_from(&crash_log, &path).expect("crash log should open");
         let second = crash_log_file_from(&crash_log, &path).expect("crash log should be reused");
@@ -461,9 +445,8 @@ mod tests {
 
     #[test]
     fn crash_log_file_returns_cached_initialization_error() {
+        let (_directory, path) = crash_log_fixture("panic-cached-open-error");
         let crash_log = OnceLock::new();
-        let path =
-            unique_crash_log_path("crash_log_file_returns_cached_initialization_error_parent");
         write_parent_file_fixture(&path);
         let nested_log = path.join("crash.log");
 
@@ -478,8 +461,8 @@ mod tests {
 
     #[test]
     fn write_crash_report_appends_developer_report() {
+        let (_directory, path) = crash_log_fixture("panic-appended-report");
         let crash_log = OnceLock::new();
-        let path = unique_crash_log_path("write_crash_report_appends_developer_report");
         let context = test_context();
 
         write_crash_report_with_log(&crash_log, &path, &context)
@@ -499,8 +482,8 @@ mod tests {
 
     #[test]
     fn write_crash_report_returns_rendered_failure_when_log_is_locked() {
+        let (_directory, path) = crash_log_fixture("panic-locked-log");
         let crash_log = OnceLock::new();
-        let path = unique_crash_log_path("write_crash_report_returns_rendered_failure_when_locked");
         let context = test_context();
         let file_mutex = crash_log_file_from(&crash_log, &path).expect("crash log should open");
         let _locked = file_mutex.lock().expect("fixture lock should be available");
@@ -518,8 +501,8 @@ mod tests {
 
     #[test]
     fn write_crash_report_returns_rendered_failure_when_log_cannot_open() {
+        let (_directory, path) = crash_log_fixture("panic-open-failure");
         let crash_log = OnceLock::new();
-        let path = unique_crash_log_path("write_crash_report_returns_failure_parent");
         write_parent_file_fixture(&path);
         let nested_log = path.join("crash.log");
         let context = test_context();
@@ -534,13 +517,46 @@ mod tests {
 
     #[test]
     fn install_panic_hook_writes_report_for_caught_thread_panic() {
-        let _guard = PANIC_HOOK_TEST_LOCK
-            .lock()
-            .expect("panic hook test lock should be available");
-        let path =
-            unique_crash_log_path("install_panic_hook_writes_report_for_caught_thread_panic");
+        if std::env::var_os(PANIC_HOOK_CHILD_ENV).is_some() {
+            run_panic_hook_child();
+            return;
+        }
+
+        let (_directory, path) = crash_log_fixture("panic-installed-hook");
+        let current_exe = std::env::current_exe().expect("current test executable should resolve");
+        let output = std::process::Command::new(current_exe)
+            .arg("--exact")
+            .arg("tests::install_panic_hook_writes_report_for_caught_thread_panic")
+            .arg("--nocapture")
+            .env(PANIC_HOOK_CHILD_ENV, "1")
+            .env(PANIC_HOOK_PATH_ENV, &path)
+            .output()
+            .expect("panic hook child process should run");
+
+        assert!(
+            output.status.success(),
+            "panic hook child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let contents =
+            std::fs::read_to_string(&path).expect("panic hook should write crash report");
+        assert!(contents.contains("=== HookTest Panic Report ==="));
+        assert!(contents.contains("Version:   9.9.9-test"));
+        assert!(contents.contains("Thread:    panic-hook-fixture"));
+        assert!(contents.contains("Message:   hook panic payload"));
+        assert!(
+            contents.contains("Report:    https://example.test/hook/issues/new?template=panic.yml")
+        );
+    }
+
+    fn run_panic_hook_child() {
+        let path = std::env::var_os(PANIC_HOOK_PATH_ENV)
+            .map(std::path::PathBuf::from)
+            .expect("panic hook child path should be provided");
         let config = PanicHookConfig::new("HookTest", "9.9.9-test", "https://example.test/hook")
-            .with_crash_log_path(path.clone())
+            .with_crash_log_path(path)
             .with_issue_template("issues/new?template=panic.yml");
 
         super::install_panic_hook(config);
@@ -552,15 +568,6 @@ mod tests {
             .join();
 
         assert!(result.is_err());
-        let contents =
-            std::fs::read_to_string(&path).expect("panic hook should write crash report");
-        assert!(contents.contains("=== HookTest Panic Report ==="));
-        assert!(contents.contains("Version:   9.9.9-test"));
-        assert!(contents.contains("Thread:    panic-hook-fixture"));
-        assert!(contents.contains("Message:   hook panic payload"));
-        assert!(
-            contents.contains("Report:    https://example.test/hook/issues/new?template=panic.yml")
-        );
     }
 
     struct FailingWriter;

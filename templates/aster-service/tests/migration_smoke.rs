@@ -1,5 +1,6 @@
 //! Migration smoke tests.
 
+use aster_forge_test::temp::SqliteTestDatabase;
 use sea_orm::Database;
 use sea_orm_migration::prelude::MigratorTrait;
 use sea_orm_migration::prelude::SchemaManager;
@@ -17,8 +18,8 @@ fn foundation_migration_is_registered_first() {
 
 #[tokio::test]
 async fn foundation_migration_applies_and_rolls_back_on_sqlite() {
-    let database_url = format!("sqlite://{}?mode=rwc", unique_database_path().display());
-    let db = Database::connect(&database_url)
+    let database = SqliteTestDatabase::new("foundation-migration");
+    let db = Database::connect(database.url())
         .await
         .expect("connect sqlite migration test database");
 
@@ -61,12 +62,7 @@ async fn foundation_migration_applies_and_rolls_back_on_sqlite() {
             "expected {table} to be dropped"
         );
     }
-}
-
-fn unique_database_path() -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!("{}-migration-{nanos}.db", env!("CARGO_PKG_NAME")))
+    db.close()
+        .await
+        .expect("close sqlite migration test database");
 }

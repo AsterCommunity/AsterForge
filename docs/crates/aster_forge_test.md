@@ -1,6 +1,6 @@
 # aster_forge_test
 
-`aster_forge_test` 提供 Aster 产品共享的集成测试基础设施：可复用 Docker 容器（testcontainers）、跨进程容器状态登记、真实子进程 guard 和异步等待工具。目标是让每个产品的测试套件不必重复实现"命名容器 + 复用 + 状态锁 + 孤儿资源清理 + 进程日志收敛"这套机制。
+`aster_forge_test` 提供 Aster 产品共享的集成测试基础设施：隔离临时目录、文件型 SQLite fixture、可复用 Docker 容器（testcontainers）、跨进程容器状态登记、真实子进程 guard 和异步等待工具。目标是让每个产品的测试套件不必重复实现测试资源命名、生命周期清理、容器复用、状态锁、孤儿资源清理和进程日志收敛。
 
 这是测试支持 crate，`publish = false`，只作为 dev-dependency 使用。所有失败路径直接 panic，因为测试设施出错时测试本来就不该继续。
 
@@ -11,12 +11,36 @@
 - 多个 checkout / worktree 并行跑测试，容器名不能互相打架。
 - 测试进程在容器里创建了 per-test 资源（如独立数据库），后续运行需要清理已退出进程留下的孤儿资源。
 - E2E 需要启动一个或多个真实服务进程，并在失败时自动附带 stdout/stderr 尾部。
+- 测试需要跨平台唯一临时目录，或需要把 SQLite 主文件与 WAL/SHM/journal sidecar 一起清理。
 
 不适合放在这里的内容：
 
 - 产品自己的测试模型、fixture、seed 数据。
 - 产品语义的资源命名规范（数据库名、key 前缀仍由产品侧决定）。
 - CI 编排逻辑（service container 怎么起是 CI 的事）。
+
+## 临时文件系统 fixture
+
+`temp` 模块默认可用，不需要 Cargo feature：
+
+```rust
+use aster_forge_test::temp::{SqliteTestDatabase, TestTempDir};
+
+let directory = TestTempDir::new("config-loader");
+let config_path = directory.join("data/config.toml");
+
+let database = SqliteTestDatabase::new("repository-case");
+let db = sea_orm::Database::connect(database.url()).await?;
+// ... assertions ...
+db.close().await?;
+```
+
+- `TestTempDir::new(scope)` 在平台临时目录下创建带 PID、进程内计数器和时间戳的隔离目录。
+- `TestTempDir::new_in(root, scope)` 用于必须位于项目目录下的测试，例如验证相对配置路径；清理仍由 guard 负责。
+- `TestTempDir` 复用 `aster_forge_utils::raii::TempDirGuard`，不重复实现资源回收。
+- `SqliteTestDatabase` 把数据库放进独立目录，drop 时主文件、journal、WAL 和 SHM sidecar 会随目录一起清理。
+- SQLite URL 使用 percent-encoded `sqlite:` opaque path，Windows drive letter、反斜杠、空格和 URL 保留字符不会改变文件名语义。
+- Windows 会锁住仍然打开的 SQLite 文件；测试必须先显式关闭连接池，再让 fixture 离开作用域。
 
 ## Cargo feature
 

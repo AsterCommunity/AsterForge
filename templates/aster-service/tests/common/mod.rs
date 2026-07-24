@@ -1,33 +1,21 @@
 //! Integration test helpers.
 
 use aster_forge_cache::CacheConfig;
+use aster_forge_test::temp::SqliteTestDatabase;
 
 /// Builds a clean test [`AppState`](crate::runtime::AppState).
 #[allow(dead_code)]
-pub async fn setup() -> {{crate_name}}::runtime::AppState {
+pub async fn setup() -> ({{crate_name}}::runtime::AppState, SqliteTestDatabase) {
+    let database = SqliteTestDatabase::new("service-state");
     let mut config = {{crate_name}}::config::AppConfig::default();
-    config.database.url = format!("sqlite://{}?mode=rwc", unique_database_path().display());
+    config.database.url = database.url().to_string();
     config.cache = CacheConfig::default();
     config.logging.file = String::new();
 
-    {{crate_name}}::runtime::assembly::prepare_state(config)
+    let state = {{crate_name}}::runtime::assembly::prepare_state(config)
         .await
-        .expect("runtime state should prepare")
-}
-
-fn unique_database_path() -> std::path::PathBuf {
-    static NEXT_DATABASE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-    let id = NEXT_DATABASE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "{}-test-{}-{id}-{nanos}.db",
-        env!("CARGO_PKG_NAME"),
-        std::process::id()
-    ))
+        .expect("runtime state should prepare");
+    (state, database)
 }
 
 /// Creates the standard test Actix app.{% raw %}

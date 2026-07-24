@@ -41,4 +41,5 @@ scheduled-task = ["dep:aster_forge_tasks", "aster_forge_tasks/runtime"]
 system-config = ["dep:aster_forge_config"]
 
 [dev-dependencies]
+aster_forge_test = { path = "../aster_forge_test" }
 uuid.workspace = true

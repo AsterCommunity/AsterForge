@@ -110,13 +110,8 @@ mod tests {
 
     #[test]
     fn generated_default_file_uses_config_relative_paths() {
-        let path = std::env::temp_dir().join(format!(
-            "{{project-name}}-loader-default-{}.toml",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock should be after unix epoch")
-                .as_nanos()
-        ));
+        let directory = aster_forge_test::temp::TestTempDir::new("loader-default");
+        let path = directory.join("config.toml");
 
         ensure_default_config_exists(&path, &crate::config::AppConfig::default())
             .expect("write default config");
@@ -124,7 +119,5 @@ mod tests {
 
         assert!(generated.contains(r#"temp_dir = ".tmp""#));
         assert!(generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#));
-
-        let _ = std::fs::remove_file(path);
     }
 }

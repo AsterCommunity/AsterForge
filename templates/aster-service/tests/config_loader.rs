@@ -1,8 +1,8 @@
 //! Static configuration loader integration tests.
 
+use aster_forge_test::temp::TestTempDir;
 use std::fs;
 use std::sync::{Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -21,7 +21,8 @@ fn default_config_uses_generated_data_paths() {
 #[test]
 fn default_config_file_is_created_under_data_dir() {
     let _guard = EnvGuard::capture();
-    let dir = unique_project_temp_dir();
+    let directory = unique_project_temp_dir();
+    let dir = directory.path();
     fs::create_dir_all(&dir).expect("create temp config dir");
     let config_path = dir.join("data").join("config.toml");
 
@@ -53,7 +54,8 @@ fn default_config_file_is_created_under_data_dir() {
 #[test]
 fn config_file_overrides_are_loaded_and_relative_paths_resolve_from_config_dir() {
     let _guard = EnvGuard::capture();
-    let dir = unique_project_temp_dir();
+    let directory = unique_project_temp_dir();
+    let dir = directory.path();
     let config_path = dir.join("data").join("config.toml");
     fs::create_dir_all(
         config_path
@@ -152,16 +154,12 @@ unsafe fn restore_env_var(key: &str, value: Option<std::ffi::OsString>) {
     }
 }
 
-fn unique_project_temp_dir() -> std::path::PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_nanos();
-    std::env::current_dir()
+fn unique_project_temp_dir() -> TestTempDir {
+    let root = std::env::current_dir()
         .expect("resolve current dir")
         .join("target")
-        .join("config-loader-tests")
-        .join(format!("{{project-name}}-{nanos}"))
+        .join("config-loader-tests");
+    TestTempDir::new_in(root, "config-loader")
 }
 
 fn runtime_relative_path(path: std::path::PathBuf) -> String {

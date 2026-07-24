@@ -10,3 +10,6 @@ publish = false
 
 [dependencies]
 chrono = { workspace = true, features = ["clock"] }
+
+[dev-dependencies]
+aster_forge_test = { path = "../aster_forge_test" }

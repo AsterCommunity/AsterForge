@@ -255,31 +255,8 @@ mod tests {
         DEFAULT_JSON_FORMAT, LoggingConfig, build_file_writer, build_filter, build_rolling_writer,
         build_writer, init_logging,
     };
+    use aster_forge_test::temp::TestTempDir;
     use std::io::Write;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn unique_test_path(test_name: &str) -> std::path::PathBuf {
-        let thread = std::thread::current();
-        let thread_name = thread.name().unwrap_or("unnamed");
-        let counter = TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock should be after unix epoch")
-            .as_nanos();
-
-        std::env::temp_dir()
-            .join("aster_forge_logging_tests")
-            .join(format!(
-                "{}-{}-{}-{}-{}",
-                test_name,
-                std::process::id(),
-                thread_name.replace(':', "_"),
-                timestamp,
-                counter
-            ))
-    }
 
     #[test]
     fn build_writer_uses_stdout_for_empty_file() {
@@ -301,8 +278,11 @@ mod tests {
 
     #[test]
     fn build_writer_reports_invalid_file_and_falls_back_to_stdout() {
+        let directory = TestTempDir::new("logging-invalid-file");
+        let parent_file = directory.join("not-a-directory");
+        std::fs::write(&parent_file, "fixture").expect("parent fixture should be writable");
         let (_writer, warning) = build_writer(&LoggingConfig {
-            file: "/definitely-missing-parent/aster.log".to_string(),
+            file: parent_file.join("aster.log").to_string_lossy().into_owned(),
             enable_rotation: false,
             ..LoggingConfig::default()
         });
@@ -314,8 +294,8 @@ mod tests {
 
     #[test]
     fn build_file_writer_creates_file_and_appends_bytes() {
-        let path = unique_test_path("build_file_writer_creates_file_and_appends_bytes");
-        let path = path.join("logs").join("aster.log");
+        let directory = TestTempDir::new("logging-file-writer");
+        let path = directory.join("logs").join("aster.log");
         std::fs::create_dir_all(path.parent().expect("test path has parent"))
             .expect("fixture parent should be created");
 
@@ -342,9 +322,8 @@ mod tests {
 
     #[test]
     fn build_rolling_writer_creates_daily_appender_for_valid_directory() {
-        let root = unique_test_path("build_rolling_writer_creates_daily_appender");
-        std::fs::create_dir_all(&root).expect("fixture directory should be created");
-        let file = root.join("service.log");
+        let directory = TestTempDir::new("logging-rolling-writer");
+        let file = directory.join("service.log");
 
         let (mut writer, warning) = build_rolling_writer(&LoggingConfig {
             file: file.to_string_lossy().into_owned(),
@@ -360,9 +339,8 @@ mod tests {
 
     #[test]
     fn build_rolling_writer_reports_invalid_directory_and_falls_back_to_stdout() {
-        let parent_file = unique_test_path("build_rolling_writer_reports_invalid_directory");
-        std::fs::create_dir_all(parent_file.parent().expect("test path has parent"))
-            .expect("fixture root should be created");
+        let directory = TestTempDir::new("logging-invalid-rolling-directory");
+        let parent_file = directory.join("not-a-directory");
         std::fs::write(&parent_file, "not a directory")
             .expect("parent-file fixture should be writable");
         let file = parent_file.join("aster.log");
@@ -472,9 +450,8 @@ mod tests {
     }
 
     fn run_init_logging_child() {
-        let log_path = unique_test_path("init_logging_child")
-            .join("logs")
-            .join("aster.log");
+        let directory = TestTempDir::new("logging-init-child");
+        let log_path = directory.join("logs").join("aster.log");
         std::fs::create_dir_all(log_path.parent().expect("test path has parent"))
             .expect("fixture parent should be created");
 

@@ -11,18 +11,21 @@ publish = false
 [features]
 default = []
 containers = ["dep:fs2", "dep:serde", "dep:serde_json", "dep:testcontainers", "dep:tokio"]
-process = ["dep:uuid"]
+process = []
 smtp = ["containers", "dep:reqwest"]
 redis = ["containers"]
 postgres = ["containers", "dep:sea-orm"]
 mysql = ["containers"]
 
 [dependencies]
+aster_forge_utils = { path = "../aster_forge_utils" }
 fs2 = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 testcontainers = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
+
+[dev-dependencies]
+url.workspace = true
