@@ -11,7 +11,10 @@ use http::header::{
 };
 use http::{HeaderMap, HeaderValue, StatusCode};
 
-use crate::{DavContentStream, DavPrecondition, DavProtocolError};
+use crate::{
+    DavBackendError, DavBackendErrorKind, DavContentStream, DavErrorCondition, DavPrecondition,
+    DavProtocolError, DavProtocolErrorKind, DavXmlElement, DavXmlError, dav_error_element,
+};
 
 /// Methods advertised by the product-neutral DAV protocol engine.
 pub const DAV_ALLOW_HEADER: &str = "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, PROPPATCH, LOCK, UNLOCK, REPORT, VERSION-CONTROL";
@@ -87,6 +90,91 @@ impl DavResponse {
             body: DavResponseBody::Bytes(body.into()),
         }
     }
+}
+
+pub(crate) fn xml_document_response(
+    status: StatusCode,
+    root: DavXmlElement,
+) -> Result<DavResponse, DavXmlError> {
+    let mut response = DavResponse::bytes(status, root.to_bytes()?);
+    response.headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    if status.is_client_error() || status.is_server_error() {
+        response
+            .headers
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    Ok(response)
+}
+
+pub(crate) fn text_document_response(status: StatusCode, body: impl Into<String>) -> DavResponse {
+    let mut response = DavResponse::bytes(status, body.into());
+    response.headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    if status.is_client_error() || status.is_server_error() {
+        response
+            .headers
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
+pub(crate) fn xml_request_error_response(
+    error: DavXmlError,
+    invalid_grammar_message: &'static str,
+) -> Result<DavResponse, DavXmlError> {
+    match error {
+        DavXmlError::ExternalEntity => xml_document_response(
+            StatusCode::FORBIDDEN,
+            dav_error_element(&DavErrorCondition::NoExternalEntities),
+        ),
+        DavXmlError::TooDeep | DavXmlError::Malformed => Ok(text_document_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid XML body",
+        )),
+        DavXmlError::InvalidGrammar => Ok(text_document_response(
+            StatusCode::BAD_REQUEST,
+            invalid_grammar_message,
+        )),
+    }
+}
+
+/// Maps a protocol parsing/precondition failure to its transport-neutral response.
+#[must_use]
+pub fn protocol_error_response(error: &DavProtocolError) -> DavResponse {
+    match error.kind() {
+        DavProtocolErrorKind::BadRequest => text_document_response(error.status(), error.message()),
+        DavProtocolErrorKind::PreconditionFailed => no_store_empty_response(error.status()),
+    }
+}
+
+/// Maps a classified product backend failure to the WebDAV status contract.
+#[must_use]
+pub fn backend_error_response(error: &DavBackendError) -> DavResponse {
+    let status = match error.kind {
+        DavBackendErrorKind::NotFound => StatusCode::NOT_FOUND,
+        DavBackendErrorKind::Forbidden => StatusCode::FORBIDDEN,
+        DavBackendErrorKind::Conflict | DavBackendErrorKind::AlreadyExists => StatusCode::CONFLICT,
+        DavBackendErrorKind::InsufficientStorage => StatusCode::INSUFFICIENT_STORAGE,
+        DavBackendErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        DavBackendErrorKind::Locked => StatusCode::LOCKED,
+        DavBackendErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
+        DavBackendErrorKind::Unsupported => StatusCode::METHOD_NOT_ALLOWED,
+        DavBackendErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    no_store_empty_response(status)
+}
+
+fn no_store_empty_response(status: StatusCode) -> DavResponse {
+    let mut response = DavResponse::empty(status);
+    response
+        .headers
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Builds the response to a DAV `OPTIONS` request.

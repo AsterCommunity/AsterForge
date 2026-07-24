@@ -7,8 +7,26 @@ use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 
 use crate::protocol::DavProtocolError;
 use crate::{
-    DavBodyError, DavMethod, DavRequestHead, DavRequestOrigin, DavResponse, DavResponseBody,
+    DavBodyError, DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin, DavResponse,
+    DavResponseBody,
 };
+
+/// Request body prepared according to the selected WebDAV method contract.
+pub enum DavPreparedBody {
+    None,
+    Xml(Vec<u8>),
+}
+
+impl DavPreparedBody {
+    /// Returns the collected XML bytes, or an empty slice for bodyless methods.
+    #[must_use]
+    pub fn xml(&self) -> &[u8] {
+        match self {
+            Self::None => &[],
+            Self::Xml(body) => body,
+        }
+    }
+}
 
 /// Parses an Actix request into the transport-neutral request head.
 pub fn request_head(
@@ -98,4 +116,21 @@ pub async fn collect_bounded_xml_body(
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// Applies the method-owned body policy while leaving streaming PUT bodies untouched.
+pub async fn prepare_request_body(
+    method: DavMethod,
+    payload: &mut actix_web::web::Payload,
+    xml_limit: usize,
+) -> Result<DavPreparedBody, DavBodyError> {
+    match method.body_policy() {
+        DavBodyPolicy::Empty => ensure_empty_body(payload)
+            .await
+            .map(|()| DavPreparedBody::None),
+        DavBodyPolicy::BoundedXml => collect_bounded_xml_body(payload, xml_limit)
+            .await
+            .map(DavPreparedBody::Xml),
+        DavBodyPolicy::Stream | DavBodyPolicy::Unused => Ok(DavPreparedBody::None),
+    }
 }

@@ -62,6 +62,20 @@ pub struct DavResourceMetadata {
     pub modified_at: Option<SystemTime>,
 }
 
+/// Protocol-visible state used to evaluate one resource referenced by a WebDAV `If` header.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DavIfResourceState {
+    pub etag: Option<String>,
+    pub lock_tokens: Vec<String>,
+}
+
+/// Product adapter used by the protocol layer while evaluating WebDAV `If` conditions.
+#[async_trait]
+pub trait DavIfStateResolver: Send + Sync {
+    async fn resolve_if_state(&self, path: &DavPath)
+    -> Result<DavIfResourceState, DavBackendError>;
+}
+
 /// One child returned by a collection listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavDirectoryEntry {

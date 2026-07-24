@@ -120,6 +120,7 @@ pub struct DavRequestOrigin {
 pub struct DavRequestHead {
     pub method: DavMethod,
     pub target: DavPath,
+    pub origin: DavRequestOrigin,
     pub depth: Option<Depth>,
     pub overwrite: Option<bool>,
     pub destination: Option<Destination>,
@@ -177,6 +178,7 @@ impl DavRequestHead {
         Ok(Self {
             method,
             target,
+            origin: origin.clone(),
             depth,
             overwrite,
             destination,

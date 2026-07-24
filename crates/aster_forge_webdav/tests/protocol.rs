@@ -1,14 +1,18 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{
-    DAV_ALLOW_HEADER, DavBodyPolicy, DavMethod, DavPath, DavPathError, DavPrecondition,
-    DavRequestHead, DavRequestOrigin, Depth, IfStateCondition, child_relative_path,
-    destination_relative_path, evaluate_http_download_preconditions,
-    evaluate_http_etag_preconditions, href_for_relative, parent_relative_path, parse_copy_depth,
-    parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
-    parse_lock_token_header, parse_move_depth, parse_propfind_depth, submitted_lock_tokens,
-    submitted_lock_tokens_for_path,
+    DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError,
+    DavIfResourceState, DavIfStateResolver, DavMethod, DavPath, DavPathError, DavPrecondition,
+    DavProtocolErrorKind, DavRequestHead, DavRequestOrigin, Depth, IfHeader, IfStateCondition,
+    child_relative_path, destination_relative_path, enforce_if_header,
+    evaluate_http_download_preconditions, evaluate_http_etag_preconditions, href_for_relative,
+    parent_relative_path, parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth,
+    parse_lock_timeout, parse_lock_token_header, parse_move_depth, parse_propfind_depth,
+    submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
+use async_trait::async_trait;
 use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use http::{Method, Uri};
 
@@ -19,6 +23,36 @@ fn headers(name: &'static str, value: &'static str) -> HeaderMap {
         HeaderValue::from_static(value),
     );
     headers
+}
+
+fn parsed_if(value: &'static str) -> IfHeader {
+    parse_if_header(&headers("If", value))
+        .expect("If header should parse")
+        .expect("If header should exist")
+}
+
+#[derive(Default)]
+struct MockIfStateResolver {
+    states: HashMap<String, DavIfResourceState>,
+    fail_path: Option<String>,
+    calls: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl DavIfStateResolver for MockIfStateResolver {
+    async fn resolve_if_state(
+        &self,
+        path: &DavPath,
+    ) -> Result<DavIfResourceState, DavBackendError> {
+        self.calls
+            .lock()
+            .expect("call log lock should not be poisoned")
+            .push(path.as_str().to_string());
+        if self.fail_path.as_deref() == Some(path.as_str()) {
+            return Err(DavBackendError::new(DavBackendErrorKind::Internal));
+        }
+        Ok(self.states.get(path.as_str()).cloned().unwrap_or_default())
+    }
 }
 
 #[test]
@@ -292,6 +326,169 @@ fn if_header_accepts_case_insensitive_not_and_groups_tagged_lists() {
 }
 
 #[test]
+fn if_evaluator_uses_or_between_lists_and_and_inside_each_list() {
+    let request_path = DavPath::new("/current.txt").expect("request path");
+    let resolver = MockIfStateResolver {
+        states: HashMap::from([(
+            "/current.txt".to_string(),
+            DavIfResourceState {
+                etag: Some("etag-1".to_string()),
+                lock_tokens: vec!["urn:uuid:one".to_string()],
+            },
+        )]),
+        ..MockIfStateResolver::default()
+    };
+    let matching =
+        parsed_if(r#"(<urn:uuid:missing>) (<urn:uuid:one> ["etag-1"] Not <urn:uuid:other>)"#);
+    futures::executor::block_on(enforce_if_header(
+        Some(&matching),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ))
+    .expect("one complete state list should satisfy the header");
+
+    let mismatched = parsed_if(r#"(<urn:uuid:one> ["other"])"#);
+    let error = futures::executor::block_on(enforce_if_header(
+        Some(&mismatched),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ))
+    .expect_err("every condition in one list must match");
+    assert!(matches!(
+        error,
+        DavIfEvaluationError::Protocol(error)
+            if error.kind() == DavProtocolErrorKind::PreconditionFailed
+    ));
+}
+
+#[test]
+fn if_evaluator_requires_every_tagged_resource_group_to_match() {
+    let request_path = DavPath::new("/request.txt").expect("request path");
+    let resolver = MockIfStateResolver {
+        states: HashMap::from([
+            (
+                "/a.txt".to_string(),
+                DavIfResourceState {
+                    etag: None,
+                    lock_tokens: vec!["urn:uuid:a".to_string()],
+                },
+            ),
+            (
+                "/b.txt".to_string(),
+                DavIfResourceState {
+                    etag: None,
+                    lock_tokens: vec!["urn:uuid:b".to_string()],
+                },
+            ),
+        ]),
+        ..MockIfStateResolver::default()
+    };
+    let matching = parsed_if(r#"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:b>)"#);
+    futures::executor::block_on(enforce_if_header(
+        Some(&matching),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ))
+    .expect("all tagged resource groups match");
+
+    let partially_matching =
+        parsed_if(r#"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:wrong>)"#);
+    let error = futures::executor::block_on(enforce_if_header(
+        Some(&partially_matching),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ));
+    assert!(matches!(
+        error,
+        Err(DavIfEvaluationError::Protocol(error))
+            if error.kind() == DavProtocolErrorKind::PreconditionFailed
+    ));
+}
+
+#[test]
+fn if_evaluator_scopes_tagged_uris_before_calling_the_product_resolver() {
+    let request_path = DavPath::new("/request.txt").expect("request path");
+    let resolver = MockIfStateResolver::default();
+    let outside_origin = parsed_if(r#"<https://other.example/webdav/a.txt> (Not <urn:x>)"#);
+    futures::executor::block_on(enforce_if_header(
+        Some(&outside_origin),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ))
+    .expect("negated state should match an out-of-scope resource");
+    assert!(resolver.calls.lock().expect("call log lock").is_empty());
+
+    let decoded = parsed_if(r#"</webdav/current%20file.txt> (Not <urn:x>)"#);
+    futures::executor::block_on(enforce_if_header(
+        Some(&decoded),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ))
+    .expect("mount-scoped percent-encoded path should resolve");
+    assert_eq!(
+        resolver.calls.lock().expect("call log lock").as_slice(),
+        ["/current file.txt"]
+    );
+}
+
+#[test]
+fn if_evaluator_separates_protocol_and_backend_failures() {
+    let request_path = DavPath::new("/request.txt").expect("request path");
+    let invalid = parsed_if(r#"<https:/broken> (Not <urn:x>)"#);
+    let resolver = MockIfStateResolver::default();
+    let error = futures::executor::block_on(enforce_if_header(
+        Some(&invalid),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ));
+    assert!(matches!(
+        error,
+        Err(DavIfEvaluationError::Protocol(error))
+            if error.kind() == DavProtocolErrorKind::BadRequest
+    ));
+
+    let resolver = MockIfStateResolver {
+        fail_path: Some("/request.txt".to_string()),
+        ..MockIfStateResolver::default()
+    };
+    let header = parsed_if(r#"(Not <urn:x>)"#);
+    let error = futures::executor::block_on(enforce_if_header(
+        Some(&header),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ));
+    assert!(matches!(
+        error,
+        Err(DavIfEvaluationError::Backend(error))
+            if error.kind == DavBackendErrorKind::Internal
+    ));
+}
+
+#[test]
 fn submitted_tokens_apply_only_to_matching_tagged_resource() {
     let headers = headers(
         "If",
@@ -477,6 +674,8 @@ fn request_head_parses_method_specific_contract() {
     .expect("COPY request head should parse");
 
     assert_eq!(request.target.as_str(), "/source.txt");
+    assert_eq!(request.origin.scheme, "https");
+    assert_eq!(request.origin.host, "dav.example");
     assert_eq!(request.depth, Some(Depth::Zero));
     assert_eq!(request.overwrite, Some(false));
     assert_eq!(

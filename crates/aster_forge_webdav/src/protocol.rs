@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{StatusCode, Uri};
 
-use crate::DavPath;
+use crate::{DavBackendError, DavIfResourceState, DavIfStateResolver, DavPath};
 use aster_forge_utils::http_validators;
 
 /// WebDAV `Depth` header value.
@@ -66,6 +66,15 @@ pub enum IfStateCondition {
     Token { value: String, negated: bool },
     /// An entity-tag condition.
     Etag { value: String, negated: bool },
+}
+
+/// Failure while resolving and evaluating a WebDAV `If` request precondition.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DavIfEvaluationError {
+    #[error(transparent)]
+    Protocol(#[from] DavProtocolError),
+    #[error(transparent)]
+    Backend(#[from] DavBackendError),
 }
 
 /// Outcome of HTTP entity-tag and modification-date precondition evaluation.
@@ -253,6 +262,91 @@ pub fn parse_if_header(headers: &HeaderMap) -> Result<Option<IfHeader>, DavProto
         .to_str()
         .map_err(|_| DavProtocolError::bad_request("Invalid If header"))?;
     IfHeaderParser::new(raw).parse().map(Some)
+}
+
+/// Resolves referenced resources and enforces the complete WebDAV `If` state-list precondition.
+///
+/// Conditions inside one list are AND-connected. Lists for one resource are OR-connected. Every
+/// tagged resource group must have a matching list; an untagged header contains one request-target
+/// group and follows the same list semantics.
+pub async fn enforce_if_header(
+    if_header: Option<&IfHeader>,
+    resolver: &dyn DavIfStateResolver,
+    request_path: &DavPath,
+    prefix: &str,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), DavIfEvaluationError> {
+    let Some(if_header) = if_header else {
+        return Ok(());
+    };
+
+    for group in &if_header.groups {
+        let path = match group.tagged_path.as_deref() {
+            Some(tagged_path) => {
+                tagged_dav_path(prefix, tagged_path, request_scheme, request_host)?
+            }
+            None => Some(request_path.clone()),
+        };
+        let state = match path.as_ref() {
+            Some(path) => resolver.resolve_if_state(path).await?,
+            None => DavIfResourceState::default(),
+        };
+        if !group
+            .lists
+            .iter()
+            .any(|list| evaluate_if_state_list(list, &state))
+        {
+            return Err(DavProtocolError::precondition_failed().into());
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_if_state_list(list: &IfStateList, state: &DavIfResourceState) -> bool {
+    list.conditions.iter().all(|condition| match condition {
+        IfStateCondition::Token { value, negated } => {
+            state.lock_tokens.iter().any(|token| token == value) ^ *negated
+        }
+        IfStateCondition::Etag { value, negated } => {
+            state.etag.as_deref().is_some_and(|etag| {
+                http_validators::if_none_match_header_matches(value, true, Some(etag))
+                    .unwrap_or(false)
+            }) ^ *negated
+        }
+    })
+}
+
+fn tagged_dav_path(
+    prefix: &str,
+    tagged_path: &str,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<Option<DavPath>, DavProtocolError> {
+    let uri: Uri = tagged_path
+        .parse()
+        .map_err(|_| DavProtocolError::bad_request("Invalid If header"))?;
+    let path = match (uri.scheme_str(), uri.authority()) {
+        (Some(scheme), Some(authority)) => {
+            if !scheme.eq_ignore_ascii_case(request_scheme)
+                || !authority.as_str().eq_ignore_ascii_case(request_host)
+            {
+                return Ok(None);
+            }
+            uri.path()
+        }
+        (None, None) => uri.path(),
+        _ => return Err(DavProtocolError::bad_request("Invalid If header")),
+    };
+    if !path.starts_with('/') {
+        return Err(DavProtocolError::bad_request("Invalid If header"));
+    }
+    let Some(relative) = strip_mount_prefix(path, prefix) else {
+        return Ok(None);
+    };
+    DavPath::new(relative)
+        .map(Some)
+        .map_err(|_| DavProtocolError::bad_request("Invalid If header"))
 }
 
 /// Extracts submitted lock tokens that apply to one request path.

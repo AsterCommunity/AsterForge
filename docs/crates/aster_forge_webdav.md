@@ -19,11 +19,18 @@ Forge 负责：
 
 - `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝。
 - WebDAV 方法、`Depth`、`Overwrite`、`Destination`、`If`、`Timeout` 和 `Lock-Token` header 解析。
+- `If` tagged-resource 归一化、AND/OR/Not 状态机，以及只暴露 ETag/lock token 的 resolver port。
+- LOCK acquire/refresh 选择、timeout/token/body 校验与成功响应 composition。
+- COPY/MOVE/DELETE 的资源路径关系、typed partial failure、207 与 201/204 响应选择。
 - 每个 DAV 方法的 empty/bounded XML/stream/unused body policy，以及 Actix bounded-body adapter。
+- request head 保留规范化后的请求 origin；Actix adapter 按方法一次性完成 empty/XML/stream body preparation。
 - HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
 - GET/HEAD 的 200/206/304/416 response planning、单段 byte range 选择与读取区间。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
 - PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
+- PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
+- PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
+- DeltaV `DAV:version-tree` REPORT 选择、file-only/unsupported mapping、version multistatus 和 VERSION-CONTROL response selection。
 - `DavXmlElement` XML 表示与序列化边界；具体 XML crate 是 Forge 私有实现，产品不直接依赖。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - `DavResourceBackend`、`DavPropertyBackend`、`DavLockBackend` 和可选 `DavVersionBackend` port。

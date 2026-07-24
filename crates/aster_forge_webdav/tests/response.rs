@@ -1,16 +1,18 @@
 use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{
-    DAV_ALLOW_HEADER, DavBodyError, DavDownloadBody, DavDownloadPlanError, DavProtocolErrorKind,
-    DavResponseBody, body_error_response, method_not_allowed_response, options_response,
-    plan_download_response, range_not_satisfiable_response,
+    DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyError, DavDownloadBody,
+    DavDownloadPlanError, DavMethod, DavProtocolErrorKind, DavRequestHead, DavRequestOrigin,
+    DavResponseBody, backend_error_response, body_error_response, method_not_allowed_response,
+    options_response, plan_download_response, protocol_error_response,
+    range_not_satisfiable_response,
 };
 use http::StatusCode;
 use http::header::{
     ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
     CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LAST_MODIFIED, RANGE,
 };
-use http::{HeaderMap, HeaderValue};
+use http::{HeaderMap, HeaderValue, Uri};
 
 fn representation_time() -> std::time::SystemTime {
     UNIX_EPOCH + Duration::from_secs(784_111_777)
@@ -249,5 +251,56 @@ fn direct_416_builder_handles_zero_and_maximum_representation_lengths() {
                 .unwrap(),
             format!("bytes */{content_length}")
         );
+    }
+}
+
+#[test]
+fn protocol_and_backend_failures_are_mapped_by_forge() {
+    let error = DavRequestHead::parse(
+        DavMethod::Get,
+        &"/outside".parse::<Uri>().expect("URI"),
+        &HeaderMap::new(),
+        "/webdav",
+        &DavRequestOrigin {
+            scheme: "https".to_owned(),
+            host: "dav.example".to_owned(),
+        },
+    )
+    .expect_err("outside mount should fail");
+    let protocol = protocol_error_response(&error);
+    assert_eq!(protocol.status, StatusCode::BAD_REQUEST);
+    assert_eq!(protocol.headers.get(CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(
+        protocol.headers.get(CONTENT_TYPE).unwrap(),
+        "text/plain; charset=utf-8"
+    );
+
+    for (kind, expected) in [
+        (DavBackendErrorKind::NotFound, StatusCode::NOT_FOUND),
+        (DavBackendErrorKind::Forbidden, StatusCode::FORBIDDEN),
+        (DavBackendErrorKind::Conflict, StatusCode::CONFLICT),
+        (DavBackendErrorKind::AlreadyExists, StatusCode::CONFLICT),
+        (
+            DavBackendErrorKind::InsufficientStorage,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavBackendErrorKind::PayloadTooLarge,
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (DavBackendErrorKind::Locked, StatusCode::LOCKED),
+        (DavBackendErrorKind::InvalidInput, StatusCode::BAD_REQUEST),
+        (
+            DavBackendErrorKind::Unsupported,
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        (
+            DavBackendErrorKind::Internal,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let response = backend_error_response(&DavBackendError::new(kind));
+        assert_eq!(response.status, expected);
+        assert_eq!(response.headers.get(CACHE_CONTROL).unwrap(), "no-store");
     }
 }
