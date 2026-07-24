@@ -83,6 +83,7 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", pa
 aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks", features = ["runtime-component"] }
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
 aster_forge_validation = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_validation" }
+aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_webdav", features = ["actix"] }
 ```
 
 按需开启 feature：
