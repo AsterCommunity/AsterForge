@@ -31,7 +31,7 @@ Forge 负责：
 - PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
 - PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
 - DeltaV `DAV:version-tree` REPORT 选择、file-only/unsupported mapping、version multistatus 和 VERSION-CONTROL response selection。
-- `DavXmlElement` XML 表示与序列化边界；具体 XML crate 是 Forge 私有实现，产品不直接依赖。
+- `DavXmlElement` XML 表示与序列化边界；解析、安全限制和流式写出由 `aster_forge_xml` 承担，产品不直接依赖具体 XML 实现。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - 唯一 backend contract：`DavFileSystem`、`DavMetaData`、`DavFile`、`DavDirEntry`、
   `DavLockSystem`、`FsError` 和 `OpenOptions`；产品只实现这些 Forge port，不再复制协议 trait。
@@ -62,8 +62,8 @@ Forge 负责：
 ## 测试要求
 
 - 协议 crate 测试路径逃逸、header grammar、同源 `Destination`、条件请求和 request-head 解析。
-- XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、深度临界、UTF-8、转义和大属性值。
-- XML response 矩阵覆盖状态行、元素顺序、QName、命名空间声明、锁字段、死属性重建和异常旧值转义。
+- XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、reader I/O、输入大小与深度精确临界、非法 UTF-8、转义和大属性值。
+- XML response 矩阵覆盖状态行、元素顺序、QName、namespace shadowing/undeclaration、锁字段、死属性重建、异常旧值转义，以及非法 writer model 与深度临界。
 - 产品仓库保留真实认证、数据库、存储、quota、audit 和客户端集成测试。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 

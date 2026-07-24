@@ -100,7 +100,15 @@ fn validates_complete_single_root_and_declarations() {
         validate_xml_input(b"<!DOCTYPE a [<!ENTITY x 'boom'>]><a>&x;</a>", policy),
         Err(XmlSafetyError::ExternalEntity)
     );
+    assert_eq!(
+        validate_xml_input(b"<!ENTITY x 'boom'><a/>", policy),
+        Err(XmlSafetyError::ExternalEntity)
+    );
     assert!(validate_xml_input(b"<a><![CDATA[<!DOCTYPE harmless>]]></a>", policy).is_ok());
+    assert_eq!(
+        validate_xml_input(b"<!-- <!ENTITY x 'harmless'> --><!BROKEN><a/>", policy),
+        Err(XmlSafetyError::Malformed)
+    );
 }
 
 #[test]

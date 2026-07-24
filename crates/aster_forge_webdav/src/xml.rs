@@ -4,10 +4,12 @@
 //! WebDAV-specific request models and [`DavXmlElement`] instead of depending on an XML crate.
 
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read};
+use std::io::Read;
 
-use aster_forge_utils::xml::{XmlSafetyError, XmlSafetyPolicy, validate_xml_input};
-use xmltree::{Element, XMLNode};
+use aster_forge_xml::{
+    BorrowedDocument, ElementRef, Error as ForgeXmlError, NodeRef, OwnedDocument, ParseOptions,
+    XmlSafetyError, XmlSafetyPolicy, XmlStreamWriter, XmlWriteAttribute, validate_xml_input,
+};
 
 const DAV_NAMESPACE: &str = "DAV:";
 
@@ -33,7 +35,15 @@ impl From<XmlSafetyError> for DavXmlError {
         match error {
             XmlSafetyError::ExternalEntity => Self::ExternalEntity,
             XmlSafetyError::TooDeep => Self::TooDeep,
-            XmlSafetyError::Malformed | XmlSafetyError::InvalidPolicy => Self::Malformed,
+            XmlSafetyError::InvalidPolicy
+            | XmlSafetyError::InputTooLarge
+            | XmlSafetyError::OutputTooLarge
+            | XmlSafetyError::TooManyElements
+            | XmlSafetyError::TooManyAttributes
+            | XmlSafetyError::TextTooLarge
+            | XmlSafetyError::TooManyEvents
+            | XmlSafetyError::InvalidEncoding
+            | XmlSafetyError::Malformed => Self::Malformed,
         }
     }
 }
@@ -103,21 +113,18 @@ impl DavXmlElement {
     }
 
     /// Parses one bounded XML element from a reader.
-    pub fn parse_reader(mut reader: impl Read) -> Result<Self, DavXmlError> {
-        let mut bytes = Vec::new();
-        reader
-            .read_to_end(&mut bytes)
-            .map_err(|_| DavXmlError::Malformed)?;
-        Self::parse(&bytes)
+    pub fn parse_reader(reader: impl Read) -> Result<Self, DavXmlError> {
+        let options = webdav_parse_options();
+        let document = OwnedDocument::from_reader_with_options(reader, &options)
+            .map_err(map_forge_xml_error)?;
+        Ok(element_from_forge(document.root()))
     }
 
     /// Serializes the element as UTF-8 XML bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, DavXmlError> {
-        let mut bytes = Vec::new();
-        element_to_xmltree(self)
-            .write(&mut bytes)
-            .map_err(|_| DavXmlError::Malformed)?;
-        Ok(bytes)
+        let mut writer = XmlStreamWriter::new(Vec::new()).map_err(map_forge_xml_error)?;
+        write_element(&mut writer, self, &BTreeMap::new())?;
+        writer.finish().map_err(map_forge_xml_error)
     }
 
     /// Iterates over direct child elements while ignoring text, comments, and CDATA.
@@ -359,9 +366,9 @@ pub fn parse_report_root(body: &[u8]) -> Result<DavRequestedProperty, DavXmlErro
 
 fn parse_element(bytes: &[u8]) -> Result<DavXmlElement, DavXmlError> {
     validate_xml_input(bytes, XmlSafetyPolicy::untrusted())?;
-    Element::parse(Cursor::new(bytes))
-        .map(element_from_xmltree)
-        .map_err(|_| DavXmlError::Malformed)
+    let document = BorrowedDocument::parse_with_options(bytes, &webdav_parse_options())
+        .map_err(map_forge_xml_error)?;
+    Ok(element_from_forge(document.root()))
 }
 
 fn is_dav_element(element: &DavXmlElement, local_name: &str) -> bool {
@@ -384,61 +391,168 @@ fn xml_lang_value(element: &DavXmlElement) -> Option<&str> {
         .map(String::as_str)
 }
 
-fn element_from_xmltree(element: Element) -> DavXmlElement {
+fn webdav_parse_options() -> ParseOptions {
+    // Preserve the established WebDAV XML boundary: formatting whitespace is ignored and retained
+    // text is trimmed before WebDAV grammar evaluation or dead-property persistence.
+    ParseOptions::new().trim_whitespace(true)
+}
+
+fn map_forge_xml_error(error: ForgeXmlError) -> DavXmlError {
+    match error {
+        ForgeXmlError::Safety(error) => error.into(),
+        ForgeXmlError::InvalidXml(_) | ForgeXmlError::InvalidData(_) | ForgeXmlError::Io(_) => {
+            DavXmlError::Malformed
+        }
+    }
+}
+
+fn element_from_forge<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavXmlElement {
+    let mut namespaces = BTreeMap::new();
+    match (element.prefix(), element.namespace()) {
+        (Some(prefix), Some(namespace)) if prefix != "xml" => {
+            namespaces.insert(prefix.to_owned(), namespace.to_owned());
+        }
+        (None, Some(namespace)) => {
+            namespaces.insert(String::new(), namespace.to_owned());
+        }
+        // This owned subtree may later be embedded under a default namespace. Declaring the
+        // empty namespace keeps an originally unqualified element unqualified.
+        (None, None) => {
+            namespaces.insert(String::new(), String::new());
+        }
+        _ => {}
+    }
+
+    let mut attributes = BTreeMap::new();
+    for attribute in element.attributes() {
+        if let (Some(prefix), Some(namespace)) = (attribute.prefix(), attribute.namespace())
+            && prefix != "xml"
+        {
+            namespaces
+                .entry(prefix.to_owned())
+                .or_insert_with(|| namespace.to_owned());
+        }
+        attributes.insert(
+            attribute.qualified_name().to_owned(),
+            attribute.value().to_owned(),
+        );
+    }
+
     DavXmlElement {
-        name: element.name,
-        prefix: element.prefix,
-        namespace: element.namespace,
-        namespaces: element
-            .namespaces
-            .map(|namespaces| {
-                namespaces
-                    .iter()
-                    .map(|(prefix, namespace)| (prefix.to_owned(), namespace.to_owned()))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        attributes: element.attributes.into_iter().collect(),
+        name: element.name().to_owned(),
+        prefix: element.prefix().map(str::to_owned),
+        namespace: element.namespace().map(str::to_owned),
+        namespaces,
+        attributes,
         children: element
-            .children
-            .into_iter()
+            .children()
             .map(|child| match child {
-                XMLNode::Element(element) => DavXmlNode::Element(element_from_xmltree(element)),
-                XMLNode::Text(text) => DavXmlNode::Text(text),
-                XMLNode::CData(text) => DavXmlNode::CData(text),
-                XMLNode::Comment(text) => DavXmlNode::Comment(text),
-                XMLNode::ProcessingInstruction(name, value) => {
-                    DavXmlNode::ProcessingInstruction(name, value)
-                }
+                NodeRef::Element(element) => DavXmlNode::Element(element_from_forge(element)),
+                NodeRef::Text(text) => DavXmlNode::Text(text.to_owned()),
+                NodeRef::CData(text) => DavXmlNode::CData(text.to_owned()),
+                NodeRef::Comment(text) => DavXmlNode::Comment(text.to_owned()),
+                NodeRef::ProcessingInstruction(instruction) => DavXmlNode::ProcessingInstruction(
+                    instruction.target.to_owned(),
+                    instruction.content.map(str::to_owned),
+                ),
             })
             .collect(),
     }
 }
 
-fn element_to_xmltree(element: &DavXmlElement) -> Element {
-    let mut result = Element::new(&element.name);
-    result.prefix.clone_from(&element.prefix);
-    result.namespace.clone_from(&element.namespace);
-    if !element.namespaces.is_empty() {
-        let mut namespaces = xmltree::Namespace::empty();
-        for (prefix, namespace) in &element.namespaces {
-            namespaces.force_put(prefix.clone(), namespace.clone());
+fn write_element(
+    writer: &mut XmlStreamWriter<Vec<u8>>,
+    element: &DavXmlElement,
+    inherited_namespaces: &BTreeMap<String, String>,
+) -> Result<(), DavXmlError> {
+    let qualified_name = element.prefix.as_ref().map_or_else(
+        || element.name.clone(),
+        |prefix| format!("{prefix}:{}", element.name),
+    );
+    let mut namespaces = inherited_namespaces.clone();
+    let mut attributes = BTreeMap::new();
+    for (prefix, namespace) in &element.namespaces {
+        if namespaces.get(prefix) != Some(namespace) {
+            let name = if prefix.is_empty() {
+                "xmlns".to_owned()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            attributes.insert(name, namespace.clone());
         }
-        result.namespaces = Some(namespaces);
+        namespaces.insert(prefix.clone(), namespace.clone());
     }
-    result.attributes.extend(element.attributes.clone());
-    result.children = element
-        .children
-        .iter()
-        .map(|child| match child {
-            DavXmlNode::Element(element) => XMLNode::Element(element_to_xmltree(element)),
-            DavXmlNode::Text(text) => XMLNode::Text(text.clone()),
-            DavXmlNode::CData(text) => XMLNode::CData(text.clone()),
-            DavXmlNode::Comment(text) => XMLNode::Comment(text.clone()),
-            DavXmlNode::ProcessingInstruction(name, value) => {
-                XMLNode::ProcessingInstruction(name.clone(), value.clone())
+    attributes.extend(element.attributes.clone());
+    for (name, namespace) in &attributes {
+        if let Some(prefix) = namespace_declaration_prefix(name) {
+            namespaces.insert(prefix.to_owned(), namespace.clone());
+        }
+    }
+
+    if let Some(namespace) = &element.namespace {
+        let prefix = element.prefix.as_deref().unwrap_or("");
+        if namespaces.get(prefix).map(String::as_str) != Some(namespace) {
+            let binding_name = if prefix.is_empty() {
+                "xmlns".to_owned()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            match attributes.get(&binding_name) {
+                Some(binding) if binding != namespace => return Err(DavXmlError::Malformed),
+                Some(_) => {}
+                None => {
+                    attributes.insert(binding_name, namespace.clone());
+                }
             }
-        })
-        .collect();
-    result
+            namespaces.insert(prefix.to_owned(), namespace.clone());
+        }
+    } else if element.prefix.is_none()
+        && namespaces
+            .get("")
+            .is_some_and(|namespace| !namespace.is_empty())
+    {
+        match attributes.get("xmlns") {
+            Some(namespace) if !namespace.is_empty() => return Err(DavXmlError::Malformed),
+            Some(_) => {}
+            None => {
+                attributes.insert("xmlns".to_owned(), String::new());
+            }
+        }
+        namespaces.insert(String::new(), String::new());
+    }
+
+    let write_attributes = attributes
+        .iter()
+        .map(|(name, value)| XmlWriteAttribute::new(name, value));
+    if element.children.is_empty() {
+        writer
+            .empty_element(&qualified_name, write_attributes)
+            .map_err(map_forge_xml_error)?;
+        return Ok(());
+    }
+    writer
+        .start_element(&qualified_name, write_attributes)
+        .map_err(map_forge_xml_error)?;
+    for child in &element.children {
+        match child {
+            DavXmlNode::Element(element) => write_element(writer, element, &namespaces)?,
+            DavXmlNode::Text(text) => writer.text(text).map_err(map_forge_xml_error)?,
+            DavXmlNode::CData(text) => writer.cdata(text).map_err(map_forge_xml_error)?,
+            DavXmlNode::Comment(text) => writer.comment(text).map_err(map_forge_xml_error)?,
+            DavXmlNode::ProcessingInstruction(target, content) => {
+                writer
+                    .processing_instruction(target, content.as_deref())
+                    .map_err(map_forge_xml_error)?;
+            }
+        }
+    }
+    writer.end_element().map_err(map_forge_xml_error)
+}
+
+fn namespace_declaration_prefix(name: &str) -> Option<&str> {
+    if name == "xmlns" {
+        Some("")
+    } else {
+        name.strip_prefix("xmlns:")
+    }
 }

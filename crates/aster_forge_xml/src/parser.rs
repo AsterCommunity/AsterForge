@@ -240,7 +240,22 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
     let mut state = ScanState::default();
 
     loop {
-        let event = reader.read_event().map_err(map_quick_xml_error)?;
+        let event = reader.read_event().map_err(|error| {
+            let error_position = usize::try_from(reader.error_position()).unwrap_or(bytes.len());
+            if options.safety.reject_doctype
+                && matches!(
+                    error,
+                    quick_xml::Error::Syntax(quick_xml::errors::SyntaxError::InvalidBangMarkup)
+                )
+                && bytes
+                    .get(error_position..)
+                    .is_some_and(|input| input.starts_with(b"<!ENTITY"))
+            {
+                Error::Safety(XmlSafetyError::ExternalEntity)
+            } else {
+                map_quick_xml_error(error)
+            }
+        })?;
         if !matches!(event, Event::Eof) {
             state.count_event(options.safety)?;
         }

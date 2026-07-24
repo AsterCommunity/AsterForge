@@ -1,8 +1,18 @@
-use aster_forge_utils::xml::DEFAULT_XML_MAX_DEPTH;
+use std::io::{self, Cursor, Read};
+
 use aster_forge_webdav::{
     DavPropfindRequest, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
     parse_propfind_request, parse_proppatch_request, parse_report_root,
 };
+use aster_forge_xml::{DEFAULT_XML_MAX_DEPTH, XmlSafetyPolicy};
+
+struct FailingReader;
+
+impl Read for FailingReader {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("fixture read failure"))
+    }
+}
 
 #[test]
 fn propfind_absent_body_and_namespace_forms() {
@@ -266,6 +276,108 @@ fn xml_boundary_round_trips_namespaces_comments_cdata_utf8_and_escaping() {
             .children
             .iter()
             .any(|node| matches!(node, DavXmlNode::Comment(_)))
+    );
+}
+
+#[test]
+fn xml_boundary_preserves_default_namespace_undeclaration() {
+    let original = br#"<D:root xmlns:D="DAV:" xmlns="urn:default"><plain xmlns=""/></D:root>"#;
+    let element = DavXmlElement::parse(original).unwrap();
+    let bytes = element.to_bytes().unwrap();
+    let reparsed = DavXmlElement::parse(&bytes).unwrap();
+    let plain = reparsed.child_elements().next().unwrap();
+
+    assert_eq!(plain.name, "plain");
+    assert_eq!(plain.namespace, None);
+}
+
+#[test]
+fn xml_boundary_round_trips_namespace_shadowing_and_namespaced_attributes() {
+    let original = br#"<root xmlns="urn:root" xmlns:a="urn:a"><a:item a:id="7"><plain xmlns=""><a:leaf xmlns:a="urn:b"/></plain></a:item></root>"#;
+    let element = DavXmlElement::parse(original).unwrap();
+    let bytes = element.to_bytes().unwrap();
+    let reparsed = DavXmlElement::parse(&bytes).unwrap();
+    let item = reparsed.child_elements().next().unwrap();
+    let plain = item.child_elements().next().unwrap();
+    let leaf = plain.child_elements().next().unwrap();
+
+    assert_eq!(reparsed.namespace.as_deref(), Some("urn:root"));
+    assert_eq!(item.namespace.as_deref(), Some("urn:a"));
+    assert_eq!(item.attributes.get("a:id").map(String::as_str), Some("7"));
+    assert_eq!(plain.namespace, None);
+    assert_eq!(leaf.namespace.as_deref(), Some("urn:b"));
+}
+
+#[test]
+fn xml_reader_maps_io_invalid_encoding_and_size_boundaries() {
+    assert_eq!(
+        DavXmlElement::parse_reader(FailingReader),
+        Err(DavXmlError::Malformed)
+    );
+    assert_eq!(
+        DavXmlElement::parse_reader(Cursor::new(b"<root>\xff</root>")),
+        Err(DavXmlError::Malformed)
+    );
+
+    let max_input_bytes = XmlSafetyPolicy::untrusted().max_input_bytes;
+    let mut exact = Vec::with_capacity(max_input_bytes);
+    exact.extend_from_slice(b"<root>");
+    exact.resize(max_input_bytes - b"</root>".len(), b'x');
+    exact.extend_from_slice(b"</root>");
+    assert_eq!(exact.len(), max_input_bytes);
+    assert!(DavXmlElement::parse_reader(Cursor::new(&exact)).is_ok());
+
+    exact.insert(b"<root>".len(), b'x');
+    assert_eq!(exact.len(), max_input_bytes + 1);
+    assert_eq!(
+        DavXmlElement::parse_reader(Cursor::new(&exact)),
+        Err(DavXmlError::Malformed)
+    );
+}
+
+#[test]
+fn xml_writer_rejects_invalid_models_and_conflicting_namespaces() {
+    let unbound_prefix = DavXmlElement::new("p:root");
+    assert_eq!(unbound_prefix.to_bytes(), Err(DavXmlError::Malformed));
+
+    let mut conflicting_namespace = DavXmlElement::dav("root");
+    conflicting_namespace
+        .attributes
+        .insert("xmlns:D".to_owned(), "urn:not-dav".to_owned());
+    assert_eq!(
+        conflicting_namespace.to_bytes(),
+        Err(DavXmlError::Malformed)
+    );
+
+    for node in [
+        DavXmlNode::Text("bad\u{0}text".to_owned()),
+        DavXmlNode::CData("bad]]>cdata".to_owned()),
+        DavXmlNode::Comment("bad--comment".to_owned()),
+        DavXmlNode::ProcessingInstruction("xml".to_owned(), None),
+        DavXmlNode::ProcessingInstruction("work".to_owned(), Some("bad?>pi".to_owned())),
+    ] {
+        let mut element = DavXmlElement::dav("root");
+        element.children.push(node);
+        assert_eq!(element.to_bytes(), Err(DavXmlError::Malformed));
+    }
+}
+
+#[test]
+fn xml_writer_accepts_exact_depth_and_rejects_one_over() {
+    fn nested(depth: usize) -> DavXmlElement {
+        let mut element = DavXmlElement::dav("node");
+        for _ in 1..depth {
+            let mut parent = DavXmlElement::dav("node");
+            parent.children.push(DavXmlNode::Element(element));
+            element = parent;
+        }
+        element
+    }
+
+    assert!(nested(DEFAULT_XML_MAX_DEPTH).to_bytes().is_ok());
+    assert_eq!(
+        nested(DEFAULT_XML_MAX_DEPTH + 1).to_bytes(),
+        Err(DavXmlError::TooDeep)
     );
 }
 
