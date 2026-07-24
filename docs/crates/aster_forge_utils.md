@@ -196,58 +196,6 @@ Unicode segmentation 策略。
 
 适合 external auth callback、CORS origin、公开 base URL 等配置规范化。`public_site_*` helper 只处理产品无关的 origin 解析、去重、请求 origin 匹配和 URL 拼接；产品侧仍然保留具体 config key、runtime snapshot、日志上下文和错误映射。
 
-### xml
-
-主要 API：
-
-- `DEFAULT_XML_MAX_DEPTH`
-- `XmlSafetyPolicy`
-- `XmlSafetyPolicy::untrusted()`
-- `XmlSafetyError`
-- `validate_xml_input(bytes, policy)`
-- `xml_root_local_name(bytes, policy)`
-
-`validate_xml_input` 使用 `quick-xml` 事件读取器校验输入，不递归构造 DOM。默认的不可信
-输入策略拒绝 `DOCTYPE` / `ENTITY` 声明，并把最大同时打开元素数限制为 128。校验同时要求
-输入是完整、格式正确、仅有一个根元素的 XML 文档。
-
-`reject_doctype` 策略会在解析前做字节级预扫描：预扫描不理解 CDATA 和注释，文本内容里合法出现
-`<!DOCTYPE` / `<!ENTITY` 字样的文档（如 `<![CDATA[<!DOCTYPE x>]]>`）也会被拒。误报方向是"拒绝"，
-属于 fail-safe；产品必须接受这类内容时应走其他解析通道。
-
-```rust
-use aster_forge_utils::xml::{XmlSafetyPolicy, validate_xml_input};
-
-validate_xml_input(body, XmlSafetyPolicy::untrusted())?;
-let document = product_xml_parser(body)?;
-```
-
-只需要分派根元素、无需保留 DOM 时，直接使用 `xml_root_local_name`。它会先执行同一套安全
-校验，再返回去除命名空间前缀后的根元素本地名：
-
-```rust
-use aster_forge_utils::xml::{XmlSafetyPolicy, xml_root_local_name};
-
-let report_type = xml_root_local_name(body, XmlSafetyPolicy::untrusted())?;
-```
-
-该 helper 只负责 XML 结构安全，不负责：
-
-- HTTP response body 的累计字节上限；调用方必须在聚合响应前单独限制大小。
-- XML 业务 schema、元素名、命名空间和字段语义。
-- 构建 DOM 或把 XML 映射为产品 DTO。
-- 把错误映射为 REST、WebDAV、WOPI 或对象存储协议响应。
-
-需要保留完整 XML 子树时，应先调用 `validate_xml_input`，再把通过校验的字节交给
-`xmltree` 或产品自己的解析器。不要把外部输入直接交给递归 DOM parser。
-
-`XmlSafetyError` 的稳定分类为：
-
-- `InvalidPolicy`：最大深度为零等调用方配置错误。
-- `ExternalEntity`：输入含被策略禁止的 DTD 或 ENTITY 声明。
-- `TooDeep`：嵌套深度超过策略上限。
-- `Malformed`：空文档、多个根元素、标签错配、未闭合或其他格式错误。
-
 ## 错误边界
 
 `UtilsError` 分为：
@@ -257,20 +205,14 @@ let report_type = xml_root_local_name(body, XmlSafetyPolicy::untrusted())?;
 
 产品侧应在配置加载、API handler 或 service 边界映射成具体错误。不要把 `UtilsError` 直接作为产品 API error 类型。
 
-`xml` 模块使用独立的强类型 `XmlSafetyError`，方便调用方保留 `ExternalEntity`、`TooDeep`
-和 `Malformed` 的协议差异；它不经过通用 `UtilsError` 文案匹配。
-
 ## 测试要求
 
 - 每个产品接入点覆盖非法输入。
 - 数值转换测试要包含负数、超上限和边界值。
 - URL/origin 测试要覆盖 loopback HTTP、HTTPS、wildcard。
 - trusted proxy 测试要覆盖多代理链。
-- XML 测试要覆盖正常输入、精确深度上限、超限一层、空文档、多个根元素、标签错配、
-  DTD/ENTITY 大小写变体、尾部不完整 markup，以及允许 DTD 的显式策略分支。
 
 ## 参考项目
 
-- AsterDrive：URL、proxy、upload chunk、token、临时路径、数值转换，以及 WebDAV/WOPI/
-  对象存储 XML 输入安全场景丰富。
+- AsterDrive：URL、proxy、upload chunk、token、临时路径和数值转换场景丰富。
 - AsterYggdrasil：适合看轻量项目如何直接调用 Forge utils，避免保留无意义 facade。

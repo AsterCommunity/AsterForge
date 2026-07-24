@@ -46,6 +46,7 @@ const cratePages = [
   ["Tasks", "/crates/aster_forge_tasks"],
   ["Utils", "/crates/aster_forge_utils"],
   ["Validation", "/crates/aster_forge_validation"],
+  ["XML", "/crates/aster_forge_xml"],
 ] as const
 
 function crateSidebar() {

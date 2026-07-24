@@ -64,6 +64,7 @@ aster_forge_runtime::AsterRuntime::builder()
 - [`aster_forge_tasks`](./crates/aster_forge_tasks.md)
 - [`aster_forge_utils`](./crates/aster_forge_utils.md)
 - [`aster_forge_validation`](./crates/aster_forge_validation.md)
+- [`aster_forge_xml`](./crates/aster_forge_xml.md)
 
 ## 参考项目
 
