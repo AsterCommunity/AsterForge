@@ -80,9 +80,10 @@ pub async fn check_cache_component(
     config: &CacheConfig,
     cache: &dyn CacheBackend,
 ) -> HealthComponentReport {
-    if config.backend != cache.backend_name() {
+    let configured_backend = config.normalized_backend();
+    if configured_backend != cache.backend_name() {
         tracing::debug!(
-            configured_backend = %config.backend,
+            configured_backend = %configured_backend,
             active_backend = cache.backend_name(),
             "cache backend is using fallback"
         );
@@ -90,11 +91,11 @@ pub async fn check_cache_component(
             CACHE_HEALTH_CHECK,
             format!(
                 "configured cache backend '{}' is using active backend '{}'",
-                config.backend,
+                configured_backend,
                 cache.backend_name()
             ),
         )
-        .with_detail("configured_backend", config.backend.clone())
+        .with_detail("configured_backend", configured_backend.into_owned())
         .with_detail("active_backend", cache.backend_name());
     }
 
@@ -254,6 +255,19 @@ mod tests {
                 .and_then(HealthComponentDetailValue::as_text),
             Some("redis")
         );
+    }
+
+    #[tokio::test]
+    async fn cache_component_uses_the_same_normalized_backend_as_factory() {
+        let config = CacheConfig {
+            backend: " ReDiS ".to_string(),
+            endpoint: "redis://example.com:6379/0".to_string(),
+            default_ttl: 60,
+        };
+
+        let report = check_cache_component(&config, &FakeCache::new("redis")).await;
+
+        assert_eq!(report.status, HealthStatus::Healthy);
     }
 
     #[tokio::test]

@@ -35,6 +35,7 @@ const cratePages = [
   ["Config", "/crates/aster_forge_config"],
   ["Crypto", "/crates/aster_forge_crypto"],
   ["Database", "/crates/aster_forge_db"],
+  ["Database migration", "/crates/aster_forge_db_migration"],
   ["External auth", "/crates/aster_forge_external_auth"],
   ["File classification", "/crates/aster_forge_file_classification"],
   ["Logging", "/crates/aster_forge_logging"],

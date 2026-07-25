@@ -55,13 +55,13 @@ async fn create_scheduled_tasks(manager: &SchemaManager<'_>) -> Result<(), DbErr
 }
 
 async fn drop_scheduled_tasks(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    aster_forge_db::drop_index_if_exists(
+    aster_forge_db_migration::drop_index_if_exists(
         manager.get_connection(),
         aster_forge_db::SCHEDULED_TASKS_TABLE,
         aster_forge_db::SCHEDULED_TASK_NEXT_RUN_INDEX,
     )
     .await?;
-    aster_forge_db::drop_index_if_exists(
+    aster_forge_db_migration::drop_index_if_exists(
         manager.get_connection(),
         aster_forge_db::SCHEDULED_TASKS_TABLE,
         aster_forge_db::SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX,
@@ -84,7 +84,7 @@ async fn create_system_config(manager: &SchemaManager<'_>) -> Result<(), DbErr> 
 }
 
 async fn drop_system_config(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    aster_forge_db::drop_index_if_exists(
+    aster_forge_db_migration::drop_index_if_exists(
         manager.get_connection(),
         aster_forge_db::SYSTEM_CONFIG_TABLE,
         aster_forge_db::SYSTEM_CONFIG_KEY_UNIQUE_INDEX,
@@ -118,7 +118,7 @@ async fn drop_mail_outbox(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         aster_forge_db::MAIL_OUTBOX_PROCESSING_INDEX,
         aster_forge_db::MAIL_OUTBOX_DUE_INDEX,
     ] {
-        aster_forge_db::drop_index_if_exists(
+        aster_forge_db_migration::drop_index_if_exists(
             manager.get_connection(),
             aster_forge_db::MAIL_OUTBOX_TABLE,
             index_name,
@@ -156,7 +156,7 @@ async fn drop_audit_logs(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         aster_forge_db::AUDIT_LOG_ACTION_INDEX,
         aster_forge_db::AUDIT_LOG_CREATED_AT_INDEX,
     ] {
-        aster_forge_db::drop_index_if_exists(
+        aster_forge_db_migration::drop_index_if_exists(
             manager.get_connection(),
             aster_forge_db::AUDIT_LOGS_TABLE,
             index_name,

@@ -1,5 +1,5 @@
-use sea_orm::sea_query::{Alias, Index, IndexDropStatement};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statement};
+use sea_orm_migration::sea_orm::sea_query::{Alias, Index, IndexDropStatement};
+use sea_orm_migration::sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statement};
 
 /// Drops an index when it exists across all supported database backends.
 ///
@@ -25,8 +25,7 @@ where
 
 /// Renames a MySQL index when the source exists and the target does not.
 ///
-/// This is useful when a table or business term is renamed while preserving
-/// the physical index definition. Calling it repeatedly is safe.
+/// Calling it repeatedly is safe.
 pub async fn rename_mysql_index_if_exists<C>(
     db: &C,
     table_name: &str,
@@ -105,8 +104,10 @@ fn validate_mysql_identifier(identifier: &str) -> Result<(), DbErr> {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
-    use sea_orm::{ConnectionTrait, Database, DatabaseBackend};
+    use sea_orm_migration::sea_orm::sea_query::{
+        MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder,
+    };
+    use sea_orm_migration::sea_orm::{ConnectionTrait, Database, DatabaseBackend};
 
     use super::{
         drop_index_for_backend, drop_index_if_exists, rename_mysql_index_if_exists,
@@ -140,29 +141,25 @@ mod tests {
 
     #[tokio::test]
     async fn drop_index_if_exists_is_idempotent_on_sqlite() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("SQLite migration helper test database should connect");
+        let db = Database::connect("sqlite::memory:").await.unwrap();
         db.execute_unprepared("CREATE TABLE example_table (id INTEGER PRIMARY KEY)")
             .await
-            .expect("example table should be created");
+            .unwrap();
         db.execute_unprepared("CREATE INDEX idx_example ON example_table (id)")
             .await
-            .expect("example index should be created");
+            .unwrap();
 
         drop_index_if_exists(&db, "example_table", "idx_example")
             .await
-            .expect("existing index should be dropped");
+            .unwrap();
         drop_index_if_exists(&db, "example_table", "idx_example")
             .await
-            .expect("missing index should be ignored");
+            .unwrap();
     }
 
     #[tokio::test]
     async fn mysql_index_rename_rejects_non_mysql_connections() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("SQLite migration helper test database should connect");
+        let db = Database::connect("sqlite::memory:").await.unwrap();
         let error = rename_mysql_index_if_exists(
             &db,
             "example_table",
@@ -170,7 +167,7 @@ mod tests {
             "idx_example_new",
         )
         .await
-        .expect_err("MySQL-only index rename should reject SQLite");
+        .unwrap_err();
 
         assert!(error.to_string().contains("requires a MySQL connection"));
     }

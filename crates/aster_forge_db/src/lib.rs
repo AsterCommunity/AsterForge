@@ -22,7 +22,6 @@ pub mod audit_log;
 #[cfg(feature = "runtime-component")]
 mod component;
 pub mod connection;
-mod index;
 #[cfg(feature = "mail-outbox")]
 pub mod mail_outbox;
 pub mod pagination;
@@ -68,7 +67,6 @@ pub use connection::{
     DatabaseConfig, DbHandles, connect, connect_reader_for_writer,
     connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
-pub use index::{drop_index_if_exists, rename_mysql_index_if_exists};
 #[cfg(feature = "mail-outbox")]
 pub use mail_outbox::{
     MAIL_OUTBOX_ATTEMPT_COUNT_COLUMN, MAIL_OUTBOX_CREATED_AT_COLUMN, MAIL_OUTBOX_DUE_INDEX,

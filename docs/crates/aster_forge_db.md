@@ -1,6 +1,6 @@
 # aster_forge_db
 
-`aster_forge_db` 提供 SeaORM 相关的共享基础设施：数据库连接、连接关闭、查询重试、分页构造、搜索 query 处理、排序 helper、事务封装、runtime lease 数据库 store、scheduled task catalog 数据库 store、system config store、mail outbox store 和 audit log store。
+`aster_forge_db` 提供 SeaORM 相关的共享基础设施：数据库连接、连接关闭、查询重试、分页构造、搜索 query 处理、排序 helper、事务封装、runtime lease 数据库 store、scheduled task catalog 数据库 store、system config store、mail outbox store 和 audit log store。Migration 执行协调和 migration-only schema helper 由 `aster_forge_db_migration` 提供。
 
 ## 适用场景
 
@@ -125,13 +125,13 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        aster_forge_db::drop_index_if_exists(
+        aster_forge_db_migration::drop_index_if_exists(
             manager.get_connection(),
             aster_forge_db::SCHEDULED_TASKS_TABLE,
             aster_forge_db::SCHEDULED_TASK_NEXT_RUN_INDEX,
         )
         .await?;
-        aster_forge_db::drop_index_if_exists(
+        aster_forge_db_migration::drop_index_if_exists(
             manager.get_connection(),
             aster_forge_db::SCHEDULED_TASKS_TABLE,
             aster_forge_db::SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX,
@@ -202,7 +202,7 @@ manager
 down migration：
 
 ```rust
-aster_forge_db::drop_index_if_exists(
+aster_forge_db_migration::drop_index_if_exists(
     manager.get_connection(),
     aster_forge_db::SYSTEM_CONFIG_TABLE,
     aster_forge_db::SYSTEM_CONFIG_KEY_UNIQUE_INDEX,
@@ -327,7 +327,7 @@ for index_name in [
     aster_forge_db::AUDIT_LOG_CREATED_ID_INDEX,
     aster_forge_db::AUDIT_LOG_ACTION_CREATED_USER_INDEX,
 ] {
-    aster_forge_db::drop_index_if_exists(
+    aster_forge_db_migration::drop_index_if_exists(
         manager.get_connection(),
         aster_forge_db::AUDIT_LOGS_TABLE,
         index_name,

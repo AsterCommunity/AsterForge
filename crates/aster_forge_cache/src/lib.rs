@@ -29,6 +29,7 @@ mod reservation;
 
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
+use std::borrow::Cow;
 #[cfg(feature = "memory")]
 use std::sync::Arc;
 
@@ -109,6 +110,20 @@ impl CacheConfig {
 
     const fn default_ttl() -> u64 {
         DEFAULT_CACHE_TTL_SECS
+    }
+
+    /// Returns the normalized backend name used by construction, validation, and health checks.
+    pub fn normalized_backend(&self) -> Cow<'_, str> {
+        let backend = self.backend.trim();
+        if backend.eq_ignore_ascii_case("memory") {
+            Cow::Borrowed("memory")
+        } else if backend.eq_ignore_ascii_case("redis") {
+            Cow::Borrowed("redis")
+        } else if backend.bytes().all(|byte| !byte.is_ascii_uppercase()) {
+            Cow::Borrowed(backend)
+        } else {
+            Cow::Owned(backend.to_ascii_lowercase())
+        }
     }
 }
 
@@ -205,7 +220,7 @@ impl CacheExt for dyn CacheBackend {
 /// Creates a cache backend from configuration.
 #[cfg(feature = "memory")]
 pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
-    match config.backend.as_str() {
+    match config.normalized_backend().as_ref() {
         #[cfg(feature = "redis")]
         "redis" => match redis_cache::RedisCache::new(&config.endpoint, config.default_ttl).await {
             Ok(cache) => {
@@ -275,6 +290,34 @@ mod tests {
         assert_eq!(config.backend, "redis");
         assert_eq!(config.endpoint, "redis://127.0.0.1/");
         assert_eq!(config.default_ttl, 30);
+    }
+
+    #[test]
+    fn cache_backend_normalization_trims_and_folds_ascii_case() {
+        for (backend, expected) in [
+            (" memory ", "memory"),
+            (" ReDiS ", "redis"),
+            (" CUSTOM-BACKEND ", "custom-backend"),
+            (" \n\t", ""),
+        ] {
+            let config = CacheConfig {
+                backend: backend.to_string(),
+                ..CacheConfig::default()
+            };
+            assert_eq!(config.normalized_backend(), expected);
+        }
+    }
+
+    #[cfg(feature = "memory")]
+    #[tokio::test]
+    async fn create_cache_uses_normalized_memory_backend() {
+        let cache = super::create_cache(&CacheConfig {
+            backend: " MeMoRy ".to_string(),
+            ..CacheConfig::default()
+        })
+        .await;
+
+        assert_eq!(cache.backend_name(), "memory");
     }
 
     #[cfg(feature = "memory")]

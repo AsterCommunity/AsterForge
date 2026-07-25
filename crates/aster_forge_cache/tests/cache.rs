@@ -42,7 +42,7 @@ fn unique_key(name: &str) -> String {
 async fn wait_for_redis_cache(endpoint: String) -> Arc<dyn aster_forge_cache::CacheBackend> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let config = CacheConfig {
-        backend: "redis".to_string(),
+        backend: " ReDiS ".to_string(),
         endpoint,
         default_ttl: 60,
     };
