@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::io::{BufRead, Take, Write};
-use std::str;
 
 use aster_forge_utils::numbers::usize_to_u64;
 use quick_xml::XmlVersion;
@@ -14,6 +13,7 @@ use quick_xml::name::{NamespaceResolver, PrefixDeclaration, ResolveResult};
 use quick_xml::reader::NsReader;
 use quick_xml::writer::Writer;
 
+use crate::syntax::{map_quick_xml_error, utf8};
 use crate::{Error, ValidatedXml, XmlSafetyError, XmlSafetyPolicy};
 
 /// A namespace-resolved XML name borrowed from one streaming event.
@@ -713,17 +713,6 @@ fn decode_reference<'a>(
         "quot" => "\"",
         _ => return Err(XmlSafetyError::ExternalEntity.into()),
     }))
-}
-
-fn utf8(bytes: &[u8]) -> Result<&str, Error> {
-    str::from_utf8(bytes).map_err(|_| XmlSafetyError::InvalidEncoding.into())
-}
-
-fn map_quick_xml_error(error: quick_xml::Error) -> Error {
-    match error {
-        quick_xml::Error::Encoding(_) => XmlSafetyError::InvalidEncoding.into(),
-        error => Error::InvalidXml(error.to_string()),
-    }
 }
 
 fn write_capture_event(writer: &mut Writer<LimitedVec>, event: Event<'_>) -> Result<(), Error> {

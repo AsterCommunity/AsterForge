@@ -8,8 +8,8 @@ use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::syntax::{
-    XML_NAMESPACE_URI, map_quick_xml_error, split_qualified_name, utf8, validate_namespace_binding,
-    validate_qualified_name,
+    XML_NAMESPACE_URI, map_quick_xml_error_at, split_qualified_name, utf8,
+    validate_namespace_binding, validate_qualified_name,
 };
 use crate::{DEFAULT_XML_MAX_DEPTH, Error, XmlSafetyError};
 
@@ -240,7 +240,10 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
     let mut state = ScanState::default();
 
     loop {
-        let event = reader.read_event().map_err(map_quick_xml_error)?;
+        let event = reader.read_event().map_err(|error| {
+            let error_position = usize::try_from(reader.error_position()).unwrap_or(bytes.len());
+            map_quick_xml_error_at(error, error_position, bytes, options.safety.reject_doctype)
+        })?;
         if !matches!(event, Event::Eof) {
             state.count_event(options.safety)?;
         }

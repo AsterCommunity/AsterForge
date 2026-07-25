@@ -83,6 +83,7 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", pa
 aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks", features = ["runtime-component"] }
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
 aster_forge_validation = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_validation" }
+aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_webdav", features = ["actix"] }
 aster_forge_xml = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_xml" }
 ```
 
@@ -114,6 +115,7 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 | `aster_forge_mail` | 无 | `persistence`, `runtime-component`, `openapi` | sender/template 默认可用；SeaORM outbox model 和 runtime drain component 分开启用。 |
 | `aster_forge_metrics` | 无 | `backend-prometheus`, `runtime-health`, `allocator-metrics` | backend 由产品入口统一选择；普通产品用 `init_configured_or_noop()`。 |
 | `aster_forge_tasks` | 无 | `runtime`, `runtime-component`, `openapi` | retry、dedupe、steps、spec 默认可用；worker/scheduled runtime 和 component factory 分开启用。 |
+| `aster_forge_webdav` | 无 | `actix` | transport-neutral 协议内核默认可用；Actix adapter 显式启用。 |
 
 ## main.rs 目标形态
 

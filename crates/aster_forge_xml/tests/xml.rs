@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, Cursor, Write};
 
 use aster_forge_xml::{
     BorrowedDocument, Error, NodeRef, OwnedDocument, ParseOptions, XmlSafetyError, XmlSafetyPolicy,
@@ -100,7 +100,58 @@ fn validates_complete_single_root_and_declarations() {
         validate_xml_input(b"<!DOCTYPE a [<!ENTITY x 'boom'>]><a>&x;</a>", policy),
         Err(XmlSafetyError::ExternalEntity)
     );
+    assert_eq!(
+        validate_xml_input(b"<!ENTITY x 'boom'><a/>", policy),
+        Err(XmlSafetyError::ExternalEntity)
+    );
     assert!(validate_xml_input(b"<a><![CDATA[<!DOCTYPE harmless>]]></a>", policy).is_ok());
+    assert_eq!(
+        validate_xml_input(b"<!-- <!ENTITY x 'harmless'> --><!BROKEN><a/>", policy),
+        Err(XmlSafetyError::Malformed)
+    );
+}
+
+#[test]
+fn classifies_entity_declarations_consistently_across_complete_document_entry_points() {
+    let policy = XmlSafetyPolicy::untrusted();
+    let options = ParseOptions::new().safety_policy(policy);
+    let entity = b"<!ENTITY x 'boom'><a/>";
+
+    assert_eq!(
+        validate_xml_input(entity, policy),
+        Err(XmlSafetyError::ExternalEntity)
+    );
+    assert!(matches!(
+        BorrowedDocument::parse_with_options(entity.as_slice(), &options),
+        Err(Error::Safety(XmlSafetyError::ExternalEntity))
+    ));
+    assert!(matches!(
+        OwnedDocument::from_reader_with_options(Cursor::new(entity), &options),
+        Err(Error::Safety(XmlSafetyError::ExternalEntity))
+    ));
+
+    for harmless in [
+        b"<!-- <!ENTITY x 'harmless'> --><a/>".as_slice(),
+        b"<a><![CDATA[<!ENTITY x 'harmless'>]]></a>",
+    ] {
+        assert!(validate_xml_input(harmless, policy).is_ok());
+        assert!(BorrowedDocument::parse_with_options(harmless, &options).is_ok());
+        assert!(OwnedDocument::from_reader_with_options(Cursor::new(harmless), &options).is_ok());
+    }
+
+    let malformed = b"<!BROKEN><a/>";
+    assert_eq!(
+        validate_xml_input(malformed, policy),
+        Err(XmlSafetyError::Malformed)
+    );
+    assert!(matches!(
+        BorrowedDocument::parse_with_options(malformed.as_slice(), &options),
+        Err(Error::InvalidXml(_))
+    ));
+    assert!(matches!(
+        OwnedDocument::from_reader_with_options(Cursor::new(malformed), &options),
+        Err(Error::InvalidXml(_))
+    ));
 }
 
 #[test]
