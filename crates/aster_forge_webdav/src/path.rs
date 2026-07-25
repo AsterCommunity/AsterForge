@@ -126,6 +126,9 @@ impl DavPath {
     /// Percent-decodes and canonicalizes a path without allowing root escape.
     pub fn new(path: &str) -> Result<Self, DavPathError> {
         let encoded = ensure_leading_slash(path);
+        if contains_encoded_path_separator(&encoded) {
+            return Err(DavPathError::InvalidEncoding);
+        }
         let decoded = percent_decode_str(&encoded)
             .decode_utf8()
             .map_err(|_| DavPathError::InvalidEncoding)?;
@@ -158,6 +161,14 @@ impl DavPath {
     pub fn is_collection(&self) -> bool {
         self.canonical == "/" || self.canonical.ends_with('/')
     }
+}
+
+fn contains_encoded_path_separator(path: &str) -> bool {
+    path.as_bytes().windows(3).any(|window| {
+        let high = window[1].to_ascii_lowercase();
+        let low = window[2].to_ascii_lowercase();
+        window[0] == b'%' && matches!((high, low), (b'2', b'f') | (b'5', b'c'))
+    })
 }
 
 fn ensure_leading_slash(path: &str) -> String {

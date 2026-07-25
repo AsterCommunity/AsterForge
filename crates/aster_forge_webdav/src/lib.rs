@@ -35,8 +35,8 @@ pub mod xml_response;
 pub use backend::{
     DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavFile, DavFileSystem,
     DavIfResourceState, DavIfStateResolver, DavLock, DavLockError, DavLockPreflightError,
-    DavLockSystem, DavMetaData, DavProp, DavPropertyTarget, DavResourceKind, FsError, FsFuture,
-    FsResult, FsStream, LsFuture, OpenOptions, ReadDirMeta,
+    DavLockSystem, DavMetaData, DavProp, DavResourceKind, FsError, FsFuture, FsResult, FsStream,
+    LsFuture, OpenOptions, ReadDirMeta,
 };
 pub use deltav::{
     DavVersionTreeReportError, validate_version_tree_report, version_control_response,

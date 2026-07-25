@@ -91,13 +91,6 @@ pub enum DavResourceKind {
     Collection,
 }
 
-/// Product-side resource kind and numeric primary key used to batch dead-property reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DavPropertyTarget {
-    pub kind: DavResourceKind,
-    pub id: i64,
-}
-
 /// Protocol-visible state used to evaluate one resource referenced by an `If` header.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DavIfResourceState {
@@ -159,9 +152,6 @@ pub trait DavMetaData: Send + Sync {
         None
     }
     fn created(&self) -> FsResult<SystemTime>;
-    fn property_target(&self) -> Option<DavPropertyTarget> {
-        None
-    }
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -248,24 +238,6 @@ pub trait DavFileSystem: Send + Sync {
                 result.insert(path.clone(), self.get_props(path, do_content).await?);
             }
             Ok(result)
-        })
-    }
-
-    /// Serial fallback that discards target IDs and delegates to
-    /// [`DavFileSystem::get_props_many`].
-    ///
-    /// Production adapters should override this method to batch by the supplied numeric targets.
-    fn get_props_many_for_targets<'a>(
-        &'a self,
-        targets: &'a [(DavPath, DavPropertyTarget)],
-        do_content: bool,
-    ) -> FsFuture<'a, HashMap<DavPath, Vec<DavProp>>> {
-        Box::pin(async move {
-            let paths = targets
-                .iter()
-                .map(|(path, _)| path.clone())
-                .collect::<Vec<_>>();
-            self.get_props_many(&paths, do_content).await
         })
     }
 

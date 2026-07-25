@@ -1,6 +1,4 @@
-use aster_forge_webdav::{
-    DavBackendError, DavBackendErrorKind, DavPropertyTarget, DavResourceKind, FsError, OpenOptions,
-};
+use aster_forge_webdav::{DavBackendError, DavBackendErrorKind, FsError, OpenOptions};
 
 #[test]
 fn filesystem_errors_map_exhaustively_to_protocol_backend_categories() {
@@ -22,7 +20,7 @@ fn filesystem_errors_map_exhaustively_to_protocol_backend_categories() {
 }
 
 #[test]
-fn open_modes_and_property_targets_are_transport_neutral_values() {
+fn open_modes_are_transport_neutral_values() {
     assert_eq!(
         OpenOptions::read(),
         OpenOptions {
@@ -37,11 +35,4 @@ fn open_modes_and_property_targets_are_transport_neutral_values() {
             ..OpenOptions::default()
         }
     );
-
-    let target = DavPropertyTarget {
-        kind: DavResourceKind::Collection,
-        id: i64::MAX,
-    };
-    assert_eq!(target.kind, DavResourceKind::Collection);
-    assert_eq!(target.id, i64::MAX);
 }

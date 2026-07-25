@@ -77,6 +77,25 @@ fn dav_path_canonicalizes_dot_segments_and_rejects_escape() {
 }
 
 #[test]
+fn dav_path_rejects_percent_encoded_path_separators_before_decoding() {
+    for path in [
+        "/folder%2Fchild",
+        "/folder%2fchild",
+        "/folder%5Cchild",
+        "/folder%5cchild",
+    ] {
+        assert_eq!(DavPath::new(path), Err(DavPathError::InvalidEncoding));
+    }
+
+    assert_eq!(
+        DavPath::new("/folder%252Fchild")
+            .expect("a once-decoded literal percent sequence should remain one segment")
+            .as_str(),
+        "/folder%2Fchild"
+    );
+}
+
+#[test]
 fn dav_path_preserves_collection_aliases_and_internal_parent_segments() {
     for value in [
         "/projects/docs/.",
