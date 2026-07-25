@@ -43,7 +43,7 @@ impl SmtpTestContainer {
             .expect("Mailpit API port should be exposed");
         drop(lock);
         let smtp_address = SocketAddr::from(([127, 0, 0, 1], smtp_port));
-        let ready = wait_until(
+        let smtp_ready = wait_until(
             Duration::from_secs(90),
             Duration::from_millis(250),
             || async {
@@ -51,12 +51,28 @@ impl SmtpTestContainer {
             },
         )
         .await;
-        assert!(ready, "Mailpit SMTP endpoint did not become ready");
+        assert!(smtp_ready, "Mailpit SMTP endpoint did not become ready");
+
+        let api_base_url = format!("http://127.0.0.1:{api_port}");
+        let client = reqwest::Client::new();
+        let api_ready = wait_until(
+            Duration::from_secs(90),
+            Duration::from_millis(250),
+            || async {
+                client
+                    .get(format!("{api_base_url}/api/v1/messages"))
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.status().is_success())
+            },
+        )
+        .await;
+        assert!(api_ready, "Mailpit API endpoint did not become ready");
 
         Self {
             smtp_address,
-            api_base_url: format!("http://127.0.0.1:{api_port}"),
-            client: reqwest::Client::new(),
+            api_base_url,
+            client,
             _container: container,
             _lease: ContainerLease::new(suite.clone(), "mailpit"),
         }

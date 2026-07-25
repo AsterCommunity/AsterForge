@@ -107,7 +107,7 @@ database.cleanup().await;
 - 非 Unix 平台没有 `kill -0`，保守地假设进程存活，即孤儿资源不会被清理（功能正确，只是清理变懒）。
 - `PostgresTestContainer::create_database()` 返回 `PostgresTestDatabase`，统一负责安全建库、连接重试、孤儿库清理和显式销毁。产品侧只负责数据库名称、migration 与 seed 数据。
 - MySQL helper 当前只提供 root 连接 URL；涉及产品用户授权时仍由产品测试 harness 负责，避免 Forge 猜测产品账号模型。
-- `SmtpTestContainer` 封装 Mailpit 的 SMTP/API 端口和消息 API。产品测试只负责邮件业务配置与投递断言，不重复拼 Mailpit URL 或解析其 JSON。
+- `SmtpTestContainer` 封装 Mailpit 的 SMTP/API 端口和消息 API。`start()` 会同时等待 SMTP 和 HTTP API ready，返回后可以直接调用 `clear_messages()` / `message_count()`；产品测试只负责邮件业务配置与投递断言，不重复拼 Mailpit URL、启动重试或解析其 JSON。
 
 ## 真实子进程
 
