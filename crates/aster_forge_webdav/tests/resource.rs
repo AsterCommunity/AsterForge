@@ -2,8 +2,9 @@ use aster_forge_webdav::{
     DavCopyMoveMethod, DavMutationFailure, DavMutationPlanError, DavPath, DavResourceKind,
     DavResponseBody, Depth, collection_created_response, delete_success_response,
     is_descendant_path, mutation_multistatus_response, mutation_plan_error_response,
-    mutation_success_response, plan_copy_move_request, resource_identity_path, same_resource_path,
-    validate_collection_create_target, validate_delete_target,
+    mutation_success_response, plan_copy_move_request, replace_relative_prefix,
+    resource_identity_path, same_resource_path, validate_collection_create_target,
+    validate_delete_target,
 };
 use http::StatusCode;
 
@@ -17,6 +18,26 @@ fn resource_identity_and_descendant_rules_use_path_boundaries() {
     assert!(!is_descendant_path("/docs", "/docs-2/file.txt"));
     assert!(!is_descendant_path("/docs", "/docs"));
     assert!(!is_descendant_path("/", "/docs"));
+}
+
+#[test]
+fn recursive_mutation_path_rebasing_respects_segment_and_collection_boundaries() {
+    assert_eq!(
+        replace_relative_prefix("/docs/docs/file.txt", "/docs", "/archive"),
+        "/archive/docs/file.txt"
+    );
+    assert_eq!(
+        replace_relative_prefix("/docs/", "/docs/", "/archive/"),
+        "/archive/"
+    );
+    assert_eq!(
+        replace_relative_prefix("/docs/sub/", "/docs/", "/archive/"),
+        "/archive/sub/"
+    );
+    assert_eq!(
+        replace_relative_prefix("/docs2/file.txt", "/docs", "/archive"),
+        "/archive/docs2/file.txt"
+    );
 }
 
 #[test]

@@ -5,8 +5,12 @@ use std::time::{Duration, SystemTime};
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{StatusCode, Uri};
 
-use crate::{DavBackendError, DavIfResourceState, DavIfStateResolver, DavPath};
+use crate::{
+    DavBackendError, DavFileSystem, DavIfResourceState, DavIfStateResolver, DavLockSystem, DavPath,
+    FsError,
+};
 use aster_forge_utils::http_validators;
+use async_trait::async_trait;
 
 /// WebDAV `Depth` header value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,6 +305,62 @@ pub async fn enforce_if_header(
         }
     }
     Ok(())
+}
+
+/// Resolves `If` state from the canonical filesystem and lock backend ports.
+///
+/// Products normally use this entrypoint instead of implementing a transport-local resolver.
+/// A missing resource contributes no ETag, while all other filesystem failures preserve the
+/// backend error boundary.
+pub async fn enforce_if_header_with_backends(
+    if_header: Option<&IfHeader>,
+    filesystem: &dyn DavFileSystem,
+    lock_system: &dyn DavLockSystem,
+    request_path: &DavPath,
+    prefix: &str,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), DavIfEvaluationError> {
+    let resolver = BackendIfStateResolver {
+        filesystem,
+        lock_system,
+    };
+    enforce_if_header(
+        if_header,
+        &resolver,
+        request_path,
+        prefix,
+        request_scheme,
+        request_host,
+    )
+    .await
+}
+
+struct BackendIfStateResolver<'a> {
+    filesystem: &'a dyn DavFileSystem,
+    lock_system: &'a dyn DavLockSystem,
+}
+
+#[async_trait]
+impl DavIfStateResolver for BackendIfStateResolver<'_> {
+    async fn resolve_if_state(
+        &self,
+        path: &DavPath,
+    ) -> Result<DavIfResourceState, DavBackendError> {
+        let etag = match self.filesystem.metadata(path).await {
+            Ok(metadata) => metadata.etag(),
+            Err(FsError::NotFound) => None,
+            Err(error) => return Err(error.into()),
+        };
+        let lock_tokens = self
+            .lock_system
+            .discover(path)
+            .await
+            .into_iter()
+            .map(|lock| lock.token)
+            .collect();
+        Ok(DavIfResourceState { etag, lock_tokens })
+    }
 }
 
 fn evaluate_if_state_list(list: &IfStateList, state: &DavIfResourceState) -> bool {

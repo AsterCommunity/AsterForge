@@ -345,15 +345,3 @@ pub trait DavLockSystem: Send + Sync {
     fn conflicting_locks(&self, path: &DavPath, deep: bool) -> LsFuture<'_, Vec<DavLock>>;
     fn delete(&self, path: &DavPath) -> LsFuture<'_, Result<(), ()>>;
 }
-
-/// Lock value used by protocol response composition.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavLockInfo {
-    pub token: String,
-    pub path: DavPath,
-    pub owner_xml: Option<DavXmlElement>,
-    pub timeout_at: Option<SystemTime>,
-    pub timeout: Option<Duration>,
-    pub shared: bool,
-    pub deep: bool,
-}

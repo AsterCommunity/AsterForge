@@ -80,3 +80,24 @@ pub(crate) fn map_quick_xml_error(error: quick_xml::Error) -> Error {
         error => Error::InvalidXml(error.to_string()),
     }
 }
+
+pub(crate) fn map_quick_xml_error_at(
+    error: quick_xml::Error,
+    error_position: usize,
+    input: &[u8],
+    reject_doctype: bool,
+) -> Error {
+    if reject_doctype
+        && matches!(
+            error,
+            quick_xml::Error::Syntax(quick_xml::errors::SyntaxError::InvalidBangMarkup)
+        )
+        && input
+            .get(error_position..)
+            .is_some_and(|input| input.starts_with(b"<!ENTITY"))
+    {
+        XmlSafetyError::ExternalEntity.into()
+    } else {
+        map_quick_xml_error(error)
+    }
+}

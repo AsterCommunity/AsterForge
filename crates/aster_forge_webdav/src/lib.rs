@@ -34,9 +34,9 @@ pub mod xml_response;
 
 pub use backend::{
     DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavFile, DavFileSystem,
-    DavIfResourceState, DavIfStateResolver, DavLock, DavLockError, DavLockInfo,
-    DavLockPreflightError, DavLockSystem, DavMetaData, DavProp, DavPropertyTarget, DavResourceKind,
-    FsError, FsFuture, FsResult, FsStream, LsFuture, OpenOptions, ReadDirMeta,
+    DavIfResourceState, DavIfStateResolver, DavLock, DavLockError, DavLockPreflightError,
+    DavLockSystem, DavMetaData, DavProp, DavPropertyTarget, DavResourceKind, FsError, FsFuture,
+    FsResult, FsStream, LsFuture, OpenOptions, ReadDirMeta,
 };
 pub use deltav::{
     DavVersionTreeReportError, validate_version_tree_report, version_control_response,
@@ -44,9 +44,11 @@ pub use deltav::{
 };
 pub use event::{DavEvent, DavEventOutcome, DavEventSink, DavOperation, NoopDavEventSink};
 pub use lock::{
-    DavLockPlan, DavLockPlanError, lock_acquire_success_response, lock_conflict_response,
-    lock_limit_response, lock_refresh_success_response, lock_xml_error_response, plan_lock_request,
-    unlock_success_response, unlock_token_mismatch_response,
+    DavLockPlan, DavLockPlanError, enforce_parent_unlocked, enforce_unlocked,
+    ensure_lock_target_exists, lock_acquire_success_response, lock_conflict_response,
+    lock_discovery_element, lock_limit_response, lock_refresh_success_response,
+    lock_xml_error_response, plan_lock_request, unlock_success_response,
+    unlock_token_mismatch_response, unsubmitted_lock_conflicts,
 };
 pub use path::{
     DavPath, DavPathError, child_relative_path, decode_relative_path, display_name, encode_href,
@@ -60,10 +62,11 @@ pub use property::{
 pub use protocol::{
     DavIfEvaluationError, DavPrecondition, DavProtocolError, DavProtocolErrorKind, Depth,
     Destination, IfHeader, IfResourceGroup, IfStateCondition, IfStateList,
-    destination_relative_path, enforce_if_header, evaluate_http_download_preconditions,
-    evaluate_http_etag_preconditions, parse_copy_depth, parse_delete_depth, parse_if_header,
-    parse_lock_depth, parse_lock_timeout, parse_lock_token_header, parse_move_depth,
-    parse_overwrite, parse_propfind_depth, submitted_lock_tokens, submitted_lock_tokens_for_path,
+    destination_relative_path, enforce_if_header, enforce_if_header_with_backends,
+    evaluate_http_download_preconditions, evaluate_http_etag_preconditions, parse_copy_depth,
+    parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
+    parse_lock_token_header, parse_move_depth, parse_overwrite, parse_propfind_depth,
+    submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
 pub use put::{
     DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError, plan_put_request,
@@ -73,8 +76,9 @@ pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin};
 pub use resource::{
     DavCopyMoveMethod, DavCopyMovePlan, DavMutationFailure, DavMutationPlanError,
     DavMutationResponseError, collection_created_response, delete_success_response,
-    is_descendant_path, mutation_multistatus_response, mutation_plan_error_response,
-    mutation_success_response, plan_copy_move_request, resource_identity_path, same_resource_path,
+    enforce_parent_collection, is_descendant_path, mutation_multistatus_response,
+    mutation_plan_error_response, mutation_success_response, plan_copy_move_request,
+    replace_relative_prefix, resource_identity_path, same_resource_path,
     validate_collection_create_target, validate_delete_target,
 };
 pub use response::{

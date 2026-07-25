@@ -4,8 +4,9 @@ use http::header::{CACHE_CONTROL, CONTENT_LOCATION, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
 
 use crate::{
-    DavErrorCondition, DavMultiStatusItem, DavPath, DavResourceKind, DavResponse, DavXmlError,
-    Depth, dav_multistatus_element, href_for_dav_path,
+    DavErrorCondition, DavFileSystem, DavMultiStatusItem, DavPath, DavResourceKind, DavResponse,
+    DavXmlError, Depth, FsError, backend_error_response, dav_multistatus_element,
+    href_for_dav_path, parent_relative_path,
 };
 
 /// COPY or MOVE operation selected by the request method.
@@ -43,6 +44,39 @@ pub fn validate_collection_create_target(path: &str) -> Result<(), DavMutationPl
         Err(DavMutationPlanError::MethodNotAllowed)
     } else {
         Ok(())
+    }
+}
+
+/// Requires the canonical parent of a mutation target to exist as a collection.
+///
+/// The DAV mount root is an implicit collection and does not require a backend lookup. A target
+/// without a parent identifies the mount root itself and is rejected for mutation.
+pub async fn enforce_parent_collection(
+    filesystem: &dyn DavFileSystem,
+    target: &DavPath,
+) -> Result<(), DavResponse> {
+    let Some(parent) = parent_relative_path(target.as_str()) else {
+        return Err(mutation_plan_error_response(
+            DavMutationPlanError::MethodNotAllowed,
+        ));
+    };
+    if parent == "/" {
+        return Ok(());
+    }
+    let parent = match DavPath::new(&parent) {
+        Ok(parent) => parent,
+        Err(_) => {
+            return Err(mutation_plan_error_response(
+                DavMutationPlanError::BadRequest,
+            ));
+        }
+    };
+    match filesystem.metadata(&parent).await {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) | Err(FsError::NotFound) => {
+            Err(mutation_plan_error_response(DavMutationPlanError::Conflict))
+        }
+        Err(error) => Err(backend_error_response(&error.into())),
     }
 }
 
@@ -184,6 +218,29 @@ pub fn is_descendant_path(parent: &str, child: &str) -> bool {
         return false;
     }
     child.starts_with(&format!("{parent}/"))
+}
+
+/// Re-roots a canonical descendant path from one mutation tree to another.
+///
+/// Only a complete path-segment prefix is stripped. An unmatched path is attached to the
+/// destination root unchanged so callers can preserve the original hierarchy in failure paths.
+#[must_use]
+pub fn replace_relative_prefix(
+    path: &str,
+    source_prefix: &str,
+    destination_prefix: &str,
+) -> String {
+    let source_prefix = source_prefix.trim_end_matches('/');
+    let destination_prefix = destination_prefix.trim_end_matches('/');
+    let suffix = path
+        .strip_prefix(source_prefix)
+        .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+        .unwrap_or(path);
+    if suffix.is_empty() {
+        format!("{destination_prefix}/")
+    } else {
+        format!("{destination_prefix}{suffix}")
+    }
 }
 
 /// Builds the cache-safe 201/204 response selected by destination existence.

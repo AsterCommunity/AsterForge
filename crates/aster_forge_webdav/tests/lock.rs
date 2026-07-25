@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use aster_forge_webdav::{
-    DavLockInfo, DavLockPlan, DavLockPlanError, DavMethod, DavPath, DavProtocolErrorKind,
+    DavLock, DavLockPlan, DavLockPlanError, DavMethod, DavPath, DavProtocolErrorKind,
     DavRequestHead, DavRequestOrigin, DavResponseBody, Depth, IfHeader,
-    lock_acquire_success_response, lock_conflict_response, lock_limit_response,
-    lock_refresh_success_response, lock_xml_error_response, parse_if_header, plan_lock_request,
-    unlock_success_response, unlock_token_mismatch_response,
+    lock_acquire_success_response, lock_conflict_response, lock_discovery_element,
+    lock_limit_response, lock_refresh_success_response, lock_xml_error_response, parse_if_header,
+    plan_lock_request, unlock_success_response, unlock_token_mismatch_response,
 };
 use http::StatusCode;
 use http::header::{HeaderMap, HeaderValue};
@@ -87,10 +87,11 @@ fn empty_lock_body_requires_exactly_one_scoped_refresh_token() {
 
 #[test]
 fn lock_success_responses_own_status_xml_and_lock_token_header_contract() {
-    let lock = DavLockInfo {
+    let lock = DavLock {
         token: "urn:uuid:lock".to_string(),
-        path: DavPath::new("/a.txt").expect("path"),
-        owner_xml: None,
+        path: Box::new(DavPath::new("/a.txt").expect("path")),
+        principal: None,
+        owner: None,
         timeout_at: None,
         timeout: Some(Duration::from_secs(60)),
         shared: false,
@@ -119,6 +120,13 @@ fn lock_success_responses_own_status_xml_and_lock_token_header_contract() {
         existing.headers.get("Lock-Token").unwrap(),
         "<urn:uuid:lock>"
     );
+
+    let discovery = lock_discovery_element(&[lock], "/webdav")
+        .to_bytes()
+        .expect("lockdiscovery XML");
+    let discovery = String::from_utf8(discovery).expect("UTF-8 lockdiscovery XML");
+    assert!(discovery.contains("/webdav/a.txt"));
+    assert!(discovery.contains("urn:uuid:lock"));
 }
 
 #[test]

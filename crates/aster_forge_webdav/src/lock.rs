@@ -5,11 +5,14 @@ use std::time::Duration;
 use http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue, StatusCode};
 
+use crate::DavLockSystem;
 use crate::response::xml_request_error_response;
 use crate::{
-    DavErrorCondition, DavLockInfo, DavLockXml, DavPath, DavProtocolError, DavRequestHead,
-    DavResponse, DavXmlElement, DavXmlError, dav_error_element, dav_lock_response_element,
-    href_for_dav_path, parse_lock_request, parse_lock_timeout, submitted_lock_tokens,
+    DavErrorCondition, DavFileSystem, DavLock, DavLockXml, DavPath, DavProtocolError,
+    DavRequestHead, DavResponse, DavXmlElement, DavXmlError, FsError, IfHeader, OpenOptions,
+    dav_error_element, dav_lock_discovery_element, dav_lock_response_element, href_for_dav_path,
+    parent_relative_path, parse_lock_request, parse_lock_timeout, protocol_error_response,
+    submitted_lock_tokens,
 };
 
 /// Backend operation selected from a LOCK request.
@@ -34,6 +37,114 @@ pub enum DavLockPlanError {
     Protocol(#[from] DavProtocolError),
     #[error(transparent)]
     Xml(#[from] DavXmlError),
+}
+
+/// Rejects an operation when a conflicting lock token was not submitted for its lock root.
+pub async fn enforce_unlocked(
+    lock_system: &dyn DavLockSystem,
+    path: &DavPath,
+    deep: bool,
+    prefix: &str,
+    if_header: Option<&IfHeader>,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), DavResponse> {
+    if let Some(lock) = unsubmitted_lock_conflicts(
+        lock_system,
+        path,
+        deep,
+        prefix,
+        if_header,
+        request_scheme,
+        request_host,
+    )
+    .await
+    .into_iter()
+    .next()
+    {
+        return Err(lock_conflict_response(prefix, &lock.path)
+            .unwrap_or_else(|_| DavResponse::empty(StatusCode::INTERNAL_SERVER_ERROR)));
+    }
+    Ok(())
+}
+
+/// Returns conflicting locks whose tokens were not submitted for their corresponding lock root.
+pub async fn unsubmitted_lock_conflicts(
+    lock_system: &dyn DavLockSystem,
+    path: &DavPath,
+    deep: bool,
+    prefix: &str,
+    if_header: Option<&IfHeader>,
+    request_scheme: &str,
+    request_host: &str,
+) -> Vec<crate::DavLock> {
+    let mut conflicts = lock_system.conflicting_locks(path, deep).await;
+    conflicts.retain(|lock| {
+        let lock_href = href_for_dav_path(prefix, &lock.path);
+        let submitted_tokens = if_header.map_or_else(Vec::new, |if_header| {
+            submitted_lock_tokens(if_header, &lock_href, request_scheme, request_host)
+        });
+        !submitted_tokens.iter().any(|token| token == &lock.token)
+    });
+    conflicts
+}
+
+/// Applies [`enforce_unlocked`] to the canonical parent of a mutation target.
+pub async fn enforce_parent_unlocked(
+    lock_system: &dyn DavLockSystem,
+    path: &DavPath,
+    prefix: &str,
+    if_header: Option<&IfHeader>,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), DavResponse> {
+    let Some(parent) = parent_relative_path(path.as_str()) else {
+        return Ok(());
+    };
+    let parent_path = DavPath::new(&parent).map_err(|_| {
+        protocol_error_response(&DavProtocolError::bad_request("Invalid request path"))
+    })?;
+    enforce_unlocked(
+        lock_system,
+        &parent_path,
+        false,
+        prefix,
+        if_header,
+        request_scheme,
+        request_host,
+    )
+    .await
+}
+
+/// Ensures that a LOCK target exists, creating an empty lock-null file when allowed.
+///
+/// Existing resources are left untouched. A missing collection target remains missing because
+/// creating its hierarchy is outside LOCK semantics.
+pub async fn ensure_lock_target_exists(
+    filesystem: &dyn DavFileSystem,
+    path: &DavPath,
+) -> Result<bool, FsError> {
+    match filesystem.metadata(path).await {
+        Ok(_) => Ok(true),
+        Err(FsError::NotFound) if !path.is_collection() => {
+            let mut file = filesystem
+                .open(
+                    path,
+                    OpenOptions {
+                        write: true,
+                        create: true,
+                        truncate: true,
+                        size: Some(0),
+                        ..OpenOptions::default()
+                    },
+                )
+                .await?;
+            file.flush().await?;
+            Ok(false)
+        }
+        Err(FsError::NotFound) => Err(FsError::NotFound),
+        Err(error) => Err(error),
+    }
 }
 
 /// Selects lock acquisition or refresh and validates all protocol-owned inputs.
@@ -80,14 +191,14 @@ pub fn plan_lock_request(
 }
 
 fn lock_success_response(
-    lock: &DavLockInfo,
+    lock: &DavLock,
     status: StatusCode,
     prefix: &str,
     include_lock_token_header: bool,
 ) -> Result<DavResponse, DavXmlError> {
     let body = dav_lock_response_element(&[DavLockXml {
         token: lock.token.clone(),
-        owner: lock.owner_xml.clone(),
+        owner: lock.owner.as_deref().cloned(),
         timeout: lock.timeout,
         shared: lock.shared,
         deep: lock.deep,
@@ -109,7 +220,7 @@ fn lock_success_response(
 
 /// Builds the successful response for a LOCK refresh.
 pub fn lock_refresh_success_response(
-    lock: &DavLockInfo,
+    lock: &DavLock,
     prefix: &str,
 ) -> Result<DavResponse, DavXmlError> {
     lock_success_response(lock, StatusCode::OK, prefix, false)
@@ -117,7 +228,7 @@ pub fn lock_refresh_success_response(
 
 /// Builds the 200/201 response for a LOCK acquisition.
 pub fn lock_acquire_success_response(
-    lock: &DavLockInfo,
+    lock: &DavLock,
     prefix: &str,
     resource_existed: bool,
 ) -> Result<DavResponse, DavXmlError> {
@@ -131,6 +242,23 @@ pub fn lock_acquire_success_response(
         prefix,
         true,
     )
+}
+
+/// Builds the `DAV:lockdiscovery` property from backend lock values.
+#[must_use]
+pub fn lock_discovery_element(locks: &[DavLock], prefix: &str) -> DavXmlElement {
+    let locks = locks
+        .iter()
+        .map(|lock| DavLockXml {
+            token: lock.token.clone(),
+            owner: lock.owner.as_deref().cloned(),
+            timeout: lock.timeout,
+            shared: lock.shared,
+            deep: lock.deep,
+            root_href: href_for_dav_path(prefix, &lock.path),
+        })
+        .collect::<Vec<_>>();
+    dav_lock_discovery_element(&locks)
 }
 
 /// Builds a 423 response identifying the lock whose token must be submitted.

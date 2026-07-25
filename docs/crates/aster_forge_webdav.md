@@ -20,6 +20,7 @@ Forge 负责：
 - `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝。
 - WebDAV 方法、`Depth`、`Overwrite`、`Destination`、`If`、`Timeout` 和 `Lock-Token` header 解析。
 - `If` tagged-resource 归一化、AND/OR/Not 状态机，以及只暴露 ETag/lock token 的 resolver port。
+- 通过 `DavFileSystem` / `DavLockSystem` 统一执行 `If`、资源锁、父级锁、父集合存在性与 LOCK lock-null 文件前置条件；产品不再复制 resolver/guard。
 - LOCK acquire/refresh 选择、timeout/token/body 校验与成功响应 composition。
 - COPY/MOVE/DELETE 的资源路径关系、typed partial failure、207 与 201/204 响应选择。
 - 每个 DAV 方法的 empty/bounded XML/stream/unused body policy，以及 Actix bounded-body adapter。
@@ -27,16 +28,19 @@ Forge 负责：
 - HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
 - GET/HEAD 的 200/206/304/416 response planning、单段 byte range 选择与读取区间。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
+- `DavEvent::completed` 从 request head 生成脱敏完成事件，不携带 `If` token、凭据或正文。
 - PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
 - PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
 - PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
 - DeltaV `DAV:version-tree` REPORT 选择、file-only/unsupported mapping、version multistatus 和 VERSION-CONTROL response selection。
-- `DavXmlElement` XML 表示与序列化边界；解析、安全限制和流式写出由 `aster_forge_xml` 承担，产品不直接依赖具体 XML 实现。
+- 已知 request grammar 直接遍历 `aster_forge_xml` 的 source-backed arena，不先重复 validation，也不复制整棵通用 DOM；只有需要持久化或回显的 owner/property 子树才物化为 `DavXmlElement`。
+- `DavXmlElement` 只承担 DAV 持久化子树与 response composition；通用解析、安全限制、namespace 和 reader/writer 由 `aster_forge_xml` 承担。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - 唯一 backend contract：`DavFileSystem`、`DavMetaData`、`DavFile`、`DavDirEntry`、
   `DavLockSystem`、`FsError` 和 `OpenOptions`；产品只实现这些 Forge port，不再复制协议 trait。
 - `DavPropertyTarget` 只携带资源种类与产品侧不透明 ID，用于批量 dead-property 读取；Forge 不解释数据库身份。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
+- Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
 
 产品负责：
@@ -62,6 +66,7 @@ Forge 负责：
 ## 测试要求
 
 - 协议 crate 测试路径逃逸、header grammar、同源 `Destination`、条件请求和 request-head 解析。
+- fake backend 矩阵覆盖 ETag + lock token 联合解析、tagged lock root、父级锁、父集合、lock-null 文件创建，以及 metadata/open/flush 错误传播。
 - XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、reader I/O、输入大小与深度精确临界、非法 UTF-8、转义和大属性值。
 - XML response 矩阵覆盖状态行、元素顺序、QName、namespace shadowing/undeclaration、锁字段、死属性重建、异常旧值转义，以及非法 writer model 与深度临界。
 - 产品仓库保留真实认证、数据库、存储、quota、audit 和客户端集成测试。

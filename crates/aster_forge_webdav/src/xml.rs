@@ -8,7 +8,7 @@ use std::io::Read;
 
 use aster_forge_xml::{
     BorrowedDocument, ElementRef, Error as ForgeXmlError, NodeRef, OwnedDocument, ParseOptions,
-    XmlSafetyError, XmlSafetyPolicy, XmlStreamWriter, XmlWriteAttribute, validate_xml_input,
+    XmlSafetyError, XmlStreamWriter, XmlWriteAttribute,
 };
 
 const DAV_NAMESPACE: &str = "DAV:";
@@ -63,7 +63,10 @@ pub enum DavXmlNode {
     ProcessingInstruction(String, Option<String>),
 }
 
-/// XML element whose concrete parser/serializer is private to AsterForge.
+/// Owned DAV element used for persisted subtrees and response composition.
+///
+/// Known request grammars traverse the source-backed `aster_forge_xml` arena directly and only
+/// materialize the owner or property subtrees that must cross the backend boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavXmlElement {
     /// Local element name.
@@ -216,8 +219,9 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
             include: Vec::new(),
         });
     }
-    let root = parse_element(body)?;
-    if !is_dav_element(&root, "propfind") {
+    let document = parse_document(body)?;
+    let root = document.root();
+    if !is_dav_element(root, "propfind") {
         return Err(DavXmlError::InvalidGrammar);
     }
 
@@ -262,11 +266,12 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
 
 /// Parses an ordered PROPPATCH request.
 pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchRequest>, DavXmlError> {
-    let root = parse_element(body)?;
-    if !is_dav_element(&root, "propertyupdate") {
+    let document = parse_document(body)?;
+    let root = document.root();
+    if !is_dav_element(root, "propertyupdate") {
         return Err(DavXmlError::InvalidGrammar);
     }
-    let root_lang = xml_lang_value(&root).map(str::to_owned);
+    let root_lang = xml_lang_value(root).map(str::to_owned);
     let mut patches = Vec::new();
     for action in root.child_elements() {
         let set = if is_dav_element(action, "set") {
@@ -280,15 +285,15 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
         let action_lang = xml_lang_value(action).or(root_lang.as_deref());
         let dav_children = action
             .child_elements()
-            .filter(|child| child.namespace.as_deref() == Some(DAV_NAMESPACE))
+            .filter(|child| child.namespace() == Some(DAV_NAMESPACE))
             .collect::<Vec<_>>();
-        if !matches!(dav_children.as_slice(), [child] if is_dav_element(child, "prop")) {
+        if !matches!(dav_children.as_slice(), [child] if is_dav_element(*child, "prop")) {
             return Err(DavXmlError::InvalidGrammar);
         }
         let prop_container = dav_children[0];
         let container_lang = xml_lang_value(prop_container).or(action_lang);
         for property in prop_container.child_elements() {
-            let mut element = property.clone();
+            let mut element = element_from_forge(property);
             let inherited_lang = xml_lang_value(property).or(container_lang);
             if let Some(lang) = inherited_lang.filter(|lang| !lang.is_empty()) {
                 element
@@ -315,8 +320,9 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
 
 /// Parses a LOCK creation body.
 pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError> {
-    let root = parse_element(body)?;
-    if !is_dav_element(&root, "lockinfo") {
+    let document = parse_document(body)?;
+    let root = document.root();
+    if !is_dav_element(root, "lockinfo") {
         return Err(DavXmlError::InvalidGrammar);
     }
     let mut shared = None;
@@ -329,11 +335,11 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
             }
             let children = child
                 .child_elements()
-                .filter(|scope| scope.namespace.as_deref() == Some(DAV_NAMESPACE))
+                .filter(|scope| scope.namespace() == Some(DAV_NAMESPACE))
                 .collect::<Vec<_>>();
             shared = match children.as_slice() {
-                [scope] if is_dav_element(scope, "exclusive") => Some(false),
-                [scope] if is_dav_element(scope, "shared") => Some(true),
+                [scope] if is_dav_element(*scope, "exclusive") => Some(false),
+                [scope] if is_dav_element(*scope, "shared") => Some(true),
                 _ => return Err(DavXmlError::InvalidGrammar),
             };
         } else if is_dav_element(child, "locktype") {
@@ -342,14 +348,17 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
             }
             let children = child
                 .child_elements()
-                .filter(|kind| kind.namespace.as_deref() == Some(DAV_NAMESPACE))
+                .filter(|kind| kind.namespace() == Some(DAV_NAMESPACE))
                 .collect::<Vec<_>>();
-            if !matches!(children.as_slice(), [kind] if is_dav_element(kind, "write")) {
+            if !matches!(children.as_slice(), [kind] if is_dav_element(*kind, "write")) {
                 return Err(DavXmlError::InvalidGrammar);
             }
             write_lock = true;
-        } else if is_dav_element(child, "owner") && owner.replace(child.clone()).is_some() {
-            return Err(DavXmlError::InvalidGrammar);
+        } else if is_dav_element(child, "owner") {
+            if owner.is_some() {
+                return Err(DavXmlError::InvalidGrammar);
+            }
+            owner = Some(element_from_forge(child));
         }
     }
     match (shared, write_lock) {
@@ -360,35 +369,40 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
 
 /// Returns the QName of a bounded REPORT root.
 pub fn parse_report_root(body: &[u8]) -> Result<DavRequestedProperty, DavXmlError> {
-    let root = parse_element(body)?;
-    Ok(requested_property(&root))
+    let document = parse_document(body)?;
+    Ok(requested_property(document.root()))
 }
 
 fn parse_element(bytes: &[u8]) -> Result<DavXmlElement, DavXmlError> {
-    validate_xml_input(bytes, XmlSafetyPolicy::untrusted())?;
-    let document = BorrowedDocument::parse_with_options(bytes, &webdav_parse_options())
-        .map_err(map_forge_xml_error)?;
+    let document = parse_document(bytes)?;
     Ok(element_from_forge(document.root()))
 }
 
-fn is_dav_element(element: &DavXmlElement, local_name: &str) -> bool {
-    element.name == local_name && element.namespace.as_deref() == Some(DAV_NAMESPACE)
+fn parse_document(bytes: &[u8]) -> Result<BorrowedDocument<'_>, DavXmlError> {
+    // The Forge parser applies the WebDAV safety policy while building its source-backed arena.
+    // A separate validator pass here would scan every request twice.
+    BorrowedDocument::parse_with_options(bytes, &webdav_parse_options())
+        .map_err(map_forge_xml_error)
 }
 
-fn requested_property(element: &DavXmlElement) -> DavRequestedProperty {
+fn is_dav_element<S: AsRef<[u8]>>(element: ElementRef<'_, S>, local_name: &str) -> bool {
+    element.name() == local_name && element.namespace() == Some(DAV_NAMESPACE)
+}
+
+fn requested_property<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavRequestedProperty {
     DavRequestedProperty {
-        name: element.name.clone(),
-        namespace: element.namespace.clone(),
-        prefix: element.prefix.clone(),
+        name: element.name().to_owned(),
+        namespace: element.namespace().map(str::to_owned),
+        prefix: element.prefix().map(str::to_owned),
     }
 }
 
-fn xml_lang_value(element: &DavXmlElement) -> Option<&str> {
+fn xml_lang_value<'document, S: AsRef<[u8]>>(
+    element: ElementRef<'document, S>,
+) -> Option<&'document str> {
     element
-        .attributes
-        .get("xml:lang")
-        .or_else(|| element.attributes.get("lang"))
-        .map(String::as_str)
+        .attribute("xml:lang")
+        .or_else(|| element.attribute("lang"))
 }
 
 fn webdav_parse_options() -> ParseOptions {

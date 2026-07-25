@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::{DavBackendErrorKind, DavPath};
+use crate::{DavBackendErrorKind, DavPath, DavRequestHead};
 
 /// Protocol operations exposed to event observers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +70,32 @@ pub struct DavEvent {
     pub destination: Option<DavPath>,
     pub outcome: DavEventOutcome,
     pub elapsed: Duration,
+}
+
+impl DavEvent {
+    /// Builds the transport-neutral event for one completed request.
+    ///
+    /// Only protocol routing data is copied from the request head. Conditional headers,
+    /// credentials, request bodies, and lock tokens are deliberately excluded.
+    #[must_use]
+    pub fn completed(
+        request_head: &DavRequestHead,
+        status: u16,
+        elapsed: Duration,
+        backend_error: Option<DavBackendErrorKind>,
+    ) -> Self {
+        Self {
+            request_id: None,
+            operation: request_head.method.operation(),
+            source: request_head.target.clone(),
+            destination: request_head
+                .destination
+                .as_ref()
+                .map(|destination| destination.path.clone()),
+            outcome: DavEventOutcome::from_status(status, backend_error),
+            elapsed,
+        }
+    }
 }
 
 /// Non-authoritative observer for audit adapters, metrics, tracing, and notifications.

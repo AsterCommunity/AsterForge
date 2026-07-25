@@ -1,7 +1,8 @@
 #![cfg(feature = "actix")]
 
+use actix_web::http::StatusCode;
 use actix_web::{FromRequest, web};
-use aster_forge_webdav::{DavBodyError, DavMethod};
+use aster_forge_webdav::{DavBodyError, DavMethod, DavPrecondition};
 use bytes::Bytes;
 use futures::StreamExt;
 
@@ -70,4 +71,37 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
         stream.next().await.expect("stream chunk").expect("chunk"),
         Bytes::from_static(b"payload")
     );
+}
+
+#[test]
+fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
+    let matching_none_match = actix_web::test::TestRequest::default()
+        .insert_header(("If-None-Match", "\"etag-a\""))
+        .to_http_request();
+    assert_eq!(
+        aster_forge_webdav::actix::evaluate_http_etag_preconditions(
+            matching_none_match.headers(),
+            true,
+            Some("etag-a"),
+            true,
+        )
+        .expect("safe matching If-None-Match should be a valid precondition"),
+        DavPrecondition::NotModified
+    );
+
+    let mismatching_if_match = actix_web::test::TestRequest::default()
+        .insert_header(("If-Match", "\"etag-b\""))
+        .to_http_request();
+    let response = aster_forge_webdav::actix::evaluate_http_etag_preconditions(
+        mismatching_if_match.headers(),
+        true,
+        Some("etag-a"),
+        false,
+    )
+    .expect_err("mismatching If-Match should fail");
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+    let converted = aster_forge_webdav::actix::converted_headers(mismatching_if_match.headers())
+        .expect("valid Actix headers should convert");
+    assert_eq!(converted.get("If-Match").expect("If-Match"), "\"etag-b\"");
 }

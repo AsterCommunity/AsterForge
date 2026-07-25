@@ -7,8 +7,9 @@ use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 
 use crate::protocol::DavProtocolError;
 use crate::{
-    DavBodyError, DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin, DavResponse,
-    DavResponseBody,
+    DavBodyError, DavBodyPolicy, DavFileSystem, DavIfEvaluationError, DavLockSystem, DavMethod,
+    DavPath, DavPrecondition, DavRequestHead, DavRequestOrigin, DavResponse, DavResponseBody,
+    IfHeader,
 };
 
 /// Request body prepared according to the selected WebDAV method contract.
@@ -72,6 +73,102 @@ pub fn into_response(response: DavResponse) -> HttpResponse {
             builder.streaming(stream)
         }
     }
+}
+
+/// Maps a transport-neutral protocol error into its Actix response.
+#[must_use]
+pub fn protocol_error_response(error: DavProtocolError) -> HttpResponse {
+    into_response(crate::protocol_error_response(&error))
+}
+
+/// Copies Actix headers into the transport-neutral map and maps malformed input to a response.
+pub fn converted_headers(source: &actix_header::HeaderMap) -> Result<HeaderMap, HttpResponse> {
+    convert_header_map(source).map_err(protocol_error_response)
+}
+
+/// Resolves and enforces a parsed WebDAV `If` header through the canonical backend ports.
+pub async fn enforce_if_header_with_backends(
+    if_header: Option<&IfHeader>,
+    filesystem: &dyn DavFileSystem,
+    lock_system: &dyn DavLockSystem,
+    request_path: &DavPath,
+    prefix: &str,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), HttpResponse> {
+    match crate::enforce_if_header_with_backends(
+        if_header,
+        filesystem,
+        lock_system,
+        request_path,
+        prefix,
+        request_scheme,
+        request_host,
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(DavIfEvaluationError::Protocol(error)) => Err(protocol_error_response(error)),
+        Err(DavIfEvaluationError::Backend(error)) => {
+            Err(into_response(crate::backend_error_response(&error)))
+        }
+    }
+}
+
+/// Enforces resource lock submission and maps the protocol response to Actix.
+pub async fn enforce_unlocked(
+    lock_system: &dyn DavLockSystem,
+    path: &DavPath,
+    deep: bool,
+    prefix: &str,
+    if_header: Option<&IfHeader>,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), HttpResponse> {
+    crate::enforce_unlocked(
+        lock_system,
+        path,
+        deep,
+        prefix,
+        if_header,
+        request_scheme,
+        request_host,
+    )
+    .await
+    .map_err(into_response)
+}
+
+/// Enforces lock submission for the canonical parent and maps the response to Actix.
+pub async fn enforce_parent_unlocked(
+    lock_system: &dyn DavLockSystem,
+    path: &DavPath,
+    prefix: &str,
+    if_header: Option<&IfHeader>,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<(), HttpResponse> {
+    crate::enforce_parent_unlocked(
+        lock_system,
+        path,
+        prefix,
+        if_header,
+        request_scheme,
+        request_host,
+    )
+    .await
+    .map_err(into_response)
+}
+
+/// Evaluates HTTP ETag preconditions from Actix headers and maps protocol failures to a response.
+pub fn evaluate_http_etag_preconditions(
+    headers: &actix_header::HeaderMap,
+    resource_exists: bool,
+    current_etag: Option<&str>,
+    safe_method: bool,
+) -> Result<DavPrecondition, HttpResponse> {
+    let headers = converted_headers(headers)?;
+    crate::evaluate_http_etag_preconditions(&headers, resource_exists, current_etag, safe_method)
+        .map_err(protocol_error_response)
 }
 
 /// Copies Actix header types into the transport-neutral `http` 1.x map.

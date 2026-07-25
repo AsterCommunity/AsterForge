@@ -13,8 +13,8 @@ use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::syntax::{
-    XML_NAMESPACE_URI, map_quick_xml_error, split_qualified_name, utf8, validate_namespace_binding,
-    validate_qualified_name,
+    XML_NAMESPACE_URI, map_quick_xml_error_at, split_qualified_name, utf8,
+    validate_namespace_binding, validate_qualified_name,
 };
 use crate::{Error, ParseOptions, XmlSafetyError, XmlSafetyPolicy};
 
@@ -713,7 +713,16 @@ impl<'a> DocumentBuilder<'a> {
         reader.config_mut().check_end_names = true;
         loop {
             let event_start = reader.buffer_position();
-            let event = reader.read_event().map_err(map_quick_xml_error)?;
+            let event = reader.read_event().map_err(|error| {
+                let error_position =
+                    usize::try_from(reader.error_position()).unwrap_or(self.source.len());
+                map_quick_xml_error_at(
+                    error,
+                    error_position,
+                    self.source,
+                    self.options.safety.reject_doctype,
+                )
+            })?;
             let event_end = reader.buffer_position();
             if !matches!(event, Event::Eof) {
                 self.count_event()?;
