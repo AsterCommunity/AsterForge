@@ -177,4 +177,8 @@ fn property_response_helpers_own_multistatus_depth_and_xml_error_contracts() {
         panic!("PROPPATCH error should have text body");
     };
     assert_eq!(body.as_ref(), b"Invalid PROPPATCH body");
+
+    let too_large = propfind_xml_error_response(DavXmlError::TooLarge).unwrap();
+    assert_eq!(too_large.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(too_large.headers.get("Cache-Control").unwrap(), "no-store");
 }

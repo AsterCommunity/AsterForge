@@ -27,6 +27,7 @@ Forge 负责：
 - request head 保留规范化后的请求 origin；Actix adapter 按方法一次性完成 empty/XML/stream body preparation。
 - HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
 - GET/HEAD 的 200/206/304/416 response planning、单段 byte range 选择与读取区间。
+- PUT 的 `If-Match` / `If-None-Match` 前置条件、`create` / `create_new` 选择、`X-Expected-Entity-Length` 优先级、collection target 405 拒绝和 201/204 成功响应选择。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
 - `DavEvent::completed` 从 request head 生成脱敏完成事件，不携带 `If` token、凭据或正文。
 - PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
@@ -38,7 +39,7 @@ Forge 负责：
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - 唯一 backend contract：`DavFileSystem`、`DavMetaData`、`DavFile`、`DavDirEntry`、
   `DavLockSystem`、`FsError` 和 `OpenOptions`；产品只实现这些 Forge port，不再复制协议 trait。
-- `DavPropertyTarget` 只携带资源种类与产品侧不透明 ID，用于批量 dead-property 读取；Forge 不解释数据库身份。
+- `DavPropertyTarget` 只携带资源种类与产品侧数值主键，用于批量 dead-property 读取；Forge 不解释数据库身份。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。

@@ -38,6 +38,10 @@ pub fn version_tree_report_error_response(
             StatusCode::FORBIDDEN,
             dav_error_element(&DavErrorCondition::NoExternalEntities),
         ),
+        DavVersionTreeReportError::Xml(DavXmlError::TooLarge) => Ok(text_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "WebDAV XML body too large",
+        )),
         DavVersionTreeReportError::Xml(
             DavXmlError::TooDeep | DavXmlError::Malformed | DavXmlError::InvalidGrammar,
         ) => Ok(text_response(StatusCode::BAD_REQUEST, "Invalid XML body")),

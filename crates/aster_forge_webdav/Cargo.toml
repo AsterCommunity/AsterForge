@@ -23,4 +23,3 @@ futures.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
 thiserror.workspace = true
-urlencoding.workspace = true

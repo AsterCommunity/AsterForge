@@ -3,7 +3,9 @@
 use std::time::{Duration, SystemTime};
 
 use http::header::{self, HeaderMap, HeaderValue};
+use http::uri::Authority;
 use http::{StatusCode, Uri};
+use percent_encoding::percent_decode_str;
 
 use crate::{
     DavBackendError, DavFileSystem, DavIfResourceState, DavIfStateResolver, DavLockSystem, DavPath,
@@ -231,9 +233,7 @@ pub fn destination_relative_path(
         .map_err(|_| DavProtocolError::bad_request("Invalid Destination header"))?;
     match (uri.scheme_str(), uri.authority()) {
         (Some(scheme), Some(authority)) => {
-            if !scheme.eq_ignore_ascii_case(request_scheme)
-                || !authority.as_str().eq_ignore_ascii_case(request_host)
-            {
+            if !origin_authority_matches(scheme, authority, request_scheme, request_host) {
                 return Err(DavProtocolError::bad_request(
                     "Destination must stay on this WebDAV server",
                 ));
@@ -270,9 +270,8 @@ pub fn parse_if_header(headers: &HeaderMap) -> Result<Option<IfHeader>, DavProto
 
 /// Resolves referenced resources and enforces the complete WebDAV `If` state-list precondition.
 ///
-/// Conditions inside one list are AND-connected. Lists for one resource are OR-connected. Every
-/// tagged resource group must have a matching list; an untagged header contains one request-target
-/// group and follows the same list semantics.
+/// Conditions inside one list are AND-connected. Lists for one resource and tagged resource
+/// productions across the complete header are OR-connected.
 pub async fn enforce_if_header(
     if_header: Option<&IfHeader>,
     resolver: &dyn DavIfStateResolver,
@@ -296,15 +295,15 @@ pub async fn enforce_if_header(
             Some(path) => resolver.resolve_if_state(path).await?,
             None => DavIfResourceState::default(),
         };
-        if !group
+        if group
             .lists
             .iter()
             .any(|list| evaluate_if_state_list(list, &state))
         {
-            return Err(DavProtocolError::precondition_failed().into());
+            return Ok(());
         }
     }
-    Ok(())
+    Err(DavProtocolError::precondition_failed().into())
 }
 
 /// Resolves `If` state from the canonical filesystem and lock backend ports.
@@ -388,9 +387,7 @@ fn tagged_dav_path(
         .map_err(|_| DavProtocolError::bad_request("Invalid If header"))?;
     let path = match (uri.scheme_str(), uri.authority()) {
         (Some(scheme), Some(authority)) => {
-            if !scheme.eq_ignore_ascii_case(request_scheme)
-                || !authority.as_str().eq_ignore_ascii_case(request_host)
-            {
+            if !origin_authority_matches(scheme, authority, request_scheme, request_host) {
                 return Ok(None);
             }
             uri.path()
@@ -475,11 +472,7 @@ pub fn parse_lock_timeout(
             .strip_prefix("Second-")
             .and_then(|seconds| seconds.parse::<u64>().ok())
         {
-            let timeout = Duration::from_secs(seconds);
-            if timeout > maximum {
-                return Err(DavProtocolError::bad_request("Invalid Timeout header"));
-            }
-            return Ok(timeout);
+            return Ok(Duration::from_secs(seconds).min(maximum));
         }
     }
     Err(DavProtocolError::bad_request("Invalid Timeout header"))
@@ -605,7 +598,41 @@ fn parse_http_date_header(
         .map_err(|_| DavProtocolError::bad_request(invalid_message))
 }
 
-fn strip_mount_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+fn origin_authority_matches(
+    uri_scheme: &str,
+    uri_authority: &Authority,
+    request_scheme: &str,
+    request_host: &str,
+) -> bool {
+    if !uri_scheme.eq_ignore_ascii_case(request_scheme) {
+        return false;
+    }
+    let Ok(request_authority) = request_host.parse::<Authority>() else {
+        return false;
+    };
+    if uri_authority.as_str().contains('@') || request_authority.as_str().contains('@') {
+        return false;
+    }
+    uri_authority
+        .host()
+        .eq_ignore_ascii_case(request_authority.host())
+        && effective_port(uri_scheme, uri_authority)
+            == effective_port(request_scheme, &request_authority)
+}
+
+fn effective_port(scheme: &str, authority: &Authority) -> Option<u16> {
+    authority.port_u16().or_else(|| {
+        if scheme.eq_ignore_ascii_case("http") {
+            Some(80)
+        } else if scheme.eq_ignore_ascii_case("https") {
+            Some(443)
+        } else {
+            None
+        }
+    })
+}
+
+pub(crate) fn strip_mount_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     path.strip_prefix(prefix).filter(|_| {
         prefix == "/"
             || path == prefix
@@ -807,8 +834,7 @@ fn if_tag_matches_path(
     };
     match (uri.scheme_str(), uri.authority()) {
         (Some(scheme), Some(authority)) => {
-            scheme.eq_ignore_ascii_case(request_scheme)
-                && authority.as_str().eq_ignore_ascii_case(request_host)
+            origin_authority_matches(scheme, authority, request_scheme, request_host)
                 && path_equivalent(uri.path(), request_path)
         }
         (None, None) => path_equivalent(uri.path(), request_path),
@@ -820,8 +846,8 @@ fn path_equivalent(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
-    let left_decoded = urlencoding::decode(left).ok();
-    let right_decoded = urlencoding::decode(right).ok();
+    let left_decoded = percent_decode_str(left).decode_utf8().ok();
+    let right_decoded = percent_decode_str(right).decode_utf8().ok();
     match (left_decoded.as_deref(), right_decoded.as_deref()) {
         (Some(left), Some(right)) => left == right,
         (Some(left), None) => left == right,

@@ -74,6 +74,11 @@ fn report_errors_select_plain_or_dav_xml_responses() {
         "application/xml; charset=utf-8"
     );
     assert!(body_text(&external).contains("no-external-entities"));
+
+    let too_large =
+        version_tree_report_error_response(&DavVersionTreeReportError::Xml(DavXmlError::TooLarge))
+            .expect("too large response");
+    assert_eq!(too_large.status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[test]

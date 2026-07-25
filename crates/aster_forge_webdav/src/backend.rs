@@ -91,7 +91,7 @@ pub enum DavResourceKind {
     Collection,
 }
 
-/// Opaque product-side identity used to batch dead-property reads.
+/// Product-side resource kind and numeric primary key used to batch dead-property reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DavPropertyTarget {
     pub kind: DavResourceKind,
@@ -233,6 +233,10 @@ pub trait DavFileSystem: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// Serial fallback that calls [`DavFileSystem::get_props`] once per path.
+    ///
+    /// Production adapters should override this method when the persistence layer supports a
+    /// genuine batch query.
     fn get_props_many<'a>(
         &'a self,
         paths: &'a [DavPath],
@@ -247,6 +251,10 @@ pub trait DavFileSystem: Send + Sync {
         })
     }
 
+    /// Serial fallback that discards target IDs and delegates to
+    /// [`DavFileSystem::get_props_many`].
+    ///
+    /// Production adapters should override this method to batch by the supplied numeric targets.
     fn get_props_many_for_targets<'a>(
         &'a self,
         targets: &'a [(DavPath, DavPropertyTarget)],
@@ -293,7 +301,8 @@ pub enum DavLockPreflightError {
 
 #[derive(Debug, Clone)]
 pub enum DavLockError {
-    Conflict(DavLock),
+    Conflict(Box<DavLock>),
+    TokenMismatch,
     LimitExceeded,
     Backend,
 }
@@ -314,13 +323,13 @@ pub trait DavLockSystem: Send + Sync {
         deep: bool,
     ) -> LsFuture<'_, Result<DavLock, DavLockError>>;
 
-    fn unlock(&self, path: &DavPath, token: &str) -> LsFuture<'_, Result<(), ()>>;
+    fn unlock(&self, path: &DavPath, token: &str) -> LsFuture<'_, Result<(), DavLockError>>;
     fn refresh(
         &self,
         path: &DavPath,
         token: &str,
         timeout: Option<Duration>,
-    ) -> LsFuture<'_, Result<DavLock, ()>>;
+    ) -> LsFuture<'_, Result<DavLock, DavLockError>>;
     fn check(
         &self,
         path: &DavPath,
@@ -343,5 +352,5 @@ pub trait DavLockSystem: Send + Sync {
         })
     }
     fn conflicting_locks(&self, path: &DavPath, deep: bool) -> LsFuture<'_, Vec<DavLock>>;
-    fn delete(&self, path: &DavPath) -> LsFuture<'_, Result<(), ()>>;
+    fn delete(&self, path: &DavPath) -> LsFuture<'_, Result<(), DavLockError>>;
 }

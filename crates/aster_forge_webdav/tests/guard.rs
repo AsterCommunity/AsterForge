@@ -177,8 +177,8 @@ impl DavLockSystem for TestLockSystem {
         Box::pin(async { Err(DavLockError::Backend) })
     }
 
-    fn unlock(&self, _path: &DavPath, _token: &str) -> LsFuture<'_, Result<(), ()>> {
-        Box::pin(async { Err(()) })
+    fn unlock(&self, _path: &DavPath, _token: &str) -> LsFuture<'_, Result<(), DavLockError>> {
+        Box::pin(async { Err(DavLockError::TokenMismatch) })
     }
 
     fn refresh(
@@ -186,8 +186,8 @@ impl DavLockSystem for TestLockSystem {
         _path: &DavPath,
         _token: &str,
         _timeout: Option<Duration>,
-    ) -> LsFuture<'_, Result<DavLock, ()>> {
-        Box::pin(async { Err(()) })
+    ) -> LsFuture<'_, Result<DavLock, DavLockError>> {
+        Box::pin(async { Err(DavLockError::TokenMismatch) })
     }
 
     fn check(
@@ -220,7 +220,7 @@ impl DavLockSystem for TestLockSystem {
         Box::pin(async move { conflicts })
     }
 
-    fn delete(&self, _path: &DavPath) -> LsFuture<'_, Result<(), ()>> {
+    fn delete(&self, _path: &DavPath) -> LsFuture<'_, Result<(), DavLockError>> {
         Box::pin(async { Ok(()) })
     }
 }

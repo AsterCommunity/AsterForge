@@ -8,7 +8,7 @@ use std::io::Read;
 
 use aster_forge_xml::{
     BorrowedDocument, ElementRef, Error as ForgeXmlError, NodeRef, OwnedDocument, ParseOptions,
-    XmlSafetyError, XmlStreamWriter, XmlWriteAttribute,
+    XmlSafetyError, XmlSafetyPolicy, XmlStreamWriter, XmlWriteAttribute,
 };
 
 const DAV_NAMESPACE: &str = "DAV:";
@@ -22,6 +22,9 @@ pub enum DavXmlError {
     /// The document exceeds the configured nesting depth.
     #[error("XML nesting depth exceeds the configured limit")]
     TooDeep,
+    /// The request XML exceeds an input or decoded-text size limit.
+    #[error("XML input exceeds the configured size limit")]
+    TooLarge,
     /// The document is malformed or is not a single-root document.
     #[error("malformed XML input")]
     Malformed,
@@ -35,12 +38,11 @@ impl From<XmlSafetyError> for DavXmlError {
         match error {
             XmlSafetyError::ExternalEntity => Self::ExternalEntity,
             XmlSafetyError::TooDeep => Self::TooDeep,
+            XmlSafetyError::InputTooLarge | XmlSafetyError::TextTooLarge => Self::TooLarge,
             XmlSafetyError::InvalidPolicy
-            | XmlSafetyError::InputTooLarge
             | XmlSafetyError::OutputTooLarge
             | XmlSafetyError::TooManyElements
             | XmlSafetyError::TooManyAttributes
-            | XmlSafetyError::TextTooLarge
             | XmlSafetyError::TooManyEvents
             | XmlSafetyError::InvalidEncoding
             | XmlSafetyError::Malformed => Self::Malformed,
@@ -400,15 +402,15 @@ fn requested_property<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavRequeste
 fn xml_lang_value<'document, S: AsRef<[u8]>>(
     element: ElementRef<'document, S>,
 ) -> Option<&'document str> {
-    element
-        .attribute("xml:lang")
-        .or_else(|| element.attribute("lang"))
+    element.attribute("xml:lang")
 }
 
 fn webdav_parse_options() -> ParseOptions {
     // Preserve the established WebDAV XML boundary: formatting whitespace is ignored and retained
     // text is trimmed before WebDAV grammar evaluation or dead-property persistence.
-    ParseOptions::new().trim_whitespace(true)
+    ParseOptions::new()
+        .safety_policy(XmlSafetyPolicy::untrusted())
+        .trim_whitespace(true)
 }
 
 fn map_forge_xml_error(error: ForgeXmlError) -> DavXmlError {

@@ -1,7 +1,7 @@
 //! Prometheus backend for shared Aster infrastructure metrics.
 //!
 //! This module is enabled by the `prometheus` feature. Product crates can use
-//! [`init_or_noop`] to obtain a [`SharedMetricsRecorder`](crate::SharedMetricsRecorder)
+//! [`init_or_noop`] to obtain a [`SharedMetricsRecorder`]
 //! and [`export_metrics`] for their HTTP metrics endpoint without depending on
 //! the `prometheus` crate directly. Product-specific metric families can be
 //! registered with Forge descriptors and recorded through opaque handles, so

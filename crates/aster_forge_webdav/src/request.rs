@@ -7,7 +7,7 @@ use crate::event::DavOperation;
 use crate::protocol::{
     DavProtocolError, Depth, Destination, IfHeader, destination_relative_path, parse_copy_depth,
     parse_delete_depth, parse_if_header, parse_lock_depth, parse_move_depth, parse_overwrite,
-    parse_propfind_depth,
+    parse_propfind_depth, strip_mount_prefix,
 };
 
 /// WebDAV method recognized by the protocol layer.
@@ -136,21 +136,9 @@ impl DavRequestHead {
         mount_path: &str,
         origin: &DavRequestOrigin,
     ) -> Result<Self, DavProtocolError> {
-        let relative = uri
-            .path()
-            .strip_prefix(mount_path)
-            .filter(|_| {
-                mount_path == "/"
-                    || uri.path() == mount_path
-                    || uri
-                        .path()
-                        .as_bytes()
-                        .get(mount_path.len())
-                        .is_some_and(|byte| *byte == b'/')
-            })
-            .ok_or_else(|| {
-                DavProtocolError::bad_request("Request target must stay under WebDAV prefix")
-            })?;
+        let relative = strip_mount_prefix(uri.path(), mount_path).ok_or_else(|| {
+            DavProtocolError::bad_request("Request target must stay under WebDAV prefix")
+        })?;
         let target = DavPath::new(relative)
             .map_err(|_| DavProtocolError::bad_request("Invalid request path"))?;
 

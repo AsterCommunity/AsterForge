@@ -10,7 +10,7 @@ use aster_forge_webdav::{
 use http::StatusCode;
 use http::header::{
     ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
-    CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LAST_MODIFIED, RANGE,
+    CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, IF_RANGE, LAST_MODIFIED, RANGE,
 };
 use http::{HeaderMap, HeaderValue, Uri};
 
@@ -88,7 +88,7 @@ fn full_get_plan_contains_complete_response_and_storage_contract() {
 #[test]
 fn ranged_get_plan_selects_exact_storage_offset_and_response_headers() {
     let mut headers = HeaderMap::new();
-    headers.insert(RANGE, HeaderValue::from_static("bytes=5-99"));
+    headers.insert(RANGE, HeaderValue::from_static("  BYTES=5-99"));
     let plan = plan_download_response(
         &headers,
         false,
@@ -133,13 +133,7 @@ fn head_ignores_even_an_unsatisfiable_range_and_never_selects_a_body() {
 
 #[test]
 fn malformed_unsatisfiable_and_empty_ranges_return_complete_416_shells() {
-    for (raw, content_length) in [
-        ("items=0-1", 20),
-        ("bytes=0-1,3-4", 20),
-        ("bytes=-0", 20),
-        ("bytes=20-", 20),
-        ("bytes=0-0", 0),
-    ] {
+    for (raw, content_length) in [("bytes=-0", 20), ("bytes=20-", 20), ("bytes=0-0", 0)] {
         let mut headers = HeaderMap::new();
         headers.insert(RANGE, HeaderValue::from_static(raw));
         let plan = plan_download_response(
@@ -168,6 +162,75 @@ fn malformed_unsatisfiable_and_empty_ranges_return_complete_416_shells() {
             plan.response.headers.get(CACHE_CONTROL).unwrap(),
             "no-store"
         );
+    }
+}
+
+#[test]
+fn unsupported_and_multiple_ranges_fall_back_to_the_complete_representation() {
+    for raw in ["items=0-1", "bytes=0-1,3-4"] {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static(raw));
+        let plan = plan_download_response(
+            &headers,
+            false,
+            20,
+            "application/octet-stream",
+            None,
+            representation_time(),
+        )
+        .expect("unsupported range form should be ignored");
+
+        assert_eq!(plan.response.status, StatusCode::OK);
+        assert_eq!(plan.body, DavDownloadBody::Full);
+        assert_eq!(plan.response.headers.get(CONTENT_LENGTH).unwrap(), "20");
+        assert!(plan.response.headers.get(CONTENT_RANGE).is_none());
+    }
+}
+
+#[test]
+fn if_range_requires_a_matching_strong_validator() {
+    for (if_range, expected_status, expected_body) in [
+        (
+            "\"etag-1\"",
+            StatusCode::PARTIAL_CONTENT,
+            DavDownloadBody::Range(
+                aster_forge_utils::http_range::HttpByteRange::new(0, 1, 20).unwrap(),
+            ),
+        ),
+        ("\"other\"", StatusCode::OK, DavDownloadBody::Full),
+        ("W/\"etag-1\"", StatusCode::OK, DavDownloadBody::Full),
+        ("not-a-validator", StatusCode::OK, DavDownloadBody::Full),
+        (
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            StatusCode::PARTIAL_CONTENT,
+            DavDownloadBody::Range(
+                aster_forge_utils::http_range::HttpByteRange::new(0, 1, 20).unwrap(),
+            ),
+        ),
+        (
+            "Sun, 06 Nov 1994 08:49:36 GMT",
+            StatusCode::OK,
+            DavDownloadBody::Full,
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=0-1"));
+        headers.insert(
+            IF_RANGE,
+            HeaderValue::from_str(if_range).expect("valid test header"),
+        );
+        let plan = plan_download_response(
+            &headers,
+            false,
+            20,
+            "application/octet-stream",
+            Some("etag-1"),
+            representation_time(),
+        )
+        .expect("If-Range should plan");
+
+        assert_eq!(plan.response.status, expected_status, "{if_range}");
+        assert_eq!(plan.body, expected_body, "{if_range}");
     }
 }
 

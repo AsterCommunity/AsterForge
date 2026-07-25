@@ -70,6 +70,10 @@ fn dav_path_canonicalizes_dot_segments_and_rejects_escape() {
         DavPath::new("/%2e%2e/secret.txt"),
         Err(DavPathError::PathEscape)
     ));
+    assert!(matches!(
+        DavPath::new("/bad%FFname"),
+        Err(DavPathError::InvalidEncoding)
+    ));
 }
 
 #[test]
@@ -107,8 +111,20 @@ fn href_and_relative_path_helpers_preserve_collection_semantics() {
         "/webdav/folder/file%20name%252B.txt"
     );
     assert_eq!(
-        child_relative_path("/folder/", b"child", true),
+        child_relative_path("/folder/", b"child", true).expect("valid child name"),
         "/folder/child/"
+    );
+    assert_eq!(
+        child_relative_path("/folder/", b"bad/name", false),
+        Err(DavPathError::InvalidChildName)
+    );
+    assert_eq!(
+        child_relative_path("/folder/", b"bad\\name", false),
+        Err(DavPathError::InvalidChildName)
+    );
+    assert_eq!(
+        child_relative_path("/folder/", b"bad\xffname", false),
+        Err(DavPathError::InvalidEncoding)
     );
     assert_eq!(
         parent_relative_path("/folder/child/"),
@@ -228,6 +244,46 @@ fn destination_is_same_origin_and_mount_scoped() {
     )
     .expect("matching absolute destination should parse");
     assert_eq!(absolute.path.as_str(), "/folder/file name.txt");
+
+    destination_relative_path(
+        &headers("Destination", "https://dav.example:443/webdav/file.txt"),
+        "/webdav",
+        "https",
+        "dav.example",
+    )
+    .expect("the default HTTPS port should not change the origin");
+    destination_relative_path(
+        &headers("Destination", "https://user@dav.example/webdav/file.txt"),
+        "/webdav",
+        "https",
+        "dav.example",
+    )
+    .expect_err("userinfo in an HTTP URI must be rejected");
+    destination_relative_path(
+        &headers("Destination", "http://dav.example/webdav/file.txt"),
+        "/webdav",
+        "http",
+        "dav.example:80",
+    )
+    .expect("an omitted HTTP port should match explicit port 80");
+
+    for destination in [
+        "https://dav.example:444/webdav/file.txt",
+        "https://dav.example/webdav/file.txt",
+    ] {
+        let request_host = if destination.contains(":444") {
+            "dav.example"
+        } else {
+            "dav.example:444"
+        };
+        destination_relative_path(
+            &headers("Destination", destination),
+            "/webdav",
+            "https",
+            request_host,
+        )
+        .expect_err("a non-default port must remain part of the origin");
+    }
 
     let cross_origin = destination_relative_path(
         &headers("Destination", "https://other.example/webdav/file.txt"),
@@ -368,7 +424,7 @@ fn if_evaluator_uses_or_between_lists_and_and_inside_each_list() {
 }
 
 #[test]
-fn if_evaluator_requires_every_tagged_resource_group_to_match() {
+fn if_evaluator_uses_or_between_tagged_resource_groups() {
     let request_path = DavPath::new("/request.txt").expect("request path");
     let resolver = MockIfStateResolver {
         states: HashMap::from([
@@ -402,8 +458,20 @@ fn if_evaluator_requires_every_tagged_resource_group_to_match() {
 
     let partially_matching =
         parsed_if(r#"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:wrong>)"#);
-    let error = futures::executor::block_on(enforce_if_header(
+    futures::executor::block_on(enforce_if_header(
         Some(&partially_matching),
+        &resolver,
+        &request_path,
+        "/webdav",
+        "https",
+        "dav.example",
+    ))
+    .expect("one matching tagged-list production satisfies the complete If header");
+
+    let mismatched =
+        parsed_if(r#"</webdav/a.txt> (<urn:uuid:wrong-a>) </webdav/b.txt> (<urn:uuid:wrong-b>)"#);
+    let error = futures::executor::block_on(enforce_if_header(
+        Some(&mismatched),
         &resolver,
         &request_path,
         "/webdav",
@@ -587,12 +655,14 @@ fn lock_timeout_uses_bounded_server_policy() {
         Duration::from_secs(60)
     );
 
-    for value in ["Second-604801", "Second-18446744073709551615", "Extension"] {
-        assert!(
-            parse_lock_timeout(&headers("Timeout", value), maximum).is_err(),
-            "{value} should be rejected"
+    for value in ["Second-604801", "Second-18446744073709551615"] {
+        assert_eq!(
+            parse_lock_timeout(&headers("Timeout", value), maximum)
+                .expect("an oversized numeric timeout should be clamped"),
+            maximum
         );
     }
+    assert!(parse_lock_timeout(&headers("Timeout", "Extension"), maximum).is_err());
 
     let mut non_utf8 = HeaderMap::new();
     non_utf8.insert(
@@ -647,6 +717,37 @@ fn etag_and_date_preconditions_keep_http_precedence() {
         evaluate_http_download_preconditions(&download, None, Some(modified))
             .expect("valid date precondition"),
         DavPrecondition::NotModified
+    );
+
+    let mut if_match_precedence = HeaderMap::new();
+    if_match_precedence.insert(header::IF_MATCH, HeaderValue::from_static("\"v1\""));
+    if_match_precedence.insert(
+        header::IF_UNMODIFIED_SINCE,
+        HeaderValue::from_static("Thu, 01 Jan 1970 00:00:00 GMT"),
+    );
+    assert_eq!(
+        evaluate_http_download_preconditions(&if_match_precedence, Some("\"v1\""), Some(modified),)
+            .expect("a matching If-Match suppresses If-Unmodified-Since"),
+        DavPrecondition::Proceed
+    );
+
+    let mut if_none_match_precedence = HeaderMap::new();
+    if_none_match_precedence.insert(
+        header::IF_NONE_MATCH,
+        HeaderValue::from_static("\"different\""),
+    );
+    if_none_match_precedence.insert(
+        header::IF_MODIFIED_SINCE,
+        HeaderValue::from_static("Sat, 24 Jan 1970 03:33:20 GMT"),
+    );
+    assert_eq!(
+        evaluate_http_download_preconditions(
+            &if_none_match_precedence,
+            Some("\"v1\""),
+            Some(modified),
+        )
+        .expect("a nonmatching If-None-Match suppresses If-Modified-Since"),
+        DavPrecondition::Proceed
     );
 }
 

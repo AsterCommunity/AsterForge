@@ -5,6 +5,7 @@ use actix_web::{FromRequest, web};
 use aster_forge_webdav::{DavBodyError, DavMethod, DavPrecondition};
 use bytes::Bytes;
 use futures::StreamExt;
+use std::pin::Pin;
 
 async fn payload_from_bytes(bytes: Bytes) -> web::Payload {
     let (request, mut payload) = actix_web::test::TestRequest::default()
@@ -13,6 +14,23 @@ async fn payload_from_bytes(bytes: Bytes) -> web::Payload {
     web::Payload::from_request(&request, &mut payload)
         .await
         .expect("test payload should extract")
+}
+
+async fn payload_from_chunks(chunks: &[&'static [u8]]) -> web::Payload {
+    let stream = futures::stream::iter(
+        chunks
+            .iter()
+            .map(|chunk| Ok(Bytes::from_static(chunk)))
+            .collect::<Vec<Result<Bytes, actix_web::error::PayloadError>>>(),
+    );
+    let stream: Pin<
+        Box<dyn futures::Stream<Item = Result<Bytes, actix_web::error::PayloadError>>>,
+    > = Box::pin(stream);
+    let mut payload = actix_web::dev::Payload::from(stream);
+    let request = actix_web::test::TestRequest::default().to_http_request();
+    web::Payload::from_request(&request, &mut payload)
+        .await
+        .expect("chunked test payload should extract")
 }
 
 #[actix_web::test]
@@ -42,6 +60,23 @@ async fn bounded_xml_body_accepts_the_exact_limit_and_rejects_one_byte_over() {
     let mut over = payload_from_bytes(Bytes::from_static(b"12345")).await;
     assert_eq!(
         aster_forge_webdav::actix::collect_bounded_xml_body(&mut over, 4).await,
+        Err(DavBodyError::XmlTooLarge)
+    );
+
+    let mut cumulative = payload_from_chunks(&[b"12", b"34", b"5"]).await;
+    assert_eq!(
+        aster_forge_webdav::actix::collect_bounded_xml_body(&mut cumulative, 4).await,
+        Err(DavBodyError::XmlTooLarge)
+    );
+
+    let mut zero_empty = payload_from_bytes(Bytes::new()).await;
+    assert_eq!(
+        aster_forge_webdav::actix::collect_bounded_xml_body(&mut zero_empty, 0).await,
+        Ok(Vec::new())
+    );
+    let mut zero_nonempty = payload_from_bytes(Bytes::from_static(b"x")).await;
+    assert_eq!(
+        aster_forge_webdav::actix::collect_bounded_xml_body(&mut zero_nonempty, 0).await,
         Err(DavBodyError::XmlTooLarge)
     );
 }

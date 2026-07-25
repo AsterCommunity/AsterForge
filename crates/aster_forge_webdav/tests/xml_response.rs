@@ -126,6 +126,38 @@ fn lockdiscovery_covers_owner_timeout_scope_depth_token_and_root() {
     assert!(output.contains("Infinity"), "{output}");
     assert!(output.contains("urn:uuid:a%20b"), "{output}");
     assert!(output.contains("用户 &amp; owner"), "{output}");
+    let parsed = DavXmlElement::parse(output.as_bytes()).expect("lockdiscovery XML");
+    let active_locks = parsed.child_elements().collect::<Vec<_>>();
+    assert_eq!(active_locks.len(), 2);
+    assert_eq!(
+        active_locks[0]
+            .child_elements()
+            .map(|element| element.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "lockscope",
+            "locktype",
+            "depth",
+            "owner",
+            "timeout",
+            "locktoken",
+            "lockroot",
+        ]
+    );
+    assert_eq!(
+        active_locks[1]
+            .child_elements()
+            .map(|element| element.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "lockscope",
+            "locktype",
+            "depth",
+            "timeout",
+            "locktoken",
+            "lockroot",
+        ]
+    );
 
     let response = xml(&dav_lock_response_element(&locks));
     assert!(response.contains("xmlns:D=\"DAV:\""), "{response}");
@@ -192,6 +224,34 @@ fn property_builders_preserve_qnames_values_and_namespace_declarations() {
     );
     assert!(custom_xml.contains("<D:collection"), "{custom_xml}");
     assert!(xml(&dav_property_name_element(&plain)).contains("<plain"));
+
+    for (reserved, expected_prefix) in [("xml", "A"), ("xmlns", "A")] {
+        let requested = aster_forge_webdav::DavRequestedProperty {
+            name: "color".to_owned(),
+            namespace: Some("urn:custom".to_owned()),
+            prefix: Some(reserved.to_owned()),
+        };
+        let output = xml(&dav_property_name_element(&requested));
+        assert!(
+            output.contains(&format!("<{expected_prefix}:color")),
+            "{output}"
+        );
+        assert!(
+            output.contains(&format!("xmlns:{expected_prefix}=\"urn:custom\"")),
+            "{output}"
+        );
+        assert!(!output.contains(&format!("<{reserved}:color")), "{output}");
+    }
+
+    let reserved_dav = aster_forge_webdav::DavRequestedProperty {
+        name: "getetag".to_owned(),
+        namespace: Some("DAV:".to_owned()),
+        prefix: Some("xml".to_owned()),
+    };
+    assert!(
+        xml(&dav_property_name_element(&reserved_dav)).contains("<D:getetag"),
+        "reserved DAV prefix should fall back to D"
+    );
 }
 
 #[test]

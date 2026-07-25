@@ -81,6 +81,9 @@ pub(crate) fn map_quick_xml_error(error: quick_xml::Error) -> Error {
     }
 }
 
+// External-entity classification relies on quick-xml reporting `InvalidBangMarkup` with
+// `error_position()` at the opening `<!ENTITY`. The complete-document entry-point tests pin this
+// contract so a quick-xml upgrade cannot silently downgrade the error to generic malformed XML.
 pub(crate) fn map_quick_xml_error_at(
     error: quick_xml::Error,
     error_position: usize,

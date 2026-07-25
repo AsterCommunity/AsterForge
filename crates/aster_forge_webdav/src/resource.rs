@@ -3,6 +3,7 @@
 use http::header::{CACHE_CONTROL, CONTENT_LOCATION, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
 
+use crate::response::no_store_empty_response;
 use crate::{
     DavErrorCondition, DavFileSystem, DavMultiStatusItem, DavPath, DavResourceKind, DavResponse,
     DavXmlError, Depth, FsError, backend_error_response, dav_multistatus_element,
@@ -178,11 +179,7 @@ pub fn mutation_plan_error_response(error: DavMutationPlanError) -> DavResponse 
         DavMutationPlanError::Forbidden => StatusCode::FORBIDDEN,
         DavMutationPlanError::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
     };
-    let mut response = DavResponse::empty(status);
-    response
-        .headers
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    no_store_empty_response(status)
 }
 
 /// Builds the successful MKCOL response.
@@ -251,11 +248,7 @@ pub fn mutation_success_response(destination_existed: bool) -> DavResponse {
     } else {
         StatusCode::CREATED
     };
-    let mut response = DavResponse::empty(status);
-    response
-        .headers
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    no_store_empty_response(status)
 }
 
 /// Builds a 207 response for typed recursive mutation failures.

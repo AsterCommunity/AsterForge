@@ -2,12 +2,14 @@
 
 use std::time::SystemTime;
 
-use aster_forge_utils::http_range::{HttpByteRange, parse_single_byte_range};
-use aster_forge_utils::http_validators::format_http_date;
+use aster_forge_utils::http_range::{HttpByteRange, HttpRangeError, parse_single_byte_range};
+use aster_forge_utils::http_validators::{
+    format_http_date, http_date_epoch_seconds, parse_http_date,
+};
 use bytes::Bytes;
 use http::header::{
     ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
-    CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE,
+    CONTENT_TYPE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
 };
 use http::{HeaderMap, HeaderValue, StatusCode};
 
@@ -132,6 +134,10 @@ pub(crate) fn xml_request_error_response(
             StatusCode::FORBIDDEN,
             dav_error_element(&DavErrorCondition::NoExternalEntities),
         ),
+        DavXmlError::TooLarge => Ok(text_document_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "WebDAV XML body too large",
+        )),
         DavXmlError::TooDeep | DavXmlError::Malformed => Ok(text_document_response(
             StatusCode::BAD_REQUEST,
             "Invalid XML body",
@@ -169,7 +175,7 @@ pub fn backend_error_response(error: &DavBackendError) -> DavResponse {
     no_store_empty_response(status)
 }
 
-fn no_store_empty_response(status: StatusCode) -> DavResponse {
+pub(crate) fn no_store_empty_response(status: StatusCode) -> DavResponse {
     let mut response = DavResponse::empty(status);
     response
         .headers
@@ -254,7 +260,7 @@ pub fn plan_download_response(
         }
     }
 
-    let range = if head_only {
+    let range = if head_only || !if_range_matches(headers, etag, last_modified) {
         None
     } else if let Some(value) = headers.get(RANGE) {
         let Ok(raw) = value.to_str() else {
@@ -262,7 +268,15 @@ pub fn plan_download_response(
         };
         match parse_single_byte_range(raw, content_length) {
             Ok(range) => Some(range),
-            Err(_) => return Ok(range_not_satisfiable_plan(content_length)),
+            Err(HttpRangeError::UnsupportedUnit | HttpRangeError::MultipleRangesUnsupported) => {
+                None
+            }
+            Err(
+                HttpRangeError::Malformed
+                | HttpRangeError::InvalidNumber
+                | HttpRangeError::EmptyRepresentation
+                | HttpRangeError::Unsatisfiable,
+            ) => return Ok(range_not_satisfiable_plan(content_length)),
         }
     } else {
         None
@@ -298,6 +312,57 @@ pub fn plan_download_response(
     insert_validators(&mut response.headers, etag, last_modified)?;
 
     Ok(DavDownloadPlan { response, body })
+}
+
+fn if_range_matches(headers: &HeaderMap, etag: Option<&str>, last_modified: SystemTime) -> bool {
+    let Some(value) = headers.get(IF_RANGE) else {
+        return true;
+    };
+    let Ok(raw) = value.to_str() else {
+        return false;
+    };
+    let raw = raw.trim();
+    if raw.starts_with('"')
+        || raw
+            .get(..2)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("W/"))
+    {
+        return strong_if_range_etag_matches(raw, etag);
+    }
+    parse_http_date(raw)
+        .is_ok_and(|date| http_date_epoch_seconds(date) == http_date_epoch_seconds(last_modified))
+}
+
+fn strong_if_range_etag_matches(candidate: &str, current: Option<&str>) -> bool {
+    if candidate
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("W/"))
+    {
+        return false;
+    }
+    let Some(candidate) = candidate
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .filter(|value| !value.contains('"'))
+    else {
+        return false;
+    };
+    let Some(current) = current else {
+        return false;
+    };
+    if current
+        .trim()
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("W/"))
+    {
+        return false;
+    }
+    let current = current.trim();
+    let current = current
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(current);
+    candidate == current
 }
 
 /// Builds the response required when a byte range cannot be served.

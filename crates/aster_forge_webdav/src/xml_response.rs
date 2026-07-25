@@ -346,6 +346,10 @@ fn active_lock_element(lock: &DavLockXml) -> DavXmlElement {
         .children
         .push(DavXmlNode::Element(dav_element("write")));
     active.children.push(DavXmlNode::Element(locktype));
+    active.children.push(DavXmlNode::Element(dav_text_element(
+        "depth",
+        if lock.deep { "Infinity" } else { "0" },
+    )));
     if let Some(owner) = &lock.owner {
         active.children.push(DavXmlNode::Element(owner.clone()));
     }
@@ -363,10 +367,6 @@ fn active_lock_element(lock: &DavLockXml) -> DavXmlElement {
         encode_href(&lock.token),
     )));
     active.children.push(DavXmlNode::Element(token));
-    active.children.push(DavXmlNode::Element(dav_text_element(
-        "depth",
-        if lock.deep { "Infinity" } else { "0" },
-    )));
 
     let mut lockroot = dav_element("lockroot");
     lockroot.children.push(DavXmlNode::Element(dav_text_element(
@@ -404,6 +404,7 @@ fn property_element(name: &DavRequestedProperty, child: Option<DavXmlNode>) -> D
     let prefix = name
         .prefix
         .as_deref()
+        .filter(|prefix| !matches!(*prefix, "xml" | "xmlns"))
         .unwrap_or_else(|| default_property_prefix(name.namespace.as_deref()));
     let tag = if name.namespace.is_some() {
         format!("{prefix}:{}", name.name)

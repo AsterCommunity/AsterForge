@@ -87,5 +87,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 tikv-jemalloc-ctl = "0.7"
 utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
 url = "2"
-urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }

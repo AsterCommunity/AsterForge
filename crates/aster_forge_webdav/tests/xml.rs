@@ -183,6 +183,25 @@ fn proppatch_preserves_order_qnames_values_and_inherited_language() {
 }
 
 #[test]
+fn proppatch_does_not_inherit_an_unqualified_lang_attribute() {
+    let patches = parse_proppatch_request(
+        br#"<D:propertyupdate xmlns:D="DAV:" xmlns:A="urn:a" lang="not-xml">
+              <D:set><D:prop><A:color/></D:prop></D:set>
+            </D:propertyupdate>"#,
+    )
+    .expect("unqualified lang is an ordinary application attribute");
+
+    assert_eq!(patches.len(), 1);
+    assert!(
+        !patches[0]
+            .property
+            .element
+            .attributes
+            .contains_key("xml:lang")
+    );
+}
+
+#[test]
 fn proppatch_ignores_unknown_action_subtrees_but_rejects_known_grammar_errors() {
     let patches = parse_proppatch_request(
         br#"<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:x">
@@ -318,6 +337,10 @@ fn xml_reader_maps_io_invalid_encoding_and_size_boundaries() {
         DavXmlElement::parse_reader(Cursor::new(b"<root>\xff</root>")),
         Err(DavXmlError::Malformed)
     );
+    assert_eq!(
+        DavXmlElement::parse_reader(Cursor::new(b"<a/><b/>")),
+        Err(DavXmlError::Malformed)
+    );
 
     let max_input_bytes = XmlSafetyPolicy::untrusted().max_input_bytes;
     let mut exact = Vec::with_capacity(max_input_bytes);
@@ -331,7 +354,7 @@ fn xml_reader_maps_io_invalid_encoding_and_size_boundaries() {
     assert_eq!(exact.len(), max_input_bytes + 1);
     assert_eq!(
         DavXmlElement::parse_reader(Cursor::new(&exact)),
-        Err(DavXmlError::Malformed)
+        Err(DavXmlError::TooLarge)
     );
 }
 

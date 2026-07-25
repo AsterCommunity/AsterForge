@@ -79,9 +79,11 @@ pub fn parse_single_byte_range(
     raw: &str,
     total_size: u64,
 ) -> Result<HttpByteRange, HttpRangeError> {
-    let range = raw
-        .strip_prefix("bytes=")
-        .ok_or(HttpRangeError::UnsupportedUnit)?;
+    let raw = raw.trim_start();
+    let (unit, range) = raw.split_once('=').ok_or(HttpRangeError::UnsupportedUnit)?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return Err(HttpRangeError::UnsupportedUnit);
+    }
     if range.contains(',') {
         return Err(HttpRangeError::MultipleRangesUnsupported);
     }
@@ -145,6 +147,10 @@ mod tests {
         assert_eq!(
             parse_single_byte_range("bytes=-50", 20),
             HttpByteRange::new(0, 19, 20)
+        );
+        assert_eq!(
+            parse_single_byte_range("  BYTES=0-1", 20),
+            HttpByteRange::new(0, 1, 20)
         );
     }
 

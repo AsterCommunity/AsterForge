@@ -6,7 +6,7 @@ use http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use crate::DavLockSystem;
-use crate::response::xml_request_error_response;
+use crate::response::{no_store_empty_response, xml_request_error_response};
 use crate::{
     DavErrorCondition, DavFileSystem, DavLock, DavLockXml, DavPath, DavProtocolError,
     DavRequestHead, DavResponse, DavXmlElement, DavXmlError, FsError, IfHeader, OpenOptions,
@@ -320,12 +320,4 @@ fn lock_condition_response(
         .headers
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
-}
-
-fn no_store_empty_response(status: StatusCode) -> DavResponse {
-    let mut response = DavResponse::empty(status);
-    response
-        .headers
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
