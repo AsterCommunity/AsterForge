@@ -23,7 +23,7 @@ pub async fn prepare_database_handles(
 ) -> Result<aster_forge_db::DbHandles> {
     let config = aster_forge_db::DatabaseConfig {
         url: database.url.clone(),
-        raw_credentials: None,
+        raw_credentials: database.raw_credentials.clone(),
         pool_size: database.pool_size,
         retry_count: database.retry_count,
     };

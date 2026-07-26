@@ -101,6 +101,40 @@ file = "service.log"
 }
 
 #[test]
+fn config_file_deserializes_database_raw_credentials() {
+    let _guard = EnvGuard::capture();
+    let directory = unique_project_temp_dir();
+    let config_path = directory.path().join("config.toml");
+    fs::write(
+        &config_path,
+        r#"
+[database]
+url = ""
+
+[database.raw_credentials]
+base_url = "postgres://db.example.test/app"
+username = "database-user"
+password = "database-password#[]{}"
+"#,
+    )
+    .expect("write config");
+
+    unsafe {
+        std::env::set_var({{crate_name}}::config::CONFIG_ENV_VAR, &config_path);
+    }
+    let loaded = {{crate_name}}::config::load().expect("load config");
+    let credentials = loaded
+        .database
+        .raw_credentials
+        .expect("database raw credentials should deserialize");
+
+    assert_eq!(loaded.database.url, "");
+    assert_eq!(credentials.base_url, "postgres://db.example.test/app");
+    assert_eq!(credentials.username.as_deref(), Some("database-user"));
+    assert_eq!(credentials.password.as_deref(), Some("database-password#[]{}"));
+}
+
+#[test]
 fn environment_overrides_static_config() {
     let _guard = EnvGuard::capture();
 

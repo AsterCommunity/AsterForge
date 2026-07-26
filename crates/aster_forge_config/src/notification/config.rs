@@ -33,7 +33,7 @@ pub struct ConfigSyncConfig {
     ///
     /// When set, `endpoint` must be empty so complete URLs and separated credentials cannot be
     /// selected through an implicit precedence rule.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub raw_redis_credentials: Option<ConfigSyncRedisCredentials>,
     /// Logical reload topic. Transports may map this to a channel, exchange,
     /// subject, or routing key.
@@ -69,10 +69,10 @@ pub struct ConfigSyncRedisCredentials {
     /// Absolute Redis URL without userinfo.
     pub base_url: String,
     /// Raw Redis username, when ACL authentication is used.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub username: Option<String>,
     /// Raw Redis password.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub password: Option<String>,
 }
 
@@ -166,7 +166,7 @@ fn build_redis_config_sync_runtime(
     let channel = redis_channel_from_topic(topic);
     let notifier = match &config.raw_redis_credentials {
         Some(credentials) => {
-            if !config.endpoint.is_empty() {
+            if !config.endpoint.trim().is_empty() {
                 return Err(ConfigCoreError::invalid_value(
                     "config_sync.endpoint and config_sync.raw_redis_credentials cannot both be configured",
                 ));
@@ -209,4 +209,42 @@ fn build_redis_config_sync_runtime(
 #[cfg(any(feature = "redis-pubsub", test))]
 pub(super) fn redis_channel_from_topic(topic: &str) -> String {
     topic.trim().replace('.', ":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigSyncConfig, ConfigSyncRedisCredentials};
+
+    #[test]
+    fn config_sync_credentials_deserialize_but_never_serialize() {
+        let secret_username = "sync-user";
+        let secret_password = "sync-password#[]{}";
+        let config: ConfigSyncConfig = serde_json::from_str(&format!(
+            r#"{{"backend":"redis","raw_redis_credentials":{{"base_url":"redis://sync.example.test/0","username":"{secret_username}","password":"{secret_password}"}}}}"#
+        ))
+        .expect("config sync credentials should deserialize");
+
+        let credentials = config
+            .raw_redis_credentials
+            .as_ref()
+            .expect("config sync credentials should be retained after deserialization");
+        assert_eq!(credentials.username.as_deref(), Some(secret_username));
+        assert_eq!(credentials.password.as_deref(), Some(secret_password));
+
+        let serialized =
+            serde_json::to_string(&config).expect("config sync config should serialize");
+        assert!(!serialized.contains("raw_redis_credentials"));
+        assert!(!serialized.contains(secret_username));
+        assert!(!serialized.contains(secret_password));
+
+        let serialized_credentials = serde_json::to_string(&ConfigSyncRedisCredentials {
+            base_url: "redis://sync.example.test/0".to_string(),
+            username: Some(secret_username.to_string()),
+            password: Some(secret_password.to_string()),
+        })
+        .expect("config sync credentials should serialize safely");
+        assert!(serialized_credentials.contains("sync.example.test"));
+        assert!(!serialized_credentials.contains(secret_username));
+        assert!(!serialized_credentials.contains(secret_password));
+    }
 }

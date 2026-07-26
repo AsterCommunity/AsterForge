@@ -71,13 +71,15 @@ impl std::fmt::Debug for DatabaseConfig {
 }
 
 /// Raw database credentials for a credential-free connection base URL.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct DatabaseCredentials {
     /// Absolute database URL without userinfo.
     pub base_url: String,
     /// Raw database username, when required by the backend.
+    #[serde(default, skip_serializing)]
     pub username: Option<String>,
     /// Raw database password, when required by the backend.
+    #[serde(default, skip_serializing)]
     pub password: Option<String>,
 }
 
@@ -315,7 +317,7 @@ fn normalize_database_url(database_url: &str) -> String {
 fn resolved_database_url(cfg: &DatabaseConfig) -> Result<String> {
     let url = match &cfg.raw_credentials {
         Some(credentials) => {
-            if !cfg.url.is_empty() {
+            if !cfg.url.trim().is_empty() {
                 return Err(DbError::database_connection(
                     "database.url and database.raw_credentials cannot both be configured",
                 ));
@@ -425,8 +427,8 @@ fn db_query_metric_from_sea_orm(info: &sea_orm::metric::Info<'_>) -> DbQueryMetr
 
 #[cfg(test)]
 mod tests {
-    use super::{first_close_error, normalize_database_url};
-    use crate::connection::DatabaseConfig;
+    use super::{first_close_error, normalize_database_url, resolved_database_url};
+    use crate::connection::{DatabaseConfig, DatabaseCredentials};
     use aster_forge_metrics::{DbQueryKind, NoopDbMetrics};
     use aster_forge_test::temp::SqliteTestDatabase;
     use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
@@ -490,6 +492,64 @@ mod tests {
             normalize_database_url("postgres://user:pass@localhost/asterdrive"),
             "postgres://user:pass@localhost/asterdrive"
         );
+    }
+
+    #[test]
+    fn raw_credentials_allow_a_whitespace_only_database_url() {
+        let config = DatabaseConfig {
+            url: " \t\n ".to_string(),
+            raw_credentials: Some(DatabaseCredentials {
+                base_url: "postgres://db.example.test:5432/app".to_string(),
+                username: Some("user".to_string()),
+                password: Some("password#[]{}".to_string()),
+            }),
+            pool_size: 5,
+            retry_count: 0,
+        };
+
+        let url = resolved_database_url(&config)
+            .expect("whitespace-only database URL should not conflict with raw credentials");
+        assert!(url.starts_with("postgres://user:"));
+        assert!(url.ends_with("db.example.test:5432/app"));
+    }
+
+    #[test]
+    fn raw_credentials_reject_a_non_blank_database_url() {
+        let config = DatabaseConfig {
+            url: "postgres://configured.example.test/app".to_string(),
+            raw_credentials: Some(DatabaseCredentials {
+                base_url: "postgres://credentials.example.test/app".to_string(),
+                username: None,
+                password: None,
+            }),
+            pool_size: 5,
+            retry_count: 0,
+        };
+
+        assert!(matches!(
+            resolved_database_url(&config),
+            Err(crate::DbError::DatabaseConnection(message))
+                if message.contains("cannot both be configured")
+        ));
+    }
+
+    #[test]
+    fn database_credentials_deserialize_but_never_serialize() {
+        let secret_username = "database-user";
+        let secret_password = "database-password#[]{}";
+        let credentials: DatabaseCredentials = serde_json::from_str(&format!(
+            r#"{{"base_url":"postgres://db.example.test/app","username":"{secret_username}","password":"{secret_password}"}}"#
+        ))
+        .expect("database credentials should deserialize");
+
+        assert_eq!(credentials.username.as_deref(), Some(secret_username));
+        assert_eq!(credentials.password.as_deref(), Some(secret_password));
+
+        let serialized =
+            serde_json::to_string(&credentials).expect("database credentials should serialize");
+        assert!(serialized.contains("db.example.test"));
+        assert!(!serialized.contains(secret_username));
+        assert!(!serialized.contains(secret_password));
     }
 
     #[test]

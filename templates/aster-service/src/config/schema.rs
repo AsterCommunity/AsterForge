@@ -78,6 +78,12 @@ impl Default for ServerConfig {
 pub struct DatabaseConfig {
     /// SeaORM database URL.
     pub url: String,
+    /// Optional raw credentials for a credential-free database base URL.
+    ///
+    /// When configured, `url` must be empty. This field is intentionally excluded from generated
+    /// configuration files so deployment secrets are never written back to disk.
+    #[serde(default, skip_serializing)]
+    pub raw_credentials: Option<aster_forge_db::DatabaseCredentials>,
     /// Maximum pool size for non-SQLite pools and SQLite reader pools.
     pub pool_size: u32,
     /// Connection retry count.
@@ -88,6 +94,7 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             url: "sqlite://{{project-name}}.db?mode=rwc".to_string(),
+            raw_credentials: None,
             pool_size: 10,
             retry_count: 3,
         }

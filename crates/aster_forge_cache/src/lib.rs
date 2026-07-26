@@ -95,7 +95,7 @@ pub struct CacheConfig {
     ///
     /// When set, `endpoint` must be empty so complete URLs and separated credentials cannot be
     /// selected through an implicit precedence rule.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub raw_redis_credentials: Option<RedisCredentials>,
     /// Default time-to-live, in seconds, for entries that do not specify an explicit TTL.
     #[serde(default = "CacheConfig::default_ttl")]
@@ -136,11 +136,11 @@ impl CacheConfig {
         }
     }
 
-    #[cfg(feature = "redis")]
+    #[cfg(any(feature = "redis", test))]
     fn resolved_redis_url(&self) -> Result<String> {
         match &self.raw_redis_credentials {
             Some(credentials) => {
-                if !self.endpoint.is_empty() {
+                if !self.endpoint.trim().is_empty() {
                     return Err(CacheError::RedisConfiguration(
                         "cache.endpoint and cache.raw_redis_credentials cannot both be configured"
                             .to_string(),
@@ -177,10 +177,10 @@ pub struct RedisCredentials {
     /// Absolute Redis URL without userinfo.
     pub base_url: String,
     /// Raw Redis username, when ACL authentication is used.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub username: Option<String>,
     /// Raw Redis password.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub password: Option<String>,
 }
 
@@ -318,7 +318,7 @@ fn create_memory_cache(default_ttl: u64) -> Arc<dyn CacheBackend> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheConfig, CacheError};
+    use super::{CacheConfig, CacheError, RedisCredentials};
 
     #[test]
     fn cache_config_default_uses_memory_backend() {
@@ -359,6 +359,78 @@ mod tests {
         assert_eq!(config.backend, "redis");
         assert_eq!(config.endpoint, "redis://127.0.0.1/");
         assert_eq!(config.default_ttl, 30);
+    }
+
+    #[test]
+    fn cache_credentials_deserialize_but_never_serialize() {
+        let secret_username = "cache-user";
+        let secret_password = "cache-password#[]{}";
+        let config: CacheConfig = serde_json::from_str(&format!(
+            r#"{{"backend":"redis","raw_redis_credentials":{{"base_url":"redis://cache.example.test/0","username":"{secret_username}","password":"{secret_password}"}}}}"#
+        ))
+        .expect("cache credentials should deserialize");
+
+        let credentials = config
+            .raw_redis_credentials
+            .as_ref()
+            .expect("cache credentials should be retained after deserialization");
+        assert_eq!(credentials.username.as_deref(), Some(secret_username));
+        assert_eq!(credentials.password.as_deref(), Some(secret_password));
+
+        let serialized = serde_json::to_string(&config).expect("cache config should serialize");
+        assert!(!serialized.contains("raw_redis_credentials"));
+        assert!(!serialized.contains(secret_username));
+        assert!(!serialized.contains(secret_password));
+
+        let serialized_credentials = serde_json::to_string(&RedisCredentials {
+            base_url: "redis://cache.example.test/0".to_string(),
+            username: Some(secret_username.to_string()),
+            password: Some(secret_password.to_string()),
+        })
+        .expect("credentials should serialize safely");
+        assert!(serialized_credentials.contains("cache.example.test"));
+        assert!(!serialized_credentials.contains(secret_username));
+        assert!(!serialized_credentials.contains(secret_password));
+    }
+
+    #[test]
+    fn raw_redis_credentials_allow_a_whitespace_only_endpoint() {
+        let config = CacheConfig {
+            backend: "redis".to_string(),
+            endpoint: " \t\n ".to_string(),
+            raw_redis_credentials: Some(RedisCredentials {
+                base_url: "redis://cache.example.test/3".to_string(),
+                username: None,
+                password: Some("password#[]{}".to_string()),
+            }),
+            default_ttl: 60,
+        };
+
+        let url = config
+            .resolved_redis_url()
+            .expect("whitespace-only endpoint should not conflict with raw credentials");
+        assert!(url.starts_with("redis://:"));
+        assert!(url.ends_with("cache.example.test/3"));
+    }
+
+    #[test]
+    fn raw_redis_credentials_reject_a_non_blank_endpoint() {
+        let config = CacheConfig {
+            backend: "redis".to_string(),
+            endpoint: "redis://cache.example.test/0".to_string(),
+            raw_redis_credentials: Some(RedisCredentials {
+                base_url: "redis://other.example.test/3".to_string(),
+                username: None,
+                password: None,
+            }),
+            default_ttl: 60,
+        };
+
+        assert!(matches!(
+            config.resolved_redis_url(),
+            Err(CacheError::RedisConfiguration(message))
+                if message.contains("cannot both be configured")
+        ));
     }
 
     #[test]
