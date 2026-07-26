@@ -14,7 +14,8 @@ use aster_forge_metrics::{
 };
 
 /// Database connection URL input.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(untagged)]
 pub enum DatabaseUrl {
     /// A complete database URL. Existing percent-encoded URLs use this compatibility mode.
     Url(String),
@@ -23,8 +24,10 @@ pub enum DatabaseUrl {
         /// Absolute database URL without username or password.
         base_url: String,
         /// Raw username, without percent encoding.
+        #[serde(default, skip_serializing)]
         username: Option<String>,
         /// Raw password, without percent encoding.
+        #[serde(default, skip_serializing)]
         password: Option<String>,
     },
 }
@@ -40,6 +43,22 @@ impl DatabaseUrl {
             base_url: base_url.into(),
             username,
             password,
+        }
+    }
+
+    /// Returns the complete URL when this input uses compatibility mode.
+    pub fn as_url(&self) -> Option<&str> {
+        match self {
+            Self::Url(url) => Some(url),
+            Self::Credentials { .. } => None,
+        }
+    }
+
+    /// Returns the complete URL mutably when this input uses compatibility mode.
+    pub fn as_url_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::Url(url) => Some(url),
+            Self::Credentials { .. } => None,
         }
     }
 
@@ -463,6 +482,31 @@ mod tests {
         let debug = format!("{input:?}");
         assert_eq!(debug, "DatabaseUrl::Credentials(<redacted>)");
         assert!(!debug.contains(raw_password));
+    }
+
+    #[test]
+    fn credentialed_database_url_deserializes_without_serializing_secrets() {
+        let raw_username = "app-user@example.com";
+        let raw_password = "db#[]{}^+=*@:/?%secret";
+        let input: DatabaseUrl = serde_json::from_str(&format!(
+            r#"{{"base_url":"postgres://db.example:5432/app","username":"{raw_username}","password":"{raw_password}"}}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            input,
+            DatabaseUrl::credentials(
+                "postgres://db.example:5432/app",
+                Some(raw_username.to_string()),
+                Some(raw_password.to_string()),
+            )
+        );
+
+        let serialized = serde_json::to_string(&input).unwrap();
+        assert!(serialized.contains("postgres://db.example:5432/app"));
+        assert!(!serialized.contains(raw_username));
+        assert!(!serialized.contains(raw_password));
+        assert!(!serialized.contains("db%23%5B%5D"));
     }
 
     #[tokio::test]

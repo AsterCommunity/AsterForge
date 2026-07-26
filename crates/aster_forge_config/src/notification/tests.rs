@@ -189,9 +189,10 @@ fn config_sync_config_defaults_to_disabled_generic_topic() {
 
 #[test]
 fn config_sync_config_deserializes_structured_credentials_and_redacts_debug() {
+    let raw_username = "sync-user@example.com";
     let raw_password = "sync#[]{}^+=*@:/?%secret";
     let config: ConfigSyncConfig = serde_json::from_str(&format!(
-        r#"{{"backend":"redis","endpoint":{{"base_url":"redis://cache.example/0","username":"sync-user","password":"{raw_password}"}},"topic":"aster.config_reload"}}"#,
+        r#"{{"backend":"redis","endpoint":{{"base_url":"redis://cache.example/0","username":"{raw_username}","password":"{raw_password}"}},"topic":"aster.config_reload"}}"#,
     ))
     .unwrap();
 
@@ -199,13 +200,20 @@ fn config_sync_config_deserializes_structured_credentials_and_redacts_debug() {
         config.endpoint,
         ConfigSyncEndpoint::credentials(
             "redis://cache.example/0",
-            Some("sync-user".to_string()),
+            Some(raw_username.to_string()),
             Some(raw_password.to_string()),
         )
     );
     let debug = format!("{config:?}");
+    assert!(!debug.contains(raw_username));
     assert!(!debug.contains(raw_password));
     assert!(debug.contains("ConfigSyncEndpoint::Credentials(<redacted>)"));
+
+    let serialized = serde_json::to_string(&config).unwrap();
+    assert!(serialized.contains("redis://cache.example/0"));
+    assert!(!serialized.contains(raw_username));
+    assert!(!serialized.contains(raw_password));
+    assert!(!serialized.contains("sync%23%5B%5D"));
 }
 
 #[test]

@@ -543,6 +543,9 @@ let config = aster_forge_db::DatabaseConfig::with_credentials(
 ```
 
 `DatabaseUrl::Url` 与 `DatabaseUrl::Credentials` 是互斥模式；完整 URL 不会再次编码。
+`DatabaseUrl` 支持 untagged serde，因此产品配置可以继续使用字符串 URL，或使用包含
+`base_url`、username/password 的结构化输入。结构化输入再次序列化时只保留 `base_url`，
+不会输出原始凭据。
 SQLite 继续使用完整 URL 模式，路径和 reader/writer pool 行为不变。结构化配置错误在进入
 retry loop 前返回 non-retryable `DbError`。`DatabaseUrl` 的 `Debug` 会脱敏，但产品仍然不能
 记录解析后含凭据的 URL 或把它放进 health detail。

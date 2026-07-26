@@ -10,6 +10,8 @@ workers = 0
 temp_dir = ".tmp"
 
 [database]
+# Complete URL example below. To inject raw credentials instead, use:
+# url = { base_url = "postgres://127.0.0.1:5432/app", username = "RAW_USERNAME", password = "RAW_PASSWORD" }
 url = "sqlite://{{project-name}}.db?mode=rwc"
 pool_size = 10
 retry_count = 3

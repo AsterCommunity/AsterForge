@@ -632,6 +632,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "sea-orm",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

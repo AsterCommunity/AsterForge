@@ -12,12 +12,12 @@ publish = false
 default = ["memory"]
 bloom = ["dep:bloomfilter", "dep:parking_lot"]
 memory = []
-redis = ["memory", "dep:redis"]
+redis = ["memory", "dep:aster_forge_utils", "dep:redis"]
 runtime-component = ["dep:aster_forge_runtime"]
 
 [dependencies]
 aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
-aster_forge_utils = { path = "../aster_forge_utils" }
+aster_forge_utils = { path = "../aster_forge_utils", optional = true }
 async-trait.workspace = true
 bloomfilter = { workspace = true, optional = true }
 dashmap.workspace = true

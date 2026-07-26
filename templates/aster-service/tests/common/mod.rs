@@ -8,7 +8,7 @@ use aster_forge_test::temp::SqliteTestDatabase;
 pub async fn setup() -> ({{crate_name}}::runtime::AppState, SqliteTestDatabase) {
     let database = SqliteTestDatabase::new("service-state");
     let mut config = {{crate_name}}::config::AppConfig::default();
-    config.database.url = database.url().to_string();
+    config.database.url = database.url().into();
     config.cache = CacheConfig::default();
     config.logging.file = String::new();
 

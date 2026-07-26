@@ -86,6 +86,8 @@ default_ttl = 3600
 没有 ACL username 的 Redis 使用 `username = ""` 或在产品映射时构造
 `CacheEndpoint::credentials(base_url, None, Some(password))`。base URL 已带 userinfo 会被拒绝；
 完整 URL 与结构化模式不会互相覆盖或重复编码。`CacheEndpoint` 的 `Debug` 始终脱敏。
+结构化 endpoint 可以反序列化原始 username/password；再次序列化配置时只保留非敏感的
+`base_url`，不会把凭据写入 JSON、TOML、日志或运行时快照。
 
 `create_cache()` 返回 `Arc<dyn CacheBackend>`。Redis 初始化失败时会记录 warn 并回退到 memory backend。
 

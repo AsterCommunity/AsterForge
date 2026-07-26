@@ -34,7 +34,9 @@ fn to_io_error(error: impl ToString) -> io::Error {
 
 fn prepare_runtime_directories(config: &crate::config::AppConfig) -> crate::errors::Result<()> {
     std::fs::create_dir_all(&config.server.temp_dir)?;
-    create_sqlite_parent_dir(&config.database.url)?;
+    if let Some(database_url) = config.database.url.as_url() {
+        create_sqlite_parent_dir(database_url)?;
+    }
     if !config.logging.file.is_empty() {
         create_parent_dir(&config.logging.file)?;
     }

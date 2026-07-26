@@ -458,6 +458,8 @@ Forge 不感知产品环境变量名。结构化模式最终调用
 `aster_forge_events::RedisEventBus::from_credentials()`，因此 cache、events 和 config-sync 不会
 各自维护一份 URL encoding 逻辑。endpoint 的 `Debug` 脱敏，reload 观测和 health detail 也不应
 包含连接串。
+结构化 endpoint 的 username/password 只用于反序列化与连接构造；再次序列化配置时仅保留
+`base_url`，避免 Secret 被写入配置快照或管理接口输出。
 
 `build_config_sync_runtime_with_runtime_id(...)` 只在产品已有稳定进程 ID 或测试需要固定 origin 过滤时使用。普通服务用 `build_config_sync_runtime(...)` 生成 process-level runtime ID。
 

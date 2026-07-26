@@ -29,10 +29,10 @@ pub enum ConfigSyncEndpoint {
         /// Absolute broker URL without username or password.
         base_url: String,
         /// Raw broker username.
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         username: Option<String>,
         /// Raw broker password.
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         password: Option<String>,
     },
 }

@@ -96,10 +96,10 @@ pub enum CacheEndpoint {
         /// Absolute Redis URL without username or password.
         base_url: String,
         /// Raw Redis ACL username.
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         username: Option<String>,
         /// Raw Redis password.
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         password: Option<String>,
     },
 }
@@ -454,9 +454,10 @@ mod tests {
 
     #[test]
     fn cache_config_deserializes_structured_credentials_and_redacts_debug() {
+        let raw_username = "cache-user@example.com";
         let raw_password = "cache#[]{}^+=*@:/?%secret";
         let config: CacheConfig = serde_json::from_str(&format!(
-            r#"{{"backend":"redis","endpoint":{{"base_url":"redis://cache.example/0","username":null,"password":"{raw_password}"}}}}"#,
+            r#"{{"backend":"redis","endpoint":{{"base_url":"redis://cache.example/0","username":"{raw_username}","password":"{raw_password}"}}}}"#,
         ))
         .unwrap();
 
@@ -464,13 +465,20 @@ mod tests {
             config.endpoint,
             CacheEndpoint::credentials(
                 "redis://cache.example/0",
-                None,
+                Some(raw_username.to_string()),
                 Some(raw_password.to_string()),
             )
         );
         let debug = format!("{config:?}");
+        assert!(!debug.contains(raw_username));
         assert!(!debug.contains(raw_password));
         assert!(debug.contains("CacheEndpoint::Credentials(<redacted>)"));
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        assert!(serialized.contains("redis://cache.example/0"));
+        assert!(!serialized.contains(raw_username));
+        assert!(!serialized.contains(raw_password));
+        assert!(!serialized.contains("cache%23%5B%5D"));
     }
 
     #[test]
