@@ -1064,8 +1064,5 @@ mod tests {
         db.execute(&create_audit_logs_created_id_index())
             .await
             .expect("audit log index builder should execute");
-        crate::drop_index_if_exists(&db, super::AUDIT_LOGS_TABLE, AUDIT_LOG_CREATED_ID_INDEX)
-            .await
-            .expect("shared index helper should drop the audit log index");
     }
 }

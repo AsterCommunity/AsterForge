@@ -6,7 +6,7 @@
 //! server states open the fallback circuit; deterministic command errors (for example WRONGTYPE)
 //! are logged and fall back for that single operation without degrading the backend.
 
-use super::{CacheBackend, CacheError, Result, memory::MemoryCache};
+use super::{CacheBackend, CacheEndpoint, CacheError, Result, memory::MemoryCache};
 use async_trait::async_trait;
 use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
 use std::future::Future;
@@ -158,6 +158,51 @@ impl RedisCache {
     /// Creates a Redis cache from a Redis URL and default TTL in seconds.
     pub async fn new(url: &str, default_ttl: u64) -> Result<Self> {
         let client = redis::Client::open(url)?;
+        Self::from_client(client, default_ttl).await
+    }
+
+    /// Creates a Redis cache from a base URL and raw credentials.
+    pub async fn from_credentials(
+        base_url: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+        default_ttl: u64,
+    ) -> Result<Self> {
+        let url = aster_forge_utils::url::url_with_credentials(
+            base_url,
+            username,
+            password,
+            "Redis cache base URL",
+        )
+        .map_err(|error| CacheError::InvalidConfiguration(error.to_string()))?;
+        let client = redis::Client::open(url).map_err(|_| {
+            CacheError::InvalidConfiguration(
+                "invalid Redis cache connection configuration".to_string(),
+            )
+        })?;
+        Self::from_client(client, default_ttl).await
+    }
+
+    pub(crate) async fn from_endpoint(endpoint: &CacheEndpoint, default_ttl: u64) -> Result<Self> {
+        match endpoint {
+            CacheEndpoint::Url(url) => Self::new(url, default_ttl).await,
+            CacheEndpoint::Credentials {
+                base_url,
+                username,
+                password,
+            } => {
+                Self::from_credentials(
+                    base_url,
+                    username.as_deref(),
+                    password.as_deref(),
+                    default_ttl,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn from_client(client: redis::Client, default_ttl: u64) -> Result<Self> {
         let manager_config = redis::aio::ConnectionManagerConfig::new()
             .set_response_timeout(Some(REDIS_CACHE_OPERATION_TIMEOUT))
             .set_connection_timeout(Some(REDIS_CACHE_CONNECTION_TIMEOUT))

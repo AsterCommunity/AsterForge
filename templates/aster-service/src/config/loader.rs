@@ -95,12 +95,14 @@ fn normalize_paths(config: &mut super::AppConfig, config_path: &Path) -> Result<
         )
         .map_err(|error| AppError::Config(error.to_string()))?
     };
-    config.database.url = aster_forge_utils::paths::resolve_config_relative_sqlite_url(
-        &base_dir,
-        &config_dir,
-        &config.database.url,
-    )
-    .map_err(|error| AppError::Config(error.to_string()))?;
+    if let Some(database_url) = config.database.url.as_url_mut() {
+        *database_url = aster_forge_utils::paths::resolve_config_relative_sqlite_url(
+            &base_dir,
+            &config_dir,
+            database_url,
+        )
+        .map_err(|error| AppError::Config(error.to_string()))?;
+    }
     Ok(())
 }
 
@@ -119,5 +121,48 @@ mod tests {
 
         assert!(generated.contains(r#"temp_dir = ".tmp""#));
         assert!(generated.contains(r#"url = "sqlite://{{project-name}}.db?mode=rwc""#));
+    }
+
+    #[test]
+    fn structured_database_credentials_preserve_base_url_and_secrets_stay_out_of_serde() {
+        let directory = aster_forge_test::temp::TestTempDir::new_in(
+            std::env::current_dir()
+                .expect("resolve current dir")
+                .join("target")
+                .join("config-loader-tests"),
+            "loader-credentials",
+        );
+        let path = directory.join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[database]
+url = { base_url = "postgres://db.example:5432/app", username = "raw-user@example.com", password = "raw#[]{}secret" }
+"#,
+        )
+        .expect("write credential config");
+
+        let mut loaded = ::config::Config::builder()
+            .add_source(::config::File::from(path.as_path()))
+            .build()
+            .expect("build credential config")
+            .try_deserialize::<crate::config::AppConfig>()
+            .expect("deserialize credential config");
+        normalize_paths(&mut loaded, &path).expect("normalize credential config");
+
+        assert_eq!(
+            loaded.database.url,
+            aster_forge_db::DatabaseUrl::credentials(
+                "postgres://db.example:5432/app",
+                Some("raw-user@example.com".to_string()),
+                Some("raw#[]{}secret".to_string()),
+            )
+        );
+
+        let serialized = toml::to_string(&loaded).expect("serialize loaded config");
+        assert!(serialized.contains("postgres://db.example:5432/app"));
+        assert!(!serialized.contains("raw-user@example.com"));
+        assert!(!serialized.contains("raw#[]{}secret"));
+        assert!(!serialized.contains("raw%23%5B%5D"));
     }
 }

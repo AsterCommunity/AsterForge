@@ -12,8 +12,8 @@ fn default_config_uses_generated_data_paths() {
 
     assert_eq!(config.server.temp_dir, ".tmp");
     assert_eq!(
-        config.database.url,
-        "sqlite://{{project-name}}.db?mode=rwc"
+        config.database.url.as_url(),
+        Some("sqlite://{{project-name}}.db?mode=rwc")
     );
     assert!(config.logging.file.is_empty());
 }
@@ -36,13 +36,11 @@ fn default_config_file_is_created_under_data_dir() {
         loaded.server.temp_dir,
         runtime_relative_path(dir.join("data").join(".tmp"))
     );
-    assert_eq!(
-        loaded.database.url,
-        format!(
-            "sqlite://{}?mode=rwc",
-            runtime_relative_path(dir.join("data").join("{{project-name}}.db"))
-        )
+    let expected_database_url = format!(
+        "sqlite://{}?mode=rwc",
+        runtime_relative_path(dir.join("data").join("{{project-name}}.db"))
     );
+    assert_eq!(loaded.database.url.as_url(), Some(expected_database_url.as_str()));
     assert!(config_path.exists());
     assert!(generated.contains("# {{project-name}} configuration file"));
     assert!(generated.contains(r#"temp_dir = ".tmp""#));
@@ -87,13 +85,11 @@ file = "service.log"
         loaded.server.temp_dir,
         runtime_relative_path(dir.join("data").join(".tmp"))
     );
-    assert_eq!(
-        loaded.database.url,
-        format!(
-            "sqlite://{}?mode=rwc",
-            runtime_relative_path(dir.join("data").join("custom.db"))
-        )
+    let expected_database_url = format!(
+        "sqlite://{}?mode=rwc",
+        runtime_relative_path(dir.join("data").join("custom.db"))
     );
+    assert_eq!(loaded.database.url.as_url(), Some(expected_database_url.as_str()));
     assert_eq!(
         loaded.logging.file,
         runtime_relative_path(dir.join("data").join("service.log"))

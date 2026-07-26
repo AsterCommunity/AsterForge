@@ -61,7 +61,7 @@ struct Config {
 ```rust
 let config = aster_forge_cache::CacheConfig {
     backend: "redis".to_string(),
-    endpoint: "redis://127.0.0.1/".to_string(),
+    endpoint: "redis://127.0.0.1/".into(),
     default_ttl: 3600,
 };
 let cache = aster_forge_cache::create_cache(&config).await;
@@ -72,6 +72,22 @@ let cache = aster_forge_cache::create_cache(&config).await;
 `CacheConfig::normalized_backend()` 是 backend 名称的统一解析入口，会去除首尾空白并折叠 ASCII 大小写。`create_cache()` 和标准 health check 都复用这套语义，因此 `" ReDiS "` 不会在静态校验通过后又被 factory 当成 memory。未知 backend 仍按既有行为回退 memory，health report 会通过 configured/active mismatch 标记 degraded。
 
 配置文件里应该使用 `endpoint`。为了不破坏已有部署，`CacheConfig` 反序列化时仍接受历史键 `redis_url` 作为 alias；Rust API 不保留 `redis_url` 字段。
+
+`endpoint` 是 untagged `CacheEndpoint`：旧的完整 URL 字符串仍按原格式反序列化；需要传入
+原始 Redis 凭据时使用结构化 inline table：
+
+```toml
+[cache]
+backend = "redis"
+endpoint = { base_url = "redis://cache.example:6379/0", username = "app", password = "RAW_PASSWORD" }
+default_ttl = 3600
+```
+
+没有 ACL username 的 Redis 使用 `username = ""` 或在产品映射时构造
+`CacheEndpoint::credentials(base_url, None, Some(password))`。base URL 已带 userinfo 会被拒绝；
+完整 URL 与结构化模式不会互相覆盖或重复编码。`CacheEndpoint` 的 `Debug` 始终脱敏。
+结构化 endpoint 可以反序列化原始 username/password；再次序列化配置时只保留非敏感的
+`base_url`，不会把凭据写入 JSON、TOML、日志或运行时快照。
 
 `create_cache()` 返回 `Arc<dyn CacheBackend>`。Redis 初始化失败时会记录 warn 并回退到 memory backend。
 
@@ -176,6 +192,7 @@ registry.register_bundle(aster_forge_cache::cache_health_component(
 
 - memory backend 的 TTL、take、set-if-absent。
 - Redis backend 可用时的读写和 prefix invalidation。
+- 原始保留字符密码的真实 Redis 连接和读写，以及错误/debug 脱敏。
 - Redis 不可用时回退 memory。
 - TTL 边界：`Some(0)` 立即过期、1 秒 TTL 在服务端真实过期。
 - Redis 错误分类：WRONGTYPE 等命令错误不触发 fallback circuit。

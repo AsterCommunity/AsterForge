@@ -4,7 +4,7 @@ use std::time::Duration;
 use aster_forge_events::{
     EventConnectionObservation, EventConnectionState, RedisEventBus, RedisEventReconnectPolicy,
 };
-use aster_forge_test::redis::RedisTestContainer;
+use aster_forge_test::redis::{AuthenticatedRedisTestContainer, RedisTestContainer};
 use aster_forge_test::suite::TestContainerSuite;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -71,6 +71,43 @@ async fn wait_for_ready(observations: &Arc<Mutex<Vec<EventConnectionObservation>
     })
     .await
     .expect("event subscriber did not become ready");
+}
+
+#[tokio::test]
+async fn raw_reserved_password_publishes_and_subscribes() {
+    let password = "events#[]{}^+=*@:/?%Special";
+    let redis = AuthenticatedRedisTestContainer::start(password).await;
+    let topic = format!("asterforge.events.auth.{}", uuid::Uuid::new_v4().simple());
+    let bus = RedisEventBus::from_credentials(redis.base_url(), None, Some(password), topic)
+        .expect("credentialed Redis event bus should build");
+    let mut subscription = bus.subscribe().await.expect("subscribe with raw password");
+
+    bus.publish("credentialed-event")
+        .await
+        .expect("publish with raw password");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), subscription.receive())
+            .await
+            .expect("credentialed event should arrive")
+            .expect("credentialed payload should decode"),
+        "credentialed-event"
+    );
+
+    let wrong_password = "wrong#event-secret";
+    let wrong_bus = RedisEventBus::from_credentials(
+        redis.base_url(),
+        None,
+        Some(wrong_password),
+        "asterforge.events.wrong-password",
+    )
+    .expect("wrong credentials still form a syntactically valid Redis client");
+    let error = wrong_bus
+        .publish("rejected")
+        .await
+        .expect_err("wrong Redis password should reject publishing");
+    let message = error.to_string();
+    assert!(!message.contains(wrong_password));
+    assert!(!message.contains("wrong%23event-secret"));
 }
 
 fn clear_observations(observations: &Arc<Mutex<Vec<EventConnectionObservation>>>) {

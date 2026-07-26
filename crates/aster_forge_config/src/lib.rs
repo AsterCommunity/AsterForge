@@ -34,7 +34,7 @@ pub use notification::{
     ConfigChangeNotifier, ConfigNotification, ConfigNotificationSource, ConfigReloadDecision,
     ConfigReloadMessage, ConfigReloadObservation, ConfigReloadObserver, ConfigReloadWorkerConfig,
     ConfigSyncConfig, ConfigSyncConnectionObservation, ConfigSyncConnectionObserver,
-    ConfigSyncConnectionState, ConfigSyncRuntime, InMemoryConfigNotifier,
+    ConfigSyncConnectionState, ConfigSyncEndpoint, ConfigSyncRuntime, InMemoryConfigNotifier,
     SharedConfigChangeNotifier, build_config_sync_runtime,
     build_config_sync_runtime_with_runtime_id, decode_config_reload_transport_payload,
     default_config_sync_topic, handle_config_reload_notification, run_config_reload_supervisor,

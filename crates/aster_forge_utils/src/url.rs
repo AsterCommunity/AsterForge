@@ -5,8 +5,10 @@
 //! exposes small predicates for OAuth-style redirect and endpoint checks. Callers still decide
 //! whether failures are configuration errors, validation errors, or domain-specific errors.
 
+use std::cell::Cell;
+
 use http::Uri;
-use url::Url;
+use url::{SyntaxViolation, Url};
 
 use crate::{Result, UtilsError, net::is_loopback_host};
 
@@ -65,6 +67,59 @@ pub fn parse_absolute_url(value: &str, label: &str) -> Result<Url> {
     Url::parse(value).map_err(|error| {
         UtilsError::invalid_value(format!("{label} must be an absolute URL: {error}"))
     })
+}
+
+/// Parses an absolute base URL and injects raw credentials through [`Url`] setters.
+///
+/// `base_url` must include a host and must not already contain userinfo. The raw username and
+/// password are never trimmed or interpolated into a string, so reserved characters are encoded
+/// exactly once by the URL implementation. Passing `None` for the username with a password is the
+/// password-only form used by Redis.
+///
+/// The returned URL contains credentials. Callers must keep it out of logs, debug output, health
+/// details, and error context.
+pub fn url_with_credentials(
+    base_url: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    context: &str,
+) -> Result<Url> {
+    let has_explicit_userinfo = Cell::new(false);
+    let record_syntax_violation = |violation| {
+        if violation == SyntaxViolation::EmbeddedCredentials {
+            has_explicit_userinfo.set(true);
+        }
+    };
+    let mut url = Url::options()
+        .syntax_violation_callback(Some(&record_syntax_violation))
+        .parse(base_url)
+        .map_err(|error| {
+            UtilsError::invalid_value(format!("{context} must be an absolute URL: {error}"))
+        })?;
+    if url.host_str().is_none_or(str::is_empty) || url.cannot_be_a_base() {
+        return Err(UtilsError::invalid_value(format!(
+            "{context} must include an authority host for credentials"
+        )));
+    }
+
+    if has_explicit_userinfo.get() || !url.username().is_empty() || url.password().is_some() {
+        return Err(UtilsError::invalid_value(format!(
+            "{context} must not already include userinfo"
+        )));
+    }
+
+    if username.is_none() && password.is_none() {
+        return Ok(url);
+    }
+
+    url.set_username(username.unwrap_or_default())
+        .map_err(|()| {
+            UtilsError::invalid_value(format!("{context} does not support username credentials"))
+        })?;
+    url.set_password(password).map_err(|()| {
+        UtilsError::invalid_value(format!("{context} does not support password credentials"))
+    })?;
+    Ok(url)
 }
 
 /// Parses a required absolute HTTP or HTTPS URL with a host.
@@ -338,9 +393,121 @@ mod tests {
     use super::{
         HttpBaseUrlOptions, has_http_scheme, is_https_or_loopback_http, normalize_http_base_url,
         normalize_origin, normalize_public_site_origins_config_value, parse_absolute_url,
-        parse_public_site_origins, parse_url, public_site_origin_for_request,
+        parse_public_site_origins, parse_url, public_site_origin_for_request, url_with_credentials,
     };
     use crate::UtilsError;
+    use percent_encoding::percent_decode_str;
+    use url::Url;
+
+    fn decode_userinfo(value: &str) -> String {
+        percent_decode_str(value)
+            .decode_utf8()
+            .unwrap()
+            .into_owned()
+    }
+
+    #[test]
+    fn credentials_are_percent_encoded_once_and_round_trip() {
+        let username = "user#[]{}^+=*@:/?%\u{63a7}\u{5236}";
+        let password = "pass#[]{}^+=*@:/?%\u{0001}\u{5bc6}\u{7801}";
+        let url = url_with_credentials(
+            "postgres://db.example:5432/app?sslmode=require#driver",
+            Some(username),
+            Some(password),
+            "database base URL",
+        )
+        .unwrap();
+
+        assert_eq!(url.host_str(), Some("db.example"));
+        assert_eq!(url.path(), "/app");
+        assert_eq!(url.query(), Some("sslmode=require"));
+        assert_eq!(url.fragment(), Some("driver"));
+        assert_eq!(decode_userinfo(url.username()), username);
+        assert_eq!(decode_userinfo(url.password().unwrap()), password);
+        assert!(!url.as_str().contains(username));
+        assert!(!url.as_str().contains(password));
+        assert_eq!(Url::parse(url.as_str()).unwrap(), url);
+    }
+
+    #[test]
+    fn credentials_support_password_only_and_empty_username() {
+        let password_only = url_with_credentials(
+            "redis://cache.example:6379/2?protocol=resp3",
+            None,
+            Some("#secret[]"),
+            "Redis base URL",
+        )
+        .unwrap();
+        assert_eq!(password_only.username(), "");
+        assert_eq!(
+            decode_userinfo(password_only.password().unwrap()),
+            "#secret[]"
+        );
+
+        let empty_username = url_with_credentials(
+            "redis://cache.example:6379/2",
+            Some(""),
+            Some("secret"),
+            "Redis base URL",
+        )
+        .unwrap();
+        assert_eq!(empty_username.username(), "");
+        assert_eq!(empty_username.password(), Some("secret"));
+    }
+
+    #[test]
+    fn credentials_reject_existing_userinfo_without_exposing_raw_password() {
+        for base_url in [
+            "redis://user@cache.example/0",
+            "redis://:password@cache.example/0",
+            "redis://@cache.example/0",
+        ] {
+            let error = url_with_credentials(
+                base_url,
+                Some("replacement"),
+                Some("raw#replacement"),
+                "Redis base URL",
+            )
+            .unwrap_err();
+            assert!(matches!(error, UtilsError::InvalidValue(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("must not already include userinfo")
+            );
+            assert!(!error.to_string().contains("raw#replacement"));
+        }
+    }
+
+    #[test]
+    fn credentials_reject_hostless_and_invalid_base_urls() {
+        for base_url in [
+            "mailto:user@example.com",
+            "data:text/plain,hello",
+            "redis+unix:///tmp/redis.sock",
+        ] {
+            let error =
+                url_with_credentials(base_url, None, Some("raw#secret"), "credential base URL")
+                    .unwrap_err();
+            assert!(matches!(error, UtilsError::InvalidValue(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("must include an authority host for credentials")
+            );
+            assert!(!error.to_string().contains("raw#secret"));
+        }
+
+        let error = url_with_credentials(
+            "not a URL",
+            Some("user"),
+            Some("raw#secret"),
+            "credential base URL",
+        )
+        .unwrap_err();
+        assert!(matches!(error, UtilsError::InvalidValue(_)));
+        assert!(!error.to_string().contains("raw#secret"));
+    }
 
     #[test]
     fn parse_url_maps_parser_errors_with_context() {

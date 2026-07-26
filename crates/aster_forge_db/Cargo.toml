@@ -19,6 +19,7 @@ aster_forge_utils = { path = "../aster_forge_utils" }
 async-trait.workspace = true
 chrono = { workspace = true, features = ["clock"] }
 sea-orm.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -39,7 +40,15 @@ runtime-component = ["dep:aster_forge_runtime"]
 runtime-lease = ["dep:aster_forge_runtime"]
 scheduled-task = ["dep:aster_forge_tasks", "aster_forge_tasks/runtime"]
 system-config = ["dep:aster_forge_config"]
+database-container-tests = []
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test" }
+aster_forge_test = { path = "../aster_forge_test", features = ["mysql", "postgres"] }
+serde_json.workspace = true
+url.workspace = true
 uuid.workspace = true
+
+[[test]]
+name = "credentialed_databases"
+path = "tests/credentialed_databases.rs"
+required-features = ["database-container-tests"]

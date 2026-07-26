@@ -26,12 +26,12 @@ impl Default for AppConfig {
             database: DatabaseConfig::default(),
             cache: aster_forge_cache::CacheConfig {
                 backend: "memory".to_string(),
-                endpoint: String::new(),
+                endpoint: aster_forge_cache::CacheEndpoint::default(),
                 default_ttl: 3600,
             },
             config_sync: aster_forge_config::ConfigSyncConfig {
                 backend: "disabled".to_string(),
-                endpoint: String::new(),
+                endpoint: aster_forge_config::ConfigSyncEndpoint::default(),
                 topic: "{{project-name}}.config_reload".to_string(),
             },
             logging: aster_forge_logging::LoggingConfig {
@@ -74,8 +74,8 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
-    /// SeaORM database URL.
-    pub url: String,
+    /// Complete SeaORM URL or a credential-free base URL plus raw credentials.
+    pub url: aster_forge_db::DatabaseUrl,
     /// Maximum pool size for non-SQLite pools and SQLite reader pools.
     pub pool_size: u32,
     /// Connection retry count.
@@ -85,7 +85,7 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            url: "sqlite://{{project-name}}.db?mode=rwc".to_string(),
+            url: "sqlite://{{project-name}}.db?mode=rwc".into(),
             pool_size: 10,
             retry_count: 3,
         }

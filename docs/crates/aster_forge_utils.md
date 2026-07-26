@@ -207,8 +207,15 @@ Unicode segmentation 策略。
 - `runtime_public_site_origins_with`
 - `public_site_origin_for_request`
 - `join_origin_and_path`
+- `url_with_credentials`
 
 适合 external auth callback、CORS origin、公开 base URL 等配置规范化。`public_site_*` helper 只处理产品无关的 origin 解析、去重、请求 origin 匹配和 URL 拼接；产品侧仍然保留具体 config key、runtime snapshot、日志上下文和错误映射。
+
+`url_with_credentials(base_url, username, password, context)` 接收不含 userinfo 的绝对 base
+URL 和未经 percent-encoding 的原始凭据，并通过 `url::Url::set_username()` /
+`set_password()` 注入。它支持 Redis 的 password-only 形式，保留 path、query 和 fragment，
+拒绝已有 userinfo、无 host 和 opaque URL。不要用 `format!()` 拼凭据 URL，也不要把返回的
+`Url` 写入 `Debug`、tracing、health detail 或错误上下文；这个值已经包含 secret。
 
 ## 错误边界
 
@@ -224,6 +231,8 @@ Unicode segmentation 策略。
 - 每个产品接入点覆盖非法输入。
 - 数值转换测试要包含负数、超上限和边界值。
 - URL/origin 测试要覆盖 loopback HTTP、HTTPS、wildcard。
+- 凭据 URL 测试要覆盖保留字符、空 username、password-only、Unicode、控制字符、已有
+  userinfo 和无 authority 输入，并验证错误不含原始 password。
 - HTTP range 测试要覆盖 bounded/open-ended/suffix、end 截断、空文件、零 suffix、多段请求、
   `u64` 上界和 unsatisfiable offset。
 - trusted proxy 测试要覆盖多代理链。
