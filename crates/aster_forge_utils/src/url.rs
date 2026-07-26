@@ -5,8 +5,10 @@
 //! exposes small predicates for OAuth-style redirect and endpoint checks. Callers still decide
 //! whether failures are configuration errors, validation errors, or domain-specific errors.
 
+use std::cell::Cell;
+
 use http::Uri;
-use url::Url;
+use url::{SyntaxViolation, Url};
 
 use crate::{Result, UtilsError, net::is_loopback_host};
 
@@ -82,20 +84,25 @@ pub fn url_with_credentials(
     password: Option<&str>,
     context: &str,
 ) -> Result<Url> {
-    let has_explicit_userinfo = base_url.split_once("://").is_some_and(|(_, remainder)| {
-        remainder
-            .split(['/', '?', '#'])
-            .next()
-            .is_some_and(|authority| authority.contains('@'))
-    });
-    let mut url = parse_absolute_url(base_url, context)?;
+    let has_explicit_userinfo = Cell::new(false);
+    let record_syntax_violation = |violation| {
+        if violation == SyntaxViolation::EmbeddedCredentials {
+            has_explicit_userinfo.set(true);
+        }
+    };
+    let mut url = Url::options()
+        .syntax_violation_callback(Some(&record_syntax_violation))
+        .parse(base_url)
+        .map_err(|error| {
+            UtilsError::invalid_value(format!("{context} must be an absolute URL: {error}"))
+        })?;
     if url.host_str().is_none_or(str::is_empty) || url.cannot_be_a_base() {
         return Err(UtilsError::invalid_value(format!(
             "{context} must include an authority host for credentials"
         )));
     }
 
-    if has_explicit_userinfo || !url.username().is_empty() || url.password().is_some() {
+    if has_explicit_userinfo.get() || !url.username().is_empty() || url.password().is_some() {
         return Err(UtilsError::invalid_value(format!(
             "{context} must not already include userinfo"
         )));
