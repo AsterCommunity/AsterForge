@@ -89,7 +89,7 @@ pub fn url_with_credentials(
             .is_some_and(|authority| authority.contains('@'))
     });
     let mut url = parse_absolute_url(base_url, context)?;
-    if url.host_str().is_none() || url.cannot_be_a_base() {
+    if url.host_str().is_none_or(str::is_empty) || url.cannot_be_a_base() {
         return Err(UtilsError::invalid_value(format!(
             "{context} must include an authority host for credentials"
         )));
@@ -483,6 +483,11 @@ mod tests {
                 url_with_credentials(base_url, None, Some("raw#secret"), "credential base URL")
                     .unwrap_err();
             assert!(matches!(error, UtilsError::InvalidValue(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("must include an authority host for credentials")
+            );
             assert!(!error.to_string().contains("raw#secret"));
         }
 
