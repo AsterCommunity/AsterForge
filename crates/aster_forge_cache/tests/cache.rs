@@ -4,6 +4,8 @@
 //! details. The Redis test uses a real container so fallback behavior and wire-level round trips
 //! stay aligned with production dependencies.
 
+#[cfg(feature = "redis")]
+use aster_forge_cache::{CacheBackendFailurePolicy, create_cache_with_policy};
 use aster_forge_cache::{CacheConfig, CacheEndpoint, CacheExt, create_cache};
 #[cfg(feature = "redis")]
 use aster_forge_test::{redis::RedisTestContainer, suite::TestContainerSuite};
@@ -194,6 +196,26 @@ async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
         .set_bytes("fallback", b"value".to_vec(), Some(60))
         .await;
     assert_eq!(cache.get_bytes("fallback").await, Some(b"value".to_vec()));
+}
+
+#[cfg(feature = "redis")]
+#[tokio::test]
+async fn test_redis_backend_with_invalid_url_can_return_the_construction_error() {
+    let error = match create_cache_with_policy(
+        &CacheConfig {
+            backend: "redis".to_string(),
+            endpoint: "not a redis url".into(),
+            default_ttl: 60,
+        },
+        CacheBackendFailurePolicy::ReturnError,
+    )
+    .await
+    {
+        Ok(_) => panic!("explicit error policy should preserve Redis construction failure"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("redis cache connection"));
 }
 
 #[cfg(feature = "redis")]

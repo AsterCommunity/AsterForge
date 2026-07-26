@@ -12,7 +12,11 @@ pub async fn prepare_state(config: crate::config::AppConfig) -> Result<crate::ru
     let metrics = crate::runtime::metrics::create_metrics_recorder();
     let db_handles =
         crate::db::runtime::prepare_database_handles(&config.database, metrics.clone()).await?;
-    let cache = aster_forge_cache::create_cache(&config.cache).await;
+    let cache = aster_forge_cache::create_cache_with_policy(
+        &config.cache,
+        aster_forge_cache::CacheBackendFailurePolicy::ReturnError,
+    )
+    .await?;
     let config_sync =
         aster_forge_config::build_config_sync_runtime(&config.config_sync, env!("CARGO_PKG_NAME"))?;
     let mail_sender = aster_forge_mail::memory_sender();
