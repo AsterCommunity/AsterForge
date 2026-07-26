@@ -67,6 +67,63 @@ pub fn parse_absolute_url(value: &str, label: &str) -> Result<Url> {
     })
 }
 
+/// Builds a connection URL by safely inserting raw credentials into a credential-free base URL.
+///
+/// The base URL must be absolute, include an authority, contain no userinfo, and have no fragment.
+/// Path and query components are retained for driver-specific database names, Redis indices, TLS,
+/// and connection options. Usernames and passwords are passed to [`Url`] setters so URL encoding is
+/// performed exactly once by the URL implementation.
+///
+/// The returned URL contains credentials. Callers must not include it in logs, errors, health
+/// details, or `Debug` output.
+pub fn url_with_credentials(
+    base_url: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    context: &str,
+) -> Result<Url> {
+    let mut url = parse_absolute_url(base_url, context)?;
+    if url.host_str().is_none() {
+        return Err(UtilsError::invalid_value(format!(
+            "{context} must include a host when using separate credentials"
+        )));
+    }
+    if url.fragment().is_some() {
+        return Err(UtilsError::invalid_value(format!(
+            "{context} must not include a fragment when using separate credentials"
+        )));
+    }
+    if url_has_userinfo(base_url, &url) {
+        return Err(UtilsError::invalid_value(format!(
+            "{context} must not include userinfo when credentials are separate"
+        )));
+    }
+
+    if let Some(username) = username {
+        url.set_username(username).map_err(|()| {
+            UtilsError::invalid_value(format!("{context} does not support username credentials"))
+        })?;
+    }
+    if let Some(password) = password {
+        url.set_password(Some(password)).map_err(|()| {
+            UtilsError::invalid_value(format!("{context} does not support password credentials"))
+        })?;
+    }
+
+    Ok(url)
+}
+
+fn url_has_userinfo(base_url: &str, url: &Url) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return true;
+    }
+
+    base_url
+        .split_once("://")
+        .and_then(|(_, remainder)| remainder.split(['/', '?', '#']).next())
+        .is_some_and(|authority| authority.contains('@'))
+}
+
 /// Parses a required absolute HTTP or HTTPS URL with a host.
 ///
 /// Paths, queries, and fragments are preserved. This is intended for ordinary
@@ -335,10 +392,12 @@ pub fn join_origin_and_path(base: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use percent_encoding::percent_decode_str;
+
     use super::{
         HttpBaseUrlOptions, has_http_scheme, is_https_or_loopback_http, normalize_http_base_url,
         normalize_origin, normalize_public_site_origins_config_value, parse_absolute_url,
-        parse_public_site_origins, parse_url, public_site_origin_for_request,
+        parse_public_site_origins, parse_url, public_site_origin_for_request, url_with_credentials,
     };
     use crate::UtilsError;
 
@@ -352,6 +411,77 @@ mod tests {
         assert!(matches!(error, UtilsError::InvalidValue(_)));
         assert!(error.to_string().contains("callback URL:"));
         assert!(error.to_string().contains("relative URL without a base"));
+    }
+
+    #[test]
+    fn url_with_credentials_round_trips_reserved_and_unicode_credentials() {
+        let username = "user#[]{}^+=*@:/?%\u{4f8b}\u{5b50}";
+        let password = "password#[]{}^+=*@:/?%\u{5bc6}\u{7801}";
+        let url = url_with_credentials(
+            "postgres://db.example.test:5432/app?sslmode=require",
+            Some(username),
+            Some(password),
+            "database.base_url",
+        )
+        .unwrap();
+
+        assert_eq!(decode_userinfo(url.username()), username);
+        assert_eq!(
+            url.password().map(decode_userinfo).as_deref(),
+            Some(password)
+        );
+        assert_eq!(url.path(), "/app");
+        assert_eq!(url.query(), Some("sslmode=require"));
+
+        let reparsed = url::Url::parse(url.as_str()).unwrap();
+        assert_eq!(decode_userinfo(reparsed.username()), username);
+        assert_eq!(
+            reparsed.password().map(decode_userinfo).as_deref(),
+            Some(password)
+        );
+    }
+
+    #[test]
+    fn url_with_credentials_supports_redis_password_without_username() {
+        let url = url_with_credentials(
+            "redis://cache.example.test:6379/4",
+            None,
+            Some("p@ss#word"),
+            "cache.redis_credentials.base_url",
+        )
+        .unwrap();
+
+        assert_eq!(url.username(), "");
+        assert_eq!(
+            url.password().map(decode_userinfo).as_deref(),
+            Some("p@ss#word")
+        );
+        assert_eq!(url.path(), "/4");
+    }
+
+    fn decode_userinfo(value: &str) -> String {
+        percent_decode_str(value).decode_utf8_lossy().into_owned()
+    }
+
+    #[test]
+    fn url_with_credentials_rejects_ambiguous_or_unsupported_base_urls_without_echoing_secret() {
+        let secret = "never-log-this#password";
+        for base_url in [
+            "redis://existing:credentials@cache.example.test/0",
+            "redis://@cache.example.test/0",
+            "mailto:operator@example.test",
+            "redis://cache.example.test/0#fragment",
+        ] {
+            let error = url_with_credentials(
+                base_url,
+                None,
+                Some(secret),
+                "cache.redis_credentials.base_url",
+            )
+            .unwrap_err();
+            assert!(matches!(error, UtilsError::InvalidValue(_)));
+            assert!(!error.to_string().contains(secret));
+        }
     }
 
     #[test]

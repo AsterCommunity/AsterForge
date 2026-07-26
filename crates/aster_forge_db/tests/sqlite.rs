@@ -14,6 +14,7 @@ async fn sqlite_transactions_are_serialized_by_single_connection_pool() {
     let database = SqliteTestDatabase::new("single-connection-pool");
     let cfg = DatabaseConfig {
         url: database.url().to_string(),
+        raw_credentials: None,
         pool_size: 8,
         retry_count: 0,
     };

@@ -49,6 +49,9 @@ pub type Result<T> = std::result::Result<T, CacheError>;
 /// Errors returned by cache construction and health checks.
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
+    /// Redis configuration is invalid before a connection attempt can begin.
+    #[error("redis cache configuration: {0}")]
+    RedisConfiguration(String),
     /// Redis could not be reached or initialized.
     #[error("redis cache connection: {0}")]
     RedisConnection(String),
@@ -80,7 +83,7 @@ const DEFAULT_CACHE_BACKEND: &str = "memory";
 const DEFAULT_CACHE_TTL_SECS: u64 = 3600;
 
 /// Configuration used to construct a cache backend.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[derive(Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct CacheConfig {
     /// Backend name. Currently `memory` and `redis` are recognized.
     #[serde(default = "CacheConfig::default_backend")]
@@ -88,6 +91,12 @@ pub struct CacheConfig {
     /// Backend endpoint. Redis uses a Redis connection URL.
     #[serde(default, alias = "redis_url")]
     pub endpoint: String,
+    /// Optional raw credentials for a credential-free Redis endpoint.
+    ///
+    /// When set, `endpoint` must be empty so complete URLs and separated credentials cannot be
+    /// selected through an implicit precedence rule.
+    #[serde(default)]
+    pub raw_redis_credentials: Option<RedisCredentials>,
     /// Default time-to-live, in seconds, for entries that do not specify an explicit TTL.
     #[serde(default = "CacheConfig::default_ttl")]
     pub default_ttl: u64,
@@ -98,6 +107,7 @@ impl Default for CacheConfig {
         Self {
             backend: Self::default_backend(),
             endpoint: String::new(),
+            raw_redis_credentials: None,
             default_ttl: Self::default_ttl(),
         }
     }
@@ -124,6 +134,59 @@ impl CacheConfig {
         } else {
             Cow::Owned(backend.to_ascii_lowercase())
         }
+    }
+
+    #[cfg(feature = "redis")]
+    fn resolved_redis_url(&self) -> Result<String> {
+        match &self.raw_redis_credentials {
+            Some(credentials) => {
+                if !self.endpoint.is_empty() {
+                    return Err(CacheError::RedisConfiguration(
+                        "cache.endpoint and cache.raw_redis_credentials cannot both be configured"
+                            .to_string(),
+                    ));
+                }
+                aster_forge_utils::url::url_with_credentials(
+                    &credentials.base_url,
+                    credentials.username.as_deref(),
+                    credentials.password.as_deref(),
+                    "cache.raw_redis_credentials.base_url",
+                )
+                .map(|url| url.to_string())
+                .map_err(|error| CacheError::RedisConfiguration(error.to_string()))
+            }
+            None => Ok(self.endpoint.clone()),
+        }
+    }
+}
+
+impl std::fmt::Debug for CacheConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CacheConfig")
+            .field("backend", &self.backend)
+            .field("connection", &"<redacted>")
+            .field("default_ttl", &self.default_ttl)
+            .finish()
+    }
+}
+
+/// Raw Redis credentials for a credential-free cache endpoint.
+#[derive(Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct RedisCredentials {
+    /// Absolute Redis URL without userinfo.
+    pub base_url: String,
+    /// Raw Redis username, when ACL authentication is used.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Raw Redis password.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for RedisCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RedisCredentials(<redacted>)")
     }
 }
 
@@ -222,16 +285,22 @@ impl CacheExt for dyn CacheBackend {
 pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
     match config.normalized_backend().as_ref() {
         #[cfg(feature = "redis")]
-        "redis" => match redis_cache::RedisCache::new(&config.endpoint, config.default_ttl).await {
-            Ok(cache) => {
-                tracing::info!(
-                    target = %redis_backend_target(&config.endpoint),
-                    "cache backend: redis"
-                );
-                Arc::new(cache)
-            }
-            Err(e) => {
-                tracing::warn!("redis connection failed: {e}, falling back to memory cache");
+        "redis" => match config.resolved_redis_url() {
+            Ok(url) => match redis_cache::RedisCache::new(&url, config.default_ttl).await {
+                Ok(cache) => {
+                    tracing::info!(
+                        target = %redis_backend_target(&url),
+                        "cache backend: redis"
+                    );
+                    Arc::new(cache)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "redis connection failed, falling back to memory cache");
+                    create_memory_cache(config.default_ttl)
+                }
+            },
+            Err(error) => {
+                tracing::warn!(%error, "invalid Redis cache configuration, falling back to memory cache");
                 create_memory_cache(config.default_ttl)
             }
         },
@@ -326,6 +395,7 @@ mod tests {
         let cache = super::create_cache(&CacheConfig {
             backend: "unknown".to_string(),
             endpoint: "redis://127.0.0.1/".to_string(),
+            raw_redis_credentials: None,
             default_ttl: 5,
         })
         .await;

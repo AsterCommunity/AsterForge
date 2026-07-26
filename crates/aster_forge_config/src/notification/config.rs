@@ -21,7 +21,7 @@ pub const CONFIG_SYNC_BACKEND_REDIS: &str = "redis";
 /// shape. Current services can map `backend = "redis"` to Redis pub/sub, while
 /// future RabbitMQ, NATS, or other transports can reuse the same product config
 /// surface and add backend-specific interpretation behind the notifier factory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigSyncConfig {
     /// Transport backend name, for example `disabled` or `redis`.
     #[serde(default = "ConfigSyncConfig::default_backend")]
@@ -29,6 +29,12 @@ pub struct ConfigSyncConfig {
     /// Broker endpoint URL. Redis uses a Redis URL.
     #[serde(default)]
     pub endpoint: String,
+    /// Optional raw credentials for a credential-free Redis endpoint.
+    ///
+    /// When set, `endpoint` must be empty so complete URLs and separated credentials cannot be
+    /// selected through an implicit precedence rule.
+    #[serde(default)]
+    pub raw_redis_credentials: Option<ConfigSyncRedisCredentials>,
     /// Logical reload topic. Transports may map this to a channel, exchange,
     /// subject, or routing key.
     #[serde(default = "ConfigSyncConfig::default_topic")]
@@ -40,8 +46,39 @@ impl Default for ConfigSyncConfig {
         Self {
             backend: Self::default_backend(),
             endpoint: String::new(),
+            raw_redis_credentials: None,
             topic: Self::default_topic(),
         }
+    }
+}
+
+impl std::fmt::Debug for ConfigSyncConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConfigSyncConfig")
+            .field("backend", &self.backend)
+            .field("connection", &"<redacted>")
+            .field("topic", &self.topic)
+            .finish()
+    }
+}
+
+/// Raw Redis credentials for a credential-free config-sync endpoint.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigSyncRedisCredentials {
+    /// Absolute Redis URL without userinfo.
+    pub base_url: String,
+    /// Raw Redis username, when ACL authentication is used.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Raw Redis password.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ConfigSyncRedisCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ConfigSyncRedisCredentials(<redacted>)")
     }
 }
 
@@ -126,15 +163,30 @@ fn build_redis_config_sync_runtime(
     runtime_id: String,
     topic: &str,
 ) -> Result<ConfigSyncRuntime> {
-    if config.endpoint.trim().is_empty() {
-        return Err(ConfigCoreError::invalid_value(
-            "config_sync.endpoint is required when config_sync.backend is redis",
-        ));
-    }
-    let notifier = RedisConfigChangeNotifier::from_url(
-        config.endpoint.trim(),
-        redis_channel_from_topic(topic),
-    )?;
+    let channel = redis_channel_from_topic(topic);
+    let notifier = match &config.raw_redis_credentials {
+        Some(credentials) => {
+            if !config.endpoint.is_empty() {
+                return Err(ConfigCoreError::invalid_value(
+                    "config_sync.endpoint and config_sync.raw_redis_credentials cannot both be configured",
+                ));
+            }
+            RedisConfigChangeNotifier::from_base_url_with_credentials(
+                &credentials.base_url,
+                credentials.username.as_deref(),
+                credentials.password.as_deref(),
+                channel,
+            )?
+        }
+        None => {
+            if config.endpoint.trim().is_empty() {
+                return Err(ConfigCoreError::invalid_value(
+                    "config_sync.endpoint is required when config_sync.backend is redis",
+                ));
+            }
+            RedisConfigChangeNotifier::from_url(config.endpoint.trim(), channel)?
+        }
+    };
     Ok(ConfigSyncRuntime::new(
         namespace,
         runtime_id,

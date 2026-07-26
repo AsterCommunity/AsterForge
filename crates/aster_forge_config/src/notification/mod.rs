@@ -20,8 +20,8 @@ mod supervisor;
 
 pub use config::{
     CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigSyncConfig,
-    build_config_sync_runtime, build_config_sync_runtime_with_runtime_id,
-    default_config_sync_topic,
+    ConfigSyncRedisCredentials, build_config_sync_runtime,
+    build_config_sync_runtime_with_runtime_id, default_config_sync_topic,
 };
 pub use message::{
     ConfigChangeEvent, ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,

@@ -14,10 +14,15 @@ use aster_forge_metrics::{
 };
 
 /// Database connection configuration.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DatabaseConfig {
     /// Database URL understood by SeaORM/sqlx.
     pub url: String,
+    /// Optional raw credentials for a credential-free database base URL.
+    ///
+    /// When this is set, [`DatabaseConfig::url`] must be empty. This makes the complete-URL and
+    /// separated-credentials modes mutually exclusive instead of silently choosing a precedence.
+    pub raw_credentials: Option<DatabaseCredentials>,
     /// Maximum pool size for non-SQLite connections and SQLite reader pools.
     pub pool_size: u32,
     /// Number of retries for connection establishment.
@@ -29,9 +34,56 @@ impl DatabaseConfig {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
+            raw_credentials: None,
             pool_size: 5,
             retry_count: 3,
         }
+    }
+
+    /// Creates a config that inserts raw credentials into a credential-free base URL.
+    pub fn with_raw_credentials(
+        base_url: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
+        Self {
+            url: String::new(),
+            raw_credentials: Some(DatabaseCredentials {
+                base_url: base_url.into(),
+                username,
+                password,
+            }),
+            pool_size: 5,
+            retry_count: 3,
+        }
+    }
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DatabaseConfig")
+            .field("connection", &"<redacted>")
+            .field("pool_size", &self.pool_size)
+            .field("retry_count", &self.retry_count)
+            .finish()
+    }
+}
+
+/// Raw database credentials for a credential-free connection base URL.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DatabaseCredentials {
+    /// Absolute database URL without userinfo.
+    pub base_url: String,
+    /// Raw database username, when required by the backend.
+    pub username: Option<String>,
+    /// Raw database password, when required by the backend.
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for DatabaseCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DatabaseCredentials(<redacted>)")
     }
 }
 
@@ -125,7 +177,7 @@ pub async fn connect_reader_for_writer_with_metrics(
     writer: DatabaseConnection,
     metrics: SharedDbMetricsRecorder,
 ) -> Result<DbHandles> {
-    let url = normalize_database_url(&cfg.url);
+    let url = resolved_database_url(cfg)?;
     if !sqlite_reader_pool_enabled(&url) {
         return Ok(DbHandles::single(writer));
     }
@@ -157,7 +209,7 @@ async fn connect_once(
     cfg: &DatabaseConfig,
     metrics: SharedDbMetricsRecorder,
 ) -> Result<DatabaseConnection> {
-    let url = normalize_database_url(&cfg.url);
+    let url = resolved_database_url(cfg)?;
     let is_sqlite = url.starts_with("sqlite:");
     // SQLite relies on a single pooled connection so concurrent writers are serialized at
     // connection acquisition; repo-layer "lock" helpers do not emulate row locks there.
@@ -258,6 +310,29 @@ fn normalize_database_url(database_url: &str) -> String {
     }
 
     database_url.to_string()
+}
+
+fn resolved_database_url(cfg: &DatabaseConfig) -> Result<String> {
+    let url = match &cfg.raw_credentials {
+        Some(credentials) => {
+            if !cfg.url.is_empty() {
+                return Err(DbError::database_connection(
+                    "database.url and database.raw_credentials cannot both be configured",
+                ));
+            }
+            aster_forge_utils::url::url_with_credentials(
+                &credentials.base_url,
+                credentials.username.as_deref(),
+                credentials.password.as_deref(),
+                "database.raw_credentials.base_url",
+            )
+            .map_err(DbError::database_connection)?
+            .to_string()
+        }
+        None => cfg.url.clone(),
+    };
+
+    Ok(normalize_database_url(&url))
 }
 
 fn sqlite_reader_pool_enabled(normalized_url: &str) -> bool {
@@ -498,6 +573,7 @@ mod tests {
         let db = super::connect_with_metrics(
             &DatabaseConfig {
                 url,
+                raw_credentials: None,
                 pool_size: 10,
                 retry_count: 3,
             },
@@ -515,6 +591,7 @@ mod tests {
     async fn sqlite_memory_handles_use_single_connection() {
         let cfg = DatabaseConfig {
             url: "sqlite::memory:".to_string(),
+            raw_credentials: None,
             pool_size: 4,
             retry_count: 0,
         };
@@ -543,6 +620,7 @@ mod tests {
         let database = SqliteTestDatabase::new("reader-pool");
         let cfg = DatabaseConfig {
             url: database.url().to_string(),
+            raw_credentials: None,
             pool_size: 4,
             retry_count: 0,
         };
@@ -578,6 +656,7 @@ mod tests {
         let database = SqliteTestDatabase::new("reader-writer-split");
         let cfg = DatabaseConfig {
             url: database.url().to_string(),
+            raw_credentials: None,
             pool_size: 4,
             retry_count: 0,
         };

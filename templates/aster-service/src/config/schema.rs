@@ -27,11 +27,13 @@ impl Default for AppConfig {
             cache: aster_forge_cache::CacheConfig {
                 backend: "memory".to_string(),
                 endpoint: String::new(),
+                raw_redis_credentials: None,
                 default_ttl: 3600,
             },
             config_sync: aster_forge_config::ConfigSyncConfig {
                 backend: "disabled".to_string(),
                 endpoint: String::new(),
+                raw_redis_credentials: None,
                 topic: "{{project-name}}.config_reload".to_string(),
             },
             logging: aster_forge_logging::LoggingConfig {

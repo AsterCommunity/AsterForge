@@ -76,6 +76,7 @@ async fn config_runtime_reconciles_and_delivers_after_redis_recovery() {
     let config = ConfigSyncConfig {
         backend: CONFIG_SYNC_BACKEND_REDIS.to_string(),
         endpoint: redis.url().to_string(),
+        raw_redis_credentials: None,
         topic,
     };
     let publisher =

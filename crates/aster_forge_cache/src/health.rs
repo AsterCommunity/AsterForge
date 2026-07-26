@@ -198,6 +198,7 @@ mod tests {
         let config = CacheConfig {
             backend: "redis".to_string(),
             endpoint: "redis://example.com:6379/0".to_string(),
+            raw_redis_credentials: None,
             default_ttl: 60,
         };
         let cache = FakeCache::new("memory");
@@ -229,6 +230,7 @@ mod tests {
         let config = CacheConfig {
             backend: "redis".to_string(),
             endpoint: "redis://example.com:6379/0".to_string(),
+            raw_redis_credentials: None,
             default_ttl: 60,
         };
 
@@ -262,6 +264,7 @@ mod tests {
         let config = CacheConfig {
             backend: " ReDiS ".to_string(),
             endpoint: "redis://example.com:6379/0".to_string(),
+            raw_redis_credentials: None,
             default_ttl: 60,
         };
 

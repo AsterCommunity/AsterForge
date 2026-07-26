@@ -16,6 +16,7 @@ fn cache_config(backend: &str, default_ttl: u64) -> CacheConfig {
     CacheConfig {
         backend: backend.to_string(),
         endpoint: String::new(),
+        raw_redis_credentials: None,
         default_ttl,
     }
 }
@@ -44,6 +45,7 @@ async fn wait_for_redis_cache(endpoint: String) -> Arc<dyn aster_forge_cache::Ca
     let config = CacheConfig {
         backend: " ReDiS ".to_string(),
         endpoint,
+        raw_redis_credentials: None,
         default_ttl: 60,
     };
 
@@ -185,6 +187,7 @@ async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
     let cache = create_cache(&CacheConfig {
         backend: "redis".to_string(),
         endpoint: "not a redis url".to_string(),
+        raw_redis_credentials: None,
         default_ttl: 60,
     })
     .await;

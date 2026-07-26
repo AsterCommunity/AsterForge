@@ -78,6 +78,23 @@ impl RedisEventBus {
         })
     }
 
+    /// Creates a bus from a credential-free Redis base URL and raw credentials.
+    pub fn from_base_url_with_credentials(
+        base_url: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+        topic: impl Into<String>,
+    ) -> Result<Self, RedisEventBusError> {
+        let url = aster_forge_utils::url::url_with_credentials(
+            base_url,
+            username,
+            password,
+            "Redis event base URL",
+        )
+        .map_err(|error| RedisEventBusError::Open(error.to_string()))?;
+        Self::from_url(url.as_str(), topic)
+    }
+
     /// Creates a bus from an existing Redis client.
     pub fn from_client(client: redis::Client, topic: impl Into<String>) -> Self {
         Self {
