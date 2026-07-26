@@ -17,6 +17,9 @@ pub mod suite;
 #[cfg(feature = "containers")]
 pub mod wait;
 
+#[cfg(any(feature = "mysql", feature = "postgres"))]
+mod database;
+
 #[cfg(feature = "process")]
 pub mod process;
 

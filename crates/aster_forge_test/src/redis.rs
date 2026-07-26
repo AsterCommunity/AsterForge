@@ -8,7 +8,7 @@ use crate::suite::TestContainerSuite;
 use crate::wait::wait_until;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
-use testcontainers::core::{ContainerAsync, IntoContainerPort, WaitFor};
+use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
 
 /// Handle to the suite's shared Redis container.
@@ -33,7 +33,6 @@ impl AuthenticatedRedisTestContainer {
     pub async fn start(password: &str) -> Self {
         let container = GenericImage::new("redis", "7-alpine")
             .with_exposed_port(IntoContainerPort::tcp(6379))
-            .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
             .with_cmd(["redis-server", "--requirepass", password])
             .start()
             .await
@@ -42,6 +41,11 @@ impl AuthenticatedRedisTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(6379))
             .await
             .expect("authenticated Redis test port should be exposed");
+        wait_for_redis(
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            "authenticated Redis test container",
+        )
+        .await;
 
         Self {
             base_url: format!("redis://127.0.0.1:{port}/0"),
@@ -73,7 +77,6 @@ impl RedisTestContainer {
             .port();
 
         let container = GenericImage::new("redis", "7-alpine")
-            .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
             .with_mapped_port(host_port, IntoContainerPort::tcp(6379))
             .with_container_name(suite.container_name("redis-fixed"))
             .with_reuse(ReuseDirective::Always)
@@ -84,16 +87,10 @@ impl RedisTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(6379))
             .await
             .expect("Redis test port should be exposed");
-        drop(lock);
 
         let address = SocketAddr::from(([127, 0, 0, 1], port));
-        let ready = wait_until(
-            Duration::from_secs(90),
-            Duration::from_millis(250),
-            || async { TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() },
-        )
-        .await;
-        assert!(ready, "Redis test container did not become ready");
+        wait_for_redis(address, "Redis test container").await;
+        drop(lock);
 
         Self {
             url: format!("redis://127.0.0.1:{port}/0"),
@@ -122,14 +119,16 @@ impl RedisTestContainer {
             .start()
             .await
             .expect("failed to restart Redis test container");
-        let ready = wait_until(
-            Duration::from_secs(90),
-            Duration::from_millis(250),
-            || async {
-                TcpStream::connect_timeout(&self.address, Duration::from_millis(500)).is_ok()
-            },
-        )
-        .await;
-        assert!(ready, "restarted Redis test container did not become ready");
+        wait_for_redis(self.address, "restarted Redis test container").await;
     }
+}
+
+async fn wait_for_redis(address: SocketAddr, context: &str) {
+    let ready = wait_until(
+        Duration::from_secs(90),
+        Duration::from_millis(250),
+        || async { TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() },
+    )
+    .await;
+    assert!(ready, "{context} did not become ready");
 }

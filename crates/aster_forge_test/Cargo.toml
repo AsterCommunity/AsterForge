@@ -15,7 +15,7 @@ process = []
 smtp = ["containers", "dep:reqwest"]
 redis = ["containers"]
 postgres = ["containers", "dep:sea-orm"]
-mysql = ["containers"]
+mysql = ["containers", "dep:sea-orm"]
 
 [dependencies]
 aster_forge_utils = { path = "../aster_forge_utils" }

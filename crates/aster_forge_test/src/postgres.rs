@@ -4,11 +4,11 @@
 //! their migrations and seed data; this module owns database creation, connection retry, and
 //! teardown mechanics.
 
+use crate::database::connect_with_retry;
 use crate::state::{ContainerLease, ContainerStateLock};
 use crate::suite::TestContainerSuite;
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
-use std::time::Duration;
-use testcontainers::core::{ContainerAsync, IntoContainerPort, WaitFor};
+use sea_orm::{ConnectionTrait, DatabaseConnection};
+use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
 
 /// Handle to the suite's shared PostgreSQL container.
@@ -41,9 +41,6 @@ impl PostgresTestContainer {
 
         let container = GenericImage::new("postgres", "16")
             .with_exposed_port(IntoContainerPort::tcp(5432))
-            .with_wait_for(WaitFor::message_on_stderr(
-                "database system is ready to accept connections",
-            ))
             .with_container_name(suite.container_name("postgres"))
             .with_reuse(ReuseDirective::Always)
             .with_env_var("POSTGRES_USER", "postgres")
@@ -56,10 +53,16 @@ impl PostgresTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(5432))
             .await
             .expect("PostgreSQL test port should be exposed");
+        let admin_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        connect_with_retry(&admin_url, "PostgreSQL")
+            .await
+            .close()
+            .await
+            .expect("failed to close PostgreSQL readiness probe connection");
         drop(lock);
 
         let fixture = Self {
-            admin_url: format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres"),
+            admin_url,
             suite: suite.clone(),
             _container: container,
             _lease: ContainerLease::new(suite.clone(), "postgres"),
@@ -82,7 +85,7 @@ impl PostgresTestContainer {
         lock.save(&state);
         drop(lock);
 
-        let admin = connect_with_retry(&self.admin_url).await;
+        let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;
         admin
             .execute_unprepared(&format!("CREATE DATABASE {}", quote_identifier(name)))
             .await
@@ -106,7 +109,7 @@ impl PostgresTestContainer {
         if names.is_empty() {
             return;
         }
-        let admin = connect_with_retry(&self.admin_url).await;
+        let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;
         for name in names {
             admin
                 .execute_unprepared(&format!(
@@ -142,12 +145,12 @@ impl PostgresTestDatabase {
 
     /// Connects to this database, retrying while the service becomes ready.
     pub async fn connect(&self) -> DatabaseConnection {
-        connect_with_retry(&self.url).await
+        connect_with_retry(&self.url, "PostgreSQL").await
     }
 
     /// Drops this database and removes it from the shared resource registry.
     pub async fn cleanup(&self) {
-        let admin = connect_with_retry(&self.admin_url).await;
+        let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;
         admin
             .execute_unprepared(&format!(
                 "DROP DATABASE IF EXISTS {} WITH (FORCE)",
@@ -169,19 +172,6 @@ impl PostgresTestDatabase {
         let mut state = lock.load();
         state.forget_resource(std::process::id(), &self.name);
         lock.save(&state);
-    }
-}
-
-async fn connect_with_retry(database_url: &str) -> DatabaseConnection {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    loop {
-        match Database::connect(database_url).await {
-            Ok(database) => return database,
-            Err(error) if tokio::time::Instant::now() >= deadline => {
-                panic!("PostgreSQL test database did not become ready: {error}")
-            }
-            Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
-        }
     }
 }
 

@@ -5,9 +5,10 @@
 //! register database names via [`crate::state::SharedContainerState::remember_resource`] so stale
 //! databases are pruned on later runs.
 
+use crate::database::connect_with_retry;
 use crate::state::{ContainerLease, ContainerStateLock};
 use crate::suite::TestContainerSuite;
-use testcontainers::core::{ContainerAsync, IntoContainerPort, WaitFor};
+use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
 
 /// Handle to the suite's shared MySQL container.
@@ -30,7 +31,6 @@ impl MysqlTestContainer {
 
         let container = GenericImage::new("mysql", "8.4")
             .with_exposed_port(IntoContainerPort::tcp(3306))
-            .with_wait_for(WaitFor::message_on_stdout("ready for connections"))
             .with_container_name(suite.container_name("mysql"))
             .with_reuse(ReuseDirective::Always)
             .with_env_var("MYSQL_ROOT_PASSWORD", "rootpass")
@@ -41,10 +41,16 @@ impl MysqlTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(3306))
             .await
             .expect("MySQL test port should be exposed");
+        let root_url = format!("mysql://root:rootpass@127.0.0.1:{port}/mysql");
+        connect_with_retry(&root_url, "MySQL")
+            .await
+            .close()
+            .await
+            .expect("failed to close MySQL readiness probe connection");
         drop(lock);
 
         Self {
-            root_url: format!("mysql://root:rootpass@127.0.0.1:{port}/mysql"),
+            root_url,
             suite: suite.clone(),
             stale_resources,
             _container: container,

@@ -41,7 +41,6 @@ impl SmtpTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(8025))
             .await
             .expect("Mailpit API port should be exposed");
-        drop(lock);
         let smtp_address = SocketAddr::from(([127, 0, 0, 1], smtp_port));
         let smtp_ready = wait_until(
             Duration::from_secs(90),
@@ -68,6 +67,7 @@ impl SmtpTestContainer {
         )
         .await;
         assert!(api_ready, "Mailpit API endpoint did not become ready");
+        drop(lock);
 
         Self {
             smtp_address,
