@@ -13,7 +13,7 @@ default = []
 containers = ["dep:fs2", "dep:serde", "dep:serde_json", "dep:testcontainers", "dep:tokio"]
 process = []
 smtp = ["containers", "dep:reqwest"]
-redis = ["containers"]
+redis = ["containers", "dep:redis"]
 postgres = ["containers", "dep:sea-orm"]
 mysql = ["containers", "dep:sea-orm"]
 
@@ -25,6 +25,7 @@ serde_json = { workspace = true, optional = true }
 testcontainers = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 
 [dev-dependencies]

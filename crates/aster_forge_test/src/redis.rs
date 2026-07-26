@@ -6,7 +6,8 @@
 use crate::state::{ContainerLease, ContainerStateLock};
 use crate::suite::TestContainerSuite;
 use crate::wait::wait_until;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use aster_forge_utils::url::url_with_credentials;
+use std::net::TcpListener;
 use std::time::Duration;
 use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
@@ -14,7 +15,6 @@ use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunne
 /// Handle to the suite's shared Redis container.
 pub struct RedisTestContainer {
     url: String,
-    address: SocketAddr,
     _container: ContainerAsync<GenericImage>,
     _lease: ContainerLease,
 }
@@ -41,14 +41,20 @@ impl AuthenticatedRedisTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(6379))
             .await
             .expect("authenticated Redis test port should be exposed");
-        wait_for_redis(
-            SocketAddr::from(([127, 0, 0, 1], port)),
-            "authenticated Redis test container",
+        let base_url = format!("redis://127.0.0.1:{port}/0");
+        let credential_url = url_with_credentials(
+            &base_url,
+            None,
+            Some(password),
+            "authenticated Redis test container base URL",
         )
-        .await;
+        .expect("authenticated Redis test URL should accept credentials");
+        let client = redis::Client::open(credential_url)
+            .unwrap_or_else(|_| panic!("failed to build authenticated Redis readiness client"));
+        wait_for_redis(&client, "authenticated Redis test container").await;
 
         Self {
-            base_url: format!("redis://127.0.0.1:{port}/0"),
+            base_url,
             _container: container,
         }
     }
@@ -88,13 +94,14 @@ impl RedisTestContainer {
             .await
             .expect("Redis test port should be exposed");
 
-        let address = SocketAddr::from(([127, 0, 0, 1], port));
-        wait_for_redis(address, "Redis test container").await;
+        let url = format!("redis://127.0.0.1:{port}/0");
+        let client = redis::Client::open(url.as_str())
+            .unwrap_or_else(|_| panic!("failed to build Redis readiness client"));
+        wait_for_redis(&client, "Redis test container").await;
         drop(lock);
 
         Self {
-            url: format!("redis://127.0.0.1:{port}/0"),
-            address,
+            url,
             _container: container,
             _lease: ContainerLease::new(suite.clone(), "redis-fixed"),
         }
@@ -119,16 +126,26 @@ impl RedisTestContainer {
             .start()
             .await
             .expect("failed to restart Redis test container");
-        wait_for_redis(self.address, "restarted Redis test container").await;
+        let client = redis::Client::open(self.url.as_str())
+            .unwrap_or_else(|_| panic!("failed to build restarted Redis readiness client"));
+        wait_for_redis(&client, "restarted Redis test container").await;
     }
 }
 
-async fn wait_for_redis(address: SocketAddr, context: &str) {
+async fn wait_for_redis(client: &redis::Client, context: &str) {
     let ready = wait_until(
         Duration::from_secs(90),
         Duration::from_millis(250),
-        || async { TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() },
+        || async {
+            let Ok(mut connection) = client.get_multiplexed_async_connection().await else {
+                return false;
+            };
+            redis::cmd("PING")
+                .query_async::<String>(&mut connection)
+                .await
+                .is_ok_and(|response| response == "PONG")
+        },
     )
     .await;
-    assert!(ready, "{context} did not become ready");
+    assert!(ready, "{context} did not answer PING before timeout");
 }

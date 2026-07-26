@@ -100,7 +100,7 @@ database.cleanup().await;
 - `SharedContainerState`：登记存活测试进程 PID 和它们创建的资源名（如 per-test 数据库）。
 - `ContainerLease`：Drop 时 prune 已退出进程的条目。测试进程异常退出时，下一次运行的 `start()` 也会 prune，孤儿资源最终会被回收。
 - PostgreSQL 孤儿库在删除前会转记到当前测试进程；即使回收过程再次中断，下一次运行仍能继续清理。
-- 共享容器的 `start()` 只在真实服务探针通过后返回：PostgreSQL/MySQL 使用数据库连接，Redis 使用映射端口连接，Mailpit 同时检查 SMTP 与 HTTP API；不把镜像日志文案当作 readiness 契约。
+- 共享容器的 `start()` 只在真实服务探针通过后返回：PostgreSQL/MySQL 使用数据库连接，Redis 完成认证并执行 `PING`，Mailpit 同时检查 SMTP 与 HTTP API；不把镜像日志文案或仅建立 TCP 连接当作 readiness 契约。
 
 边界说明：
 

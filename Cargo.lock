@@ -802,6 +802,7 @@ version = "0.1.0"
 dependencies = [
  "aster_forge_utils",
  "fs2",
+ "redis",
  "reqwest 0.13.4",
  "sea-orm",
  "serde",
