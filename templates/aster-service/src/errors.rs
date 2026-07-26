@@ -50,6 +50,12 @@ impl From<aster_forge_config::ConfigCoreError> for AppError {
     }
 }
 
+impl From<aster_forge_cache::CacheError> for AppError {
+    fn from(error: aster_forge_cache::CacheError) -> Self {
+        Self::Config(error.to_string())
+    }
+}
+
 impl From<config::ConfigError> for AppError {
     fn from(error: config::ConfigError) -> Self {
         Self::Config(error.to_string())

@@ -64,12 +64,15 @@ let config = aster_forge_cache::CacheConfig {
     endpoint: "redis://127.0.0.1/".into(),
     default_ttl: 3600,
 };
-let cache = aster_forge_cache::create_cache(&config).await;
+let cache = aster_forge_cache::create_cache_with_policy(
+    &config,
+    aster_forge_cache::CacheBackendFailurePolicy::ReturnError,
+).await?;
 ```
 
 默认配置使用 `memory` backend、空 `endpoint` 和 3600 秒 TTL，和 Aster 产品配置文件里的历史默认值保持一致。
 
-`CacheConfig::normalized_backend()` 是 backend 名称的统一解析入口，会去除首尾空白并折叠 ASCII 大小写。`create_cache()` 和标准 health check 都复用这套语义，因此 `" ReDiS "` 不会在静态校验通过后又被 factory 当成 memory。未知 backend 仍按既有行为回退 memory，health report 会通过 configured/active mismatch 标记 degraded。
+`CacheConfig::normalized_backend()` 是 backend 名称的统一解析入口，会去除首尾空白并折叠 ASCII 大小写。cache factory 和标准 health check 都复用这套语义，因此 `" ReDiS "` 不会在静态校验通过后又被 factory 当成 memory。
 
 配置文件里应该使用 `endpoint`。为了不破坏已有部署，`CacheConfig` 反序列化时仍接受历史键 `redis_url` 作为 alias；Rust API 不保留 `redis_url` 字段。
 
@@ -89,7 +92,12 @@ default_ttl = 3600
 结构化 endpoint 可以反序列化原始 username/password；再次序列化配置时只保留非敏感的
 `base_url`，不会把凭据写入 JSON、TOML、日志或运行时快照。
 
-`create_cache()` 返回 `Arc<dyn CacheBackend>`。Redis 初始化失败时会记录 warn 并回退到 memory backend。
+`create_cache_with_policy()` 让调用方显式决定 backend 构造失败时的行为，并返回 `Result<Arc<dyn CacheBackend>>`：
+
+- `CacheBackendFailurePolicy::ReturnError`：保留 Redis 连接错误或未知 backend 配置错误，由产品启动层映射和处理。
+- `CacheBackendFailurePolicy::FallbackToMemory`：记录 warn 并创建 memory backend。
+
+`create_cache()` 继续保留历史的 memory fallback 行为，避免现有产品和测试夹具被一次性破坏；新的 runtime assembly 应优先调用显式 policy API。Forge 只提供机制，不替产品决定“启动失败”还是“降级运行”。
 
 ## CacheBackend 边界
 

@@ -49,7 +49,7 @@ pub type Result<T> = std::result::Result<T, CacheError>;
 /// Errors returned by cache construction and health checks.
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
-    /// Cache connection configuration is invalid.
+    /// Cache backend configuration is invalid or unsupported.
     #[error("invalid cache configuration: {0}")]
     InvalidConfiguration(String),
     /// Redis could not be reached or initialized.
@@ -177,6 +177,16 @@ impl Default for CacheConfig {
     }
 }
 
+/// Controls how cache construction handles a requested backend that cannot be created.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CacheBackendFailurePolicy {
+    /// Return the construction error to the caller.
+    ReturnError,
+    /// Preserve the compatibility behavior by constructing a memory cache.
+    #[default]
+    FallbackToMemory,
+}
+
 impl CacheConfig {
     fn default_backend() -> String {
         DEFAULT_CACHE_BACKEND.to_string()
@@ -299,9 +309,12 @@ impl CacheExt for dyn CacheBackend {
     }
 }
 
-/// Creates a cache backend from configuration.
+/// Creates a cache backend with an explicit construction-failure policy.
 #[cfg(feature = "memory")]
-pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
+pub async fn create_cache_with_policy(
+    config: &CacheConfig,
+    failure_policy: CacheBackendFailurePolicy,
+) -> Result<Arc<dyn CacheBackend>> {
     match config.normalized_backend().as_ref() {
         #[cfg(feature = "redis")]
         "redis" => {
@@ -312,16 +325,54 @@ pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
                         target = %redis_backend_target(&config.endpoint),
                         "cache backend: redis"
                     );
-                    Arc::new(cache)
+                    Ok(Arc::new(cache))
                 }
-                Err(e) => {
-                    tracing::warn!("redis connection failed: {e}, falling back to memory cache");
-                    create_memory_cache(config.default_ttl)
-                }
+                Err(error) => handle_cache_backend_failure(config, failure_policy, error),
             }
         }
-        _ => {
+        "memory" => {
             tracing::info!("cache backend: memory (ttl={}s)", config.default_ttl);
+            Ok(create_memory_cache(config.default_ttl))
+        }
+        backend => handle_cache_backend_failure(
+            config,
+            failure_policy,
+            CacheError::InvalidConfiguration(format!("unsupported cache backend '{backend}'")),
+        ),
+    }
+}
+
+#[cfg(feature = "memory")]
+fn handle_cache_backend_failure(
+    config: &CacheConfig,
+    failure_policy: CacheBackendFailurePolicy,
+    error: CacheError,
+) -> Result<Arc<dyn CacheBackend>> {
+    match failure_policy {
+        CacheBackendFailurePolicy::ReturnError => Err(error),
+        CacheBackendFailurePolicy::FallbackToMemory => {
+            tracing::warn!(
+                error = %error,
+                "cache backend construction failed; falling back to memory cache"
+            );
+            Ok(create_memory_cache(config.default_ttl))
+        }
+    }
+}
+
+/// Creates a cache backend using the historical memory-fallback behavior.
+///
+/// Runtime assembly code should prefer [`create_cache_with_policy`] so the availability contract is
+/// explicit. This compatibility entry point keeps existing callers source-compatible.
+#[cfg(feature = "memory")]
+pub async fn create_cache(config: &CacheConfig) -> Arc<dyn CacheBackend> {
+    match create_cache_with_policy(config, CacheBackendFailurePolicy::FallbackToMemory).await {
+        Ok(cache) => cache,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "cache compatibility constructor encountered an unexpected error; using memory cache"
+            );
             create_memory_cache(config.default_ttl)
         }
     }
@@ -334,7 +385,7 @@ fn create_memory_cache(default_ttl: u64) -> Arc<dyn CacheBackend> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheConfig, CacheEndpoint, CacheError};
+    use super::{CacheBackendFailurePolicy, CacheConfig, CacheEndpoint, CacheError};
 
     #[test]
     fn cache_config_default_uses_memory_backend() {
@@ -419,6 +470,49 @@ mod tests {
         cache.health_check().await.expect("memory cache is healthy");
     }
 
+    #[cfg(feature = "memory")]
+    #[tokio::test]
+    async fn explicit_error_policy_rejects_unknown_backend() {
+        let error = match super::create_cache_with_policy(
+            &CacheConfig {
+                backend: "unknown".to_string(),
+                ..CacheConfig::default()
+            },
+            CacheBackendFailurePolicy::ReturnError,
+        )
+        .await
+        {
+            Ok(_) => panic!("unknown backend should be returned to explicit callers"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported cache backend 'unknown'")
+        );
+    }
+
+    #[cfg(feature = "redis")]
+    #[tokio::test]
+    async fn explicit_error_policy_returns_redis_construction_error() {
+        let error = match super::create_cache_with_policy(
+            &CacheConfig {
+                backend: "redis".to_string(),
+                endpoint: "not a redis url".into(),
+                default_ttl: 60,
+            },
+            CacheBackendFailurePolicy::ReturnError,
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid Redis endpoint should be returned to explicit callers"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("redis cache connection"));
+    }
+
     #[cfg(feature = "redis")]
     #[test]
     fn redis_backend_target_strips_credentials() {
@@ -483,6 +577,10 @@ mod tests {
 
     #[test]
     fn cache_error_display_messages_are_stable() {
+        assert_eq!(
+            CacheError::InvalidConfiguration("bad backend".to_string()).to_string(),
+            "invalid cache configuration: bad backend"
+        );
         assert_eq!(
             CacheError::RedisConnection("refused".to_string()).to_string(),
             "redis cache connection: refused"
