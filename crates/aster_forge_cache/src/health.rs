@@ -197,7 +197,7 @@ mod tests {
     async fn cache_component_reports_configured_backend_fallback() {
         let config = CacheConfig {
             backend: "redis".to_string(),
-            endpoint: "redis://example.com:6379/0".to_string(),
+            endpoint: "redis://example.com:6379/0".into(),
             default_ttl: 60,
         };
         let cache = FakeCache::new("memory");
@@ -228,7 +228,7 @@ mod tests {
     async fn cache_component_reports_active_backend_probe_result() {
         let config = CacheConfig {
             backend: "redis".to_string(),
-            endpoint: "redis://example.com:6379/0".to_string(),
+            endpoint: "redis://example.com:6379/0".into(),
             default_ttl: 60,
         };
 
@@ -261,7 +261,7 @@ mod tests {
     async fn cache_component_uses_the_same_normalized_backend_as_factory() {
         let config = CacheConfig {
             backend: " ReDiS ".to_string(),
-            endpoint: "redis://example.com:6379/0".to_string(),
+            endpoint: "redis://example.com:6379/0".into(),
             default_ttl: 60,
         };
 

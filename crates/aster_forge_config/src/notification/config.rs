@@ -15,6 +15,77 @@ pub const CONFIG_SYNC_BACKEND_DISABLED: &str = "disabled";
 /// Redis pub/sub config-sync backend name.
 pub const CONFIG_SYNC_BACKEND_REDIS: &str = "redis";
 
+/// Config-sync broker endpoint input.
+///
+/// Existing string endpoints remain valid. The structured form carries a base URL without
+/// userinfo and raw credentials that the selected transport injects safely.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConfigSyncEndpoint {
+    /// A complete broker URL.
+    Url(String),
+    /// A base broker URL without userinfo plus raw credentials.
+    Credentials {
+        /// Absolute broker URL without username or password.
+        base_url: String,
+        /// Raw broker username.
+        #[serde(default)]
+        username: Option<String>,
+        /// Raw broker password.
+        #[serde(default)]
+        password: Option<String>,
+    },
+}
+
+impl ConfigSyncEndpoint {
+    /// Creates a complete-URL endpoint.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url(url.into())
+    }
+
+    /// Creates a base URL plus raw credentials endpoint.
+    pub fn credentials(
+        base_url: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
+        Self::Credentials {
+            base_url: base_url.into(),
+            username,
+            password,
+        }
+    }
+}
+
+impl Default for ConfigSyncEndpoint {
+    fn default() -> Self {
+        Self::Url(String::new())
+    }
+}
+
+impl From<String> for ConfigSyncEndpoint {
+    fn from(url: String) -> Self {
+        Self::Url(url)
+    }
+}
+
+impl From<&str> for ConfigSyncEndpoint {
+    fn from(url: &str) -> Self {
+        Self::Url(url.to_string())
+    }
+}
+
+impl std::fmt::Debug for ConfigSyncEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Url(_) => formatter.write_str("ConfigSyncEndpoint::Url(<redacted>)"),
+            Self::Credentials { .. } => {
+                formatter.write_str("ConfigSyncEndpoint::Credentials(<redacted>)")
+            }
+        }
+    }
+}
+
 /// Static configuration for cross-process config reload synchronization.
 ///
 /// The field names describe a generic broker contract instead of a Redis-only
@@ -28,7 +99,7 @@ pub struct ConfigSyncConfig {
     pub backend: String,
     /// Broker endpoint URL. Redis uses a Redis URL.
     #[serde(default)]
-    pub endpoint: String,
+    pub endpoint: ConfigSyncEndpoint,
     /// Logical reload topic. Transports may map this to a channel, exchange,
     /// subject, or routing key.
     #[serde(default = "ConfigSyncConfig::default_topic")]
@@ -39,7 +110,7 @@ impl Default for ConfigSyncConfig {
     fn default() -> Self {
         Self {
             backend: Self::default_backend(),
-            endpoint: String::new(),
+            endpoint: ConfigSyncEndpoint::default(),
             topic: Self::default_topic(),
         }
     }
@@ -126,15 +197,34 @@ fn build_redis_config_sync_runtime(
     runtime_id: String,
     topic: &str,
 ) -> Result<ConfigSyncRuntime> {
-    if config.endpoint.trim().is_empty() {
-        return Err(ConfigCoreError::invalid_value(
-            "config_sync.endpoint is required when config_sync.backend is redis",
-        ));
-    }
-    let notifier = RedisConfigChangeNotifier::from_url(
-        config.endpoint.trim(),
-        redis_channel_from_topic(topic),
-    )?;
+    let channel = redis_channel_from_topic(topic);
+    let notifier = match &config.endpoint {
+        ConfigSyncEndpoint::Url(endpoint) => {
+            if endpoint.trim().is_empty() {
+                return Err(ConfigCoreError::invalid_value(
+                    "config_sync.endpoint is required when config_sync.backend is redis",
+                ));
+            }
+            RedisConfigChangeNotifier::from_url(endpoint.trim(), channel)?
+        }
+        ConfigSyncEndpoint::Credentials {
+            base_url,
+            username,
+            password,
+        } => {
+            if base_url.trim().is_empty() {
+                return Err(ConfigCoreError::invalid_value(
+                    "config_sync.endpoint base_url is required when config_sync.backend is redis",
+                ));
+            }
+            RedisConfigChangeNotifier::from_credentials(
+                base_url.trim(),
+                username.as_deref(),
+                password.as_deref(),
+                channel,
+            )?
+        }
+    };
     Ok(ConfigSyncRuntime::new(
         namespace,
         runtime_id,

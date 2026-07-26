@@ -283,7 +283,7 @@ mod tests {
 
     async fn sqlite_db() -> DatabaseConnection {
         crate::connection::connect(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
+            url: "sqlite::memory:".into(),
             pool_size: 1,
             retry_count: 0,
         })

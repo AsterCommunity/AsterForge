@@ -19,7 +19,7 @@ mod runtime;
 mod supervisor;
 
 pub use config::{
-    CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigSyncConfig,
+    CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigSyncConfig, ConfigSyncEndpoint,
     build_config_sync_runtime, build_config_sync_runtime_with_runtime_id,
     default_config_sync_topic,
 };

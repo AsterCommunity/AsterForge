@@ -78,6 +78,37 @@ impl RedisEventBus {
         })
     }
 
+    /// Creates a bus from a base Redis URL and raw credentials.
+    ///
+    /// The base URL must not contain userinfo. `username = None` with a password creates the
+    /// password-only URL form used by Redis deployments without ACL usernames.
+    pub fn from_credentials(
+        base_url: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+        topic: impl Into<String>,
+    ) -> Result<Self, RedisEventBusError> {
+        let topic = topic.into();
+        if topic.trim().is_empty() {
+            return Err(RedisEventBusError::EmptyTopic);
+        }
+        let url = aster_forge_utils::url::url_with_credentials(
+            base_url,
+            username,
+            password,
+            "Redis event base URL",
+        )
+        .map_err(|error| RedisEventBusError::Open(error.to_string()))?;
+        let client = redis::Client::open(url).map_err(|_| {
+            RedisEventBusError::Open("invalid Redis event connection configuration".to_string())
+        })?;
+        Ok(Self {
+            client,
+            topic,
+            reconnect_policy: EventReconnectPolicy::default(),
+        })
+    }
+
     /// Creates a bus from an existing Redis client.
     pub fn from_client(client: redis::Client, topic: impl Into<String>) -> Self {
         Self {
@@ -211,5 +242,40 @@ mod tests {
             RedisEventBus::from_url("redis://127.0.0.1", "  "),
             Err(RedisEventBusError::EmptyTopic)
         ));
+    }
+
+    #[test]
+    fn credentialed_bus_accepts_reserved_password_characters() {
+        let bus = RedisEventBus::from_credentials(
+            "redis://cache.example:6379/2?protocol=resp3",
+            None,
+            Some("#[]{}^+=*@:/?%\u{5bc6}\u{7801}"),
+            "aster.events",
+        )
+        .unwrap();
+
+        assert_eq!(bus.topic(), "aster.events");
+    }
+
+    #[test]
+    fn credentialed_bus_rejects_conflicting_userinfo_without_secret_leak() {
+        let raw_password = "raw#event-secret";
+        let result = RedisEventBus::from_credentials(
+            "redis://existing@cache.example:6379/0",
+            Some("replacement"),
+            Some(raw_password),
+            "aster.events",
+        );
+        let Err(error) = result else {
+            panic!("conflicting Redis credentials should be rejected");
+        };
+
+        assert!(matches!(error, RedisEventBusError::Open(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("must not already include userinfo")
+        );
+        assert!(!error.to_string().contains(raw_password));
     }
 }

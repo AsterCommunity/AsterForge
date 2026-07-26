@@ -13,11 +13,85 @@ use aster_forge_metrics::{
     DbMetricBackend, DbQueryKind, DbQueryMetric, NoopDbMetrics, SharedDbMetricsRecorder,
 };
 
+/// Database connection URL input.
+#[derive(Clone, PartialEq, Eq)]
+pub enum DatabaseUrl {
+    /// A complete database URL. Existing percent-encoded URLs use this compatibility mode.
+    Url(String),
+    /// A base URL without userinfo plus raw credentials that Forge injects safely.
+    Credentials {
+        /// Absolute database URL without username or password.
+        base_url: String,
+        /// Raw username, without percent encoding.
+        username: Option<String>,
+        /// Raw password, without percent encoding.
+        password: Option<String>,
+    },
+}
+
+impl DatabaseUrl {
+    /// Creates a separated-credentials database URL input.
+    pub fn credentials(
+        base_url: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
+        Self::Credentials {
+            base_url: base_url.into(),
+            username,
+            password,
+        }
+    }
+
+    fn resolve(&self) -> Result<String> {
+        match self {
+            Self::Url(url) => Ok(url.clone()),
+            Self::Credentials {
+                base_url,
+                username,
+                password,
+            } => aster_forge_utils::url::url_with_credentials(
+                base_url,
+                username.as_deref(),
+                password.as_deref(),
+                "database base URL",
+            )
+            .map(|url| url.into())
+            .map_err(|error| {
+                DbError::non_retryable(format!(
+                    "invalid database connection configuration: {error}"
+                ))
+            }),
+        }
+    }
+}
+
+impl std::fmt::Debug for DatabaseUrl {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Url(_) => formatter.write_str("DatabaseUrl::Url(<redacted>)"),
+            Self::Credentials { .. } => formatter.write_str("DatabaseUrl::Credentials(<redacted>)"),
+        }
+    }
+}
+
+impl From<String> for DatabaseUrl {
+    fn from(url: String) -> Self {
+        Self::Url(url)
+    }
+}
+
+impl From<&str> for DatabaseUrl {
+    fn from(url: &str) -> Self {
+        Self::Url(url.to_string())
+    }
+}
+
 /// Database connection configuration.
 #[derive(Clone, Debug)]
 pub struct DatabaseConfig {
     /// Database URL understood by SeaORM/sqlx.
-    pub url: String,
+    pub url: DatabaseUrl,
     /// Maximum pool size for non-SQLite connections and SQLite reader pools.
     pub pool_size: u32,
     /// Number of retries for connection establishment.
@@ -28,7 +102,20 @@ impl DatabaseConfig {
     /// Creates a config with conservative default pool and retry settings.
     pub fn new(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            url: DatabaseUrl::Url(url.into()),
+            pool_size: 5,
+            retry_count: 3,
+        }
+    }
+
+    /// Creates a config from a base URL and raw credentials.
+    pub fn with_credentials(
+        base_url: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
+        Self {
+            url: DatabaseUrl::credentials(base_url, username, password),
             pool_size: 5,
             retry_count: 3,
         }
@@ -104,12 +191,13 @@ pub async fn connect_with_metrics(
     cfg: &DatabaseConfig,
     metrics: SharedDbMetricsRecorder,
 ) -> Result<DatabaseConnection> {
+    let url = cfg.url.resolve()?;
     let retry_config = retry::RetryConfig {
         max_retries: cfg.retry_count,
         ..retry::RetryConfig::connection()
     };
     retry::with_retry(&retry_config, || {
-        Box::pin(connect_once(cfg, metrics.clone()))
+        Box::pin(connect_once(cfg, &url, metrics.clone()))
     })
     .await
 }
@@ -125,7 +213,7 @@ pub async fn connect_reader_for_writer_with_metrics(
     writer: DatabaseConnection,
     metrics: SharedDbMetricsRecorder,
 ) -> Result<DbHandles> {
-    let url = normalize_database_url(&cfg.url);
+    let url = normalize_database_url(&cfg.url.resolve()?);
     if !sqlite_reader_pool_enabled(&url) {
         return Ok(DbHandles::single(writer));
     }
@@ -155,9 +243,10 @@ pub async fn connect_reader_for_writer(
 
 async fn connect_once(
     cfg: &DatabaseConfig,
+    database_url: &str,
     metrics: SharedDbMetricsRecorder,
 ) -> Result<DatabaseConnection> {
-    let url = normalize_database_url(&cfg.url);
+    let url = normalize_database_url(database_url);
     let is_sqlite = url.starts_with("sqlite:");
     // SQLite relies on a single pooled connection so concurrent writers are serialized at
     // connection acquisition; repo-layer "lock" helpers do not emulate row locks there.
@@ -351,11 +440,50 @@ fn db_query_metric_from_sea_orm(info: &sea_orm::metric::Info<'_>) -> DbQueryMetr
 #[cfg(test)]
 mod tests {
     use super::{first_close_error, normalize_database_url};
-    use crate::connection::DatabaseConfig;
+    use crate::connection::{DatabaseConfig, DatabaseUrl};
     use aster_forge_metrics::{DbQueryKind, NoopDbMetrics};
     use aster_forge_test::temp::SqliteTestDatabase;
     use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
     use std::sync::Arc;
+
+    #[test]
+    fn credentialed_database_url_is_resolved_and_debug_is_redacted() {
+        let raw_password = "db#[]{}^+=*@:/?%\u{5bc6}\u{7801}";
+        let input = DatabaseUrl::credentials(
+            "postgres://db.example:5432/app?sslmode=require",
+            Some("app-user".to_string()),
+            Some(raw_password.to_string()),
+        );
+
+        let resolved = input.resolve().unwrap();
+        assert!(resolved.starts_with("postgres://app-user:"));
+        assert!(resolved.ends_with("@db.example:5432/app?sslmode=require"));
+        assert!(!resolved.contains(raw_password));
+
+        let debug = format!("{input:?}");
+        assert_eq!(debug, "DatabaseUrl::Credentials(<redacted>)");
+        assert!(!debug.contains(raw_password));
+    }
+
+    #[tokio::test]
+    async fn invalid_credentialed_database_url_returns_non_retryable_redacted_error() {
+        let raw_password = "raw#database-secret";
+        let mut config = DatabaseConfig::with_credentials(
+            "postgres://existing@db.example/app",
+            Some("replacement".to_string()),
+            Some(raw_password.to_string()),
+        );
+        config.retry_count = 10;
+
+        let error = super::connect(&config).await.unwrap_err();
+        assert!(matches!(error, crate::DbError::NonRetryable(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("must not already include userinfo")
+        );
+        assert!(!error.to_string().contains(raw_password));
+    }
 
     #[test]
     fn first_close_error_prefers_the_reader_failure() {
@@ -497,7 +625,7 @@ mod tests {
         );
         let db = super::connect_with_metrics(
             &DatabaseConfig {
-                url,
+                url: url.into(),
                 pool_size: 10,
                 retry_count: 3,
             },
@@ -514,7 +642,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_memory_handles_use_single_connection() {
         let cfg = DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
+            url: "sqlite::memory:".into(),
             pool_size: 4,
             retry_count: 0,
         };
@@ -542,7 +670,7 @@ mod tests {
     async fn sqlite_reader_pool_is_query_only() {
         let database = SqliteTestDatabase::new("reader-pool");
         let cfg = DatabaseConfig {
-            url: database.url().to_string(),
+            url: database.url().into(),
             pool_size: 4,
             retry_count: 0,
         };
@@ -577,7 +705,7 @@ mod tests {
     async fn sqlite_reader_pool_reads_while_writer_connection_is_busy() {
         let database = SqliteTestDatabase::new("reader-writer-split");
         let cfg = DatabaseConfig {
-            url: database.url().to_string(),
+            url: database.url().into(),
             pool_size: 4,
             retry_count: 0,
         };

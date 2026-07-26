@@ -26,12 +26,12 @@ impl Default for AppConfig {
             database: DatabaseConfig::default(),
             cache: aster_forge_cache::CacheConfig {
                 backend: "memory".to_string(),
-                endpoint: String::new(),
+                endpoint: aster_forge_cache::CacheEndpoint::default(),
                 default_ttl: 3600,
             },
             config_sync: aster_forge_config::ConfigSyncConfig {
                 backend: "disabled".to_string(),
-                endpoint: String::new(),
+                endpoint: aster_forge_config::ConfigSyncEndpoint::default(),
                 topic: "{{project-name}}.config_reload".to_string(),
             },
             logging: aster_forge_logging::LoggingConfig {

@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use aster_forge_config::{
     CONFIG_SYNC_BACKEND_REDIS, ConfigNotificationSource, ConfigSyncConfig,
-    ConfigSyncConnectionObservation, ConfigSyncConnectionState,
+    ConfigSyncConnectionObservation, ConfigSyncConnectionState, ConfigSyncEndpoint,
     build_config_sync_runtime_with_runtime_id,
 };
-use aster_forge_test::redis::RedisTestContainer;
+use aster_forge_test::redis::{AuthenticatedRedisTestContainer, RedisTestContainer};
 use aster_forge_test::suite::TestContainerSuite;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -70,12 +70,78 @@ fn clear_observations(observations: &Arc<Mutex<Vec<ConfigSyncConnectionObservati
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raw_reserved_password_delivers_config_reload() {
+    let password = "config#[]{}^+=*@:/?%Special";
+    let redis = AuthenticatedRedisTestContainer::start(password).await;
+    let config = ConfigSyncConfig {
+        backend: CONFIG_SYNC_BACKEND_REDIS.to_string(),
+        endpoint: ConfigSyncEndpoint::credentials(
+            redis.base_url(),
+            None,
+            Some(password.to_string()),
+        ),
+        topic: format!("asterforge.config.auth.{}", uuid::Uuid::new_v4().simple()),
+    };
+    let publisher =
+        build_config_sync_runtime_with_runtime_id(&config, "aster_test", "publisher-auth")
+            .expect("credentialed publisher should build");
+    let subscriber =
+        build_config_sync_runtime_with_runtime_id(&config, "aster_test", "subscriber-auth")
+            .expect("credentialed subscriber should build");
+    let (reload_tx, mut reload_rx) = mpsc::unbounded_channel();
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let worker_observations = observations.clone();
+    let connection_observer = move |observation| {
+        worker_observations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(observation);
+    };
+    let shutdown = CancellationToken::new();
+    let worker_shutdown = shutdown.clone();
+    let worker = tokio::spawn(async move {
+        subscriber
+            .run_reload_subscription_with_reconcile_and_observers(
+                worker_shutdown,
+                || async { Ok(()) },
+                move |message| {
+                    let reload_tx = reload_tx.clone();
+                    async move {
+                        reload_tx.send(message).expect("reload receiver stays open");
+                        Ok(())
+                    }
+                },
+                None,
+                Some(&connection_observer),
+            )
+            .await
+    });
+
+    wait_for_connection_ready(&observations).await;
+    publisher
+        .publish_reload(["credentialed"], ConfigNotificationSource::Api)
+        .await
+        .expect("publish credentialed reload");
+    let message = tokio::time::timeout(Duration::from_secs(5), reload_rx.recv())
+        .await
+        .expect("credentialed reload should arrive")
+        .expect("reload channel should stay open");
+    assert_eq!(message.keys, vec!["credentialed"]);
+
+    shutdown.cancel();
+    worker
+        .await
+        .expect("credentialed subscriber task should not panic")
+        .expect("credentialed subscriber should stop cleanly");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_runtime_reconciles_and_delivers_after_redis_recovery() {
     let redis = RedisTestContainer::start(test_suite()).await;
     let topic = format!("asterforge.config.{}", uuid::Uuid::new_v4().simple());
     let config = ConfigSyncConfig {
         backend: CONFIG_SYNC_BACKEND_REDIS.to_string(),
-        endpoint: redis.url().to_string(),
+        endpoint: redis.url().into(),
         topic,
     };
     let publisher =

@@ -4,7 +4,7 @@
 //! details. The Redis test uses a real container so fallback behavior and wire-level round trips
 //! stay aligned with production dependencies.
 
-use aster_forge_cache::{CacheConfig, CacheExt, create_cache};
+use aster_forge_cache::{CacheConfig, CacheEndpoint, CacheExt, create_cache};
 #[cfg(feature = "redis")]
 use aster_forge_test::{redis::RedisTestContainer, suite::TestContainerSuite};
 #[cfg(feature = "redis")]
@@ -15,7 +15,7 @@ use tokio::time::{Duration, Instant, sleep};
 fn cache_config(backend: &str, default_ttl: u64) -> CacheConfig {
     CacheConfig {
         backend: backend.to_string(),
-        endpoint: String::new(),
+        endpoint: CacheEndpoint::default(),
         default_ttl,
     }
 }
@@ -43,7 +43,7 @@ async fn wait_for_redis_cache(endpoint: String) -> Arc<dyn aster_forge_cache::Ca
     let deadline = Instant::now() + Duration::from_secs(10);
     let config = CacheConfig {
         backend: " ReDiS ".to_string(),
-        endpoint,
+        endpoint: endpoint.into(),
         default_ttl: 60,
     };
 
@@ -184,7 +184,7 @@ async fn test_memory_cache_zero_ttl_entries_expire_immediately() {
 async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
     let cache = create_cache(&CacheConfig {
         backend: "redis".to_string(),
-        endpoint: "not a redis url".to_string(),
+        endpoint: "not a redis url".into(),
         default_ttl: 60,
     })
     .await;

@@ -417,6 +417,7 @@ Redis 连接、单次 subscription、断线状态、退避、jitter 和 shutdown
 - `CONFIG_SYNC_BACKEND_DISABLED`
 - `CONFIG_SYNC_BACKEND_REDIS`
 - `ConfigSyncConfig`
+- `ConfigSyncEndpoint`
 - `ConfigSyncRuntime`
 - `build_config_sync_runtime(config, namespace)`
 - `build_config_sync_runtime_with_runtime_id(config, namespace, runtime_id)`
@@ -441,6 +442,22 @@ Redis 连接、单次 subscription、断线状态、退避、jitter 和 shutdown
 4. 如果产品启用了 metrics，分别把 `ConfigReloadObservation` 和 `ConfigSyncConnectionObservation` 映射到产品 recorder。
 
 产品侧如果需要构造静态配置或测试数据，优先使用 `CONFIG_SYNC_BACKEND_DISABLED` 和 `CONFIG_SYNC_BACKEND_REDIS`，不要在各仓库散写 backend 字符串。
+
+`ConfigSyncConfig.endpoint` 是 untagged `ConfigSyncEndpoint`。已有 Redis URL 字符串继续兼容；
+原始凭据使用结构化模式：
+
+```toml
+[config_sync]
+backend = "redis"
+endpoint = { base_url = "redis://cache.example:6379/0", username = "app", password = "RAW_PASSWORD" }
+topic = "aster_product.config_reload"
+```
+
+产品负责 TOML、环境变量和 Secret 的字段来源及优先级，然后映射为完整 URL 或结构化模式。
+Forge 不感知产品环境变量名。结构化模式最终调用
+`aster_forge_events::RedisEventBus::from_credentials()`，因此 cache、events 和 config-sync 不会
+各自维护一份 URL encoding 逻辑。endpoint 的 `Debug` 脱敏，reload 观测和 health detail 也不应
+包含连接串。
 
 `build_config_sync_runtime_with_runtime_id(...)` 只在产品已有稳定进程 ID 或测试需要固定 origin 过滤时使用。普通服务用 `build_config_sync_runtime(...)` 生成 process-level runtime ID。
 

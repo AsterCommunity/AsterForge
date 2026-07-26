@@ -64,7 +64,7 @@ pub use component::{
     database_health_component, database_health_options, ping_database,
 };
 pub use connection::{
-    DatabaseConfig, DbHandles, connect, connect_reader_for_writer,
+    DatabaseConfig, DatabaseUrl, DbHandles, connect, connect_reader_for_writer,
     connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
 #[cfg(feature = "mail-outbox")]

@@ -4,11 +4,11 @@ use super::{
     CONFIG_SYNC_BACKEND_DISABLED, ConfigChangeEvent, ConfigChangeNotifier,
     ConfigNotificationSource, ConfigReloadDecision, ConfigReloadMessage,
     ConfigReloadReconnectPolicy, ConfigReloadWorkerConfig, ConfigSyncConfig,
-    ConfigSyncConnectionObservation, ConfigSyncConnectionState, ConfigSyncRuntime,
-    InMemoryConfigNotifier, SharedConfigChangeNotifier, build_config_sync_runtime,
-    build_config_sync_runtime_with_runtime_id, config_reload_reconnect_delay,
-    decode_config_reload_transport_payload, default_config_sync_topic,
-    handle_config_reload_notification, redis_channel_from_topic,
+    ConfigSyncConnectionObservation, ConfigSyncConnectionState, ConfigSyncEndpoint,
+    ConfigSyncRuntime, InMemoryConfigNotifier, SharedConfigChangeNotifier,
+    build_config_sync_runtime, build_config_sync_runtime_with_runtime_id,
+    config_reload_reconnect_delay, decode_config_reload_transport_payload,
+    default_config_sync_topic, handle_config_reload_notification, redis_channel_from_topic,
     run_config_reload_supervisor_inner, run_config_reload_worker,
     run_config_reload_worker_with_observer,
 };
@@ -183,8 +183,29 @@ fn config_sync_config_defaults_to_disabled_generic_topic() {
 
     assert!(!config.enabled());
     assert_eq!(config.backend, CONFIG_SYNC_BACKEND_DISABLED);
-    assert_eq!(config.endpoint, "");
+    assert_eq!(config.endpoint, ConfigSyncEndpoint::default());
     assert_eq!(config.topic, "aster.config_reload");
+}
+
+#[test]
+fn config_sync_config_deserializes_structured_credentials_and_redacts_debug() {
+    let raw_password = "sync#[]{}^+=*@:/?%secret";
+    let config: ConfigSyncConfig = serde_json::from_str(&format!(
+        r#"{{"backend":"redis","endpoint":{{"base_url":"redis://cache.example/0","username":"sync-user","password":"{raw_password}"}},"topic":"aster.config_reload"}}"#,
+    ))
+    .unwrap();
+
+    assert_eq!(
+        config.endpoint,
+        ConfigSyncEndpoint::credentials(
+            "redis://cache.example/0",
+            Some("sync-user".to_string()),
+            Some(raw_password.to_string()),
+        )
+    );
+    let debug = format!("{config:?}");
+    assert!(!debug.contains(raw_password));
+    assert!(debug.contains("ConfigSyncEndpoint::Credentials(<redacted>)"));
 }
 
 #[test]
@@ -307,7 +328,7 @@ fn redis_config_sync_backend_requires_feature() {
     let result = build_config_sync_runtime(
         &ConfigSyncConfig {
             backend: CONFIG_SYNC_BACKEND_REDIS.to_string(),
-            endpoint: "redis://127.0.0.1:6379/0".to_string(),
+            endpoint: "redis://127.0.0.1:6379/0".into(),
             ..ConfigSyncConfig::default()
         },
         "aster_test",

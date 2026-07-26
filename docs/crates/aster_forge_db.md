@@ -511,6 +511,7 @@ aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", feature
 核心类型：
 
 - `DatabaseConfig`
+- `DatabaseUrl`
 - `DbHandles`
 - `aster_forge_metrics::DbMetricsRecorder`
 - `aster_forge_metrics::NoopDbMetrics`
@@ -521,6 +522,30 @@ aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", feature
 let db = aster_forge_db::connect_with_metrics(&config.database, metrics.clone()).await?;
 let db_handles = aster_forge_db::DbHandles::single(db);
 ```
+
+已有合法、已经 percent-encoded 的完整 URL 使用兼容模式：
+
+```rust
+let config = aster_forge_db::DatabaseConfig::new(
+    "postgres://user:encoded-password@db.example/app",
+);
+```
+
+部署系统提供原始 username/password 时，使用显式分离凭据模式。base URL 不能包含
+userinfo，原始凭据不需要 trim 或预编码：
+
+```rust
+let config = aster_forge_db::DatabaseConfig::with_credentials(
+    "postgres://db.example:5432/app?sslmode=require",
+    Some("app-user".to_string()),
+    Some(raw_password),
+);
+```
+
+`DatabaseUrl::Url` 与 `DatabaseUrl::Credentials` 是互斥模式；完整 URL 不会再次编码。
+SQLite 继续使用完整 URL 模式，路径和 reader/writer pool 行为不变。结构化配置错误在进入
+retry loop 前返回 non-retryable `DbError`。`DatabaseUrl` 的 `Debug` 会脱敏，但产品仍然不能
+记录解析后含凭据的 URL 或把它放进 health detail。
 
 如果产品已经使用 `aster_forge_runtime::AsterRuntime` component 模式，优先把数据库句柄注册成 runtime component：
 
@@ -767,6 +792,8 @@ let file = transaction::with_transaction_retry(
 ## 测试要求
 
 - SQLite 内存库至少覆盖连接、事务和基础 query helper。
+- PostgreSQL/MySQL 原始凭据实连测试通过 `database-container-tests` feature 运行，密码应覆盖
+  URL 保留字符，并同时断言连接错误和 debug 输出不泄露 secret。
 - 产品 repository 要覆盖 token fence、状态转换和并发保护。
 - 错误分类至少覆盖 MySQL `1213`/`1205`、PostgreSQL `40P01`/`40001`/`55P03`、SQLite
   `BUSY`/`LOCKED` 家族（含扩展结果码）、unique/FK 约束和非驱动/普通业务错误不误判。

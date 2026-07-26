@@ -131,6 +131,20 @@ mod redis_transport {
                 .map_err(|error| ConfigCoreError::notification(error.to_string()))?;
             Ok(Self { bus })
         }
+
+        /// Creates a Redis notifier from a base URL and raw credentials.
+        pub fn from_credentials(
+            base_url: &str,
+            username: Option<&str>,
+            password: Option<&str>,
+            channel: impl Into<String>,
+        ) -> Result<Self> {
+            let bus = aster_forge_events::RedisEventBus::from_credentials(
+                base_url, username, password, channel,
+            )
+            .map_err(|error| ConfigCoreError::notification(error.to_string()))?;
+            Ok(Self { bus })
+        }
     }
 
     #[async_trait::async_trait]

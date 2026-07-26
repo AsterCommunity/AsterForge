@@ -570,6 +570,7 @@ version = "0.1.0"
 dependencies = [
  "aster_forge_runtime",
  "aster_forge_test",
+ "aster_forge_utils",
  "async-trait",
  "bloomfilter",
  "criterion",
@@ -634,6 +635,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -815,6 +817,7 @@ dependencies = [
  "httpdate",
  "ipnet",
  "md-5",
+ "percent-encoding",
  "rand 0.10.2",
  "serde_json",
  "thiserror 2.0.19",

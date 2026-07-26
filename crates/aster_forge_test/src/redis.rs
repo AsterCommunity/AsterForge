@@ -19,6 +19,42 @@ pub struct RedisTestContainer {
     _lease: ContainerLease,
 }
 
+/// Isolated Redis container configured with a caller-provided raw password.
+///
+/// Unlike [`RedisTestContainer`], this fixture is not shared or reused because authentication is
+/// process-wide Redis state. The exposed base URL never contains the password.
+pub struct AuthenticatedRedisTestContainer {
+    base_url: String,
+    _container: ContainerAsync<GenericImage>,
+}
+
+impl AuthenticatedRedisTestContainer {
+    /// Starts an isolated Redis server that requires `password`.
+    pub async fn start(password: &str) -> Self {
+        let container = GenericImage::new("redis", "7-alpine")
+            .with_exposed_port(IntoContainerPort::tcp(6379))
+            .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+            .with_cmd(["redis-server", "--requirepass", password])
+            .start()
+            .await
+            .expect("failed to start authenticated Redis test container");
+        let port = container
+            .get_host_port_ipv4(IntoContainerPort::tcp(6379))
+            .await
+            .expect("authenticated Redis test port should be exposed");
+
+        Self {
+            base_url: format!("redis://127.0.0.1:{port}/0"),
+            _container: container,
+        }
+    }
+
+    /// Returns the Redis base URL without userinfo.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
 impl RedisTestContainer {
     /// Starts (or reuses) the shared Redis container and waits for it to accept connections.
     pub async fn start(suite: &TestContainerSuite) -> Self {

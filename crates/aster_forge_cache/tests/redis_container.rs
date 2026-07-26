@@ -5,7 +5,10 @@
 //! `WRONGTYPE` reply is a command error that must not degrade the backend.
 
 use aster_forge_cache::{CacheBackend, RedisCache};
-use aster_forge_test::{redis::RedisTestContainer, suite::TestContainerSuite};
+use aster_forge_test::{
+    redis::{AuthenticatedRedisTestContainer, RedisTestContainer},
+    suite::TestContainerSuite,
+};
 use redis::AsyncCommands;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{OnceLock, atomic};
@@ -31,6 +34,35 @@ async fn redis_cache() -> (RedisTestContainer, RedisCache) {
         .await
         .expect("Redis cache should connect to the test container");
     (container, cache)
+}
+
+#[tokio::test]
+async fn raw_reserved_password_connects_and_round_trips_cache_data() {
+    let password = "cache#[]{}^+=*@:/?%Special";
+    let container = AuthenticatedRedisTestContainer::start(password).await;
+    let cache = RedisCache::from_credentials(container.base_url(), None, Some(password), 60)
+        .await
+        .expect("raw Redis password should be encoded by Forge");
+    let key = unique_key("credentialed");
+
+    cache
+        .set_bytes(&key, b"credentialed-value".to_vec(), Some(60))
+        .await;
+    assert_eq!(
+        cache.get_bytes(&key).await,
+        Some(b"credentialed-value".to_vec())
+    );
+    cache.delete(&key).await;
+
+    let wrong_password = "wrong#cache-secret";
+    let result =
+        RedisCache::from_credentials(container.base_url(), None, Some(wrong_password), 60).await;
+    let Err(error) = result else {
+        panic!("wrong Redis password should fail cache initialization");
+    };
+    let message = error.to_string();
+    assert!(!message.contains(wrong_password));
+    assert!(!message.contains("wrong%23cache-secret"));
 }
 
 #[tokio::test]

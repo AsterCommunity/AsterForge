@@ -22,7 +22,7 @@ pub async fn prepare_database_handles(
     metrics: aster_forge_metrics::SharedMetricsRecorder,
 ) -> Result<aster_forge_db::DbHandles> {
     let config = aster_forge_db::DatabaseConfig {
-        url: database.url.clone(),
+        url: database.url.clone().into(),
         pool_size: database.pool_size,
         retry_count: database.retry_count,
     };

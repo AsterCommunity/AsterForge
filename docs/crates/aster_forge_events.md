@@ -35,6 +35,21 @@ bus.run_subscription(shutdown, Some(&observer), |payload| async move {
 }).await;
 ```
 
+部署配置把原始凭据与 endpoint 分开提供时，直接使用 transport 的结构化入口：
+
+```rust
+let bus = RedisEventBus::from_credentials(
+    "redis://cache.example:6379/0",
+    redis_username.as_deref(),
+    redis_password.as_deref(),
+    "my_product.events",
+)?;
+```
+
+`from_url()` 保留完整 URL 兼容模式，`from_client()` 继续用于调用方已经创建 client 的场景。
+`from_credentials()` 要求 base URL 不含 userinfo，并复用 `aster_forge_utils::url` 的 setter
+实现；transport 内没有第二套 percent-encoding 表。
+
 需要接入其他 transport 或 typed notifier 时，实现 `EventSubscriptionSource`，再消费共享 supervisor 发出的顺序 update：
 
 ```rust
@@ -62,4 +77,5 @@ tokio::pin!(supervisor);
 
 ## 测试
 
-crate 测试覆盖退避边界、空 topic、真实 Redis 投递、运行中断线恢复、恢复后继续投递，以及 backoff 期间 shutdown。
+crate 测试覆盖退避边界、空 topic、真实 Redis 投递、原始保留字符密码、运行中断线恢复、
+恢复后继续投递，以及 backoff 期间 shutdown。
