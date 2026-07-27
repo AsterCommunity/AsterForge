@@ -8,6 +8,7 @@ members = [
     "crates/aster_forge_alloc",
     "crates/aster_forge_cache",
     "crates/aster_forge_cloud_files/core",
+    "crates/aster_forge_cloud_files/windows",
     "crates/aster_forge_config",
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
@@ -92,3 +93,4 @@ tikv-jemalloc-ctl = "0.7"
 utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+windows = { version = "0.62.2", default-features = false }

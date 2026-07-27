@@ -119,3 +119,63 @@ jobs:
           cargo hack test --workspace --all-targets --no-default-features --no-fail-fast
           cargo hack test --workspace --all-targets --each-feature --no-fail-fast
           cargo test --workspace --all-targets --all-features --no-fail-fast
+
+  windows-cloud-files:
+    name: Windows Cloud Files
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-cloud-files-v1
+
+      - name: Test Windows Cloud Files
+        run: cargo test --locked -p aster_forge_cloud_files_windows --all-targets
+
+      - name: Clippy Windows Cloud Files
+        run: cargo clippy --locked -p aster_forge_cloud_files_windows --all-targets -- -D warnings
+
+  miri:
+    name: Miri (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: aster_forge_cloud_files_core
+            miri_flags: ''
+          - package: aster_forge_cloud_files_windows
+            miri_flags: -Zmiri-strict-provenance
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Keep the Miri baseline independent from the workspace MSRV toolchain. This pinned nightly
+      # is the strict-provenance baseline for the portable cloud-files contracts.
+      - name: Setup pinned Miri toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-12
+          components: miri, rust-src
+
+      - name: Cache Miri build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri-${{ matrix.package }}-v1
+
+      - name: Run Miri
+        env:
+          MIRIFLAGS: ${{ matrix.miri_flags }}
+        run: cargo +nightly-2026-04-12 miri test --locked -p ${{ matrix.package }}

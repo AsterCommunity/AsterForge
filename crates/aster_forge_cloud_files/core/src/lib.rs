@@ -8,8 +8,8 @@
 //! capability negotiation, read-only backend ports, durable checkpoint/mutation store contracts,
 //! runtime-neutral hydration work sharing with waiter-scoped cancellation, and revision-bound
 //! content-storage ownership with guarded eviction, recoverable provider-cache writes, immutable
-//! local generations, and resumable upload recovery. Native platform bindings follow after
-//! executable models prove their failure and recovery boundaries.
+//! local generations, and resumable upload recovery. Native platform validation has started in
+//! the sibling Windows crate while these product-neutral contracts remain platform-independent.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),

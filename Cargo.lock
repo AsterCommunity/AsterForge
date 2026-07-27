@@ -598,6 +598,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_cloud_files_windows"
+version = "0.1.0"
+dependencies = [
+ "aster_forge_cloud_files_core",
+ "async-trait",
+ "bytes",
+ "thiserror 2.0.19",
+ "tokio",
+ "windows",
+]
+
+[[package]]
 name = "aster_forge_config"
 version = "0.1.0"
 dependencies = [
