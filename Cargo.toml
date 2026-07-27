@@ -8,6 +8,7 @@ members = [
     "crates/aster_forge_alloc",
     "crates/aster_forge_cache",
     "crates/aster_forge_cloud_files/core",
+    "crates/aster_forge_cloud_files/linux",
     "crates/aster_forge_cloud_files/windows",
     "crates/aster_forge_config",
     "crates/aster_forge_crypto",
@@ -55,6 +56,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
 dashmap = "6"
 fs2 = "0.4"
+fuser = "0.18.0"
 futures = "0.3"
 governor = "0.10"
 hmac = "0.13"

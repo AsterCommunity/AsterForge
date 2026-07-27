@@ -1,0 +1,27 @@
+[package]
+name = "aster_forge_cloud_files_linux"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+aster_forge_cloud_files_core = { path = "../core" }
+bytes.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[[example]]
+name = "linux_memory_cloud_drive"
+path = "examples/memory_cloud_drive.rs"

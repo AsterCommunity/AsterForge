@@ -145,6 +145,31 @@ jobs:
       - name: Clippy Windows Cloud Files
         run: cargo clippy --locked -p aster_forge_cloud_files_windows --all-targets -- -D warnings
 
+  linux-cloud-files:
+    name: Linux Cloud Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-cloud-files-v1
+
+      - name: Test Linux Cloud Files
+        run: cargo test --locked -p aster_forge_cloud_files_linux --all-targets
+
+      - name: Clippy Linux Cloud Files
+        run: cargo clippy --locked -p aster_forge_cloud_files_linux --all-targets -- -D warnings
+
   miri:
     name: Miri (${{ matrix.package }})
     runs-on: ubuntu-latest
@@ -155,6 +180,8 @@ jobs:
         include:
           - package: aster_forge_cloud_files_core
             miri_flags: ''
+          - package: aster_forge_cloud_files_linux
+            miri_flags: -Zmiri-strict-provenance
           - package: aster_forge_cloud_files_windows
             miri_flags: -Zmiri-strict-provenance
     steps:
