@@ -39,7 +39,8 @@ pub use backend::{
     LsFuture, OpenOptions, ReadDirMeta,
 };
 pub use deltav::{
-    DavVersionTreeReportError, validate_version_tree_report, version_control_response,
+    DavVersionTreeReportError, validate_version_control_request, validate_version_tree_report,
+    version_control_request_error_response, version_control_response,
     version_tree_non_file_response, version_tree_report_error_response, version_tree_response,
 };
 pub use event::{DavEvent, DavEventOutcome, DavEventSink, DavOperation, NoopDavEventSink};

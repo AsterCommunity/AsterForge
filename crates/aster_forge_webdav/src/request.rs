@@ -99,11 +99,11 @@ impl DavMethod {
             Self::Options | Self::Mkcol | Self::Delete | Self::Copy | Self::Move | Self::Unlock => {
                 DavBodyPolicy::Empty
             }
-            Self::Propfind | Self::Proppatch | Self::Lock | Self::Report => {
+            Self::Propfind | Self::Proppatch | Self::Lock | Self::Report | Self::VersionControl => {
                 DavBodyPolicy::BoundedXml
             }
             Self::Put => DavBodyPolicy::Stream,
-            Self::Get | Self::Head | Self::VersionControl => DavBodyPolicy::Unused,
+            Self::Get | Self::Head => DavBodyPolicy::Unused,
         }
     }
 }

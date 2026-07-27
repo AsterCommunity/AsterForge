@@ -226,6 +226,7 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
     if !is_dav_element(root, "propfind") {
         return Err(DavXmlError::InvalidGrammar);
     }
+    require_element_content(root)?;
 
     let mut kind = None;
     let mut include = Vec::new();
@@ -235,11 +236,13 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
             if kind.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
             }
+            require_element_content(child)?;
             kind = Some(DavPropfindRequest::PropName);
         } else if is_dav_element(child, "allprop") {
             if kind.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
             }
+            require_element_content(child)?;
             kind = Some(DavPropfindRequest::AllProp {
                 include: Vec::new(),
             });
@@ -248,11 +251,13 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
                 return Err(DavXmlError::InvalidGrammar);
             }
             include_seen = true;
+            require_property_names(child)?;
             include.extend(child.child_elements().map(requested_property));
         } else if is_dav_element(child, "prop") {
             if kind.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
             }
+            require_property_names(child)?;
             kind = Some(DavPropfindRequest::Prop(
                 child.child_elements().map(requested_property).collect(),
             ));
@@ -273,6 +278,7 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
     if !is_dav_element(root, "propertyupdate") {
         return Err(DavXmlError::InvalidGrammar);
     }
+    require_element_content(root)?;
     let root_lang = xml_lang_value(root).map(str::to_owned);
     let mut patches = Vec::new();
     for action in root.child_elements() {
@@ -284,17 +290,16 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
             // RFC 4918 section 17: unknown extension elements are ignored with their subtree.
             continue;
         };
+        require_element_content(action)?;
         let action_lang = xml_lang_value(action).or(root_lang.as_deref());
-        let dav_children = action
-            .child_elements()
-            .filter(|child| child.namespace() == Some(DAV_NAMESPACE))
-            .collect::<Vec<_>>();
-        if !matches!(dav_children.as_slice(), [child] if is_dav_element(*child, "prop")) {
-            return Err(DavXmlError::InvalidGrammar);
-        }
-        let prop_container = dav_children[0];
+        let prop_container =
+            unique_dav_child(action, "prop")?.ok_or(DavXmlError::InvalidGrammar)?;
+        require_element_content(prop_container)?;
         let container_lang = xml_lang_value(prop_container).or(action_lang);
         for property in prop_container.child_elements() {
+            if !set {
+                require_property_name(property)?;
+            }
             let mut element = element_from_forge(property);
             let inherited_lang = xml_lang_value(property).or(container_lang);
             if let Some(lang) = inherited_lang.filter(|lang| !lang.is_empty()) {
@@ -327,6 +332,7 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
     if !is_dav_element(root, "lockinfo") {
         return Err(DavXmlError::InvalidGrammar);
     }
+    require_element_content(root)?;
     let mut shared = None;
     let mut write_lock = false;
     let mut owner = None;
@@ -335,26 +341,23 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
             if shared.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
             }
-            let children = child
-                .child_elements()
-                .filter(|scope| scope.namespace() == Some(DAV_NAMESPACE))
-                .collect::<Vec<_>>();
-            shared = match children.as_slice() {
-                [scope] if is_dav_element(*scope, "exclusive") => Some(false),
-                [scope] if is_dav_element(*scope, "shared") => Some(true),
-                _ => return Err(DavXmlError::InvalidGrammar),
+            require_element_content(child)?;
+            let exclusive_scope = unique_dav_child(child, "exclusive")?;
+            let shared_scope = unique_dav_child(child, "shared")?;
+            let (selected_scope, is_shared) = match (exclusive_scope, shared_scope) {
+                (Some(scope), None) => (scope, false),
+                (None, Some(scope)) => (scope, true),
+                (Some(_), Some(_)) | (None, None) => return Err(DavXmlError::InvalidGrammar),
             };
+            require_element_content(selected_scope)?;
+            shared = Some(is_shared);
         } else if is_dav_element(child, "locktype") {
             if write_lock {
                 return Err(DavXmlError::InvalidGrammar);
             }
-            let children = child
-                .child_elements()
-                .filter(|kind| kind.namespace() == Some(DAV_NAMESPACE))
-                .collect::<Vec<_>>();
-            if !matches!(children.as_slice(), [kind] if is_dav_element(*kind, "write")) {
-                return Err(DavXmlError::InvalidGrammar);
-            }
+            require_element_content(child)?;
+            let write = unique_dav_child(child, "write")?.ok_or(DavXmlError::InvalidGrammar)?;
+            require_element_content(write)?;
             write_lock = true;
         } else if is_dav_element(child, "owner") {
             if owner.is_some() {
@@ -375,6 +378,29 @@ pub fn parse_report_root(body: &[u8]) -> Result<DavRequestedProperty, DavXmlErro
     Ok(requested_property(document.root()))
 }
 
+pub(crate) fn parse_report_request(body: &[u8]) -> Result<DavRequestedProperty, DavXmlError> {
+    let document = parse_document(body)?;
+    let root = document.root();
+    if is_dav_element(root, "version-tree") {
+        validate_version_tree_prop(root)?;
+    }
+    Ok(requested_property(root))
+}
+
+/// Validates an optional RFC 3253 VERSION-CONTROL request body.
+pub(crate) fn parse_version_control_request(body: &[u8]) -> Result<(), DavXmlError> {
+    if body.is_empty() {
+        return Ok(());
+    }
+    let document = parse_document(body)?;
+    if !is_dav_element(document.root(), "version-control") {
+        return Err(DavXmlError::InvalidGrammar);
+    }
+    // RFC 3253 section 3.5 declares DAV:version-control as ANY. The complete document has
+    // already passed the shared WebDAV safety policy, so extensions and mixed content are kept.
+    Ok(())
+}
+
 fn parse_element(bytes: &[u8]) -> Result<DavXmlElement, DavXmlError> {
     let document = parse_document(bytes)?;
     Ok(element_from_forge(document.root()))
@@ -389,6 +415,56 @@ fn parse_document(bytes: &[u8]) -> Result<BorrowedDocument<'_>, DavXmlError> {
 
 fn is_dav_element<S: AsRef<[u8]>>(element: ElementRef<'_, S>, local_name: &str) -> bool {
     element.name() == local_name && element.namespace() == Some(DAV_NAMESPACE)
+}
+
+fn validate_version_tree_prop<S: AsRef<[u8]>>(root: ElementRef<'_, S>) -> Result<(), DavXmlError> {
+    require_element_content(root)?;
+    if let Some(prop) = unique_dav_child(root, "prop")? {
+        require_property_names(prop)?;
+    }
+    Ok(())
+}
+
+fn unique_dav_child<'document, S: AsRef<[u8]>>(
+    parent: ElementRef<'document, S>,
+    local_name: &str,
+) -> Result<Option<ElementRef<'document, S>>, DavXmlError> {
+    let mut selected = None;
+    for child in parent.child_elements() {
+        if is_dav_element(child, local_name) {
+            if selected.is_some() {
+                return Err(DavXmlError::InvalidGrammar);
+            }
+            selected = Some(child);
+        }
+    }
+    Ok(selected)
+}
+
+fn require_element_content<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> Result<(), DavXmlError> {
+    if element
+        .children()
+        .any(|child| matches!(child, NodeRef::Text(_) | NodeRef::CData(_)))
+    {
+        Err(DavXmlError::InvalidGrammar)
+    } else {
+        Ok(())
+    }
+}
+
+fn require_property_names<S: AsRef<[u8]>>(container: ElementRef<'_, S>) -> Result<(), DavXmlError> {
+    require_element_content(container)?;
+    for property in container.child_elements() {
+        require_property_name(property)?;
+    }
+    Ok(())
+}
+
+fn require_property_name<S: AsRef<[u8]>>(property: ElementRef<'_, S>) -> Result<(), DavXmlError> {
+    // In a property-name context every child element is unrecognized and RFC 4918 section 17
+    // removes its complete subtree from semantic processing. Direct character data would still
+    // be a property value, which PROPFIND/REPORT selectors and PROPPATCH remove do not permit.
+    require_element_content(property)
 }
 
 fn requested_property<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavRequestedProperty {

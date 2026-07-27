@@ -180,11 +180,12 @@ fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_sep
         DavMethod::Proppatch,
         DavMethod::Lock,
         DavMethod::Report,
+        DavMethod::VersionControl,
     ] {
         assert_eq!(method.body_policy(), DavBodyPolicy::BoundedXml);
     }
     assert_eq!(DavMethod::Put.body_policy(), DavBodyPolicy::Stream);
-    for method in [DavMethod::Get, DavMethod::Head, DavMethod::VersionControl] {
+    for method in [DavMethod::Get, DavMethod::Head] {
         assert_eq!(method.body_policy(), DavBodyPolicy::Unused);
     }
 }

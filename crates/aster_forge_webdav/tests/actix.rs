@@ -83,12 +83,19 @@ async fn bounded_xml_body_accepts_the_exact_limit_and_rejects_one_byte_over() {
 
 #[actix_web::test]
 async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves_streams() {
-    let mut xml = payload_from_bytes(Bytes::from_static(b"<D:propfind/>")).await;
-    let prepared =
-        aster_forge_webdav::actix::prepare_request_body(DavMethod::Propfind, &mut xml, 64)
+    for (method, body) in [
+        (DavMethod::Propfind, b"<D:propfind/>".as_slice()),
+        (
+            DavMethod::VersionControl,
+            b"<D:version-control/>".as_slice(),
+        ),
+    ] {
+        let mut xml = payload_from_bytes(Bytes::copy_from_slice(body)).await;
+        let prepared = aster_forge_webdav::actix::prepare_request_body(method, &mut xml, 64)
             .await
-            .expect("PROPFIND body");
-    assert_eq!(prepared.xml(), b"<D:propfind/>");
+            .expect("bounded XML body");
+        assert_eq!(prepared.xml(), body);
+    }
 
     let mut forbidden = payload_from_bytes(Bytes::from_static(b"x")).await;
     assert!(matches!(

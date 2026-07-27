@@ -30,7 +30,7 @@ Forge 负责：
 - PUT 的 `If-Match` / `If-None-Match` 前置条件、`create` / `create_new` 选择、`X-Expected-Entity-Length` 优先级、collection target 405 拒绝和 201/204 成功响应选择。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
 - `DavEvent::completed` 从 request head 生成脱敏完成事件，不携带 `If` token、凭据或正文。
-- PROPFIND、PROPPATCH、LOCK、REPORT 的 XML 安全校验、QName 语法和未知扩展处理。
+- PROPFIND、PROPPATCH、LOCK、REPORT、VERSION-CONTROL 的 XML 安全校验、QName 语法和未知扩展处理。
 - PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
 - PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
 - DeltaV `DAV:version-tree` REPORT 选择、file-only/unsupported mapping、version multistatus 和 VERSION-CONTROL response selection。
@@ -43,6 +43,23 @@ Forge 负责：
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
+
+## XML 请求语义
+
+所有受信任边界外的 WebDAV XML 先通过同一套大小、深度、DTD/ENTITY 和完整文档校验，再进入方法语义。语义层按 [RFC 4918 Section 17](https://www.rfc-editor.org/rfc/rfc4918.html#section-17) 处理扩展：只识别当前上下文规定的完整 QName；其他元素和属性连同未知元素的完整子树按不存在处理。未知元素即使位于 `DAV:` namespace 也不会因为 namespace 相同而自动成为协议控制，已知名称嵌套在未知子树中也不会被激活。
+
+| 方法 | HTTP body | 根 QName | 已知直接控制 | 顺序与重复 |
+| --- | --- | --- | --- | --- |
+| PROPFIND | 缺省表示 `allprop`；空白或空根不等于缺省 | `DAV:propfind` | `propname`，`allprop` + 可选 `include`，或 `prop` | 控制顺序无关；selector 互斥，`include` 只能出现一次且必须与 `allprop` 组合 |
+| PROPPATCH | 必须存在 | `DAV:propertyupdate` | 有序的 `set` / `remove`，每个 action 恰好一个 `DAV:prop` | action 按文档顺序保留；action 内重复 `prop` 拒绝；至少需要一个有效 property 操作 |
+| LOCK acquire | 必须存在 | `DAV:lockinfo` | 一个 `lockscope`、一个 `locktype`、可选一个 `owner` | 控制顺序无关；重复或同时出现多个已知识别值时拒绝 |
+| LOCK refresh | 必须缺省 | 无 | token 来自 `If` header | body presence 由 LOCK planner 区分 acquire 与 refresh |
+| REPORT `version-tree` | 必须存在 | `DAV:version-tree` | 至多一个直接 `DAV:prop` | 其他元素忽略；重复 `DAV:prop` 拒绝 |
+| VERSION-CONTROL | 可缺省；存在时必须是 XML | `DAV:version-control` | RFC 3253 定义为 `ANY` | 安全、完整且根 QName 正确后保留扩展内容 |
+
+结构化协议容器不接受额外字符数据。property-name 上下文只把元素 QName 作为属性名；直接字符数据会被视为非法 property value，而未知子元素仍按 RFC 4918 的完整子树忽略规则处理。`PROPPATCH set` 的 property value 和 LOCK `owner` 属于需要保留的内容，不应用这条 property-name 限制。
+
+DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.5) 和 [Section 3.7](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.7) 为准。`VERSION-CONTROL` 使用 bounded XML body policy，因此 transport adapter 不会绕过产品提供的 XML 请求体上限。
 
 产品负责：
 

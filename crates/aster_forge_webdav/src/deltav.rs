@@ -3,9 +3,10 @@
 use http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
 
+use crate::xml::{parse_report_request, parse_version_control_request};
 use crate::{
     DavErrorCondition, DavResourceKind, DavResponse, DavVersionXml, DavXmlError, dav_error_element,
-    dav_version_multistatus_element, parse_report_root,
+    dav_version_multistatus_element,
 };
 
 /// Failure while selecting the supported DeltaV REPORT grammar.
@@ -21,7 +22,7 @@ pub enum DavVersionTreeReportError {
 
 /// Validates that a REPORT request selects `DAV:version-tree`.
 pub fn validate_version_tree_report(body: &[u8]) -> Result<(), DavVersionTreeReportError> {
-    let root = parse_report_root(body)?;
+    let root = parse_report_request(body)?;
     if root.name == "version-tree" && root.namespace.as_deref() == Some("DAV:") {
         Ok(())
     } else {
@@ -29,27 +30,29 @@ pub fn validate_version_tree_report(body: &[u8]) -> Result<(), DavVersionTreeRep
     }
 }
 
+/// Validates the optional RFC 3253 `DAV:version-control` request body.
+pub fn validate_version_control_request(body: &[u8]) -> Result<(), DavXmlError> {
+    parse_version_control_request(body)
+}
+
 /// Builds the protocol response for a REPORT grammar selection failure.
 pub fn version_tree_report_error_response(
     error: &DavVersionTreeReportError,
 ) -> Result<DavResponse, DavXmlError> {
     match error {
-        DavVersionTreeReportError::Xml(DavXmlError::ExternalEntity) => xml_response(
-            StatusCode::FORBIDDEN,
-            dav_error_element(&DavErrorCondition::NoExternalEntities),
-        ),
-        DavVersionTreeReportError::Xml(DavXmlError::TooLarge) => Ok(text_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "WebDAV XML body too large",
-        )),
-        DavVersionTreeReportError::Xml(
-            DavXmlError::TooDeep | DavXmlError::Malformed | DavXmlError::InvalidGrammar,
-        ) => Ok(text_response(StatusCode::BAD_REQUEST, "Invalid XML body")),
+        DavVersionTreeReportError::Xml(error) => xml_request_error_response(*error),
         DavVersionTreeReportError::Unsupported { name } => Ok(text_response(
             StatusCode::NOT_IMPLEMENTED,
             format!("Unsupported REPORT type: {name}"),
         )),
     }
+}
+
+/// Builds the protocol response for an invalid VERSION-CONTROL XML request body.
+pub fn version_control_request_error_response(
+    error: DavXmlError,
+) -> Result<DavResponse, DavXmlError> {
+    xml_request_error_response(error)
 }
 
 /// Builds the file-only conflict response for a version-tree REPORT.
@@ -93,6 +96,22 @@ fn text_response(status: StatusCode, body: impl Into<String>) -> DavResponse {
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     response
+}
+
+fn xml_request_error_response(error: DavXmlError) -> Result<DavResponse, DavXmlError> {
+    match error {
+        DavXmlError::ExternalEntity => xml_response(
+            StatusCode::FORBIDDEN,
+            dav_error_element(&DavErrorCondition::NoExternalEntities),
+        ),
+        DavXmlError::TooLarge => Ok(text_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "WebDAV XML body too large",
+        )),
+        DavXmlError::TooDeep | DavXmlError::Malformed | DavXmlError::InvalidGrammar => {
+            Ok(text_response(StatusCode::BAD_REQUEST, "Invalid XML body"))
+        }
+    }
 }
 
 fn xml_response(
