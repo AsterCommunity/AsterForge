@@ -9,6 +9,7 @@ members = [
     "crates/aster_forge_cache",
     "crates/aster_forge_cloud_files/core",
     "crates/aster_forge_cloud_files/linux",
+    "crates/aster_forge_cloud_files/macos_bridge",
     "crates/aster_forge_cloud_files/windows",
     "crates/aster_forge_config",
     "crates/aster_forge_crypto",

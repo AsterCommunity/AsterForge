@@ -1,0 +1,7 @@
+/build/
+/generated/
+/DerivedData/
+/LocalSigning.cmake
+/system-test-*.json
+**/*.xcuserstate
+**/xcuserdata/

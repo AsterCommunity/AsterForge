@@ -1,0 +1,7 @@
+# These identifiers must belong to the selected Apple development team. The
+# App Group must be enabled for both the host and File Provider extension.
+set(ASTER_FORGE_DEVELOPMENT_TEAM "TEAM_ID")
+set(ASTER_FORGE_HOST_BUNDLE_ID "com.example.aster-forge-cloud-files")
+set(ASTER_FORGE_EXTENSION_BUNDLE_ID "com.example.aster-forge-cloud-files.file-provider")
+set(ASTER_FORGE_APP_GROUP_ID "group.com.example.aster-forge-cloud-files")
+set(ASTER_FORGE_DOMAIN_ID "aster-forge-memory-cloud")

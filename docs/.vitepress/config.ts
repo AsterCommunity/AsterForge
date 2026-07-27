@@ -34,6 +34,7 @@ const cratePages = [
   ["Cache", "/crates/aster_forge_cache"],
   ["Cloud files core", "/crates/aster_forge_cloud_files_core"],
   ["Cloud files Linux", "/crates/aster_forge_cloud_files_linux"],
+  ["Cloud files macOS bridge", "/crates/aster_forge_cloud_files_macos_bridge"],
   ["Cloud files Windows", "/crates/aster_forge_cloud_files_windows"],
   ["Config", "/crates/aster_forge_config"],
   ["Crypto", "/crates/aster_forge_crypto"],

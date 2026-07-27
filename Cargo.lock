@@ -611,6 +611,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_cloud_files_macos_bridge"
+version = "0.1.0"
+dependencies = [
+ "aster_forge_cloud_files_core",
+ "async-trait",
+ "base64 0.23.0",
+ "bytes",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "aster_forge_cloud_files_windows"
 version = "0.1.0"
 dependencies = [
