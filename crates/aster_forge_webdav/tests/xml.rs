@@ -1,8 +1,9 @@
 use std::io::{self, Cursor, Read};
 
 use aster_forge_webdav::{
-    DavPropfindRequest, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
-    parse_propfind_request, parse_proppatch_request, parse_report_root,
+    DavPropfindRequest, DavVersionTreeReportError, DavXmlElement, DavXmlError, DavXmlNode,
+    parse_lock_request, parse_propfind_request, parse_proppatch_request, parse_report_root,
+    validate_version_control_request, validate_version_tree_report,
 };
 use aster_forge_xml::{DEFAULT_XML_MAX_DEPTH, XmlSafetyPolicy};
 
@@ -11,6 +12,183 @@ struct FailingReader;
 impl Read for FailingReader {
     fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::other("fixture read failure"))
+    }
+}
+
+type RequestParser = fn(&[u8]) -> Result<(), DavXmlError>;
+
+fn propfind_parser(body: &[u8]) -> Result<(), DavXmlError> {
+    parse_propfind_request(body).map(|_| ())
+}
+
+fn proppatch_parser(body: &[u8]) -> Result<(), DavXmlError> {
+    parse_proppatch_request(body).map(|_| ())
+}
+
+fn lock_parser(body: &[u8]) -> Result<(), DavXmlError> {
+    parse_lock_request(body).map(|_| ())
+}
+
+fn report_parser(body: &[u8]) -> Result<(), DavXmlError> {
+    validate_version_tree_report(body).map_err(|error| match error {
+        DavVersionTreeReportError::Xml(error) => error,
+        DavVersionTreeReportError::Unsupported { .. } => DavXmlError::InvalidGrammar,
+    })
+}
+
+fn version_control_parser(body: &[u8]) -> Result<(), DavXmlError> {
+    validate_version_control_request(body)
+}
+
+const XML_METHOD_PARSERS: [(&str, RequestParser); 5] = [
+    ("PROPFIND", propfind_parser),
+    ("PROPPATCH", proppatch_parser),
+    ("LOCK", lock_parser),
+    ("REPORT", report_parser),
+    ("VERSION-CONTROL", version_control_parser),
+];
+
+fn ignored_subtree(total_document_depth: usize) -> String {
+    assert!(total_document_depth >= 2);
+    let mut subtree = String::from("<X:ignored>");
+    for _ in 2..total_document_depth {
+        subtree.push_str("<X:nested>");
+    }
+    for _ in 2..total_document_depth {
+        subtree.push_str("</X:nested>");
+    }
+    subtree.push_str("</X:ignored>");
+    subtree
+}
+
+fn request_with_ignored_subtree(method: &str, subtree: &str) -> String {
+    match method {
+        "PROPFIND" => format!(
+            r#"<D:propfind xmlns:D="DAV:" xmlns:X="urn:x">{subtree}<D:allprop/></D:propfind>"#
+        ),
+        "PROPPATCH" => format!(
+            r#"<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:x">{subtree}<D:set><D:prop><X:active/></D:prop></D:set></D:propertyupdate>"#
+        ),
+        "LOCK" => format!(
+            r#"<D:lockinfo xmlns:D="DAV:" xmlns:X="urn:x">{subtree}<D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#
+        ),
+        "REPORT" => format!(
+            r#"<D:version-tree xmlns:D="DAV:" xmlns:X="urn:x">{subtree}<D:prop><D:getetag/></D:prop></D:version-tree>"#
+        ),
+        "VERSION-CONTROL" => format!(
+            r#"<D:version-control xmlns:D="DAV:" xmlns:X="urn:x">{subtree}</D:version-control>"#
+        ),
+        _ => panic!("complete XML method fixture table"),
+    }
+}
+
+fn request_with_ignored_payload(method: &str, payload_bytes: usize) -> Vec<u8> {
+    let marker = "PAYLOAD";
+    let template =
+        request_with_ignored_subtree(method, &format!("<X:ignored>{marker}</X:ignored>"));
+    let marker_start = template
+        .find(marker)
+        .expect("ignored payload marker should exist");
+    let mut request = Vec::with_capacity(template.len() - marker.len() + payload_bytes);
+    request.extend_from_slice(&template.as_bytes()[..marker_start]);
+    request.resize(request.len() + payload_bytes, b'x');
+    request.extend_from_slice(&template.as_bytes()[marker_start + marker.len()..]);
+    request
+}
+
+#[test]
+fn xml_method_absent_empty_and_whitespace_body_semantics_are_explicit() {
+    assert_eq!(
+        parse_propfind_request(b"").unwrap(),
+        DavPropfindRequest::AllProp {
+            include: Vec::new()
+        }
+    );
+    validate_version_control_request(b"").expect("VERSION-CONTROL body is optional");
+
+    for (method, parser) in XML_METHOD_PARSERS {
+        if method != "PROPFIND" && method != "VERSION-CONTROL" {
+            assert_eq!(parser(b""), Err(DavXmlError::Malformed), "{method}");
+        }
+        assert_eq!(
+            parser(b" \r\n\t"),
+            Err(DavXmlError::Malformed),
+            "whitespace is a present, malformed XML body for {method}"
+        );
+    }
+
+    assert_eq!(
+        parse_propfind_request(br#"<D:propfind xmlns:D="DAV:"/>"#),
+        Err(DavXmlError::InvalidGrammar)
+    );
+    validate_version_control_request(br#"<D:version-control xmlns:D="DAV:"/>"#)
+        .expect("present empty VERSION-CONTROL root is valid");
+}
+
+#[test]
+fn every_xml_method_applies_safety_before_ignored_subtree_semantics() {
+    for (method, parser) in XML_METHOD_PARSERS {
+        let exact = request_with_ignored_subtree(method, &ignored_subtree(DEFAULT_XML_MAX_DEPTH));
+        parser(exact.as_bytes())
+            .unwrap_or_else(|error| panic!("{method} should accept exact max depth: {error}"));
+
+        let over =
+            request_with_ignored_subtree(method, &ignored_subtree(DEFAULT_XML_MAX_DEPTH + 1));
+        assert_eq!(
+            parser(over.as_bytes()),
+            Err(DavXmlError::TooDeep),
+            "{method} must reject one level over the shared depth limit"
+        );
+
+        let entity_subtree = "<X:ignored>&external;</X:ignored>";
+        let with_entity = format!(
+            "<!DOCTYPE root [<!ENTITY external SYSTEM \"file:///TARGET\">]>{}",
+            request_with_ignored_subtree(method, entity_subtree)
+        );
+        assert_eq!(
+            parser(with_entity.as_bytes()),
+            Err(DavXmlError::ExternalEntity),
+            "{method} must validate ignored subtrees before semantic filtering"
+        );
+
+        let valid = request_with_ignored_subtree(method, "<X:ignored/>");
+        let malformed = &valid.as_bytes()[..valid.len() - 1];
+        assert_eq!(
+            parser(malformed),
+            Err(DavXmlError::Malformed),
+            "{method} must reject truncated documents"
+        );
+
+        let multiple_roots = format!(r#"{valid}<X:second xmlns:X="urn:x"/>"#);
+        assert_eq!(
+            parser(multiple_roots.as_bytes()),
+            Err(DavXmlError::Malformed),
+            "{method} must reject multiple document roots"
+        );
+    }
+}
+
+#[test]
+fn every_xml_method_accepts_exact_input_limit_and_rejects_one_byte_over() {
+    let maximum = XmlSafetyPolicy::untrusted().max_input_bytes;
+    for (method, parser) in XML_METHOD_PARSERS {
+        let empty = request_with_ignored_payload(method, 0);
+        let payload_bytes = maximum
+            .checked_sub(empty.len())
+            .expect("fixture shell should fit below the XML input limit");
+        let exact = request_with_ignored_payload(method, payload_bytes);
+        assert_eq!(exact.len(), maximum, "{method}");
+        parser(&exact).unwrap_or_else(|error| {
+            panic!("{method} should accept the exact input limit: {error}")
+        });
+
+        let over = request_with_ignored_payload(method, payload_bytes + 1);
+        assert_eq!(over.len(), maximum + 1, "{method}");
+        assert_eq!(
+            parser(&over),
+            Err(DavXmlError::TooLarge),
+            "{method} must reject one byte over the shared input limit"
+        );
     }
 }
 
@@ -65,6 +243,28 @@ fn propfind_unknown_attributes_children_and_subtrees_are_ignored() {
             include: Vec::new()
         }
     );
+}
+
+#[test]
+fn propfind_rejects_character_data_and_property_values() {
+    for xml in [
+        br#"<D:propfind xmlns:D="DAV:">text<D:allprop/></D:propfind>"#.as_slice(),
+        br#"<D:propfind xmlns:D="DAV:"><D:allprop>text</D:allprop></D:propfind>"#,
+        br#"<D:propfind xmlns:D="DAV:"><D:prop><D:getetag>value</D:getetag></D:prop></D:propfind>"#,
+    ] {
+        assert_eq!(
+            parse_propfind_request(xml),
+            Err(DavXmlError::InvalidGrammar)
+        );
+    }
+
+    parse_propfind_request(
+        br#"<D:propfind xmlns:D="DAV:">
+              <D:include><D:getetag><D:ignored>value</D:ignored></D:getetag></D:include>
+              <D:allprop/>
+            </D:propfind>"#,
+    )
+    .expect("unrecognized property-name children should be ignored with their subtrees");
 }
 
 #[test]
@@ -206,7 +406,11 @@ fn proppatch_ignores_unknown_action_subtrees_but_rejects_known_grammar_errors() 
     let patches = parse_proppatch_request(
         br#"<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:x">
               <X:set><D:prop><X:not-active/></D:prop></X:set>
-              <D:set><X:ignored><D:prop/></X:ignored><D:prop><X:active/></D:prop></D:set>
+              <D:set>
+                <X:ignored><D:prop/></X:ignored>
+                <D:future><D:prop/></D:future>
+                <D:prop><X:active/></D:prop>
+              </D:set>
             </D:propertyupdate>"#,
     )
     .unwrap();
@@ -218,12 +422,43 @@ fn proppatch_ignores_unknown_action_subtrees_but_rejects_known_grammar_errors() 
         br#"<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop/><D:prop/></D:set></D:propertyupdate>"#,
         br#"<D:propertyupdate xmlns:D="DAV:"/>"#,
         br#"<X:propertyupdate xmlns:X="urn:x"><X:set><X:prop><X:a/></X:prop></X:set></X:propertyupdate>"#,
+        br#"<D:propertyupdate xmlns:D="DAV:">text<D:set><D:prop><D:a/></D:prop></D:set></D:propertyupdate>"#,
+        br#"<D:propertyupdate xmlns:D="DAV:"><D:remove><D:prop><D:a>value</D:a></D:prop></D:remove></D:propertyupdate>"#,
     ] {
         assert_eq!(
             parse_proppatch_request(xml),
             Err(DavXmlError::InvalidGrammar)
         );
     }
+
+    parse_proppatch_request(
+        br#"<D:propertyupdate xmlns:D="DAV:">
+              <D:remove><D:prop><D:a><D:ignored>value</D:ignored></D:a></D:prop></D:remove>
+            </D:propertyupdate>"#,
+    )
+    .expect("unrecognized remove-property children should be ignored with their subtrees");
+}
+
+#[test]
+fn proppatch_preserves_known_action_order_across_extensions() {
+    let patches = parse_proppatch_request(
+        br#"<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:x">
+              <D:remove><D:prop><X:first/></D:prop></D:remove>
+              <D:future><D:set><D:prop><X:not-active/></D:prop></D:set></D:future>
+              <D:set><D:prop><X:second>value</X:second></D:prop></D:set>
+              <X:future/>
+              <D:remove><D:prop><X:third/></D:prop></D:remove>
+            </D:propertyupdate>"#,
+    )
+    .expect("valid ordered PROPPATCH");
+    let operations = patches
+        .iter()
+        .map(|patch| (patch.set, patch.property.name.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        operations,
+        vec![(false, "first"), (true, "second"), (false, "third")]
+    );
 }
 
 #[test]
@@ -232,8 +467,8 @@ fn lock_parses_exclusive_shared_owner_and_extensions() {
         let xml = format!(
             r#"<D:lockinfo xmlns:D="DAV:" xmlns:X="urn:x">
                   <X:before><D:lockscope><D:shared/></D:lockscope></X:before>
-                  <D:lockscope><X:ignored/><D:{scope}/></D:lockscope>
-                  <D:locktype><X:ignored/><D:write/></D:locktype>
+                  <D:lockscope><X:ignored/><D:future/><D:{scope}/></D:lockscope>
+                  <D:locktype><X:ignored/><D:future/><D:write/></D:locktype>
                   <D:owner><D:href>用户 &amp; owner</D:href></D:owner>
                 </D:lockinfo>"#
         );
@@ -257,11 +492,32 @@ fn lock_rejects_qname_collisions_missing_controls_and_duplicates() {
         br#"<X:lockinfo xmlns:X="urn:x"><X:lockscope><X:exclusive/></X:lockscope><X:locktype><X:write/></X:locktype></X:lockinfo>"#.as_slice(),
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/><D:shared/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
-        br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/><D:other/></D:locktype></D:lockinfo>"#,
+        br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/><D:write/></D:locktype></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:lockscope><D:shared/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner/><D:owner/></D:lockinfo>"#,
+        br#"<D:lockinfo xmlns:D="DAV:">text<D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
+        br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive>text</D:exclusive></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
     ] {
         assert_eq!(parse_lock_request(xml), Err(DavXmlError::InvalidGrammar));
+    }
+}
+
+#[test]
+fn lock_known_control_order_is_irrelevant_but_nested_controls_stay_inactive() {
+    for body in [
+        br#"<D:lockinfo xmlns:D="DAV:" xmlns:X="urn:x">
+              <D:owner><D:href>owner</D:href></D:owner>
+              <D:locktype><D:write/></D:locktype>
+              <X:ignored><D:lockscope><D:shared/></D:lockscope></X:ignored>
+              <D:lockscope><D:exclusive/></D:lockscope>
+            </D:lockinfo>"#
+            .as_slice(),
+        br#"<D:lockinfo xmlns:D="DAV:">
+              <D:locktype><D:future/><D:write/></D:locktype>
+              <D:lockscope><D:future/><D:shared/></D:lockscope>
+            </D:lockinfo>"#,
+    ] {
+        parse_lock_request(body).expect("recognized LOCK controls may appear in either order");
     }
 }
 
