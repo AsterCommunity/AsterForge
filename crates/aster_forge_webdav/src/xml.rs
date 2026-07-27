@@ -342,24 +342,15 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
                 return Err(DavXmlError::InvalidGrammar);
             }
             require_element_content(child)?;
-            let mut selected_scope = None;
-            for scope in child.child_elements() {
-                let value = if is_dav_element(scope, "exclusive") {
-                    Some(false)
-                } else if is_dav_element(scope, "shared") {
-                    Some(true)
-                } else {
-                    None
-                };
-                if let Some(value) = value {
-                    if selected_scope.is_some() {
-                        return Err(DavXmlError::InvalidGrammar);
-                    }
-                    require_element_content(scope)?;
-                    selected_scope = Some(value);
-                }
-            }
-            shared = Some(selected_scope.ok_or(DavXmlError::InvalidGrammar)?);
+            let exclusive_scope = unique_dav_child(child, "exclusive")?;
+            let shared_scope = unique_dav_child(child, "shared")?;
+            let (selected_scope, is_shared) = match (exclusive_scope, shared_scope) {
+                (Some(scope), None) => (scope, false),
+                (None, Some(scope)) => (scope, true),
+                (Some(_), Some(_)) | (None, None) => return Err(DavXmlError::InvalidGrammar),
+            };
+            require_element_content(selected_scope)?;
+            shared = Some(is_shared);
         } else if is_dav_element(child, "locktype") {
             if write_lock {
                 return Err(DavXmlError::InvalidGrammar);
@@ -391,7 +382,7 @@ pub(crate) fn parse_report_request(body: &[u8]) -> Result<DavRequestedProperty, 
     let document = parse_document(body)?;
     let root = document.root();
     if is_dav_element(root, "version-tree") {
-        validate_version_tree_report(root)?;
+        validate_version_tree_prop(root)?;
     }
     Ok(requested_property(root))
 }
@@ -426,9 +417,7 @@ fn is_dav_element<S: AsRef<[u8]>>(element: ElementRef<'_, S>, local_name: &str) 
     element.name() == local_name && element.namespace() == Some(DAV_NAMESPACE)
 }
 
-fn validate_version_tree_report<S: AsRef<[u8]>>(
-    root: ElementRef<'_, S>,
-) -> Result<(), DavXmlError> {
+fn validate_version_tree_prop<S: AsRef<[u8]>>(root: ElementRef<'_, S>) -> Result<(), DavXmlError> {
     require_element_content(root)?;
     if let Some(prop) = unique_dav_child(root, "prop")? {
         require_property_names(prop)?;

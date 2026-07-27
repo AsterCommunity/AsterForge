@@ -491,7 +491,9 @@ fn lock_rejects_qname_collisions_missing_controls_and_duplicates() {
     for xml in [
         br#"<X:lockinfo xmlns:X="urn:x"><X:lockscope><X:exclusive/></X:lockscope><X:locktype><X:write/></X:locktype></X:lockinfo>"#.as_slice(),
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope></D:lockinfo>"#,
+        br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:future/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/><D:shared/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
+        br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/><D:write/></D:locktype></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:lockscope><D:shared/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#,
         br#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner/><D:owner/></D:lockinfo>"#,
