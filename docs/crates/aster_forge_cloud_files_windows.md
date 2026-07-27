@@ -1,23 +1,8 @@
 # aster_forge_cloud_files_windows
 
-`aster_forge_cloud_files_windows` 是 Windows Cloud Files API（CFAPI）的产品无关绑定层。它把
-`aster_forge_cloud_files_core` 的稳定 `CloudItemKey` 映射成 Windows `FileIdentity`，验证
-CFAPI 的 native 限制，并将 owned placeholder request 转换为
-`CF_PLACEHOLDER_CREATE_INFO` 后调用 `CfCreatePlaceholders`。它也提供 owned sync-root
-registration model，将稳定 provider/scope identity 和经过平台版本验证的 policy 转换为
-`CF_SYNC_REGISTRATION`、`CF_SYNC_POLICIES` 并调用 `CfRegisterSyncRoot`。
+`aster_forge_cloud_files_windows` 是 Windows Cloud Files API（CFAPI）的产品无关绑定层。它把 `aster_forge_cloud_files_core` 的稳定 `CloudItemKey` 映射成 Windows `FileIdentity`，验证 CFAPI 的 native 限制，并将 owned placeholder request 转换为 `CF_PLACEHOLDER_CREATE_INFO` 后调用 `CfCreatePlaceholders`。它也提供 owned sync-root registration model，将稳定 provider/scope identity 和经过平台版本验证的 policy 转换为 `CF_SYNC_REGISTRATION`、`CF_SYNC_POLICIES` 并调用 `CfRegisterSyncRoot`。
 
-当前 crate 已完成 Windows Phase 2 PoC：identity/placeholder、persistent sync-root registration、
-active callback connection/session lifecycle、hydration/restart、active waiter cancellation、watchdog/progress、
-validate/dehydrate/delete/rename acknowledgement、completion observation 和 native eviction/pin/in-sync effect。Windows target 已直接调用 `CfConnectSyncRoot` /
-`CfDisconnectSyncRoot`，注册 `FETCH_DATA` 与 `CANCEL_FETCH_DATA` callback，复制 owned snapshot 并通过
-调用方提供的 bounded `SyncSender` 执行非阻塞 ingress。队列拒绝、closing 和未被 worker 显式终结的
-fetch request 都有结构化失败完成路径；worker 也可以把 stable item identity 对应的 product-owned
-`ContentRevision` 交给 core `HydrationCoordinator`，并以 owned bytes 调用成功 `TRANSFER_DATA`。
-`CANCEL_FETCH_DATA` 会先直接匹配 registry 中的 core waiter，再把 owned snapshot 作为可选观察事件送入
-bounded queue；host-polled 60 秒 watchdog、monotonic progress reporting 和 ingress queue metrics 已完成。
-`FETCH_DATA_FLAG_RECOVERY` 会显式暴露给产品 adapter，revision 失效时可用 `RESTART_HYDRATION` 更新
-metadata/identity 并让 CFAPI 重发 hydration callback。
+当前 crate 已完成 Windows Phase 2 PoC：identity/placeholder、persistent sync-root registration、active callback connection/session lifecycle、hydration/restart、active waiter cancellation、watchdog/progress、validate/dehydrate/delete/rename acknowledgement、completion observation 和 native eviction/pin/in-sync effect。Windows target 已直接调用 `CfConnectSyncRoot` / `CfDisconnectSyncRoot`，注册 `FETCH_DATA` 与 `CANCEL_FETCH_DATA` callback，复制 owned snapshot 并通过调用方提供的 bounded `SyncSender` 执行非阻塞 ingress。队列拒绝、closing 和未被 worker 显式终结的 fetch request 都有结构化失败完成路径；worker 也可以把 stable item identity 对应的 product-owned `ContentRevision` 交给 core `HydrationCoordinator`，并以 owned bytes 调用成功 `TRANSFER_DATA`。`CANCEL_FETCH_DATA` 会先直接匹配 registry 中的 core waiter，再把 owned snapshot 作为可选观察事件送入 bounded queue；host-polled 60 秒 watchdog、monotonic progress reporting 和 ingress queue metrics 已完成。`FETCH_DATA_FLAG_RECOVERY` 会显式暴露给产品 adapter，revision 失效时可用 `RESTART_HYDRATION` 更新 metadata/identity 并让 CFAPI 重发 hydration callback。
 
 ## 所有权边界
 
@@ -52,8 +37,7 @@ metadata/identity 并让 CFAPI 重发 hydration callback。
 - 决定 `CloudItemKey`、revision、hydration、mutation、upload 或 eviction 的产品无关语义；
 - executable 安装、sync-root 产品注册策略和升级流程。
 
-`aster_forge_cloud_files_core` 仍然拥有操作系统无关机制，产品 crate 只向 Windows adapter
-提供 backend/store 实现和产品边界映射。
+`aster_forge_cloud_files_core` 仍然拥有操作系统无关机制，产品 crate 只向 Windows adapter 提供 backend/store 实现和产品边界映射。
 
 ## Cargo 集成
 
@@ -63,14 +47,11 @@ aster_forge_cloud_files_core = { path = "../AsterForge/crates/aster_forge_cloud_
 aster_forge_cloud_files_windows = { path = "../AsterForge/crates/aster_forge_cloud_files/windows" }
 ```
 
-当前没有 crate feature。`windows` 依赖只在 `cfg(windows)` target 启用，portable identity、
-placeholder model 和 contract tests 可以在 macOS/Linux 开发机编译运行；真正的 CFAPI 函数只在
-Windows target 导出。
+当前没有 crate feature。`windows` 依赖只在 `cfg(windows)` target 启用，portable identity、placeholder model 和 contract tests 可以在 macOS/Linux 开发机编译运行；真正的 CFAPI 函数只在 Windows target 导出。
 
 ## FileIdentity 合同
 
-Windows `FileIdentity` 是 adapter mapping，不是 core identity，也不是路径。当前版本化 envelope
-编码以下三个 UTF-8 opaque value：
+Windows `FileIdentity` 是 adapter mapping，不是 core identity，也不是路径。当前版本化 envelope 编码以下三个 UTF-8 opaque value：
 
 ```text
 CloudNamespaceId
@@ -78,20 +59,17 @@ CloudRootId
 CloudItemId
 ```
 
-格式使用 magic、version、三个 little-endian `u32` byte length 和原始字段 bytes。名称、parent、
-metadata revision、content revision、digest、账号 token 和产品字段不进入 identity。
+格式使用 magic、version、三个 little-endian `u32` byte length 和原始字段 bytes。名称、parent、metadata revision、content revision、digest、账号 token 和产品字段不进入 identity。
 
 因此：
 
 - rename 和同 root move 不改变 identity；
 - 相同 item ID 位于不同 namespace/root 时不会碰撞；
-- decoder 拒绝 wrong magic、unsupported version、truncated envelope、length mismatch、trailing
-  bytes、invalid UTF-8 和 core empty identity；
+- decoder 拒绝 wrong magic、unsupported version、truncated envelope、length mismatch、trailing bytes、invalid UTF-8 和 core empty identity；
 - `WindowsFileIdentity::Debug` 只显示格式版本与 byte length，不输出 opaque identity 内容；
 - identity 在完整编码后检查 `CFAPI_FILE_IDENTITY_MAX_BYTES == 4096`。
 
-当前格式是 Windows adapter 的 Phase 2 versioned PoC format。后续如果持久 store PoC 证明需要短
-indirection key，会通过新的 format version 演进，而不是静默改变 version 1 的解释。
+当前格式是 Windows adapter 的 Phase 2 versioned PoC format。后续如果持久 store PoC 证明需要短 indirection key，会通过新的 format version 演进，而不是静默改变 version 1 的解释。
 
 ## 最小 identity 示例
 
@@ -123,9 +101,7 @@ assert_eq!(identity.decode()?, key);
 - `WindowsFileTimes`；
 - `WindowsPlaceholderOptions`。
 
-constructor 会验证 identity 解码结果与 item key 完全一致。file size 从
-`CloudContentMetadata::size` 映射到 CFAPI signed `i64`；directory 使用 size 0 和
-`FILE_ATTRIBUTE_DIRECTORY`，regular file 使用 `FILE_ATTRIBUTE_NORMAL`。
+constructor 会验证 identity 解码结果与 item key 完全一致。file size 从 `CloudContentMetadata::size` 映射到 CFAPI signed `i64`；directory 使用 size 0 和 `FILE_ATTRIBUTE_DIRECTORY`，regular file 使用 `FILE_ATTRIBUTE_NORMAL`。
 
 placeholder name 当前必须是一个 Windows path component。以下输入会被拒绝：
 
@@ -135,9 +111,7 @@ placeholder name 当前必须是一个 Windows path component。以下输入会�
 - trailing space 或 trailing period；
 - `CON`、`PRN`、`AUX`、`NUL`、`COM1..COM9`、`LPT1..LPT9`，包括带 extension 的形式。
 
-名称映射策略仍由调用方拥有。如果远端名称不满足 Windows naming contract，产品 adapter 需要在
-进入 placeholder constructor 前执行自己的稳定映射，并把映射关系持久化；Forge Windows crate
-不会把 display name 偷偷变成 identity。
+名称映射策略仍由调用方拥有。如果远端名称不满足 Windows naming contract，产品 adapter 需要在进入 placeholder constructor 前执行自己的稳定映射，并把映射关系持久化；Forge Windows crate 不会把 display name 偷偷变成 identity。
 
 ## Windows native 调用
 
@@ -155,10 +129,7 @@ for entry in outcome.entries {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-native conversion 在调用栈内创建 null-terminated UTF-16 names 和
-`CF_PLACEHOLDER_CREATE_INFO` 数组。所有 `PCWSTR`/identity pointer 只引用本函数持有的稳定 buffer，
-并在同步 `CfCreatePlaceholders` 返回后立即失效；public model 不保存 native pointer 或 borrowed
-callback object。
+native conversion 在调用栈内创建 null-terminated UTF-16 names 和 `CF_PLACEHOLDER_CREATE_INFO` 数组。所有 `PCWSTR`/identity pointer 只引用本函数持有的稳定 buffer，并在同步 `CfCreatePlaceholders` 返回后立即失效；public model 不保存 native pointer 或 borrowed callback object。
 
 当前 wrapper 使用 `CF_CREATE_FLAG_NONE`，entry options 支持：
 
@@ -169,10 +140,7 @@ callback object。
 
 ## Sync-root identity 与持久注册
 
-Forge Windows registration 强制携带 `WindowsSyncRootIdentity`，即使原生 CFAPI 把
-`SyncRootIdentity` 定义为 optional。原因很简单：Forge 的 restart/callback reconciliation 需要把
-持久 native registration 精确关联回一个 product-neutral `CloudScope`，不能靠 display name、路径
-或产品账号 DTO 猜测。
+Forge Windows registration 强制携带 `WindowsSyncRootIdentity`，即使原生 CFAPI 把 `SyncRootIdentity` 定义为 optional。原因很简单：Forge 的 restart/callback reconciliation 需要把持久 native registration 精确关联回一个 product-neutral `CloudScope`，不能靠 display name、路径或产品账号 DTO 猜测。
 
 当前 sync-root identity version 1 编码：
 
@@ -191,8 +159,7 @@ root bytes
 CFAPI_SYNC_ROOT_IDENTITY_MAX_BYTES == 65536
 ```
 
-root 自身还可以提供一个 optional `WindowsFileIdentity`。如果提供，constructor 会解码并验证它与
-sync-root identity 属于同一 namespace/root scope；不同 scope 的 root file identity 会被拒绝。
+root 自身还可以提供一个 optional `WindowsFileIdentity`。如果提供，constructor 会解码并验证它与 sync-root identity 属于同一 namespace/root scope；不同 scope 的 root file identity 会被拒绝。
 
 `WindowsSyncRootRegistration` 还要求：
 
@@ -204,8 +171,7 @@ sync-root identity 属于同一 namespace/root scope；不同 scope 的 root fil
 - explicit `WindowsSyncRootPolicies`；
 - explicit `WindowsSyncRootRegistrationOptions`。
 
-provider GUID 由产品/发行方选定并跨版本、跨 root 保持稳定。Forge 不采用 CFAPI 的“根据
-ProviderName 生成 GUID”隐式行为，因为 display name 改动不应改变 provider telemetry identity。
+provider GUID 由产品/发行方选定并跨版本、跨 root 保持稳定。Forge 不采用 CFAPI 的“根据 ProviderName 生成 GUID”隐式行为，因为 display name 改动不应改变 provider telemetry identity。
 
 ## Registration policy
 
@@ -231,15 +197,11 @@ hydration modifiers 包含：
 - auto dehydration allowed；
 - allow full restart hydration。
 
-`validation required` 与 `streaming allowed` 是原生冲突组合，portable validation 会在 FFI 前拒绝。
-`allow full restart hydration` 要求 platform integration `>= 0x500`。
+`validation required` 与 `streaming allowed` 是原生冲突组合，portable validation 会在 FFI 前拒绝。`allow full restart hydration` 要求 platform integration `>= 0x500`。
 
-placeholder management 支持 create/convert/update unrestricted 三个独立 permission。任何一个被启用
-都要求 platform integration `>= 0x310`。
+placeholder management 支持 create/convert/update unrestricted 三个独立 permission。任何一个被启用都要求 platform integration `>= 0x310`。
 
-`WindowsInSyncPolicy` 以可组合 bitset 暴露 file/directory creation time、read-only、hidden、system、
-last-write time，以及 preserve-for-sync-engine。hard-link policy 需要显式选择 `Forbidden` 或
-`Allowed`，不会根据产品行为猜测。
+`WindowsInSyncPolicy` 以可组合 bitset 暴露 file/directory creation time、read-only、hidden、system、last-write time，以及 preserve-for-sync-engine。hard-link policy 需要显式选择 `Forbidden` 或 `Allowed`，不会根据产品行为猜测。
 
 registration options 支持：
 
@@ -261,13 +223,9 @@ println!("CFAPI integration={:#x}", platform.integration);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-wrapper 会先调用 `CfGetPlatformInfo`，再用检测到的 integration number 验证 gated policy，之后构造
-准确 `StructSize` 的 `CF_SYNC_REGISTRATION` 和 `CF_SYNC_POLICIES`。provider/sync-root/file identity
-buffer 与 UTF-16 strings 全部保持 owned，所有 native pointer 只在同步注册调用期间存在。
+wrapper 会先调用 `CfGetPlatformInfo`，再用检测到的 integration number 验证 gated policy，之后构造准确 `StructSize` 的 `CF_SYNC_REGISTRATION` 和 `CF_SYNC_POLICIES`。provider/sync-root/file identity buffer 与 UTF-16 strings 全部保持 owned，所有 native pointer 只在同步注册调用期间存在。
 
-持久注册与活动 connection 是两个生命周期：`CfRegisterSyncRoot` 成功只表示平台记住了 root、
-provider identity 和 policies，不表示 callback session 已经建立。后续 `CfConnectSyncRoot` 会使用
-独立 connection/session generation 和 closing fence。
+持久注册与活动 connection 是两个生命周期：`CfRegisterSyncRoot` 成功只表示平台记住了 root、provider identity 和 policies，不表示 callback session 已经建立。后续 `CfConnectSyncRoot` 会使用独立 connection/session generation 和 closing fence。
 
 ## Active connection 与 callback ingress
 
@@ -278,8 +236,7 @@ Windows target 的 `connect_sync_root` 接收：
 - bounded `std::sync::mpsc::SyncSender<WindowsCallbackRequest>`；
 - `WindowsSyncRootConnectOptions`。
 
-connect options 对应 CFAPI 的 process info、full normalized path 和 block-self implicit hydration
-flags。默认值不请求任何 optional behavior，不根据产品进程、账号或安装方式猜测。
+connect options 对应 CFAPI 的 process info、full normalized path 和 block-self implicit hydration flags。默认值不请求任何 optional behavior，不根据产品进程、账号或安装方式猜测。
 
 ```rust
 use std::{path::Path, sync::mpsc::sync_channel};
@@ -347,39 +304,24 @@ callback trampoline 会在返回前复制：
 - required/optional fetch range、`CF_EOF`、dehydration data 和 flags；
 - cancellation range 与 timeout/abort flags。
 
-`WindowsCallbackInfoSnapshot` 会重新验证 identity envelope，并确认 file identity 与 sync-root
-identity 属于同一 `CloudScope`。native pointer、`PCWSTR`、`CF_CALLBACK_INFO` 和
-`CF_CALLBACK_PARAMETERS` 都不会进入 channel、worker 或 async boundary。Debug 输出不包含 opaque
-identity、path 或 process command line。
+`WindowsCallbackInfoSnapshot` 会重新验证 identity envelope，并确认 file identity 与 sync-root identity 属于同一 `CloudScope`。native pointer、`PCWSTR`、`CF_CALLBACK_INFO` 和 `CF_CALLBACK_PARAMETERS` 都不会进入 channel、worker 或 async boundary。Debug 输出不包含 opaque identity、path 或 process command line。
 
-raw callback 只在窄 FFI helper 中存在。helper 先单独复制 `StructSize` / `ParamSize`，确认完整
-`CF_CALLBACK_INFO`、`CF_PROCESS_INFO` 或当前 union member 的真实 ABI offset/size 已包含在 native
-buffer 中，再执行一次对应结构复制；不会先构造完整 callback union reference。callback context 也在
-trampoline 内立即克隆为 owned session/sender handle，不向 handler 下游传播裸 context pointer。
-identity length 在构造 slice 前按 4 KiB / 64 KiB 上限验证，callback wide string 使用 32767 UTF-16
-unit 的有界扫描。每个 `unsafe` block 只包围一次必要的 pointer read、slice construction 或 CFAPI call。
+raw callback 只在窄 FFI helper 中存在。helper 先单独复制 `StructSize` / `ParamSize`，确认完整 `CF_CALLBACK_INFO`、`CF_PROCESS_INFO` 或当前 union member 的真实 ABI offset/size 已包含在 native buffer 中，再执行一次对应结构复制；不会先构造完整 callback union reference。callback context 也在 trampoline 内立即克隆为 owned session/sender handle，不向 handler 下游传播裸 context pointer。identity length 在构造 slice 前按 4 KiB / 64 KiB 上限验证，callback wide string 使用 32767 UTF-16 unit 的有界扫描。每个 `unsafe` block 只包围一次必要的 pointer read、slice construction 或 CFAPI call。
 
 ### Generation、closing 与 drain
 
-core `SessionGeneration` 是 durable fence，CFAPI `ConnectionKey` 是当前 native channel 的 opaque
-key，两者由不同类型承载。callback request 必须同时持有：
+core `SessionGeneration` 是 durable fence，CFAPI `ConnectionKey` 是当前 native channel 的 opaque key，两者由不同类型承载。callback request 必须同时持有：
 
 - generation-bearing owned snapshot；
 - 同一 session 发出的 non-cloneable `WindowsCallbackLease`。
 
-受控 constructor 会拒绝 snapshot/lease generation mismatch。调用 disconnect 时先建立 closing
-fence，因此 `CfDisconnectSyncRoot` 调用期间仍到达的 callback 会被明确失败，不会进入 worker。
-native disconnect 返回后不再接收 callback，Box-backed context 才会释放；已经进入 channel 的 owned
-request 不借用 context，并通过 lease 继续 drain。最后一个 lease 释放后 session 才进入 `Closed`。
+受控 constructor 会拒绝 snapshot/lease generation mismatch。调用 disconnect 时先建立 closing fence，因此 `CfDisconnectSyncRoot` 调用期间仍到达的 callback 会被明确失败，不会进入 worker。native disconnect 返回后不再接收 callback，Box-backed context 才会释放；已经进入 channel 的 owned request 不借用 context，并通过 lease 继续 drain。最后一个 lease 释放后 session 才进入 `Closed`。
 
-显式 `disconnect` 和 `Drop` 共享 exactly-once native attempt gate。若 native disconnect 报错，CFAPI
-channel 可能仍持有 callback context，因此该 context 会保留到进程结束，避免释放后继续收到 callback
-造成悬空访问。
+显式 `disconnect` 和 `Drop` 共享 exactly-once native attempt gate。若 native disconnect 报错，CFAPI channel 可能仍持有 callback context，因此该 context 会保留到进程结束，避免释放后继续收到 callback 造成悬空访问。
 
 ### Hydration 与 terminal completion
 
-CFAPI callback 不携带 core `ContentRevision`。产品 worker 必须先用 owned snapshot 中的稳定
-`CloudItemKey` 查询产品 metadata/store，再调用：
+CFAPI callback 不携带 core `ContentRevision`。产品 worker 必须先用 owned snapshot 中的稳定 `CloudItemKey` 查询产品 metadata/store，再调用：
 
 ```text
 WindowsFetchDataRequest::hydrate(
@@ -390,28 +332,13 @@ WindowsFetchDataRequest::hydrate(
 )
 ```
 
-Windows adapter 会把 callback item key、file size、required range、session generation、CFAPI 4096-byte
-alignment 和 backend alignment 组合成 `HydrationRequest`。`CF_EOF` 会解析为直到 snapshot file size 的
-精确 range；offset 必须 4096-byte aligned，非 EOF transfer length 也必须 4096-byte aligned。coordinator
-返回的 revision、offset、length 和 total size 必须完全匹配，随后其 owned `Bytes` 在同步 `CfExecute`
-期间保持存活，不进行额外 payload copy。
+Windows adapter 会把 callback item key、file size、required range、session generation、CFAPI 4096-byte alignment 和 backend alignment 组合成 `HydrationRequest`。`CF_EOF` 会解析为直到 snapshot file size 的精确 range；offset 必须 4096-byte aligned，非 EOF transfer length 也必须 4096-byte aligned。coordinator 返回的 revision、offset、length 和 total size 必须完全匹配，随后其 owned `Bytes` 在同步 `CfExecute` 期间保持存活，不进行额外 payload copy。
 
-高级 worker 可以调用 `prepare_transfer` 自己编排不带 native cancellation 的读取，也可以调用
-`prepare_registered_transfer` 获得 `Transfer` / `Cancelled` / `TimedOut` portable outcome。前者只等待 coordinator 并返回
-`WindowsFetchDataTransfer`，不会消耗 terminal ownership；调用方之后仍必须 `complete` 或 `fail`。
-普通 worker 应直接调用带 `WindowsFetchDataWaiterRegistry` 的 `hydrate`，由 request 保证所有
-setup/backend/contract error 都先映射成 terminal CFAPI failure。success、failure、platform cancellation 和
-Drop 共用 non-clone terminal gate；首次 native attempt 前即消耗 gate，即使 `CfExecute` 自身报错，Drop
-也不会重复提交。若 CFAPI cancellation 赢得 core waiter race，则 gate 进入 platform-cancelled 状态，Drop
-不会再伪造 `ProviderTerminated` completion。
+高级 worker 可以调用 `prepare_transfer` 自己编排不带 native cancellation 的读取，也可以调用 `prepare_registered_transfer` 获得 `Transfer` / `Cancelled` / `TimedOut` portable outcome。前者只等待 coordinator 并返回 `WindowsFetchDataTransfer`，不会消耗 terminal ownership；调用方之后仍必须 `complete` 或 `fail`。普通 worker 应直接调用带 `WindowsFetchDataWaiterRegistry` 的 `hydrate`，由 request 保证所有 setup/backend/contract error 都先映射成 terminal CFAPI failure。success、failure、platform cancellation 和 Drop 共用 non-clone terminal gate；首次 native attempt 前即消耗 gate，即使 `CfExecute` 自身报错，Drop 也不会重复提交。若 CFAPI cancellation 赢得 core waiter race，则 gate 进入 platform-cancelled 状态，Drop 不会再伪造 `ProviderTerminated` completion。
 
 ### Active waiter cancellation registry
 
-`WindowsSyncRootConnection::fetch_data_waiters` 返回当前 connection 使用的 shareable registry。worker 必须
-把同一个 registry 传给 `WindowsFetchDataRequest::hydrate`；native `CANCEL_FETCH_DATA` callback 会在
-callback thread 内只做 bounded HashMap matching 和 core cancellation-handle 调用，不执行 network I/O、
-数据库事务或阻塞 channel send。实际取消不依赖观察 queue 是否有容量；随后进入
-`WindowsCallbackRequest::CancelFetchData` 的 snapshot 只用于日志、metrics 或诊断观察。
+`WindowsSyncRootConnection::fetch_data_waiters` 返回当前 connection 使用的 shareable registry。worker 必须把同一个 registry 传给 `WindowsFetchDataRequest::hydrate`；native `CANCEL_FETCH_DATA` callback 会在 callback thread 内只做 bounded HashMap matching 和 core cancellation-handle 调用，不执行 network I/O、数据库事务或阻塞 channel send。实际取消不依赖观察 queue 是否有容量；随后进入 `WindowsCallbackRequest::CancelFetchData` 的 snapshot 只用于日志、metrics 或诊断观察。
 
 registry correlation 同时包含：
 
@@ -423,26 +350,13 @@ RequestKey
 FileId
 ```
 
-取消 range 完整覆盖 active waiter range 时，registry 才调用该 waiter 的
-`HydrationCancellationHandle::cancel`。如果只部分重叠，waiter 会被保留，因为 core waiter 当前是原子取消
-粒度，而 CFAPI 明确要求 cancel range 外的 bytes 继续完成。同一 correlation 下存在多个 range waiter 时，
-subset cancellation 只释放被完整覆盖的 waiter，其他 waiter 以及 coordinator 中仍被共享的 backend work
-继续运行。后续若需要在单个大 waiter 内进一步停止 partial network read，应与多段 `TRANSFER_DATA` 和
-动态 range repartition 一起实现，不能通过粗暴取消整个 waiter 冒充支持。
+取消 range 完整覆盖 active waiter range 时，registry 才调用该 waiter 的 `HydrationCancellationHandle::cancel`。如果只部分重叠，waiter 会被保留，因为 core waiter 当前是原子取消粒度，而 CFAPI 明确要求 cancel range 外的 bytes 继续完成。同一 correlation 下存在多个 range waiter 时，subset cancellation 只释放被完整覆盖的 waiter，其他 waiter 以及 coordinator 中仍被共享的 backend work 继续运行。后续若需要在单个大 waiter 内进一步停止 partial network read，应与多段 `TRANSFER_DATA` 和动态 range repartition 一起实现，不能通过粗暴取消整个 waiter 冒充支持。
 
-`WindowsFetchDataWaiterRegistry::metrics` 提供 active/registered waiter、cancellation callback、unmatched、
-full/partial match、cancelled、repeated cancellation 和 completion-race counters。它们是 process-local
-mechanics，不带账号、空间或产品业务标签。
+`WindowsFetchDataWaiterRegistry::metrics` 提供 active/registered waiter、cancellation callback、unmatched、full/partial match、cancelled、repeated cancellation 和 completion-race counters。它们是 process-local mechanics，不带账号、空间或产品业务标签。
 
 ### Callback watchdog 与 progress
 
-CFAPI callback 的固定 timeout 是 60 秒。Forge 暴露
-`WINDOWS_CFAPI_CALLBACK_TIMEOUT` 与 `WindowsFetchDataWatchdogConfig`；配置必须为正数且不能长于平台
-deadline。registry 在 waiter 注册时创建 `std::time::Instant` deadline，host/runtime 通过
-`WindowsFetchDataWaiterRegistry::poll_watchdog(now)` 定期驱动，不在 callback thread 启动 Tokio timer、
-后台线程或阻塞等待。watchdog 赢得 core cancellation race 时，portable preparation 返回 `TimedOut`，与
-平台 `CANCEL_FETCH_DATA` 产生的 `Cancelled` 分开；普通 `hydrate` 会继续提交一次 terminal failure，重复
-preparation 不会重新注册 waiter。
+CFAPI callback 的固定 timeout 是 60 秒。Forge 暴露 `WINDOWS_CFAPI_CALLBACK_TIMEOUT` 与 `WindowsFetchDataWatchdogConfig`；配置必须为正数且不能长于平台 deadline。registry 在 waiter 注册时创建 `std::time::Instant` deadline，host/runtime 通过 `WindowsFetchDataWaiterRegistry::poll_watchdog(now)` 定期驱动，不在 callback thread 启动 Tokio timer、后台线程或阻塞等待。watchdog 赢得 core cancellation race 时，portable preparation 返回 `TimedOut`，与平台 `CANCEL_FETCH_DATA` 产生的 `Cancelled` 分开；普通 `hydrate` 会继续提交一次 terminal failure，重复 preparation 不会重新注册 waiter。
 
 产品 worker 可在把 request 移入 hydration future 前创建：
 
@@ -450,41 +364,19 @@ preparation 不会重新注册 waiter。
 let progress = request.progress_reporter();
 ```
 
-`WindowsFetchDataProgressReporter` 只持有 owned callback correlation，不持有 terminal completion authority，
-因此可移动到另一个 worker。`WindowsFetchDataProgress::new(total, completed)` 验证 `completed <= total`、
-signed 64-bit native boundary、固定 total 和 monotonic completed；duplicate sample 合法，regression 与 total
-变化在 native call 前拒绝。Windows target 上 `report` 先刷新匹配 waiters 的 watchdog，再用一个最小
-`unsafe` block 调用 `CfReportProviderProgress(ConnectionKey, TransferKey, total, completed)`。registry 中已无
-匹配 waiter 时返回 0，不在 terminal 后继续调用 native progress。
+`WindowsFetchDataProgressReporter` 只持有 owned callback correlation，不持有 terminal completion authority，因此可移动到另一个 worker。`WindowsFetchDataProgress::new(total, completed)` 验证 `completed <= total`、signed 64-bit native boundary、固定 total 和 monotonic completed；duplicate sample 合法，regression 与 total 变化在 native call 前拒绝。Windows target 上 `report` 先刷新匹配 waiters 的 watchdog，再用一个最小 `unsafe` block 调用 `CfReportProviderProgress(ConnectionKey, TransferKey, total, completed)`。registry 中已无匹配 waiter 时返回 0，不在 terminal 后继续调用 native progress。
 
-`WindowsFetchDataWaiterMetrics` 额外记录 watchdog timeout、progress callback 和实际 deadline refresh。
-`WindowsSyncRootConnection::queue_metrics` 返回当前 generation 的饱和累加 ingress counters：accepted、queued
-fetch、queued cancel observation、fetch queue full、cancel observation queue full、receiver disconnected、
-queued preflight/observation、对应 queue full、closing rejection、invalid snapshot rejection 和 callback
-panic。fetch/preflight queue full/disconnected 必须提交
-terminal failure；cancel observation queue full 只丢诊断事件，实际 registry cancellation 已在此前完成。
+`WindowsFetchDataWaiterMetrics` 额外记录 watchdog timeout、progress callback 和实际 deadline refresh。`WindowsSyncRootConnection::queue_metrics` 返回当前 generation 的饱和累加 ingress counters：accepted、queued fetch、queued cancel observation、fetch queue full、cancel observation queue full、receiver disconnected、queued preflight/observation、对应 queue full、closing rejection、invalid snapshot rejection 和 callback panic。fetch/preflight queue full/disconnected 必须提交 terminal failure；cancel observation queue full 只丢诊断事件，实际 registry cancellation 已在此前完成。
 
 ### Restart、recovery 与 native mutation observation
 
-`WindowsFetchDataSnapshot::is_recovery()` 表示 CFAPI 正在恢复 provider/system 非正常退出前中断的
-hydration。产品 adapter 先用 stable identity 对 durable metadata、cache coverage 和 backend revision 做
-reconciliation，然后选择继续 `hydrate` 或调用 `restart_hydration`。replacement identity 必须仍解码为
-callback 的同一个 `CloudItemKey`；native operation 使用 `CF_OPERATION_TYPE_RESTART_HYDRATION`，成功后由
-CFAPI 重发 callback。产品仍负责恢复 revision、journal、cache bytes 和业务 conflict policy。
+`WindowsFetchDataSnapshot::is_recovery()` 表示 CFAPI 正在恢复 provider/system 非正常退出前中断的 hydration。产品 adapter 先用 stable identity 对 durable metadata、cache coverage 和 backend revision 做 reconciliation，然后选择继续 `hydrate` 或调用 `restart_hydration`。replacement identity 必须仍解码为 callback 的同一个 `CloudItemKey`；native operation 使用 `CF_OPERATION_TYPE_RESTART_HYDRATION`，成功后由 CFAPI 重发 callback。产品仍负责恢复 revision、journal、cache bytes 和业务 conflict policy。
 
-validate/dehydrate/delete/rename preflight 进入 `WindowsCallbackRequest::Preflight`。request 持有
-non-cloneable generation lease 和 exactly-once ACK responsibility；产品只有在自己的 intent/decision 已经
-耐久后才调用 `approve`，或使用结构化 failure 调用 `deny`。queue full、receiver disconnected、closing、
-panic 和未响应 Drop 会提交对应 `ACK_DATA`/`ACK_DEHYDRATE`/`ACK_DELETE`/`ACK_RENAME` failure。
+validate/dehydrate/delete/rename preflight 进入 `WindowsCallbackRequest::Preflight`。request 持有 non-cloneable generation lease 和 exactly-once ACK responsibility；产品只有在自己的 intent/decision 已经耐久后才调用 `approve`，或使用结构化 failure 调用 `deny`。queue full、receiver disconnected、closing、panic 和未响应 Drop 会提交对应 `ACK_DATA`/`ACK_DEHYDRATE`/`ACK_DELETE`/`ACK_RENAME` failure。
 
-dehydrate/delete/rename completion 进入 `WindowsCallbackRequest::Observation`。target/source path 在 callback
-返回前复制为 owned `PathBuf`，stable identity 仍来自 `WindowsFileIdentity`。产品把 completion 映射到 core
-`MutationOrigin::PlatformObserved` 或 content eviction effect，并依靠启动 reconciliation 覆盖 observation
-queue full 或 journal 前退出窗口。Forge 不生成产品 operation ID、remote mutation 或冲突展示。
+dehydrate/delete/rename completion 进入 `WindowsCallbackRequest::Observation`。target/source path 在 callback 返回前复制为 owned `PathBuf`，stable identity 仍来自 `WindowsFileIdentity`。产品把 completion 映射到 core `MutationOrigin::PlatformObserved` 或 content eviction effect，并依靠启动 reconciliation 覆盖 observation queue full 或 journal 前退出窗口。Forge 不生成产品 operation ID、remote mutation 或冲突展示。
 
-provider 发起的物理操作使用 `unregister_sync_root`、`set_placeholder_pin_state`、
-`set_placeholder_in_sync` 和 `dehydrate_placeholder`。内部通过 RAII 配对
-`CfOpenFileWithOplock`/`CfCloseHandle`，handle 与 pointer 不跨同步调用。
+provider 发起的物理操作使用 `unregister_sync_root`、`set_placeholder_pin_state`、`set_placeholder_in_sync` 和 `dehydrate_placeholder`。内部通过 RAII 配对 `CfOpenFileWithOplock`/`CfCloseHandle`，handle 与 pointer 不跨同步调用。
 
 ### Windows 内存云盘 example
 
@@ -493,23 +385,16 @@ cargo run -p aster_forge_cloud_files_windows --example memory_cloud_drive -- `
   C:\AsterForgeMemoryCloud
 ```
 
-example 使用 `PopulationPolicy::AlwaysFull`，启动时创建 `hello.txt`、`readme.txt` 和 16 KiB
-`numbers.bin` placeholder；内容只存在进程内存，通过真实 `FETCH_DATA -> HydrationCoordinator ->
-TRANSFER_DATA` 回源。
+example 使用 `PopulationPolicy::AlwaysFull`，启动时创建 `hello.txt`、`readme.txt` 和 16 KiB `numbers.bin` placeholder；内容只存在进程内存，通过真实 `FETCH_DATA -> HydrationCoordinator -> TRANSFER_DATA` 回源。
 
-sync-root registration 和 placeholder 是 Windows 持久状态，`CfConnectSyncRoot` callback connection
-则只在 example 进程存活期间有效。关闭 example 后再访问尚未 hydration 的文件时，本地没有内容且没有
-在线 provider 可以处理 `FETCH_DATA`，Windows 会返回：
+sync-root registration 和 placeholder 是 Windows 持久状态，`CfConnectSyncRoot` callback connection 则只在 example 进程存活期间有效。关闭 example 后再访问尚未 hydration 的文件时，本地没有内容且没有在线 provider 可以处理 `FETCH_DATA`，Windows 会返回：
 
 ```text
 ERROR_CLOUD_FILE_PROVIDER_TERMINATED (0x80070194)
 The cloud file provider exited unexpectedly.
 ```
 
-这是预期的 provider lifecycle 行为，也说明 Windows 已将该文件识别为 cloud placeholder；它不是
-placeholder 或 hydration 数据损坏。重新运行 example 会再次调用 `CfConnectSyncRoot`，未下载文件随后可重新
-触发 hydration。已经 hydration 且仍保留本地内容的文件不需要在线 provider 即可读取；释放本地内容后则重新
-依赖 provider。测试结束后可清理持久 registration：
+这是预期的 provider lifecycle 行为，也说明 Windows 已将该文件识别为 cloud placeholder；它不是 placeholder 或 hydration 数据损坏。重新运行 example 会再次调用 `CfConnectSyncRoot`，未下载文件随后可重新触发 hydration。已经 hydration 且仍保留本地内容的文件不需要在线 provider 即可读取；释放本地内容后则重新依赖 provider。测试结束后可清理持久 registration：
 
 ```powershell
 cargo run -p aster_forge_cloud_files_windows --example memory_cloud_drive -- `
@@ -533,13 +418,7 @@ Cancelled
 Unsuccessful
 ```
 
-它们映射为对应 `STATUS_CLOUD_FILE_*`；core backend authentication、permission、revision drift、temporary
-outage 和 unsupported classification 会映射到更具体的 CFAPI status。成功与失败都使用一次
-`CF_OPERATION_TYPE_TRANSFER_DATA`。Windows 上 request 未显式终结就被 drop 时，会自动尝试
-`ProviderTerminated`；queue full、receiver disconnected、session closing、callback panic、hydration backend
-error 和 response contract drift 也有明确失败路径。`CANCEL_FETCH_DATA` 是 cancellation notification，
-本身没有独立 terminal operation；它会直接命中 active waiter registry，完整覆盖时取消 core waiter，
-部分覆盖时保留仍承载 required bytes 的 waiter。
+它们映射为对应 `STATUS_CLOUD_FILE_*`；core backend authentication、permission、revision drift、temporary outage 和 unsupported classification 会映射到更具体的 CFAPI status。成功与失败都使用一次 `CF_OPERATION_TYPE_TRANSFER_DATA`。Windows 上 request 未显式终结就被 drop 时，会自动尝试 `ProviderTerminated`；queue full、receiver disconnected、session closing、callback panic、hydration backend error 和 response contract drift 也有明确失败路径。`CANCEL_FETCH_DATA` 是 cancellation notification，本身没有独立 terminal operation；它会直接命中 active waiter registry，完整覆盖时取消 core waiter，部分覆盖时保留仍承载 required bytes 的 waiter。
 
 ## Error boundary
 
@@ -647,20 +526,9 @@ cargo clippy -p aster_forge_cloud_files_windows \
 - callback table ordering/sentinel 与 every registered callback pointer；
 - unregister、pin、in-sync、dehydrate 和 memory example Windows-only signatures/build。
 
-Windows target compile/Clippy 负责验证 windows-rs feature、native struct layout usage、wide string
-lifetime、callback registration sentinel、`CfCreatePlaceholders`、`CfGetPlatformInfo`、
-`CfRegisterSyncRoot`、`CfConnectSyncRoot`、`CfExecute`、`CfReportProviderProgress`、
-`CfOpenFileWithOplock`、`CfSetPinState`、`CfSetInSyncState`、`CfDehydratePlaceholder` 和
-`CfDisconnectSyncRoot` signature。真实 CFAPI
-integration tests 后续在 Windows runner 上覆盖 persistent registration/query/update、callback
-concurrency、disconnect-during-callback、queue rejection completion、placeholder filesystem observation、
-partial batch result 和 provider restart。macOS 上的 cross-target check 不冒充这些 runtime tests。
+Windows target compile/Clippy 负责验证 windows-rs feature、native struct layout usage、wide string lifetime、callback registration sentinel、`CfCreatePlaceholders`、`CfGetPlatformInfo`、`CfRegisterSyncRoot`、`CfConnectSyncRoot`、`CfExecute`、`CfReportProviderProgress`、`CfOpenFileWithOplock`、`CfSetPinState`、`CfSetInSyncState`、`CfDehydratePlaceholder` 和 `CfDisconnectSyncRoot` signature。真实 CFAPI integration tests 后续在 Windows runner 上覆盖 persistent registration/query/update、callback concurrency、disconnect-during-callback、queue rejection completion、placeholder filesystem observation、partial batch result 和 provider restart。macOS 上的 cross-target check 不冒充这些 runtime tests。
 
-CI 的 `windows-cloud-files` job 会在 `windows-latest` 原生执行 portable contract 与 Windows-only
-synthetic callback tests，覆盖 truncated `StructSize` / `ParamSize`、真实 union padding、owned context、
-identity/string/process snapshot。Miri 使用固定 nightly 对 core 和 Windows crate 的 portable 路径运行；
-由于 Ubuntu 构建不会编译 `cfg(windows)` native module，Miri 不代表 CFAPI trampoline 已执行。该部分由
-Windows synthetic tests、Windows Clippy 和后续真实 sync-root integration runner 分层验证。
+CI 的 `windows-cloud-files` job 会在 `windows-latest` 原生执行 portable contract 与 Windows-only synthetic callback tests，覆盖 truncated `StructSize` / `ParamSize`、真实 union padding、owned context、identity/string/process snapshot。Miri 使用固定 nightly 对 core 和 Windows crate 的 portable 路径运行；由于 Ubuntu 构建不会编译 `cfg(windows)` native module，Miri 不代表 CFAPI trampoline 已执行。该部分由 Windows synthetic tests、Windows Clippy 和后续真实 sync-root integration runner 分层验证。
 
 ## Windows Phase 2 状态
 
@@ -672,9 +540,7 @@ Windows synthetic tests、Windows Clippy 和后续真实 sync-root integration r
 6. ~~validate/rename/delete/dehydrate ACK、completion observation 与 native physical effects。~~
 7. ~~可运行的 Windows in-memory cloud drive integration fixture。~~
 
-Windows product-neutral PoC 已收口。真实机器 runner 继续验证 Explorer 行为、平台版本差异、callback
-concurrency、provider kill/restart 和 filesystem observation；发现 native contract 偏差时回到 Windows
-adapter 修正，不通过 AsterDrive endpoint 或 DTO 反向决定 Forge API。
+Windows product-neutral PoC 已收口。真实机器 runner 继续验证 Explorer 行为、平台版本差异、callback concurrency、provider kill/restart 和 filesystem observation；发现 native contract 偏差时回到 Windows adapter 修正，不通过 AsterDrive endpoint 或 DTO 反向决定 Forge API。
 
 ## 参考
 
