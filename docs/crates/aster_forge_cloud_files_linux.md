@@ -1,6 +1,6 @@
 # `aster_forge_cloud_files_linux`
 
-`aster_forge_cloud_files_linux` 是 `aster_forge_cloud_files_core` 的 Linux FUSE 平台 adapter。Phase 4 Batch 1 提供真实的只读 `fuser` 闭环：恢复稳定 inode/generation record、paged directory snapshot、revision-bound range read、file/directory handle、FUSE reply/errno 映射，以及从 FUSE callback 到调用方 Tokio runtime 的有界非阻塞 dispatch。Batch 2A 增加现有文件的 direct-I/O writeback：完整 revision-bound hydration、调用方注入的 durable local staging、positioned write、truncate、flush、fsync、immutable dirty generation fence 和关闭后重新打开。Batch 2B 增加 mount `SessionGeneration` activation、dirty snapshot/size overlay 恢复、无需重复下载远端内容的 staged reopen，以及旧 mount session fence。Batch 2C 补齐 core runtime-neutral resumable upload runner 与 generation-aware durable transition，固定 Linux dirty snapshot 到产品 upload worker 的接入边界。Batch 2D 增加 regular-file durable create：产品事务分配稳定 item/inode/generation 与 mutation identity，Linux adapter 在同一 acceptance 中取得空 staging，并通过 `ReplyCreate` 一次返回 entry 与 direct-I/O handle。Batch 2E 增加 core generic `MutationRunner` 与 `CloudMutationBackend`，把 durable create 的 apply、remote-outcome-unknown reconciliation、产品/platform metadata reconciliation 和 completion 收成共享状态机。Batch 2F 把这些边界接入 memory example：`writeback.json` 原子保存 namespace/staging/mutation journal，独立 `remote.json` 模拟远端幂等 create ledger，示例产品 worker 负责 startup scan、apply/reconcile、generation fence 与 completion。
+`aster_forge_cloud_files_linux` 是 `aster_forge_cloud_files_core` 的 Linux FUSE 平台 adapter。它提供只读 enumeration/range read、有界 callback dispatch、direct-I/O durable writeback、resumable content upload 接入、regular-file/directory create、rename/move、unlink/rmdir、generation-fenced crash recovery，以及 durable remote overlay 到 kernel invalidation 的平台边界。共享 `MutationRunner` 和 `ContentUploadRunner` 位于 core；Linux crate 负责把已经由产品事务接受的结果映射成稳定 inode、directory snapshot、FUSE reply 和 native notification。
 
 它不是云盘 daemon、Linux service 或 AsterDrive client。产品仓库仍拥有远端 backend adapter、认证、权限、持久化 inode records、mount path、用户级 service、桌面集成、安装更新和用户可见错误。
 
@@ -22,8 +22,12 @@
 - product store 在同一 durable transaction 中保存 dirty snapshot 与 core upload intent，随后由调用方 executor 驱动 core upload runner。
 - native `create` 通过产品注入的 `LinuxNamespaceMutationStore` 获得 durable stable identity、inode record、create intent 与空 staging session。
 - create 成功后立即 write/read/fsync/reopen，并在 daemon restart 后恢复未完成的本地 create 与相同 inode/generation。
+- `mkdir`、same/cross-parent `rename`、`RENAME_NOREPLACE`、file replacement、`unlink`、empty `rmdir` 与 `ENOTEMPTY`/`EISDIR`/`ENOTDIR` 映射；
+- 每个 namespace acceptance 在 kernel exposure 前已经持久化完整 core mutation intent，重启后保持相同 inode/generation；
+- `LinuxRemoteEntry`/`LinuxRemoteChange` 把产品已提交的 remote upsert/delete 恢复到 engine overlay；
+- `spawn_mount_read_only`/`spawn_mount_writable` 返回 background session，`LinuxKernelNotifier` 应用 engine 产生的 entry/inode/delete invalidation plan。
 
-当前不包含：目录 create、rename/unlink/rmdir、kernel writeback cache、Linux engine 内建 upload/create worker、`FUSE_INTERRUPT` 精确取消、kernel cache invalidation、`mmap`/大文件实机矩阵、产品 metadata offline cache 或 daemon/service packaging。共享 upload/mutation runner 位于 core；Linux crate 不选择 operation ID、idempotency key、item ID、inode allocation policy、本地文件布局、数据库、backend transport 或 retry policy。Batch 2B 已证明 adapter 的 restart recovery contract，Batch 2C 已证明共享 upload runner 的 chunk/resume/reconcile/fence contract，Batch 2D 固定 native create 到产品原子 namespace transaction 的边界，Batch 2E 固定 create worker 到 generic mutation runner/store/backend 的边界，Batch 2F 只在 example 内提供 synthetic product implementation；产品接入仍要用自己的 crash-safe store、mount lifecycle、scheduler 和远端 adapter 完成同一验证。
+当前不包含：kernel writeback cache、`mmap`/大文件实机矩阵、Linux engine 内建 transport/worker、产品 metadata 数据库、change cursor policy、冲突策略、retry/backoff、daemon/service packaging 或桌面 UX。`fuser 0.18` dispatcher 对 `FUSE_INTERRUPT` 返回 `ENOSYS`，因此当前没有 request-unique 级精确 native cancellation；产品仍可使用 core hydration/upload/mutation cancellation 和 generation fence。Linux crate 不选择 operation/idempotency/item/inode identity，不持有 endpoint、认证、DTO 或产品错误文案。
 
 ## Cargo 集成
 
@@ -154,6 +158,30 @@ worker 使用 core 的 `LocalContentSnapshotReader` 读取 exact immutable gener
 
 不要在 Linux engine 收到 `LinuxWriteCommit` 后再通过独立 observer 异步创建 intent。那会制造 snapshot 已成功回复 FUSE、但 crash 时 upload intent 仍不存在的窗口。原子性属于产品 store transaction，不属于 FUSE callback 或 core runner。
 
+## Namespace mutation 与 remote change
+
+`LinuxNamespaceMutationStore` 的目录 create、rename 和 remove 方法与 regular-file create 遵守同一原则：产品事务先保存 stable item/inode/generation、完整 `MutationIntent`、旧位置 tombstone、replacement facts 和 active `SessionGeneration`，engine 校验 acceptance 后才更新 FUSE 可见 overlay。`RENAME_EXCHANGE` 与 `RENAME_WHITEOUT` 当前明确返回 `ENOSYS`；普通 rename 和 `RENAME_NOREPLACE` 已接入。
+
+远端 change feed 仍由产品拥有。正确顺序是：
+
+```text
+backend change + product conflict policy
+-> product metadata/inode transaction commits
+-> LinuxRemoteChange with exact old/replaced location
+-> LinuxWritableEngine::apply_remote_change
+-> ordered LinuxInvalidation plan
+-> LinuxKernelNotifier::apply_all
+-> advance product-owned change cursor
+```
+
+新 mount 应使用 `activate_with_namespace_and_remote`，在 dirty snapshot 恢复前注入产品持久化的 `LinuxRemoteEntry` records。运行期间的 upsert/delete 使用 `apply_remote_change`；它拒绝 scope 漂移、stable key 对应的 inode/generation 替换、inode reuse，以及与未完成本地 namespace mutation 的碰撞。冲突如何解决仍由产品事务决定。
+
+需要 kernel notification 时使用 `spawn_mount_writable` 或 `spawn_mount_read_only`。返回的 `LinuxBackgroundSession` 提供 `notifier()`、`join()` 和 `unmount_and_join()`；blocking `mount_writable`/`mount_read_only` 继续适合不需要外部 change worker 的简单 host。`LinuxKernelNotifier` 不进入 core，也不参与产品数据库事务。
+
+## Interrupt 边界
+
+`fuser 0.18` 能解析 `FUSE_INTERRUPT`，但其高层 dispatcher 当前直接回复 `ENOSYS`，`Filesystem` trait 也没有可实现的 interrupt callback。因此 Linux adapter 没有伪造 request-unique cancellation。已接受的 FUSE task 仍由 bounded dispatcher 保证一次终结；daemon shutdown、generation takeover、hydration、upload 和 mutation cancellation 使用现有显式 handle/fence。升级 `fuser` 后只有在高层 API 暴露 request unique 与 interrupt callback，并完成 race/late-reply 实机矩阵，才能声明 native interrupt 支持。
+
 ## 准备 FUSE 设备
 
 运行预编译或交叉编译后的 example 二进制不需要在目标机安装 Rust，但目标 Linux kernel 必须提供 FUSE，并安装包含 `fusermount3` 的 FUSE 3 用户态工具。常见发行版可使用：
@@ -256,13 +284,15 @@ fusermount3 -u /tmp/aster-forge-memory-cloud
 
 ## 测试要求
 
-Linux crate 的 portable suite 有 40 个 tests，其中 9 个直接覆盖 existing-file writeback/recovery，11 个覆盖 durable create，另有 1 个 handle-exhaustion unit test。Linux-only example harness 再增加 4 个 synthetic product tests，覆盖 remote effect 已提交但 outcome marker 缺失后的 higher-generation restart convergence、旧 `writeback.json` 缺少 mutation vector 时从 durable create intent 恢复 `IntentPersisted`、`remote.json` 持久化失败时不得在内存中发布虚假 committed outcome，以及 session 进入 `Closing` 后同 generation 的迟到 native create 必须被 fenced。完整矩阵覆盖 inode/root/duplicate/scope 边界、Linux filename 边界、分页 directory snapshot、rename 后 stable key、revision-bound range/EOF read、stale handle、missing persisted mapping 和 dispatcher saturation/closing。writeback tests 额外覆盖完整 base hydration、read/write visibility、稀疏扩展、truncate、size overlay、重复 flush/fsync、同 generation 不同 immutable snapshot 冲突、access mode、partial store read、wrong item identity、generation regression、并发 commit 乱序 fence、empty/overflow write、restart dirty-size recovery、recovered-open hydration bypass、scope/unknown/root/conflicting recovery records、old mount fence 和 recovered session generation validation。create tests 覆盖 empty acceptance、stable key/inode/generation、立即 write/read/sync/reopen、directory snapshot、existing-name conflict、同名与不同名并发、invalid name/parent、store failure before exposure、product contract substitution、lost reply restart recovery、old mount fence 和未配置 namespace port。共享 upload/mutation runner 的完整、空文件、分片、恢复、unknown outcome、precondition、source/backend/store failure、lost return、并发执行和 generation takeover 由 core contract suite 覆盖。
+Linux crate 的 portable suite 当前有 40 个 tests：existing-file writeback/recovery 9 个、durable create 11 个，并覆盖 backend/inode/value/directory/dispatcher 合同。Linux-only memory example harness 有 19 个 tests，额外覆盖 exact immutable upload、lost remote return、legacy JSON recovery、generation fence、mkdir/nested mkdir、same/cross-parent rename、`RENAME_NOREPLACE`、replacement kind errors、unlink/empty/non-empty rmdir、旧 directory handle snapshot、持久化失败不发布、namespace journal restart、remote create/rename/delete 幂等收敛、remote overlay invalidation plan，以及 nested create 在 rename 与迟到 upload 后的 reload。共享 upload/mutation runner 的空文件、分片、resume、unknown outcome、precondition、source/backend/store failure、并发执行和 generation takeover 由 core contract suite 覆盖。
 
 2026-07-27 的只读 baseline 与 2026-07-28 的 writable/recovery baseline 均已通过 Rocky Linux 10.2 aarch64（kernel `6.12.0-211.22.1.el10_2.aarch64`）实机验证。example 由 macOS 使用 `cargo zigbuild` 交叉编译；VM 未安装 Rust toolchain。只读验证覆盖真实 `/dev/fuse` mount/unmount、多页和 nested enumeration、并发 range/mixed read、EOF 与只读 mutation 拒绝。writable 验证覆盖覆盖/追加后 reopen、truncate、稀疏 positioned write、`fsync`、16 个并发 handle 写不同 offset、namespace mutation 的 `ENOSYS`，以及正常 unmount/provider exit。recovery 验证覆盖 generation 1 写入后 provider crash、stale mount 清理、generation 2 恢复 dirty bytes/size、恢复后继续写、正常卸载，以及 generation 3 再次恢复最新内容。synthetic JSON state 仅用于证明 adapter contract，不代表 production durable store、metadata offline cache 或远端 upload 已完成。产品接入仍必须使用真实 durable inode/writeback store 验证 service lifecycle、backend 故障与 crash recovery。
 
 2026-07-29 的 Batch 2D binary 继续在同一 Rocky Linux VM 实机通过 durable-create smoke：native create 后立即 write/read/sync，`O_EXCL` duplicate 返回失败，并发同名 create 只有一个成功，并发不同名 create 都成功；mkdir 与 rename 继续保持未实现；随后 provider 被强制终止、stale mount 被清理，generation 2 从同一 synthetic state 恢复相同 inode 与 exact bytes，继续 append/sync 后正常卸载。该验证证明 FUSE `ReplyCreate`、local namespace overlay、JSON atomic acceptance 和 mount-generation recovery 的组合，不代表远端 backend create/reconcile 已实现。
 
 2026-07-29 的 Batch 2F binary 在更新后的 Rocky Linux 10.2 aarch64 kernel `6.12.0-211.39.1.el10_2.aarch64` 上通过 synthetic remote-create 故障窗口：generation 1 创建 `restart.txt` 后，`remote.json` 已有唯一 committed entry，而 `writeback.json` 仍停在 `remote_applying`；此时强制终止 provider，清理 stale mount，并取消 pause 以 generation 2 重启。重启后相同 inode `7` 与 20 字节 staged content 均保持，journal 收敛为 `completed` + `already_committed`，remote ledger 数量仍为 1，正常卸载后 session durable state 为 `closed`。4 个 Linux-only synthetic product harness tests 也在该 VM 直接执行通过。该验证仍是 synthetic product adapter，不替代真实产品 transport、数据库事务、change feed 或 content upload 验收。
+
+2026-07-29 的 namespace/upload 收尾继续在该 VM 通过 19 个 Linux-only harness tests 与真实 `/dev/fuse` 矩阵：mkdir、nested mkdir、create/write/`fsync`、same/cross-parent rename、file/directory inode 在 rename 前后保持、non-empty rmdir 返回 `ENOTEMPTY`、unlink/empty rmdir，以及 provider `SIGKILL` 后清理 stale mount 并以更高 generation 重启。嵌套目录 inode `7`、文件 inode `8` 和 exact content 在重启后保持；迟到 upload metadata 不再改变原 create parent/name；重启后的 unlink + rmdir 也能清理 name index。remote overlay/notifier 的 engine plan 已在 VM contract test 执行，真实产品 change feed 与 cursor transaction 仍由下游接入测试负责。
 
 ```bash
 cargo test -p aster_forge_cloud_files_linux --all-targets

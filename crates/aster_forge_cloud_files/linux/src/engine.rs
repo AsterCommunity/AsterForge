@@ -439,7 +439,7 @@ where
     /// Resolves one name by enumerating all backend pages for the parent snapshot.
     pub async fn lookup(&self, parent: LinuxInode, name: &str) -> Result<LinuxNode> {
         validate_linux_name(name)?;
-        let parent_item = self.load_item(parent).await?;
+        let parent_item = self.load_item_for_overlay(parent).await?;
         if parent_item.kind() != CloudItemKind::Directory {
             return Err(LinuxCloudFilesError::NotDirectory);
         }
@@ -456,13 +456,13 @@ where
 
     /// Loads attributes for one restored inode.
     pub async fn getattr(&self, inode: LinuxInode) -> Result<LinuxNode> {
-        let item = self.load_item(inode).await?;
+        let item = self.load_item_for_overlay(inode).await?;
         self.node_from_item(&item)
     }
 
     /// Opens a regular file and captures its exact content revision for subsequent range reads.
     pub async fn open_file(&self, inode: LinuxInode) -> Result<LinuxFileHandle> {
-        let item = self.load_item(inode).await?;
+        let item = self.load_item_for_overlay(inode).await?;
         if item.kind() != CloudItemKind::File {
             return Err(LinuxCloudFilesError::NotFile);
         }
@@ -490,7 +490,15 @@ where
         inode: LinuxInode,
         session_generation: SessionGeneration,
     ) -> Result<(crate::LinuxWriteOpenRequest, Bytes)> {
-        let item = self.load_item(inode).await?;
+        let item = self.load_item_for_overlay(inode).await?;
+        self.hydrate_item_for_write(&item, session_generation).await
+    }
+
+    pub(crate) async fn hydrate_item_for_write(
+        &self,
+        item: &CloudItem,
+        session_generation: SessionGeneration,
+    ) -> Result<(crate::LinuxWriteOpenRequest, Bytes)> {
         if item.kind() != CloudItemKind::File {
             return Err(LinuxCloudFilesError::NotFile);
         }
@@ -569,7 +577,7 @@ where
 
     /// Opens a directory and freezes one complete paged snapshot for stable FUSE cookies.
     pub async fn open_directory(&self, inode: LinuxInode) -> Result<LinuxDirectoryHandle> {
-        let item = self.load_item(inode).await?;
+        let item = self.load_item_for_overlay(inode).await?;
         if item.kind() != CloudItemKind::Directory {
             return Err(LinuxCloudFilesError::NotDirectory);
         }
@@ -636,7 +644,7 @@ where
         Ok(())
     }
 
-    async fn load_item(&self, inode: LinuxInode) -> Result<CloudItem> {
+    pub(crate) async fn load_item_for_overlay(&self, inode: LinuxInode) -> Result<CloudItem> {
         let record = self
             .inner
             .inodes
@@ -656,7 +664,10 @@ where
         Ok(item)
     }
 
-    async fn load_children(&self, parent: &CloudItemKey) -> Result<Vec<CloudItem>> {
+    pub(crate) async fn load_children_for_overlay(
+        &self,
+        parent: &CloudItemKey,
+    ) -> Result<Vec<CloudItem>> {
         let mut cursor: Option<PageCursor> = None;
         let mut seen_cursors = HashSet::new();
         let mut seen_names = HashSet::new();
@@ -682,9 +693,6 @@ where
                         reason: "directory enumeration returned duplicate child names",
                     });
                 }
-                if self.inner.inodes.by_key(item.key()).is_none() {
-                    return Err(LinuxCloudFilesError::MissingInodeRecord);
-                }
                 children.push(item);
             }
             let Some(next_cursor) = next_cursor else {
@@ -696,6 +704,17 @@ where
                 });
             }
             cursor = Some(next_cursor);
+        }
+        Ok(children)
+    }
+
+    async fn load_children(&self, parent: &CloudItemKey) -> Result<Vec<CloudItem>> {
+        let children = self.load_children_for_overlay(parent).await?;
+        if children
+            .iter()
+            .any(|item| self.inner.inodes.by_key(item.key()).is_none())
+        {
+            return Err(LinuxCloudFilesError::MissingInodeRecord);
         }
         Ok(children)
     }

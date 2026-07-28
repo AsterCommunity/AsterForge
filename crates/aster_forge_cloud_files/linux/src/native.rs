@@ -10,22 +10,93 @@ use std::{
 use aster_forge_cloud_files_core::CloudFilesBackend;
 use fuser::{
     BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags,
-    Generation, INodeNo, LockOwner, MountOption, OpenAccMode, OpenFlags, ReplyAttr, ReplyCreate,
-    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
-    WriteFlags,
+    Generation, INodeNo, LockOwner, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr,
+    ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
+    TimeOrNow, WriteFlags,
 };
 use tokio::runtime::Handle;
 
 use crate::{
     LinuxDirectoryHandle, LinuxDispatchRejection, LinuxErrorCode, LinuxFileAccess,
-    LinuxFileAttributes, LinuxFileHandle, LinuxInode, LinuxMountConfig, LinuxNode, LinuxNodeKind,
-    LinuxReadOnlyEngine, LinuxRequestDispatcher, LinuxWritableEngine, LinuxWritebackStore, Result,
+    LinuxFileAttributes, LinuxFileHandle, LinuxInode, LinuxInvalidation, LinuxMountConfig,
+    LinuxNode, LinuxNodeKind, LinuxReadOnlyEngine, LinuxRequestDispatcher, LinuxWritableEngine,
+    LinuxWritebackStore, Result,
 };
+
+/// Native kernel-cache invalidation port owned by one mounted FUSE session.
+#[derive(Debug, Clone)]
+pub struct LinuxKernelNotifier {
+    inner: fuser::Notifier,
+}
+
+impl LinuxKernelNotifier {
+    fn new(inner: fuser::Notifier) -> Self {
+        Self { inner }
+    }
+
+    /// Applies one engine-produced invalidation to the mounted kernel namespace.
+    pub fn apply(&self, invalidation: &LinuxInvalidation) -> io::Result<()> {
+        match invalidation {
+            LinuxInvalidation::Entry { parent, name } => self
+                .inner
+                .inval_entry(INodeNo(parent.get()), OsStr::new(name)),
+            LinuxInvalidation::Inode { inode } => {
+                self.inner.inval_inode(INodeNo(inode.get()), 0, 0)
+            }
+            LinuxInvalidation::Delete {
+                parent,
+                child,
+                name,
+            } => self.inner.delete(
+                INodeNo(parent.get()),
+                INodeNo(child.get()),
+                OsStr::new(name),
+            ),
+        }
+    }
+
+    /// Applies an ordered engine plan, stopping at the first kernel error.
+    pub fn apply_all<'a>(
+        &self,
+        invalidations: impl IntoIterator<Item = &'a LinuxInvalidation>,
+    ) -> io::Result<()> {
+        for invalidation in invalidations {
+            self.apply(invalidation)?;
+        }
+        Ok(())
+    }
+}
+
+/// Background FUSE session that exposes notifier and explicit join/unmount boundaries.
+#[derive(Debug)]
+pub struct LinuxBackgroundSession {
+    inner: fuser::BackgroundSession,
+}
+
+impl LinuxBackgroundSession {
+    /// Returns a cloneable kernel notification port for remote-change workers.
+    pub fn notifier(&self) -> LinuxKernelNotifier {
+        LinuxKernelNotifier::new(self.inner.notifier())
+    }
+
+    /// Waits for the mounted session thread to finish.
+    pub fn join(self) -> io::Result<()> {
+        self.inner.join()
+    }
+
+    /// Unmounts the filesystem and then joins its session thread.
+    pub fn unmount_and_join(self) -> io::Result<()> {
+        self.inner.umount_and_join()
+    }
+}
 
 fn errno(code: LinuxErrorCode) -> Errno {
     match code {
         LinuxErrorCode::NotFound => Errno::ENOENT,
         LinuxErrorCode::AlreadyExists => Errno::EEXIST,
+        LinuxErrorCode::DirectoryNotEmpty => Errno::ENOTEMPTY,
+        LinuxErrorCode::IsDirectory => Errno::EISDIR,
+        LinuxErrorCode::NotDirectory => Errno::ENOTDIR,
         LinuxErrorCode::AccessDenied => Errno::EACCES,
         LinuxErrorCode::ReadOnlyFilesystem => Errno::EROFS,
         LinuxErrorCode::TryAgain => Errno::EAGAIN,
@@ -641,6 +712,101 @@ where
         });
     }
 
+    fn mkdir(
+        &self,
+        _request: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: ReplyEntry,
+    ) {
+        let parent = match request_inode(parent) {
+            Ok(parent) => parent,
+            Err(error) => {
+                reply.error(errno(error.error_code()));
+                return;
+            }
+        };
+        let Some(name) = name.to_str().map(str::to_owned) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+        let reservation = match self.dispatcher.reserve() {
+            Ok(reservation) => reservation,
+            Err(rejection) => {
+                reply.error(rejection_errno(rejection));
+                return;
+            }
+        };
+        let engine = self.engine.clone();
+        let ttl = engine.readonly().attribute_policy().cache_ttl();
+        reservation.spawn(async move {
+            match engine.create_directory(parent, &name, mode, umask).await {
+                Ok(node) => reply_entry(reply, ttl, &node),
+                Err(error) => reply.error(errno(error.error_code())),
+            }
+        });
+    }
+
+    fn unlink(&self, _request: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        self.remove_request(parent, name, LinuxNodeKind::File, reply);
+    }
+
+    fn rmdir(&self, _request: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        self.remove_request(parent, name, LinuxNodeKind::Directory, reply);
+    }
+
+    fn rename(
+        &self,
+        _request: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        new_parent: INodeNo,
+        new_name: &OsStr,
+        flags: RenameFlags,
+        reply: ReplyEmpty,
+    ) {
+        if flags.intersects(RenameFlags::RENAME_EXCHANGE | RenameFlags::RENAME_WHITEOUT) {
+            reply.error(Errno::ENOSYS);
+            return;
+        }
+        let result = request_inode(parent)
+            .and_then(|parent| request_inode(new_parent).map(|new_parent| (parent, new_parent)));
+        let (parent, new_parent) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                reply.error(errno(error.error_code()));
+                return;
+            }
+        };
+        let (Some(name), Some(new_name)) = (
+            name.to_str().map(str::to_owned),
+            new_name.to_str().map(str::to_owned),
+        ) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+        let reservation = match self.dispatcher.reserve() {
+            Ok(reservation) => reservation,
+            Err(rejection) => {
+                reply.error(rejection_errno(rejection));
+                return;
+            }
+        };
+        let engine = self.engine.clone();
+        let no_replace = flags.contains(RenameFlags::RENAME_NOREPLACE);
+        reservation.spawn(async move {
+            match engine
+                .rename(parent, &name, new_parent, &new_name, no_replace)
+                .await
+            {
+                Ok(()) => reply.ok(),
+                Err(error) => reply.error(errno(error.error_code())),
+            }
+        });
+    }
+
     fn read(
         &self,
         _request: &Request,
@@ -897,6 +1063,40 @@ where
             }
         });
     }
+
+    fn remove_request(
+        &self,
+        parent: INodeNo,
+        name: &OsStr,
+        kind: LinuxNodeKind,
+        reply: ReplyEmpty,
+    ) {
+        let parent = match request_inode(parent) {
+            Ok(parent) => parent,
+            Err(error) => {
+                reply.error(errno(error.error_code()));
+                return;
+            }
+        };
+        let Some(name) = name.to_str().map(str::to_owned) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+        let reservation = match self.dispatcher.reserve() {
+            Ok(reservation) => reservation,
+            Err(rejection) => {
+                reply.error(rejection_errno(rejection));
+                return;
+            }
+        };
+        let engine = self.engine.clone();
+        reservation.spawn(async move {
+            match engine.remove(parent, &name, kind).await {
+                Ok(()) => reply.ok(),
+                Err(error) => reply.error(errno(error.error_code())),
+            }
+        });
+    }
 }
 
 /// Mounts a blocking read-only FUSE session using product-neutral hardened defaults.
@@ -927,6 +1127,35 @@ where
     fuser::mount(filesystem, mountpoint, &options)
 }
 
+/// Spawns a read-only FUSE session and returns its kernel invalidation lifecycle handle.
+pub fn spawn_mount_read_only<B>(
+    filesystem: LinuxReadOnlyFilesystem<B>,
+    mountpoint: impl AsRef<Path>,
+    config: &LinuxMountConfig,
+) -> io::Result<LinuxBackgroundSession>
+where
+    B: CloudFilesBackend + 'static,
+{
+    let mut options = Config::default();
+    options.n_threads = config.kernel_threads();
+    options.clone_fd = config.clone_fd();
+    options.mount_options.extend([
+        MountOption::RO,
+        MountOption::DefaultPermissions,
+        MountOption::NoDev,
+        MountOption::NoSuid,
+        MountOption::NoExec,
+        MountOption::FSName(config.filesystem_name().to_owned()),
+    ]);
+    if let Some(subtype) = config.subtype() {
+        options
+            .mount_options
+            .push(MountOption::Subtype(subtype.to_owned()));
+    }
+    fuser::spawn_mount(filesystem, mountpoint, &options)
+        .map(|inner| LinuxBackgroundSession { inner })
+}
+
 /// Mounts a blocking writable FUSE session without kernel writeback-cache semantics.
 pub fn mount_writable<B, S>(
     filesystem: LinuxWritableFilesystem<B, S>,
@@ -953,4 +1182,33 @@ where
             .push(MountOption::Subtype(subtype.to_owned()));
     }
     fuser::mount(filesystem, mountpoint, &options)
+}
+
+/// Spawns a writable direct-I/O FUSE session with a kernel invalidation handle.
+pub fn spawn_mount_writable<B, S>(
+    filesystem: LinuxWritableFilesystem<B, S>,
+    mountpoint: impl AsRef<Path>,
+    config: &LinuxMountConfig,
+) -> io::Result<LinuxBackgroundSession>
+where
+    B: CloudFilesBackend + 'static,
+    S: LinuxWritebackStore + 'static,
+{
+    let mut options = Config::default();
+    options.n_threads = config.kernel_threads();
+    options.clone_fd = config.clone_fd();
+    options.mount_options.extend([
+        MountOption::DefaultPermissions,
+        MountOption::NoDev,
+        MountOption::NoSuid,
+        MountOption::NoExec,
+        MountOption::FSName(config.filesystem_name().to_owned()),
+    ]);
+    if let Some(subtype) = config.subtype() {
+        options
+            .mount_options
+            .push(MountOption::Subtype(subtype.to_owned()));
+    }
+    fuser::spawn_mount(filesystem, mountpoint, &options)
+        .map(|inner| LinuxBackgroundSession { inner })
 }

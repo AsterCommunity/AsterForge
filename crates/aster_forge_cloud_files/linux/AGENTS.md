@@ -51,6 +51,17 @@ This file supplements [`../../../AGENTS.md`](../../../AGENTS.md) and applies to
   transport, identities, transaction mapping, retry scheduling, and any later upload intent. Do
   not call a product transport from FUSE `create`, and do not claim that the local overlay is a
   committed remote item.
+- Directory create, rename/move, unlink, and rmdir use the same durable namespace boundary.
+  Products persist exact old/new/replaced locations and complete mutation intents before success;
+  the adapter preserves stable inode/generation and snapshot directory handles.
+- Remote change feeds remain product-owned. Commit metadata, inode mapping, and conflict policy in
+  the product transaction first, then apply `LinuxRemoteChange`, emit the returned ordered
+  invalidation plan through `LinuxKernelNotifier`, and only then advance the product cursor.
+- Restore product-persisted remote entries with `activate_with_namespace_and_remote` before dirty
+  snapshots. Never allocate remote inode records inside a FUSE callback or notifier path.
+- `fuser 0.18` does not expose a high-level interrupt callback and returns `ENOSYS` for
+  `FUSE_INTERRUPT`. Do not claim request-unique cancellation until the dependency exposes that
+  lifecycle and its late-reply races have native tests.
 - Every accepted native reply must finish exactly once. Queue saturation, dispatcher closing,
   backend failure, task panic, and stale handle paths all map to a deterministic errno/reply.
 - Keep kernel page cache distinct from provider backing content. Do not claim Windows/macOS pin or
@@ -64,6 +75,8 @@ This file supplements [`../../../AGENTS.md`](../../../AGENTS.md) and applies to
 cargo fmt --all -- --check
 cargo test -p aster_forge_cloud_files_linux --all-targets
 cargo clippy -p aster_forge_cloud_files_linux --all-targets -- -D warnings
+cargo clippy -p aster_forge_cloud_files_linux --all-targets \
+  --target aarch64-unknown-linux-gnu -- -D warnings
 cargo check -p aster_forge_cloud_files_linux --target x86_64-unknown-linux-gnu
 cargo zigbuild -p aster_forge_cloud_files_linux \
   --test memory_cloud_drive_example --target aarch64-unknown-linux-gnu
@@ -71,14 +84,15 @@ cargo zigbuild -p aster_forge_cloud_files_linux \
 
 For real Linux testing, mount the memory example, exercise nested directory enumeration, range
 reads, existing-file write/truncate/flush/fsync/reopen, regular-file create followed by immediate
-write/read/fsync/reopen, concurrent opens, duplicate create, unsupported mkdir/rename/unlink/rmdir,
-and clean unmount. With the optional synthetic state directory, also crash the provider, clear the
-stale mount, activate a higher generation, verify created namespace identity plus dirty bytes/size
-before another write, and restart once more. Core upload-runner tests must cover chunk resume, lost
+write/read/fsync/reopen, concurrent opens, duplicate create, mkdir/nested mkdir, same- and
+cross-parent rename, stable inode, no-replace, replacement kind errors, unlink, empty/non-empty
+rmdir, and clean unmount. With the optional synthetic state directory, also crash the provider,
+clear the stale mount, activate a higher generation, verify renamed nested namespace identity plus
+dirty bytes/size, remove it after restart, and restart once more. Core upload-runner tests must cover chunk resume, lost
 returns, unknown reconciliation, generation takeover, stale dirty completion, and concurrent
 execution. Core mutation-runner tests must cover create outcome shape, lost returns, explicit
 unknown reconciliation, stalled transitions, generation takeover, and concurrent execution. The
 synthetic example worker must also cover remote commit before local outcome persistence, restart
-with a higher generation, legacy journal recovery, and remote-ledger persistence failure. Add real
-product remote-upload/create integration, interrupt, and kernel-cache VM tests only with the
-matching durable identity, transaction, transport, and invalidation mechanisms.
+with a higher generation, legacy journal recovery, remote-ledger persistence failure, late upload
+after rename, and remote-overlay invalidation plans. Real product integration must cover its own
+transport, metadata/inode transaction, cursor advance, notifier delivery, and daemon lifecycle.

@@ -14,6 +14,12 @@ pub enum LinuxErrorCode {
     NotFound,
     /// A namespace create collided with an existing parent/name entry.
     AlreadyExists,
+    /// A directory removal was rejected because children still exist.
+    DirectoryNotEmpty,
+    /// A regular-file operation resolved a directory.
+    IsDirectory,
+    /// A directory operation resolved another item kind.
+    NotDirectory,
     /// The caller lacks access or must authenticate before access can proceed.
     AccessDenied,
     /// The read-only adapter rejected a mutation attempt.
@@ -118,7 +124,8 @@ impl LinuxCloudFilesError {
             Self::StaleHandle => LinuxErrorCode::Stale,
             Self::AccessModeMismatch => LinuxErrorCode::AccessDenied,
             Self::InvalidName { .. } => LinuxErrorCode::InvalidArgument,
-            Self::NotDirectory | Self::NotFile => LinuxErrorCode::NotFound,
+            Self::NotDirectory => LinuxErrorCode::NotDirectory,
+            Self::NotFile => LinuxErrorCode::IsDirectory,
             Self::Backend(error) => backend_error_code(error.kind()),
             Self::WritebackStore(error) => writeback_store_error_code(error.kind()),
             Self::NamespaceStore(error) => namespace_store_error_code(error.kind()),
@@ -144,6 +151,12 @@ pub const fn namespace_store_error_code(
     match kind {
         crate::LinuxNamespaceMutationStoreErrorKind::NotFound => LinuxErrorCode::NotFound,
         crate::LinuxNamespaceMutationStoreErrorKind::AlreadyExists => LinuxErrorCode::AlreadyExists,
+        crate::LinuxNamespaceMutationStoreErrorKind::DirectoryNotEmpty => {
+            LinuxErrorCode::DirectoryNotEmpty
+        }
+        crate::LinuxNamespaceMutationStoreErrorKind::IsDirectory => LinuxErrorCode::IsDirectory,
+        crate::LinuxNamespaceMutationStoreErrorKind::NotDirectory => LinuxErrorCode::NotDirectory,
+        crate::LinuxNamespaceMutationStoreErrorKind::Unsupported => LinuxErrorCode::NotSupported,
         crate::LinuxNamespaceMutationStoreErrorKind::Fenced => LinuxErrorCode::Stale,
         crate::LinuxNamespaceMutationStoreErrorKind::Conflict
         | crate::LinuxNamespaceMutationStoreErrorKind::PersistenceFailure => LinuxErrorCode::Io,

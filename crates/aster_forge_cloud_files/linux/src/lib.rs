@@ -1,11 +1,11 @@
 //! Product-neutral Linux FUSE bindings for Forge cloud-files core.
 //!
 //! This crate owns stable inode/generation mappings, directory-handle snapshots, file-handle
-//! revision fences, direct-I/O writeback, durable regular-file create acceptance,
-//! mount-generation recovery, FUSE reply mapping, and bounded callback-to-async dispatch. Product
-//! crates retain identity allocation, backend adapters, durable inode/content storage, remote
-//! mutation workers, daemon/service packaging, mount UX, authentication, permissions, and
-//! user-visible errors.
+//! revision fences, direct-I/O writeback, durable namespace mutation acceptance, remote-change
+//! overlays, kernel invalidation plans, mount-generation recovery, FUSE reply mapping, and bounded
+//! callback-to-async dispatch. Product crates retain identity allocation, backend adapters,
+//! durable inode/content storage, change cursors, remote workers, daemon/service packaging, mount
+//! UX, authentication, permissions, and user-visible errors.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![deny(clippy::undocumented_unsafe_blocks, unsafe_op_in_unsafe_fn)]
 #![cfg_attr(
@@ -25,6 +25,7 @@ mod engine;
 mod error;
 mod inode;
 mod namespace;
+mod remote;
 mod writeback;
 
 #[cfg(target_os = "linux")]
@@ -46,13 +47,20 @@ pub use inode::{
     LINUX_ROOT_INODE, LinuxInode, LinuxInodeGeneration, LinuxInodeRecord, LinuxInodeTable,
 };
 pub use namespace::{
-    LinuxCreateFileAcceptance, LinuxCreateFileRequest, LinuxCreatedFile,
-    LinuxNamespaceMutationStore, LinuxNamespaceMutationStoreError,
-    LinuxNamespaceMutationStoreErrorKind, LinuxNamespaceStoreResult,
+    LinuxCreateDirectoryRequest, LinuxCreateFileAcceptance, LinuxCreateFileRequest,
+    LinuxCreatedFile, LinuxNamespaceItem, LinuxNamespaceMutationStore,
+    LinuxNamespaceMutationStoreError, LinuxNamespaceMutationStoreErrorKind, LinuxNamespaceOverlay,
+    LinuxNamespaceStoreResult, LinuxNamespaceTombstone, LinuxRemoveRequest, LinuxRenameAcceptance,
+    LinuxRenameDestination, LinuxRenameRequest,
 };
 #[cfg(target_os = "linux")]
 pub use native::{
-    LinuxReadOnlyFilesystem, LinuxWritableFilesystem, mount_read_only, mount_writable,
+    LinuxBackgroundSession, LinuxKernelNotifier, LinuxReadOnlyFilesystem, LinuxWritableFilesystem,
+    mount_read_only, mount_writable, spawn_mount_read_only, spawn_mount_writable,
+};
+pub use remote::{
+    LinuxInvalidation, LinuxRemoteChange, LinuxRemoteDelete, LinuxRemoteEntry, LinuxRemoteLocation,
+    LinuxRemoteUpsert,
 };
 pub use writeback::{
     LinuxFileAccess, LinuxWritableEngine, LinuxWriteCommit, LinuxWriteOpenRequest,

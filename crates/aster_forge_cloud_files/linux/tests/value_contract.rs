@@ -196,6 +196,22 @@ fn every_backend_error_kind_has_a_stable_linux_classification() {
             LinuxErrorCode::AlreadyExists,
         ),
         (
+            LinuxNamespaceMutationStoreErrorKind::DirectoryNotEmpty,
+            LinuxErrorCode::DirectoryNotEmpty,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::IsDirectory,
+            LinuxErrorCode::IsDirectory,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::NotDirectory,
+            LinuxErrorCode::NotDirectory,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::Unsupported,
+            LinuxErrorCode::NotSupported,
+        ),
+        (
             LinuxNamespaceMutationStoreErrorKind::Fenced,
             LinuxErrorCode::Stale,
         ),
@@ -225,8 +241,11 @@ fn every_backend_error_kind_has_a_stable_linux_classification() {
             LinuxCloudFilesError::InvalidName { reason: "fixture" },
             LinuxErrorCode::InvalidArgument,
         ),
-        (LinuxCloudFilesError::NotDirectory, LinuxErrorCode::NotFound),
-        (LinuxCloudFilesError::NotFile, LinuxErrorCode::NotFound),
+        (
+            LinuxCloudFilesError::NotDirectory,
+            LinuxErrorCode::NotDirectory,
+        ),
+        (LinuxCloudFilesError::NotFile, LinuxErrorCode::IsDirectory),
         (LinuxCloudFilesError::ZeroInode, LinuxErrorCode::Io),
     ];
     for (error, expected) in local_cases {

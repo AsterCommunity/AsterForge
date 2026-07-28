@@ -1,5 +1,8 @@
 // Each integration-test crate imports the same fixture module but exercises a different subset.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared test support exposes fixtures used by separate integration binaries"
+)]
 
 pub mod content_storage;
 pub mod failure_injection;

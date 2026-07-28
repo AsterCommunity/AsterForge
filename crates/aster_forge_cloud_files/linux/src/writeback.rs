@@ -1,23 +1,27 @@
 //! Durable local-write staging for the Linux FUSE adapter.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use aster_forge_cloud_files_core::{
-    CloudFilesBackend, CloudItemId, CloudItemKey, CloudItemKind, CloudScope, ContentRevision,
-    DesiredMutation, LocalContentGeneration, LocalContentSnapshot, MutationOrigin,
+    CloudFilesBackend, CloudItem, CloudItemId, CloudItemKey, CloudItemKind, CloudScope,
+    ContentRevision, DesiredMutation, LocalContentGeneration, LocalContentSnapshot, MutationOrigin,
     SessionGeneration, StoreResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::{
-    LinuxCloudFilesError, LinuxCreateFileAcceptance, LinuxCreateFileRequest, LinuxCreatedFile,
-    LinuxDirectoryEntry, LinuxDirectoryHandle, LinuxDirectorySnapshot, LinuxFileHandle, LinuxInode,
-    LinuxNamespaceMutationStore, LinuxNode, LinuxReadOnlyEngine, Result,
+    LinuxCloudFilesError, LinuxCreateDirectoryRequest, LinuxCreateFileAcceptance,
+    LinuxCreateFileRequest, LinuxCreatedFile, LinuxDirectoryEntry, LinuxDirectoryHandle,
+    LinuxDirectorySnapshot, LinuxFileHandle, LinuxInode, LinuxInvalidation, LinuxNamespaceItem,
+    LinuxNamespaceMutationStore, LinuxNamespaceOverlay, LinuxNamespaceTombstone, LinuxNode,
+    LinuxReadOnlyEngine, LinuxRemoteChange, LinuxRemoteDelete, LinuxRemoteEntry,
+    LinuxRemoteLocation, LinuxRemoveRequest, LinuxRenameAcceptance, LinuxRenameDestination,
+    LinuxRenameRequest, Result,
 };
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -331,6 +335,17 @@ struct WritableState {
     created_by_inode: HashMap<LinuxInode, LinuxCreatedFile>,
     created_by_key: HashMap<CloudItemKey, LinuxInode>,
     created_by_name: HashMap<(CloudItemId, String), LinuxInode>,
+    namespace_by_inode: HashMap<LinuxInode, LinuxNamespaceItem>,
+    namespace_by_key: HashMap<CloudItemKey, LinuxInode>,
+    namespace_by_name: HashMap<(CloudItemId, String), LinuxInode>,
+    remote_by_inode: HashMap<LinuxInode, LinuxRemoteEntry>,
+    remote_by_key: HashMap<CloudItemKey, LinuxInode>,
+    remote_by_name: HashMap<(CloudItemId, String), LinuxInode>,
+    remote_tombstones_by_name: HashSet<(CloudItemId, String)>,
+    remote_deleted_keys: HashSet<CloudItemKey>,
+    remote_deleted_inodes: HashSet<LinuxInode>,
+    tombstones_by_name: HashMap<(CloudItemId, String), LinuxNamespaceTombstone>,
+    deleted_keys: HashSet<CloudItemKey>,
 }
 
 impl WritableState {
@@ -385,7 +400,7 @@ where
         store: Arc<S>,
         session_generation: SessionGeneration,
     ) -> Result<Self> {
-        Self::activate_inner(readonly, store, None, session_generation).await
+        Self::activate_inner(readonly, store, None, Vec::new(), session_generation).await
     }
 
     /// Activates writeback plus a durable namespace port for native regular-file creation.
@@ -398,13 +413,42 @@ where
     where
         N: LinuxNamespaceMutationStore + 'static,
     {
-        Self::activate_inner(readonly, store, Some(namespace_store), session_generation).await
+        Self::activate_inner(
+            readonly,
+            store,
+            Some(namespace_store),
+            Vec::new(),
+            session_generation,
+        )
+        .await
+    }
+
+    /// Activates namespace/writeback state with product-persisted remote inode mappings.
+    pub async fn activate_with_namespace_and_remote<N>(
+        readonly: LinuxReadOnlyEngine<B>,
+        store: Arc<S>,
+        namespace_store: Arc<N>,
+        remote_entries: Vec<LinuxRemoteEntry>,
+        session_generation: SessionGeneration,
+    ) -> Result<Self>
+    where
+        N: LinuxNamespaceMutationStore + 'static,
+    {
+        Self::activate_inner(
+            readonly,
+            store,
+            Some(namespace_store),
+            remote_entries,
+            session_generation,
+        )
+        .await
     }
 
     async fn activate_inner(
         readonly: LinuxReadOnlyEngine<B>,
         store: Arc<S>,
         namespace_store: Option<Arc<dyn LinuxNamespaceMutationStore>>,
+        remote_entries: Vec<LinuxRemoteEntry>,
         session_generation: SessionGeneration,
     ) -> Result<Self> {
         let created = match namespace_store.as_ref() {
@@ -418,6 +462,14 @@ where
         let snapshots = store
             .activate_mount(readonly.inode_table().scope(), session_generation)
             .await?;
+        let overlay = match namespace_store.as_ref() {
+            Some(namespace_store) => {
+                namespace_store
+                    .activate_namespace_overlay(readonly.inode_table().scope(), session_generation)
+                    .await?
+            }
+            None => LinuxNamespaceOverlay::default(),
+        };
         let engine = Self {
             inner: Arc::new(WritableEngineInner {
                 readonly,
@@ -427,6 +479,8 @@ where
                 state: Mutex::new(WritableState::default()),
             }),
         };
+        engine.restore_namespace_overlay(overlay).await?;
+        engine.restore_remote_overlay(remote_entries)?;
         engine.restore_created_files(created).await?;
         engine.restore_dirty_snapshots(snapshots)?;
         Ok(engine)
@@ -442,22 +496,75 @@ where
         self.inner.session_generation
     }
 
+    /// Restores product-persisted remote entries before the mount is exposed to the kernel.
+    pub fn restore_remote_overlay(
+        &self,
+        entries: impl IntoIterator<Item = LinuxRemoteEntry>,
+    ) -> Result<()> {
+        for entry in entries {
+            self.apply_remote_change(LinuxRemoteChange::Upsert(crate::LinuxRemoteUpsert::new(
+                entry, None, None,
+            )))?;
+        }
+        Ok(())
+    }
+
+    /// Applies one already-durable remote namespace transition and returns kernel invalidations.
+    pub fn apply_remote_change(&self, change: LinuxRemoteChange) -> Result<Vec<LinuxInvalidation>> {
+        match change {
+            LinuxRemoteChange::Upsert(upsert) => {
+                let (entry, previous, replaced) = upsert.into_parts();
+                self.apply_remote_upsert(entry, previous, replaced)
+            }
+            LinuxRemoteChange::Delete(deleted) => self.apply_remote_delete(deleted),
+        }
+    }
+
     /// Loads attributes, overlaying the current staged size when a writable handle is supplied.
     pub async fn getattr(
         &self,
         inode: LinuxInode,
         handle: Option<LinuxFileHandle>,
     ) -> Result<LinuxNode> {
-        let created = lock(&self.inner.state)
-            .created_by_inode
-            .get(&inode)
-            .cloned();
-        let node = match created {
-            Some(created) => self
+        let (namespace, created, remote, deleted) = {
+            let state = lock(&self.inner.state);
+            let restored_key = self
+                .inner
+                .readonly
+                .inode_table()
+                .by_inode(inode)
+                .map(crate::LinuxInodeRecord::key);
+            (
+                state.namespace_by_inode.get(&inode).cloned(),
+                state.created_by_inode.get(&inode).cloned(),
+                state.remote_by_inode.get(&inode).cloned(),
+                state.remote_deleted_inodes.contains(&inode)
+                    || restored_key.is_some_and(|key| {
+                        state.deleted_keys.contains(key) || state.remote_deleted_keys.contains(key)
+                    })
+                    || state.created_by_inode.get(&inode).is_some_and(|created| {
+                        state.deleted_keys.contains(created.item().key())
+                            || state.remote_deleted_keys.contains(created.item().key())
+                    }),
+            )
+        };
+        if deleted && namespace.is_none() && remote.is_none() {
+            return Err(LinuxCloudFilesError::UnknownInode { inode: inode.get() });
+        }
+        let node = match (namespace, created, remote) {
+            (Some(item), _, _) => self
+                .inner
+                .readonly
+                .node_from_item_and_record(item.item(), item.inode_record())?,
+            (None, Some(created), _) => self
                 .inner
                 .readonly
                 .node_from_item_and_record(created.item(), created.inode_record())?,
-            None => self.inner.readonly.getattr(inode).await?,
+            (None, None, Some(remote)) => self
+                .inner
+                .readonly
+                .node_from_item_and_record(remote.item(), remote.inode_record())?,
+            (None, None, None) => self.inner.readonly.getattr(inode).await?,
         };
         let size = match handle {
             Some(handle) => {
@@ -490,20 +597,48 @@ where
             return Err(LinuxCloudFilesError::NotDirectory);
         }
         let parent_key = parent_node.key();
-        let created = {
+        let (namespace, created, remote, tombstoned) = {
             let state = lock(&self.inner.state);
-            state
-                .created_by_name
-                .get(&(parent_key.item_id().clone(), name.to_owned()))
-                .and_then(|inode| state.created_by_inode.get(inode))
-                .cloned()
+            let name_key = (parent_key.item_id().clone(), name.to_owned());
+            (
+                state
+                    .namespace_by_name
+                    .get(&name_key)
+                    .and_then(|inode| state.namespace_by_inode.get(inode))
+                    .cloned(),
+                state
+                    .created_by_name
+                    .get(&name_key)
+                    .and_then(|inode| state.created_by_inode.get(inode))
+                    .cloned(),
+                state
+                    .remote_by_name
+                    .get(&name_key)
+                    .and_then(|inode| state.remote_by_inode.get(inode))
+                    .cloned(),
+                state.tombstones_by_name.contains_key(&name_key)
+                    || state.remote_tombstones_by_name.contains(&name_key),
+            )
         };
-        let node = match created {
-            Some(created) => self
+        let node = match (namespace, created, remote, tombstoned) {
+            (Some(item), _, _, _) => self
+                .inner
+                .readonly
+                .node_from_item_and_record(item.item(), item.inode_record())?,
+            (None, Some(created), _, _) => self
                 .inner
                 .readonly
                 .node_from_item_and_record(created.item(), created.inode_record())?,
-            None => self.inner.readonly.lookup(parent, name).await?,
+            (None, None, Some(remote), _) => self
+                .inner
+                .readonly
+                .node_from_item_and_record(remote.item(), remote.inode_record())?,
+            (None, None, None, true) => {
+                return Err(LinuxCloudFilesError::UnknownInode {
+                    inode: parent.get(),
+                });
+            }
+            (None, None, None, false) => self.inner.readonly.lookup(parent, name).await?,
         };
         let size = lock(&self.inner.state)
             .dirty_snapshots
@@ -521,16 +656,28 @@ where
         inode: LinuxInode,
         access: LinuxFileAccess,
     ) -> Result<LinuxFileHandle> {
-        let created = lock(&self.inner.state)
-            .created_by_inode
-            .get(&inode)
-            .cloned();
-        let node = match created.as_ref() {
-            Some(created) => self
+        let (namespace, created, remote) = {
+            let state = lock(&self.inner.state);
+            (
+                state.namespace_by_inode.get(&inode).cloned(),
+                state.created_by_inode.get(&inode).cloned(),
+                state.remote_by_inode.get(&inode).cloned(),
+            )
+        };
+        let node = match (namespace.as_ref(), created.as_ref(), remote.as_ref()) {
+            (Some(item), _, _) => self
+                .inner
+                .readonly
+                .node_from_item_and_record(item.item(), item.inode_record())?,
+            (None, Some(created), _) => self
                 .inner
                 .readonly
                 .node_from_item_and_record(created.item(), created.inode_record())?,
-            None => self.inner.readonly.getattr(inode).await?,
+            (None, None, Some(remote)) => self
+                .inner
+                .readonly
+                .node_from_item_and_record(remote.item(), remote.inode_record())?,
+            (None, None, None) => self.inner.readonly.getattr(inode).await?,
         };
         if node.attributes().kind() != crate::LinuxNodeKind::File {
             return Err(LinuxCloudFilesError::NotFile);
@@ -557,11 +704,20 @@ where
                 )
             }
             None => {
-                let (request, content) = self
-                    .inner
-                    .readonly
-                    .hydrate_for_write(inode, self.inner.session_generation)
-                    .await?;
+                let (request, content) = match remote.as_ref() {
+                    Some(remote) => {
+                        self.inner
+                            .readonly
+                            .hydrate_item_for_write(remote.item(), self.inner.session_generation)
+                            .await?
+                    }
+                    None => {
+                        self.inner
+                            .readonly
+                            .hydrate_for_write(inode, self.inner.session_generation)
+                            .await?
+                    }
+                };
                 (
                     self.inner.store.open_existing(&request, content).await?,
                     false,
@@ -613,51 +769,265 @@ where
         self.accept_created_file(request, acceptance, handle)
     }
 
+    /// Atomically accepts a durable directory create and exposes its stable inode.
+    pub async fn create_directory(
+        &self,
+        parent: LinuxInode,
+        name: &str,
+        mode: u32,
+        umask: u32,
+    ) -> Result<LinuxNode> {
+        let namespace_store = self
+            .inner
+            .namespace_store
+            .as_ref()
+            .ok_or(LinuxCloudFilesError::NamespaceMutationNotConfigured)?;
+        let parent_node = self.getattr(parent, None).await?;
+        if parent_node.attributes().kind() != crate::LinuxNodeKind::Directory {
+            return Err(LinuxCloudFilesError::NotDirectory);
+        }
+        let request = LinuxCreateDirectoryRequest::new(
+            parent_node.key().clone(),
+            name,
+            mode,
+            umask,
+            self.inner.session_generation,
+        )?;
+        let item = namespace_store.create_directory(&request).await?;
+        self.accept_namespace_create(&request, item)
+    }
+
+    /// Atomically renames or moves one namespace entry while preserving stable identity.
+    pub async fn rename(
+        &self,
+        parent: LinuxInode,
+        name: &str,
+        new_parent: LinuxInode,
+        new_name: &str,
+        no_replace: bool,
+    ) -> Result<()> {
+        crate::validate_linux_name(name)?;
+        crate::validate_linux_name(new_name)?;
+        if parent == new_parent && name == new_name {
+            return Ok(());
+        }
+        let namespace_store = self
+            .inner
+            .namespace_store
+            .as_ref()
+            .ok_or(LinuxCloudFilesError::NamespaceMutationNotConfigured)?;
+        let old_parent = self.getattr(parent, None).await?;
+        let new_parent = self.getattr(new_parent, None).await?;
+        if old_parent.attributes().kind() != crate::LinuxNodeKind::Directory
+            || new_parent.attributes().kind() != crate::LinuxNodeKind::Directory
+        {
+            return Err(LinuxCloudFilesError::NotDirectory);
+        }
+        let source = self.lookup(parent, name).await?;
+        let destination = match self.lookup(new_parent.attributes().inode(), new_name).await {
+            Ok(node) => Some(LinuxRenameDestination::new(
+                node.key().clone(),
+                node.generation(),
+                node.attributes().kind(),
+            )),
+            Err(error) if error.error_code() == crate::LinuxErrorCode::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let request = LinuxRenameRequest::new(
+            source.key().clone(),
+            source.generation(),
+            source.attributes().kind(),
+            old_parent.key().clone(),
+            name,
+            new_parent.key().clone(),
+            new_name,
+            destination,
+            no_replace,
+            self.inner.session_generation,
+        )?;
+        let acceptance = namespace_store.rename(&request).await?;
+        self.accept_rename(&request, acceptance)
+    }
+
+    /// Atomically accepts unlink or rmdir and hides the durable tombstone from new lookups.
+    pub async fn remove(
+        &self,
+        parent: LinuxInode,
+        name: &str,
+        expected_kind: crate::LinuxNodeKind,
+    ) -> Result<()> {
+        let namespace_store = self
+            .inner
+            .namespace_store
+            .as_ref()
+            .ok_or(LinuxCloudFilesError::NamespaceMutationNotConfigured)?;
+        let parent_node = self.getattr(parent, None).await?;
+        if parent_node.attributes().kind() != crate::LinuxNodeKind::Directory {
+            return Err(LinuxCloudFilesError::NotDirectory);
+        }
+        let child = self.lookup(parent, name).await?;
+        if child.attributes().kind() != expected_kind {
+            return Err(match expected_kind {
+                crate::LinuxNodeKind::File => LinuxCloudFilesError::NotFile,
+                crate::LinuxNodeKind::Directory => LinuxCloudFilesError::NotDirectory,
+            });
+        }
+        let request = LinuxRemoveRequest::new(
+            child.key().clone(),
+            child.generation(),
+            parent_node.key().clone(),
+            name,
+            expected_kind,
+            self.inner.session_generation,
+        )?;
+        let tombstone = namespace_store.remove(&request).await?;
+        self.accept_remove(&request, tombstone)
+    }
+
     /// Opens a directory snapshot that includes durable local creates accepted before this call.
     pub async fn open_directory(&self, inode: LinuxInode) -> Result<LinuxDirectoryHandle> {
         let node = self.getattr(inode, None).await?;
         if node.attributes().kind() != crate::LinuxNodeKind::Directory {
             return Err(LinuxCloudFilesError::NotDirectory);
         }
-        let base_handle = self.inner.readonly.open_directory(inode).await?;
-        let base = self.inner.readonly.directory_snapshot(inode, base_handle);
-        let release = self.inner.readonly.release_directory(base_handle);
-        let base = match (base, release) {
-            (Ok(base), Ok(())) => base,
-            (Err(error), _) | (Ok(_), Err(error)) => return Err(error),
+        let directory_item = match self.overlay_item(inode) {
+            Some((item, _)) => item,
+            None => self.inner.readonly.load_item_for_overlay(inode).await?,
         };
-
-        let mut entries = base.entries().to_vec();
+        let backend_children = self
+            .inner
+            .readonly
+            .load_children_for_overlay(directory_item.key())
+            .await?;
+        let parent = match directory_item.parent_id() {
+            Some(parent_id) => self
+                .inode_for_key(&CloudItemKey::new(
+                    directory_item.key().scope().clone(),
+                    parent_id.clone(),
+                ))
+                .ok_or(LinuxCloudFilesError::MissingInodeRecord)?,
+            None => inode,
+        };
+        let (tombstoned_names, overlay_names) = {
+            let state = lock(&self.inner.state);
+            let tombstoned_names = state
+                .tombstones_by_name
+                .keys()
+                .filter(|(parent_id, _)| parent_id == node.key().item_id())
+                .map(|(_, name)| name.clone())
+                .chain(
+                    state
+                        .remote_tombstones_by_name
+                        .iter()
+                        .filter(|(parent_id, _)| parent_id == node.key().item_id())
+                        .map(|(_, name)| name.clone()),
+                )
+                .collect::<HashSet<_>>();
+            let overlay_names = state
+                .namespace_by_name
+                .keys()
+                .filter(|(parent_id, _)| parent_id == node.key().item_id())
+                .map(|(_, name)| name.clone())
+                .chain(
+                    state
+                        .created_by_name
+                        .keys()
+                        .filter(|(parent_id, _)| parent_id == node.key().item_id())
+                        .map(|(_, name)| name.clone()),
+                )
+                .chain(
+                    state
+                        .remote_by_name
+                        .keys()
+                        .filter(|(parent_id, _)| parent_id == node.key().item_id())
+                        .map(|(_, name)| name.clone()),
+                )
+                .collect::<HashSet<_>>();
+            (tombstoned_names, overlay_names)
+        };
+        let mut entries = backend_children
+            .into_iter()
+            .filter(|item| {
+                !tombstoned_names.contains(item.name()) && !overlay_names.contains(item.name())
+            })
+            .map(|item| {
+                let record = self
+                    .record_for_key(item.key())
+                    .ok_or(LinuxCloudFilesError::MissingInodeRecord)?;
+                let child = self
+                    .inner
+                    .readonly
+                    .node_from_item_and_record(&item, &record)?;
+                Ok(LinuxDirectoryEntry::from_node(
+                    item.name().to_owned(),
+                    &child,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut local = {
             let state = lock(&self.inner.state);
-            state
-                .created_by_inode
-                .values()
-                .filter(|created| created.item().parent_id() == Some(node.key().item_id()))
-                .cloned()
-                .collect::<Vec<_>>()
+            let mut local = Vec::new();
+            for ((parent_id, name), child_inode) in &state.created_by_name {
+                if parent_id == node.key().item_id()
+                    && !state
+                        .namespace_by_name
+                        .contains_key(&(parent_id.clone(), name.clone()))
+                    && !state
+                        .remote_by_name
+                        .contains_key(&(parent_id.clone(), name.clone()))
+                    && !tombstoned_names.contains(name)
+                    && let Some(created) = state.created_by_inode.get(child_inode)
+                {
+                    local.push((
+                        name.clone(),
+                        created.item().clone(),
+                        created.inode_record().clone(),
+                    ));
+                }
+            }
+            for ((parent_id, name), child_inode) in &state.remote_by_name {
+                if parent_id == node.key().item_id()
+                    && !state
+                        .namespace_by_name
+                        .contains_key(&(parent_id.clone(), name.clone()))
+                    && !tombstoned_names.contains(name)
+                    && let Some(remote) = state.remote_by_inode.get(child_inode)
+                {
+                    local.push((
+                        name.clone(),
+                        remote.item().clone(),
+                        remote.inode_record().clone(),
+                    ));
+                }
+            }
+            for ((parent_id, name), child_inode) in &state.namespace_by_name {
+                if parent_id == node.key().item_id()
+                    && !tombstoned_names.contains(name)
+                    && let Some(item) = state.namespace_by_inode.get(child_inode)
+                {
+                    local.push((
+                        name.clone(),
+                        item.item().clone(),
+                        item.inode_record().clone(),
+                    ));
+                }
+            }
+            local
         };
-        local.sort_by(|left, right| left.item().name().cmp(right.item().name()));
-        for created in local {
-            if entries
-                .iter()
-                .any(|entry| entry.name() == created.item().name())
-            {
+        local.sort_by(|left, right| left.0.cmp(&right.0));
+        for (name, item, record) in local {
+            if entries.iter().any(|entry| entry.name() == name) {
                 return Err(LinuxCloudFilesError::InvalidBackendResponse {
-                    reason: "durable local create collided with a backend directory entry",
+                    reason: "durable overlay collided with another visible directory entry",
                 });
             }
             let child = self
                 .inner
                 .readonly
-                .node_from_item_and_record(created.item(), created.inode_record())?;
-            entries.push(LinuxDirectoryEntry::from_node(
-                created.item().name().to_owned(),
-                &child,
-            ));
+                .node_from_item_and_record(&item, &record)?;
+            entries.push(LinuxDirectoryEntry::from_node(name, &child));
         }
-        let snapshot =
-            LinuxDirectorySnapshot::with_entries(base.directory(), base.parent(), entries);
+        let snapshot = LinuxDirectorySnapshot::with_entries(inode, parent, entries);
         let mut state = lock(&self.inner.state);
         let handle = state.allocate_directory()?;
         state.directories.insert(handle, snapshot);
@@ -679,6 +1049,242 @@ where
             return Err(LinuxCloudFilesError::StaleHandle);
         }
         Ok(snapshot.clone())
+    }
+
+    fn overlay_item(&self, inode: LinuxInode) -> Option<(CloudItem, crate::LinuxInodeRecord)> {
+        let state = lock(&self.inner.state);
+        if let Some(item) = state.namespace_by_inode.get(&inode) {
+            return Some((item.item().clone(), item.inode_record().clone()));
+        }
+        if let Some(created) = state.created_by_inode.get(&inode) {
+            return Some((created.item().clone(), created.inode_record().clone()));
+        }
+        state
+            .remote_by_inode
+            .get(&inode)
+            .map(|entry| (entry.item().clone(), entry.inode_record().clone()))
+    }
+
+    fn record_for_key(&self, key: &CloudItemKey) -> Option<crate::LinuxInodeRecord> {
+        let state = lock(&self.inner.state);
+        state
+            .namespace_by_key
+            .get(key)
+            .and_then(|inode| state.namespace_by_inode.get(inode))
+            .map(|item| item.inode_record().clone())
+            .or_else(|| {
+                state
+                    .created_by_key
+                    .get(key)
+                    .and_then(|inode| state.created_by_inode.get(inode))
+                    .map(|item| item.inode_record().clone())
+            })
+            .or_else(|| {
+                state
+                    .remote_by_key
+                    .get(key)
+                    .and_then(|inode| state.remote_by_inode.get(inode))
+                    .map(|item| item.inode_record().clone())
+            })
+            .or_else(|| self.inner.readonly.inode_table().by_key(key).cloned())
+    }
+
+    fn inode_for_key(&self, key: &CloudItemKey) -> Option<LinuxInode> {
+        self.record_for_key(key).map(|record| record.inode())
+    }
+
+    fn key_for_inode(&self, inode: LinuxInode) -> Option<CloudItemKey> {
+        self.overlay_item(inode)
+            .map(|(item, _)| item.key().clone())
+            .or_else(|| {
+                self.inner
+                    .readonly
+                    .inode_table()
+                    .by_inode(inode)
+                    .map(|record| record.key().clone())
+            })
+    }
+
+    fn validate_remote_entry(&self, entry: &LinuxRemoteEntry) -> Result<()> {
+        if entry.item().key() != entry.inode_record().key()
+            || entry.item().key().scope() != self.inner.readonly.inode_table().scope()
+            || entry.item().is_root()
+            || entry.inode_record().inode() == crate::LINUX_ROOT_INODE
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remote overlay entry violated scope, identity, or root boundaries",
+            });
+        }
+        self.inner
+            .readonly
+            .node_from_item_and_record(entry.item(), entry.inode_record())?;
+        if let Some(existing_key) = self.key_for_inode(entry.inode_record().inode())
+            && existing_key != *entry.item().key()
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remote overlay reused an inode assigned to another stable item",
+            });
+        }
+        if let Some(existing) = self.record_for_key(entry.item().key())
+            && existing != *entry.inode_record()
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remote overlay changed a stable item inode or generation",
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_remote_delete(&self, deleted: &LinuxRemoteDelete) -> Result<()> {
+        if deleted.key() != deleted.inode_record().key()
+            || deleted.key().scope() != self.inner.readonly.inode_table().scope()
+            || deleted.parent_key().scope() != self.inner.readonly.inode_table().scope()
+            || self.record_for_key(deleted.key()).as_ref() != Some(deleted.inode_record())
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remote deletion substituted scope, stable identity, or inode generation",
+            });
+        }
+        Ok(())
+    }
+
+    fn apply_remote_upsert(
+        &self,
+        entry: LinuxRemoteEntry,
+        previous: Option<LinuxRemoteLocation>,
+        replaced: Option<LinuxRemoteDelete>,
+    ) -> Result<Vec<LinuxInvalidation>> {
+        self.validate_remote_entry(&entry)?;
+        let key = entry.item().key().clone();
+        let inode = entry.inode_record().inode();
+        let parent_id = entry
+            .item()
+            .parent_id()
+            .ok_or(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remote overlay item omitted its parent",
+            })?
+            .clone();
+        let parent_key = CloudItemKey::new(key.scope().clone(), parent_id.clone());
+        let parent = self
+            .inode_for_key(&parent_key)
+            .ok_or(LinuxCloudFilesError::MissingInodeRecord)?;
+        if previous.as_ref().is_some_and(|location| {
+            location.parent_key().scope() != key.scope()
+                || self.inode_for_key(location.parent_key()).is_none()
+        }) {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remote upsert previous location had no stable parent mapping",
+            });
+        }
+        if let Some(replaced) = replaced.as_ref() {
+            self.validate_remote_delete(replaced)?;
+            if replaced.key() == &key {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "remote upsert replaced its own stable identity",
+                });
+            }
+        }
+        {
+            let state = lock(&self.inner.state);
+            if state.namespace_by_key.contains_key(&key) || state.created_by_key.contains_key(&key)
+            {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "remote change collided with a pending local namespace mutation",
+                });
+            }
+        }
+        let mut invalidations = Vec::new();
+        if let Some(location) = previous.as_ref() {
+            let previous_parent = self
+                .inode_for_key(location.parent_key())
+                .ok_or(LinuxCloudFilesError::MissingInodeRecord)?;
+            invalidations.push(LinuxInvalidation::Entry {
+                parent: previous_parent,
+                name: location.name().to_owned(),
+            });
+        }
+        if let Some(replaced) = replaced.as_ref() {
+            let replaced_parent = self
+                .inode_for_key(replaced.parent_key())
+                .ok_or(LinuxCloudFilesError::MissingInodeRecord)?;
+            invalidations.push(LinuxInvalidation::Delete {
+                parent: replaced_parent,
+                child: replaced.inode_record().inode(),
+                name: replaced.name().to_owned(),
+            });
+        }
+        invalidations.push(LinuxInvalidation::Entry {
+            parent,
+            name: entry.item().name().to_owned(),
+        });
+        invalidations.push(LinuxInvalidation::Inode { inode });
+
+        let mut state = lock(&self.inner.state);
+        if let Some(location) = previous {
+            let old_name = (
+                location.parent_key().item_id().clone(),
+                location.name().to_owned(),
+            );
+            state.remote_by_name.remove(&old_name);
+            state.remote_tombstones_by_name.insert(old_name);
+        }
+        if let Some(replaced) = replaced {
+            let replaced_name = (
+                replaced.parent_key().item_id().clone(),
+                replaced.name().to_owned(),
+            );
+            if let Some(replaced_inode) = state.remote_by_key.remove(replaced.key()) {
+                state.remote_by_inode.remove(&replaced_inode);
+            }
+            state.remote_by_name.remove(&replaced_name);
+            state.remote_tombstones_by_name.insert(replaced_name);
+            state.remote_deleted_keys.insert(replaced.key().clone());
+            state
+                .remote_deleted_inodes
+                .insert(replaced.inode_record().inode());
+        }
+        let name_key = (parent_id, entry.item().name().to_owned());
+        state.remote_tombstones_by_name.remove(&name_key);
+        state.remote_deleted_keys.remove(&key);
+        state.remote_deleted_inodes.remove(&inode);
+        state.remote_by_key.insert(key, inode);
+        state.remote_by_name.insert(name_key, inode);
+        state.remote_by_inode.insert(inode, entry);
+        Ok(invalidations)
+    }
+
+    fn apply_remote_delete(&self, deleted: LinuxRemoteDelete) -> Result<Vec<LinuxInvalidation>> {
+        self.validate_remote_delete(&deleted)?;
+        let parent = self
+            .inode_for_key(deleted.parent_key())
+            .ok_or(LinuxCloudFilesError::MissingInodeRecord)?;
+        {
+            let state = lock(&self.inner.state);
+            if state.namespace_by_key.contains_key(deleted.key())
+                || state.created_by_key.contains_key(deleted.key())
+            {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "remote deletion collided with a pending local namespace mutation",
+                });
+            }
+        }
+        let inode = deleted.inode_record().inode();
+        let name_key = (
+            deleted.parent_key().item_id().clone(),
+            deleted.name().to_owned(),
+        );
+        let mut state = lock(&self.inner.state);
+        state.remote_by_key.remove(deleted.key());
+        state.remote_by_inode.remove(&inode);
+        state.remote_by_name.remove(&name_key);
+        state.remote_tombstones_by_name.insert(name_key);
+        state.remote_deleted_keys.insert(deleted.key().clone());
+        state.remote_deleted_inodes.insert(inode);
+        Ok(vec![LinuxInvalidation::Delete {
+            parent,
+            child: inode,
+            name: deleted.name().to_owned(),
+        }])
     }
 
     /// Releases one writable-directory snapshot handle.
@@ -909,6 +1515,298 @@ where
         Ok((node, handle))
     }
 
+    fn accept_namespace_create(
+        &self,
+        request: &LinuxCreateDirectoryRequest,
+        item: LinuxNamespaceItem,
+    ) -> Result<LinuxNode> {
+        self.validate_namespace_create(request, &item)?;
+        let node = self
+            .inner
+            .readonly
+            .node_from_item_and_record(item.item(), item.inode_record())?;
+        let name_key = (
+            request.parent_key().item_id().clone(),
+            request.name().to_owned(),
+        );
+        let mut state = lock(&self.inner.state);
+        self.ensure_namespace_item_is_unique(&state, &item, &name_key, None)?;
+        let inode = item.inode_record().inode();
+        state
+            .namespace_by_key
+            .insert(item.item().key().clone(), inode);
+        state.namespace_by_name.insert(name_key, inode);
+        state.namespace_by_inode.insert(inode, item);
+        Ok(node)
+    }
+
+    fn accept_rename(
+        &self,
+        request: &LinuxRenameRequest,
+        acceptance: LinuxRenameAcceptance,
+    ) -> Result<()> {
+        let (item, source, replaced) = acceptance.into_parts();
+        self.validate_rename_acceptance(request, &item, &source, replaced.as_ref())?;
+        let new_name_key = (
+            request.new_parent_key().item_id().clone(),
+            request.new_name().to_owned(),
+        );
+        let old_name_key = (
+            request.old_parent_key().item_id().clone(),
+            request.old_name().to_owned(),
+        );
+        let inode = item.inode_record().inode();
+        let mut state = lock(&self.inner.state);
+        self.ensure_namespace_item_is_unique(&state, &item, &new_name_key, Some(request.key()))?;
+        state.namespace_by_name.remove(&old_name_key);
+        state.created_by_name.remove(&old_name_key);
+        state.tombstones_by_name.insert(old_name_key, source);
+        if let Some(replaced) = replaced {
+            let replaced_name_key = (
+                replaced.parent_key().item_id().clone(),
+                replaced.name().to_owned(),
+            );
+            if let Some(replaced_inode) = state
+                .namespace_by_key
+                .remove(replaced.key())
+                .or_else(|| state.created_by_key.remove(replaced.key()))
+                .or_else(|| {
+                    self.inner
+                        .readonly
+                        .inode_table()
+                        .by_key(replaced.key())
+                        .map(crate::LinuxInodeRecord::inode)
+                })
+            {
+                state.namespace_by_inode.remove(&replaced_inode);
+                state.created_by_name.remove(&replaced_name_key);
+            }
+            state.deleted_keys.insert(replaced.key().clone());
+            state.tombstones_by_name.insert(replaced_name_key, replaced);
+        }
+        state.deleted_keys.remove(request.key());
+        state.namespace_by_key.insert(request.key().clone(), inode);
+        state.namespace_by_name.insert(new_name_key.clone(), inode);
+        state.namespace_by_inode.insert(inode, item);
+        if state.created_by_key.contains_key(request.key()) {
+            state.created_by_name.insert(new_name_key, inode);
+        }
+        Ok(())
+    }
+
+    fn accept_remove(
+        &self,
+        request: &LinuxRemoveRequest,
+        tombstone: LinuxNamespaceTombstone,
+    ) -> Result<()> {
+        self.validate_remove_acceptance(request, &tombstone)?;
+        let name_key = (
+            request.parent_key().item_id().clone(),
+            request.name().to_owned(),
+        );
+        let mut state = lock(&self.inner.state);
+        if let Some(inode) = state
+            .namespace_by_key
+            .remove(request.key())
+            .or_else(|| state.created_by_key.get(request.key()).copied())
+        {
+            state.namespace_by_inode.remove(&inode);
+        }
+        state.namespace_by_name.remove(&name_key);
+        state.created_by_name.remove(&name_key);
+        state.deleted_keys.insert(request.key().clone());
+        state.tombstones_by_name.insert(name_key, tombstone);
+        Ok(())
+    }
+
+    fn validate_namespace_create(
+        &self,
+        request: &LinuxCreateDirectoryRequest,
+        item: &LinuxNamespaceItem,
+    ) -> Result<()> {
+        self.validate_namespace_item(item)?;
+        let DesiredMutation::Create {
+            scope,
+            parent_id,
+            name,
+            kind,
+        } = item.mutation_intent().desired()
+        else {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "directory create did not persist a create mutation",
+            });
+        };
+        if item.item().kind() != CloudItemKind::Directory
+            || item.item().content().is_some()
+            || item.item().parent_id() != Some(request.parent_key().item_id())
+            || item.item().name() != request.name()
+            || scope != request.parent_key().scope()
+            || parent_id != request.parent_key().item_id()
+            || name != request.name()
+            || *kind != CloudItemKind::Directory
+            || item.mutation_intent().session_generation() != request.session_generation()
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "directory create acceptance did not match the native request",
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_rename_acceptance(
+        &self,
+        request: &LinuxRenameRequest,
+        item: &LinuxNamespaceItem,
+        source: &LinuxNamespaceTombstone,
+        replaced: Option<&LinuxNamespaceTombstone>,
+    ) -> Result<()> {
+        self.validate_namespace_item(item)?;
+        let DesiredMutation::ModifyMetadata {
+            key,
+            parent_id,
+            name,
+        } = item.mutation_intent().desired()
+        else {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "rename did not persist a metadata mutation",
+            });
+        };
+        let expected_kind = match request.kind() {
+            crate::LinuxNodeKind::File => CloudItemKind::File,
+            crate::LinuxNodeKind::Directory => CloudItemKind::Directory,
+        };
+        if item.item().key() != request.key()
+            || item.inode_record().key() != request.key()
+            || item.inode_record().generation() != request.inode_generation()
+            || item.item().kind() != expected_kind
+            || item.item().parent_id() != Some(request.new_parent_key().item_id())
+            || item.item().name() != request.new_name()
+            || key != request.key()
+            || parent_id.as_ref() != Some(request.new_parent_key().item_id())
+            || name.as_deref() != Some(request.new_name())
+            || item.mutation_intent().origin() != MutationOrigin::PlatformCommand
+            || item.mutation_intent().session_generation() != request.session_generation()
+            || source.key() != request.key()
+            || source.inode_generation() != request.inode_generation()
+            || source.parent_key() != request.old_parent_key()
+            || source.name() != request.old_name()
+            || source.kind() != request.kind()
+            || source.mutation_intent().operation_id() != item.mutation_intent().operation_id()
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "rename acceptance substituted namespace identity or intent",
+            });
+        }
+        match (request.destination(), replaced) {
+            (None, None) => {}
+            (Some(_), _) if request.no_replace() => {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "no-replace rename accepted an existing destination",
+                });
+            }
+            (Some(destination), Some(replaced))
+                if replaced.key() == destination.key()
+                    && replaced.inode_generation() == destination.inode_generation()
+                    && replaced.kind() == destination.kind()
+                    && replaced.parent_key() == request.new_parent_key()
+                    && replaced.name() == request.new_name() => {}
+            _ => {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "rename replacement tombstone did not match the destination",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_remove_acceptance(
+        &self,
+        request: &LinuxRemoveRequest,
+        tombstone: &LinuxNamespaceTombstone,
+    ) -> Result<()> {
+        let intent = tombstone.mutation_intent();
+        if tombstone.key() != request.key()
+            || tombstone.inode_generation() != request.inode_generation()
+            || tombstone.parent_key() != request.parent_key()
+            || tombstone.name() != request.name()
+            || tombstone.kind() != request.kind()
+            || intent.origin() != MutationOrigin::PlatformCommand
+            || intent.session_generation() != request.session_generation()
+            || !matches!(intent.desired(), DesiredMutation::Delete { key } if key == request.key())
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "remove acceptance substituted namespace identity or intent",
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_namespace_item(&self, item: &LinuxNamespaceItem) -> Result<()> {
+        item.mutation_intent()
+            .validate_for_persistence()
+            .map_err(|_| LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "namespace item returned an invalid mutation intent",
+            })?;
+        if item.item().is_root()
+            || item.item().key() != item.inode_record().key()
+            || item.inode_record().inode() == crate::LINUX_ROOT_INODE
+            || item.item().key().scope() != self.inner.readonly.inode_table().scope()
+            || item.mutation_intent().session_generation() > self.inner.session_generation
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "namespace item returned an invalid stable mapping",
+            });
+        }
+        crate::validate_linux_name(item.item().name())?;
+        Ok(())
+    }
+
+    fn ensure_namespace_item_is_unique(
+        &self,
+        state: &WritableState,
+        item: &LinuxNamespaceItem,
+        name_key: &(CloudItemId, String),
+        replacing_key: Option<&CloudItemKey>,
+    ) -> Result<()> {
+        let record = item.inode_record();
+        let static_key_conflict = self
+            .inner
+            .readonly
+            .inode_table()
+            .by_key(item.item().key())
+            .is_some_and(|existing| replacing_key != Some(existing.key()));
+        let static_inode_conflict = self
+            .inner
+            .readonly
+            .inode_table()
+            .by_inode(record.inode())
+            .is_some_and(|existing| replacing_key != Some(existing.key()));
+        let dynamic_key_conflict = state
+            .namespace_by_key
+            .get(item.item().key())
+            .is_some_and(|_| replacing_key != Some(item.item().key()));
+        let dynamic_inode_conflict = state
+            .namespace_by_inode
+            .get(&record.inode())
+            .is_some_and(|existing| replacing_key != Some(existing.item().key()));
+        let name_conflict = state
+            .namespace_by_name
+            .get(name_key)
+            .or_else(|| state.created_by_name.get(name_key))
+            .is_some_and(|inode| *inode != record.inode());
+        if static_key_conflict
+            || static_inode_conflict
+            || dynamic_key_conflict
+            || dynamic_inode_conflict
+            || name_conflict
+        {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "namespace store returned a duplicate key, inode, or parent/name mapping",
+            });
+        }
+        Ok(())
+    }
+
     fn validate_created_session(
         &self,
         created: &LinuxCreatedFile,
@@ -1045,22 +1943,28 @@ where
                 .clone();
             let parent_key =
                 CloudItemKey::new(created.item().key().scope().clone(), parent_id.clone());
-            let parent_record = self
-                .inner
-                .readonly
-                .inode_table()
-                .by_key(&parent_key)
-                .ok_or(LinuxCloudFilesError::InvalidBackendResponse {
+            let parent_inode = self.inode_for_key(&parent_key).ok_or(
+                LinuxCloudFilesError::InvalidBackendResponse {
                     reason: "recovered create parent omitted a restored inode record",
-                })?;
-            let parent = self.inner.readonly.getattr(parent_record.inode()).await?;
+                },
+            )?;
+            let parent = self.getattr(parent_inode, None).await?;
             if parent.attributes().kind() != crate::LinuxNodeKind::Directory {
                 return Err(LinuxCloudFilesError::InvalidBackendResponse {
                     reason: "recovered create parent was not a directory",
                 });
             }
-            let name_key = (parent_id, created.item().name().to_owned());
             let mut state = lock(&self.inner.state);
+            let name_key = state
+                .namespace_by_key
+                .get(created.item().key())
+                .and_then(|inode| state.namespace_by_inode.get(inode))
+                .and_then(|item| {
+                    item.item().parent_id().map(|current_parent| {
+                        (current_parent.clone(), item.item().name().to_owned())
+                    })
+                })
+                .unwrap_or_else(|| (parent_id, created.item().name().to_owned()));
             self.ensure_created_file_is_unique(&state, &created, &name_key)?;
             let inode = created.inode_record().inode();
             state
@@ -1072,10 +1976,74 @@ where
         Ok(())
     }
 
+    async fn restore_namespace_overlay(&self, overlay: LinuxNamespaceOverlay) -> Result<()> {
+        let (items, tombstones) = overlay.into_parts();
+        for item in items {
+            self.validate_namespace_item(&item)?;
+            let parent_id = item
+                .item()
+                .parent_id()
+                .ok_or(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "restored namespace item omitted its parent identity",
+                })?
+                .clone();
+            let name_key = (parent_id, item.item().name().to_owned());
+            let mut state = lock(&self.inner.state);
+            self.ensure_namespace_item_is_unique(&state, &item, &name_key, None)?;
+            let inode = item.inode_record().inode();
+            state
+                .namespace_by_key
+                .insert(item.item().key().clone(), inode);
+            state.namespace_by_name.insert(name_key, inode);
+            state.namespace_by_inode.insert(inode, item);
+        }
+        for tombstone in tombstones {
+            if tombstone.key().scope() != self.inner.readonly.inode_table().scope()
+                || tombstone.parent_key().scope() != self.inner.readonly.inode_table().scope()
+                || tombstone.mutation_intent().session_generation() > self.inner.session_generation
+            {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "restored namespace tombstone escaped the active scope or generation",
+                });
+            }
+            let name_key = (
+                tombstone.parent_key().item_id().clone(),
+                tombstone.name().to_owned(),
+            );
+            let mut state = lock(&self.inner.state);
+            let has_current_item = state.namespace_by_key.contains_key(tombstone.key());
+            if matches!(
+                tombstone.mutation_intent().desired(),
+                DesiredMutation::Delete { key } if key == tombstone.key()
+            ) || !has_current_item
+                && tombstone.mutation_intent().desired().existing_item_key()
+                    != Some(tombstone.key())
+            {
+                state.deleted_keys.insert(tombstone.key().clone());
+            }
+            if state
+                .tombstones_by_name
+                .insert(name_key, tombstone)
+                .is_some()
+            {
+                return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                    reason: "restored namespace overlay contained duplicate tombstones",
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn item_key(&self, inode: LinuxInode) -> Result<CloudItemKey> {
         let state = lock(&self.inner.state);
         if let Some(created) = state.created_by_inode.get(&inode) {
             return Ok(created.item().key().clone());
+        }
+        if let Some(item) = state.namespace_by_inode.get(&inode) {
+            return Ok(item.item().key().clone());
+        }
+        if let Some(item) = state.remote_by_inode.get(&inode) {
+            return Ok(item.item().key().clone());
         }
         self.inner
             .readonly
@@ -1101,6 +2069,8 @@ where
                 None => state
                     .created_by_key
                     .get(snapshot.item_key())
+                    .or_else(|| state.namespace_by_key.get(snapshot.item_key()))
+                    .or_else(|| state.remote_by_key.get(snapshot.item_key()))
                     .copied()
                     .ok_or(LinuxCloudFilesError::InvalidBackendResponse {
                         reason:
