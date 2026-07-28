@@ -1,11 +1,18 @@
 #![cfg(feature = "actix")]
 
-use actix_web::http::StatusCode;
+use std::pin::Pin;
+
+use actix_web::http::{Method, StatusCode};
 use actix_web::{FromRequest, web};
-use aster_forge_webdav::{DavBodyError, DavConditionalOutcome, DavConditionalResource, DavMethod};
+use aster_forge_webdav::{
+    DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityContext,
+    DavCapabilityDeclaration, DavCapabilityProvider, DavCapabilityTarget,
+    DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
+    DavConditionalResource, DavLockingCapability, DavMethod, DavMethodSet, DavNonDavProfile,
+    DavPath, DavResourceState, DavVersioningCapability, plan_capabilities,
+};
 use bytes::Bytes;
 use futures::StreamExt;
-use std::pin::Pin;
 
 async fn payload_from_bytes(bytes: Bytes) -> web::Payload {
     let (request, mut payload) = actix_web::test::TestRequest::default()
@@ -171,4 +178,124 @@ fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
     let converted = aster_forge_webdav::actix::converted_headers(malformed_if_match.headers())
         .expect("valid Actix headers should convert");
     assert_eq!(converted.get("If-Match").expect("If-Match"), "bare-etag");
+}
+
+#[test]
+fn unknown_methods_still_parse_and_validate_the_request_target_first() {
+    let unknown = actix_web::test::TestRequest::default()
+        .method(Method::from_bytes(b"SEARCH").expect("extension method"))
+        .uri("/webdav/folder/file.txt")
+        .to_http_request();
+    let target = aster_forge_webdav::actix::request_target(&unknown, "/webdav")
+        .expect("unknown method target should parse");
+    assert_eq!(target.target.as_str(), "/folder/file.txt");
+    assert!(
+        aster_forge_webdav::actix::request_head(&unknown, "/webdav")
+            .expect("target should parse")
+            .is_none()
+    );
+
+    let outside = actix_web::test::TestRequest::default()
+        .method(Method::from_bytes(b"SEARCH").expect("extension method"))
+        .uri("/outside/file.txt")
+        .to_http_request();
+    assert!(aster_forge_webdav::actix::request_head(&outside, "/webdav").is_err());
+}
+
+fn actix_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
+    plan_capabilities(DavCapabilityDeclaration {
+        resource: DavResourceState::File,
+        methods: DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Get]),
+        locking: DavLockingCapability::Disabled,
+        versioning: DavVersioningCapability::Disabled,
+        compatibility: DavCompatibilityCapabilities::default(),
+        compliance: DavComplianceClasses { class1: true },
+    })
+    .expect("valid Actix capability snapshot")
+}
+
+#[test]
+fn actix_dispatch_gate_uses_snapshot_allow_for_known_and_unknown_methods() {
+    let snapshot = actix_snapshot();
+    let get = actix_web::test::TestRequest::get()
+        .uri("/webdav/file.txt")
+        .to_http_request();
+    assert_eq!(
+        aster_forge_webdav::actix::gate_request_method(&get, &snapshot)
+            .expect("GET should be allowed"),
+        DavMethod::Get
+    );
+
+    for request in [
+        actix_web::test::TestRequest::put()
+            .uri("/webdav/file.txt")
+            .to_http_request(),
+        actix_web::test::TestRequest::default()
+            .method(Method::from_bytes(b"SEARCH").expect("extension method"))
+            .uri("/webdav/file.txt")
+            .to_http_request(),
+    ] {
+        let response = aster_forge_webdav::actix::gate_request_method(&request, &snapshot)
+            .expect_err("method should be rejected");
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            response.headers().get("Allow").expect("Allow header"),
+            "OPTIONS, GET, HEAD"
+        );
+    }
+}
+
+struct InvalidCapabilityProvider;
+
+impl DavCapabilityProvider for InvalidCapabilityProvider {
+    type Profile = DavNonDavProfile;
+
+    async fn capabilities(
+        &self,
+        _target: &DavCapabilityTarget,
+        _context: &DavCapabilityContext,
+    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+        Ok(DavCapabilityDeclaration::new(
+            DavResourceState::File,
+            DavMethodSet::from_methods(&[DavMethod::Get]),
+        ))
+    }
+}
+
+struct ForbiddenCapabilityProvider;
+
+impl DavCapabilityProvider for ForbiddenCapabilityProvider {
+    type Profile = DavNonDavProfile;
+
+    async fn capabilities(
+        &self,
+        _target: &DavCapabilityTarget,
+        _context: &DavCapabilityContext,
+    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+        Err(DavBackendError::new(DavBackendErrorKind::Forbidden))
+    }
+}
+
+#[actix_web::test]
+async fn actix_capability_adapter_distinguishes_invalid_declarations_and_backend_failures() {
+    let target = DavCapabilityTarget::new(DavPath::new("/file.txt").expect("path"), false);
+    let context = DavCapabilityContext::default();
+
+    let invalid = aster_forge_webdav::actix::capability_snapshot(
+        &InvalidCapabilityProvider,
+        &target,
+        &context,
+    )
+    .await
+    .expect_err("invalid declaration should map to a response");
+    assert_eq!(invalid.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let forbidden = aster_forge_webdav::actix::capability_snapshot(
+        &ForbiddenCapabilityProvider,
+        &target,
+        &context,
+    )
+    .await
+    .expect_err("provider failure should map to a response");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
 }

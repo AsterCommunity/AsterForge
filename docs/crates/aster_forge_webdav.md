@@ -13,6 +13,32 @@ aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", fea
 
 默认 feature 只包含 transport-neutral 协议内核。Actix 产品启用 `actix`，使用 `aster_forge_webdav::actix` 完成请求和响应类型转换。
 
+## 能力声明与响应快照
+
+产品通过 `DavCapabilityProvider` 提供类型化能力声明。产品可以在自己的类型上组合读取、写入、属性、锁和版本能力 impl，最终由一个 provider 根据 `DavCapabilityTarget` 和 `DavCapabilityContext` 投影当前请求的资源能力：
+
+```rust
+let snapshot = aster_forge_webdav::plan_capabilities_with_provider(
+    &provider,
+    &target,
+    &context,
+)
+.await?;
+
+let options = aster_forge_webdav::options_response(&snapshot);
+let rejected = aster_forge_webdav::method_not_allowed_response(&snapshot);
+```
+
+Rust 没有运行时 trait 反射，Forge 通过显式的 `DavCapabilityProvider` 聚合产品 impl；Forge 不扫描 handler，也不从字符串推测能力。provider 可以把资源类型、mount root、principal、权限、锁配置和 DeltaV 开关合并成 `DavCapabilityDeclaration`。`plan_capabilities` 校验声明并生成不可变的 `DavCapabilitySnapshot`。
+
+静态能力通过 associated profile 进一步约束：`DavClass2Profile` 要求 provider 实现 `DavClass2Support`，而该 trait 继承 `DavClass1Support`；版本能力使用对应的 `DavClass1VersioningProfile` / `DavClass2VersioningProfile`。因此 class 2 缺少 class 1、版本 profile 缺少基础 profile 等结构性错误会在编译期报错。请求目标的存在性、file/collection 类型、principal 权限和运行时开关仍属于动态投影，由 planner 在请求时验证。
+
+provider trait 使用原生 `async fn` 和泛型静态分发，不为 capability lookup 引入 `Pin<Box<dyn Future>>` 堆分配。405 gate 只返回零大小的 typed error，实际响应由同一个 snapshot 构造。
+
+同一个 snapshot 必须被 OPTIONS、405、实际 method dispatch、body policy 和扩展 discovery 共用。`gate_method` 负责把已知或未知 method 统一接入 405 gate。产品不直接拼接 `Allow`、`DAV` 或 `version-control` header。
+
+`DavLockingCapability::Class2` 只有在 class 1、LOCK 和 UNLOCK 同时成立时才会通过规划；`DavVersioningCapability::Core` 只有在 class 1、REPORT 和 VERSION-CONTROL 同时成立时才会生成 `version-control` token。`MS-Author-Via` 作为独立兼容性 flag，不进入 DAV compliance token。
+
 ## 协议所有权
 
 Forge 负责：
@@ -49,6 +75,8 @@ Forge 负责：
 - Actix transport 与 transport-neutral `http` 类型的显式转换。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
+- resource-aware capability declaration/snapshot、RFC 4918 class dependency validation、
+  canonical `Allow`/`DAV` rendering 和未知 method 的 target-first parsing。
 
 ## XML 请求语义
 
@@ -77,6 +105,8 @@ DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.h
 - 在 mutation 前提供 writer-authoritative 的 request-target `exists`、`ETag` 和
   `Last-Modified`。Forge 不替产品选择 reader/writer 一致性来源，也不把旧 metadata
   snapshot 当成事务保障。
+- 实现 `DavCapabilityProvider`，提供资源类型、权限投影、locking 事实、DeltaV 状态和
+  独立兼容性开关；产品 handler 与响应层只消费 Forge snapshot。
 
 ## HTTP 与 WebDAV 条件请求
 
@@ -118,7 +148,10 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 - fake backend 矩阵覆盖 ETag + lock token 联合解析、tagged lock root、父级锁、父集合、lock-null 文件创建，以及 metadata/open/flush 错误传播。
 - XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、reader I/O、输入大小与深度精确临界、非法 UTF-8、转义和大属性值。
 - XML response 矩阵覆盖状态行、元素顺序、QName、namespace shadowing/undeclaration、锁字段、死属性重建、异常旧值转义，以及非法 writer model 与深度临界。
-- 产品仓库保留真实认证、数据库、存储、quota、audit 和客户端集成测试。
+- 产品仓库保留真实认证、数据库、存储、quota、audit、能力 provider 和客户端集成测试。
+- capability 测试必须覆盖 unmapped、file、collection、mount root、GET/HEAD 规范化、
+  class 1/2、locking on/off、DeltaV on/off、兼容性 headers、未知 method，以及
+  OPTIONS/405/dispatch 使用同一 snapshot 的一致性。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 
 ## 参考项目

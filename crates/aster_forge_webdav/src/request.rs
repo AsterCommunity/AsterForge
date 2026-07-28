@@ -43,6 +43,64 @@ pub enum DavBodyPolicy {
 }
 
 impl DavMethod {
+    /// Methods in the canonical `Allow` rendering order.
+    pub const ALL: [Self; 14] = [
+        Self::Options,
+        Self::Get,
+        Self::Head,
+        Self::Put,
+        Self::Delete,
+        Self::Mkcol,
+        Self::Copy,
+        Self::Move,
+        Self::Propfind,
+        Self::Proppatch,
+        Self::Lock,
+        Self::Unlock,
+        Self::Report,
+        Self::VersionControl,
+    ];
+
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::Options => 0,
+            Self::Get => 1,
+            Self::Head => 2,
+            Self::Put => 3,
+            Self::Delete => 4,
+            Self::Mkcol => 5,
+            Self::Copy => 6,
+            Self::Move => 7,
+            Self::Propfind => 8,
+            Self::Proppatch => 9,
+            Self::Lock => 10,
+            Self::Unlock => 11,
+            Self::Report => 12,
+            Self::VersionControl => 13,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Options => "OPTIONS",
+            Self::Propfind => "PROPFIND",
+            Self::Proppatch => "PROPPATCH",
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Put => "PUT",
+            Self::Mkcol => "MKCOL",
+            Self::Delete => "DELETE",
+            Self::Copy => "COPY",
+            Self::Move => "MOVE",
+            Self::Lock => "LOCK",
+            Self::Unlock => "UNLOCK",
+            Self::Report => "REPORT",
+            Self::VersionControl => "VERSION-CONTROL",
+        }
+    }
+
     /// Parses a supported HTTP/WebDAV method.
     #[must_use]
     pub fn from_method(method: &Method) -> Option<Self> {
@@ -115,6 +173,13 @@ pub struct DavRequestOrigin {
     pub host: String,
 }
 
+/// Parsed request target shared by known and unknown method handling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DavRequestTarget {
+    pub target: DavPath,
+    pub origin: DavRequestOrigin,
+}
+
 /// Parsed, body-independent WebDAV request data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavRequestHead {
@@ -128,20 +193,30 @@ pub struct DavRequestHead {
 }
 
 impl DavRequestHead {
-    /// Parses protocol headers and the mount-relative target before product code is called.
-    pub fn parse(
-        method: DavMethod,
+    /// Parses a mount-relative target before method dispatch or product code runs.
+    pub fn parse_target(
         uri: &Uri,
-        headers: &HeaderMap,
         mount_path: &str,
         origin: &DavRequestOrigin,
-    ) -> Result<Self, DavProtocolError> {
+    ) -> Result<DavRequestTarget, DavProtocolError> {
         let relative = strip_mount_prefix(uri.path(), mount_path).ok_or_else(|| {
             DavProtocolError::bad_request("Request target must stay under WebDAV prefix")
         })?;
         let target = DavPath::new(relative)
             .map_err(|_| DavProtocolError::bad_request("Invalid request path"))?;
+        Ok(DavRequestTarget {
+            target,
+            origin: origin.clone(),
+        })
+    }
 
+    /// Parses method-specific protocol headers after the target has been resolved.
+    pub fn parse_known_method(
+        method: DavMethod,
+        request_target: &DavRequestTarget,
+        headers: &HeaderMap,
+        mount_path: &str,
+    ) -> Result<Self, DavProtocolError> {
         let depth = match method {
             DavMethod::Propfind => Some(parse_propfind_depth(headers)?),
             DavMethod::Copy => Some(parse_copy_depth(headers)?),
@@ -156,8 +231,8 @@ impl DavRequestHead {
                 Some(destination_relative_path(
                     headers,
                     mount_path,
-                    &origin.scheme,
-                    &origin.host,
+                    &request_target.origin.scheme,
+                    &request_target.origin.host,
                 )?),
             ),
             _ => (None, None),
@@ -165,8 +240,8 @@ impl DavRequestHead {
 
         Ok(Self {
             method,
-            target,
-            origin: origin.clone(),
+            target: request_target.target.clone(),
+            origin: request_target.origin.clone(),
             depth,
             overwrite,
             destination,

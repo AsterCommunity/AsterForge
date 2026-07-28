@@ -3,9 +3,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use aster_forge_webdav::{
-    DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError,
-    DavIfResourceState, DavIfStateResolver, DavMethod, DavPath, DavPathError, DavProtocolErrorKind,
-    DavRequestHead, DavRequestOrigin, Depth, IfHeader, IfStateCondition, child_relative_path,
+    DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError, DavIfResourceState,
+    DavIfStateResolver, DavMethod, DavPath, DavPathError, DavProtocolErrorKind, DavRequestHead,
+    DavRequestOrigin, Depth, IfHeader, IfStateCondition, child_relative_path,
     destination_relative_path, enforce_if_header, href_for_relative, parent_relative_path,
     parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
     parse_lock_token_header, parse_move_depth, parse_propfind_depth, submitted_lock_tokens,
@@ -191,10 +191,9 @@ fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_sep
 
 #[test]
 fn advertised_methods_are_exactly_the_methods_recognized_by_the_protocol_layer() {
-    let methods = DAV_ALLOW_HEADER.split(", ").collect::<Vec<_>>();
-    assert_eq!(methods.len(), 14);
-    for method in methods {
-        assert!(DavMethod::from_name(method).is_some(), "{method}");
+    assert_eq!(DavMethod::ALL.len(), 14);
+    for method in DavMethod::ALL {
+        assert_eq!(DavMethod::from_name(method.as_str()), Some(method));
     }
 }
 
@@ -726,17 +725,14 @@ fn request_head_parses_method_specific_contract() {
     request_headers.insert("Depth", HeaderValue::from_static("0"));
     request_headers.insert("Overwrite", HeaderValue::from_static("F"));
 
-    let request = DavRequestHead::parse(
-        method,
-        &uri,
-        &request_headers,
-        "/webdav",
-        &DavRequestOrigin {
-            scheme: "https".to_string(),
-            host: "dav.example".to_string(),
-        },
-    )
-    .expect("COPY request head should parse");
+    let origin = DavRequestOrigin {
+        scheme: "https".to_string(),
+        host: "dav.example".to_string(),
+    };
+    let target = DavRequestHead::parse_target(&uri, "/webdav", &origin)
+        .expect("COPY request target should parse");
+    let request = DavRequestHead::parse_known_method(method, &target, &request_headers, "/webdav")
+        .expect("COPY request head should parse");
 
     assert_eq!(request.target.as_str(), "/source.txt");
     assert_eq!(request.origin.scheme, "https");
@@ -752,10 +748,8 @@ fn request_head_parses_method_specific_contract() {
 #[test]
 fn request_head_rejects_targets_outside_the_mount() {
     let uri: Uri = "/webdavish/source.txt".parse().expect("valid request URI");
-    let error = DavRequestHead::parse(
-        DavMethod::Get,
+    let error = DavRequestHead::parse_target(
         &uri,
-        &HeaderMap::new(),
         "/webdav",
         &DavRequestOrigin {
             scheme: "https".to_string(),
@@ -772,10 +766,8 @@ fn request_head_rejects_targets_outside_the_mount() {
 #[test]
 fn request_head_accepts_a_root_mount() {
     let uri: Uri = "/folder/source.txt".parse().expect("valid request URI");
-    let request = DavRequestHead::parse(
-        DavMethod::Get,
+    let target = DavRequestHead::parse_target(
         &uri,
-        &HeaderMap::new(),
         "/",
         &DavRequestOrigin {
             scheme: "https".to_string(),
@@ -783,5 +775,8 @@ fn request_head_accepts_a_root_mount() {
         },
     )
     .expect("root-mounted WebDAV should accept descendant paths");
+    let request =
+        DavRequestHead::parse_known_method(DavMethod::Get, &target, &HeaderMap::new(), "/")
+            .expect("root-mounted WebDAV should accept descendant paths");
     assert_eq!(request.target.as_str(), "/folder/source.txt");
 }

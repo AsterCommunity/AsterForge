@@ -186,7 +186,10 @@ pub fn plan_http_conditionals(
 /// Tagged destination/resource conditions therefore fail with WebDAV `412` before the
 /// request-target HTTP conditions are considered. Product code still chooses the metadata
 /// snapshot passed to the HTTP planner.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public conditional planner mirrors the RFC evaluation inputs explicitly."
+)]
 pub async fn plan_conditionals(
     if_header: Option<&IfHeader>,
     resolver: &dyn DavIfStateResolver,
@@ -214,7 +217,10 @@ pub async fn plan_conditionals(
 /// Enforces WebDAV `If` through the canonical backend ports, then applies HTTP conditions.
 ///
 /// This has the same WebDAV-first ordering as [`plan_conditionals`].
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The backend-aware planner keeps filesystem and lock ports explicit at the boundary."
+)]
 pub async fn plan_conditionals_with_backends(
     if_header: Option<&IfHeader>,
     filesystem: &dyn DavFileSystem,

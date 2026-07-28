@@ -1,9 +1,11 @@
 use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{
-    DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyError, DavDownloadBody,
-    DavDownloadPlanError, DavMethod, DavRequestHead, DavRequestOrigin, DavResponseBody,
-    backend_error_response, body_error_response, method_not_allowed_response, options_response,
+    DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityDeclaration,
+    DavCompatibilityCapabilities, DavComplianceClasses, DavDownloadBody, DavDownloadPlanError,
+    DavLockingCapability, DavMethod, DavMethodSet, DavRequestHead, DavRequestOrigin,
+    DavResourceState, DavResponseBody, DavVersioningCapability, backend_error_response,
+    body_error_response, method_not_allowed_response, options_response, plan_capabilities,
     plan_download_response, protocol_error_response, range_not_satisfiable_response,
 };
 use http::StatusCode;
@@ -17,17 +19,38 @@ fn representation_time() -> std::time::SystemTime {
     UNIX_EPOCH + Duration::from_secs(784_111_777)
 }
 
+fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
+    plan_capabilities(DavCapabilityDeclaration {
+        resource: DavResourceState::File,
+        methods: DavMethodSet::from_methods(&DavMethod::ALL),
+        locking: DavLockingCapability::Class2,
+        versioning: DavVersioningCapability::Core,
+        compatibility: DavCompatibilityCapabilities {
+            ms_author_via: true,
+        },
+        compliance: DavComplianceClasses { class1: true },
+    })
+    .expect("valid complete capability declaration")
+}
+
 #[test]
 fn options_and_method_not_allowed_share_the_canonical_method_set() {
-    let options = options_response();
+    let snapshot = full_capability_snapshot();
+    let options = options_response(&snapshot);
     assert_eq!(options.status, StatusCode::OK);
-    assert_eq!(options.headers.get(ALLOW).unwrap(), DAV_ALLOW_HEADER);
+    assert_eq!(
+        options.headers.get(ALLOW).unwrap(),
+        "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, PROPPATCH, LOCK, UNLOCK, REPORT, VERSION-CONTROL"
+    );
     assert_eq!(options.headers.get("DAV").unwrap(), "1, 2, version-control");
     assert_eq!(options.headers.get("MS-Author-Via").unwrap(), "DAV");
 
-    let rejected = method_not_allowed_response();
+    let rejected = method_not_allowed_response(&snapshot);
     assert_eq!(rejected.status, StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(rejected.headers.get(ALLOW).unwrap(), DAV_ALLOW_HEADER);
+    assert_eq!(
+        rejected.headers.get(ALLOW).unwrap(),
+        snapshot.allow_header()
+    );
     assert_eq!(rejected.headers.get(CACHE_CONTROL).unwrap(), "no-store");
 }
 
@@ -356,10 +379,8 @@ fn direct_416_builder_handles_zero_and_maximum_representation_lengths() {
 
 #[test]
 fn protocol_and_backend_failures_are_mapped_by_forge() {
-    let error = DavRequestHead::parse(
-        DavMethod::Get,
+    let error = DavRequestHead::parse_target(
         &"/outside".parse::<Uri>().expect("URI"),
-        &HeaderMap::new(),
         "/webdav",
         &DavRequestOrigin {
             scheme: "https".to_owned(),

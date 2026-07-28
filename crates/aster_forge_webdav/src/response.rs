@@ -12,14 +12,12 @@ use http::header::{
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use crate::{
-    DavBackendError, DavBackendErrorKind, DavConditionalOutcome, DavConditionalPlan,
-    DavConditionalPlanError, DavConditionalResource, DavContentStream, DavErrorCondition,
-    DavMethod, DavProtocolError, DavProtocolErrorKind, DavRangeEvaluation, DavXmlElement,
-    DavXmlError, dav_error_element, plan_http_conditionals,
+    DavBackendError, DavBackendErrorKind, DavCapabilityEvaluationError, DavCapabilitySnapshot,
+    DavConditionalOutcome, DavConditionalPlan, DavConditionalPlanError, DavConditionalResource,
+    DavContentStream, DavErrorCondition, DavMethod, DavMethodGateError, DavProtocolError,
+    DavProtocolErrorKind, DavRangeEvaluation, DavXmlElement, DavXmlError, dav_error_element,
+    plan_http_conditionals,
 };
-
-/// Methods advertised by the product-neutral DAV protocol engine.
-pub const DAV_ALLOW_HEADER: &str = "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, PROPPATCH, LOCK, UNLOCK, REPORT, VERSION-CONTROL";
 
 /// Failure while enforcing a request body policy in the transport adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -169,6 +167,17 @@ pub fn conditional_plan_error_response(error: &DavConditionalPlanError) -> DavRe
     }
 }
 
+/// Maps provider lookup or invalid product capability declarations to a response.
+#[must_use]
+pub fn capability_evaluation_error_response(error: &DavCapabilityEvaluationError) -> DavResponse {
+    match error {
+        DavCapabilityEvaluationError::Backend(error) => backend_error_response(error),
+        DavCapabilityEvaluationError::Plan(_) => {
+            no_store_empty_response(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// Maps a classified product backend failure to the WebDAV status contract.
 #[must_use]
 pub fn backend_error_response(error: &DavBackendError) -> DavResponse {
@@ -196,31 +205,44 @@ pub(crate) fn no_store_empty_response(status: StatusCode) -> DavResponse {
 
 /// Builds the response to a DAV `OPTIONS` request.
 #[must_use]
-pub fn options_response() -> DavResponse {
+pub fn options_response(snapshot: &DavCapabilitySnapshot) -> DavResponse {
     let mut response = DavResponse::empty(StatusCode::OK);
     response
         .headers
-        .insert(ALLOW, HeaderValue::from_static(DAV_ALLOW_HEADER));
-    response
-        .headers
-        .insert("DAV", HeaderValue::from_static("1, 2, version-control"));
-    response
-        .headers
-        .insert("MS-Author-Via", HeaderValue::from_static("DAV"));
+        .insert(ALLOW, snapshot.allow_header().clone());
+    if let Some(dav) = snapshot.dav_header() {
+        response.headers.insert("DAV", dav.clone());
+    }
+    if snapshot.has_ms_author_via() {
+        response
+            .headers
+            .insert("MS-Author-Via", HeaderValue::from_static("DAV"));
+    }
     response
 }
 
 /// Builds the response for an unsupported HTTP/WebDAV method.
 #[must_use]
-pub fn method_not_allowed_response() -> DavResponse {
+pub fn method_not_allowed_response(snapshot: &DavCapabilitySnapshot) -> DavResponse {
     let mut response = DavResponse::empty(StatusCode::METHOD_NOT_ALLOWED);
     response
         .headers
-        .insert(ALLOW, HeaderValue::from_static(DAV_ALLOW_HEADER));
+        .insert(ALLOW, snapshot.allow_header().clone());
     response
         .headers
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// Gates known and unknown methods through the same snapshot used by OPTIONS and 405.
+pub fn gate_method(
+    method: Option<DavMethod>,
+    snapshot: &DavCapabilitySnapshot,
+) -> Result<DavMethod, DavMethodGateError> {
+    match method {
+        Some(method) if snapshot.allows(method) => Ok(method),
+        Some(_) | None => Err(DavMethodGateError::MethodNotAllowed),
+    }
 }
 
 /// Builds the protocol response for a transport body-policy failure.
