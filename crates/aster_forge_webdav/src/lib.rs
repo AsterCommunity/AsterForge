@@ -109,11 +109,13 @@ pub use resource::{
     validate_collection_create_target, validate_delete_target,
 };
 pub use response::{
-    DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavResponse,
-    DavResponseBody, backend_error_response, body_error_response,
+    DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavMultiRangeLimits,
+    DavMultiRangePolicy, DavMultipartDownloadPlan, DavMultipartSegmentPlan, DavRangeLimitBehavior,
+    DavResponse, DavResponseBody, backend_error_response, body_error_response,
     capability_evaluation_error_response, conditional_plan_error_response, gate_method,
     method_not_allowed_response, open_download, options_response, plan_download_response,
-    protocol_error_response, range_not_satisfiable_response,
+    plan_download_response_with_multi_range, protocol_error_response,
+    range_not_satisfiable_response,
 };
 pub use xml::{
     DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,

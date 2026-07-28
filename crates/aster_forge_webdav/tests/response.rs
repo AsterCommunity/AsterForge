@@ -1,18 +1,25 @@
+use std::collections::VecDeque;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityDeclaration,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalPlanError, DavDownloadBody,
     DavDownloadOpenError, DavDownloadPlanError, DavDownloadSource, DavLockingCapability,
-    DavMetaData, DavMethod, DavMethodSet, DavOpenedDownload, DavPatchBodyPolicy,
-    DavPatchCapability, DavPatchFormat, DavPath, DavRequestHead, DavRequestOrigin,
-    DavResourceState, DavResponseBody, DavVersioningCapability, DavWriteCapabilities,
-    DavWritePrecondition, DavXmlError, backend_error_response, body_error_response,
-    conditional_plan_error_response, method_not_allowed_response, open_download, options_response,
-    plan_capabilities, plan_download_response, propfind_xml_error_response,
+    DavMetaData, DavMethod, DavMethodSet, DavMultiRangeLimits, DavMultiRangePolicy,
+    DavOpenedDownload, DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat, DavPath,
+    DavRangeLimitBehavior, DavRequestHead, DavRequestOrigin, DavResourceState, DavResponseBody,
+    DavVersioningCapability, DavWriteCapabilities, DavWritePrecondition, DavXmlError,
+    backend_error_response, body_error_response, conditional_plan_error_response,
+    method_not_allowed_response, open_download, options_response, plan_capabilities,
+    plan_download_response, plan_download_response_with_multi_range, propfind_xml_error_response,
     protocol_error_response, range_not_satisfiable_response,
 };
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
 use http::StatusCode;
 use http::header::{
     ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
@@ -28,6 +35,22 @@ fn full_download_body(expected_length: u64) -> DavDownloadBody {
     DavDownloadBody::Full { expected_length }
 }
 
+fn multi_range_policy(
+    limits: DavMultiRangeLimits,
+    coalesce_gap_bytes: u64,
+    limit_behavior: DavRangeLimitBehavior,
+) -> DavMultiRangePolicy {
+    DavMultiRangePolicy::new(limits, coalesce_gap_bytes, limit_behavior)
+}
+
+fn generous_multi_range_policy() -> DavMultiRangePolicy {
+    multi_range_policy(
+        DavMultiRangeLimits::new(4096, 16, 16, u64::MAX, 16),
+        0,
+        DavRangeLimitBehavior::RangeNotSatisfiable,
+    )
+}
+
 struct TestDownloadSource {
     full: Result<u64, DavBackendErrorKind>,
     range: Result<u64, DavBackendErrorKind>,
@@ -35,6 +58,74 @@ struct TestDownloadSource {
 }
 
 struct TestDownloadMetadata;
+
+struct MultipartStreamSpec {
+    declared_length: u64,
+    chunks: VecDeque<Result<Bytes, DavBackendErrorKind>>,
+}
+
+impl MultipartStreamSpec {
+    fn bytes(declared_length: u64, chunks: &[&'static [u8]]) -> Self {
+        Self {
+            declared_length,
+            chunks: chunks
+                .iter()
+                .map(|chunk| Ok(Bytes::from_static(chunk)))
+                .collect(),
+        }
+    }
+
+    fn with_error(declared_length: u64, chunks: Vec<Result<Bytes, DavBackendErrorKind>>) -> Self {
+        Self {
+            declared_length,
+            chunks: chunks.into(),
+        }
+    }
+}
+
+struct MultipartDownloadSource {
+    opens: Mutex<VecDeque<Result<MultipartStreamSpec, DavBackendErrorKind>>>,
+    ranges: Mutex<Vec<aster_forge_utils::http_range::HttpByteRange>>,
+    dropped_streams: Arc<AtomicUsize>,
+}
+
+impl MultipartDownloadSource {
+    fn new(opens: Vec<Result<MultipartStreamSpec, DavBackendErrorKind>>) -> Self {
+        Self {
+            opens: Mutex::new(opens.into()),
+            ranges: Mutex::new(Vec::new()),
+            dropped_streams: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn opened_ranges(&self) -> Vec<aster_forge_utils::http_range::HttpByteRange> {
+        self.ranges.lock().expect("range calls lock").clone()
+    }
+}
+
+struct DropTrackedStream {
+    chunks: VecDeque<Result<Bytes, DavBackendErrorKind>>,
+    dropped_streams: Arc<AtomicUsize>,
+}
+
+impl Stream for DropTrackedStream {
+    type Item = Result<Bytes, DavBackendError>;
+
+    fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(
+            self.get_mut()
+                .chunks
+                .pop_front()
+                .map(|item| item.map_err(DavBackendError::new)),
+        )
+    }
+}
+
+impl Drop for DropTrackedStream {
+    fn drop(&mut self) {
+        self.dropped_streams.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 impl DavMetaData for TestDownloadMetadata {
     fn len(&self) -> u64 {
@@ -86,6 +177,44 @@ impl DavDownloadSource for TestDownloadSource {
     ) -> Result<DavOpenedDownload, DavBackendError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.range.map(Self::opened).map_err(DavBackendError::new)
+    }
+}
+
+impl DavDownloadSource for MultipartDownloadSource {
+    type Metadata = TestDownloadMetadata;
+
+    async fn metadata<'a>(&'a self, _path: &'a DavPath) -> Result<Self::Metadata, DavBackendError> {
+        Err(DavBackendError::new(DavBackendErrorKind::Internal))
+    }
+
+    async fn open_full<'a>(
+        &'a self,
+        _path: &'a DavPath,
+    ) -> Result<DavOpenedDownload, DavBackendError> {
+        Err(DavBackendError::new(DavBackendErrorKind::Unsupported))
+    }
+
+    async fn open_range<'a>(
+        &'a self,
+        _path: &'a DavPath,
+        range: aster_forge_utils::http_range::HttpByteRange,
+    ) -> Result<DavOpenedDownload, DavBackendError> {
+        self.ranges.lock().expect("range calls lock").push(range);
+        let open = self
+            .opens
+            .lock()
+            .expect("open plans lock")
+            .pop_front()
+            .expect("one open plan per selected range")
+            .map_err(DavBackendError::new)?;
+        let stream = DropTrackedStream {
+            chunks: open.chunks,
+            dropped_streams: Arc::clone(&self.dropped_streams),
+        };
+        Ok(DavOpenedDownload::new(
+            Box::pin(stream),
+            open.declared_length,
+        ))
     }
 }
 
@@ -232,6 +361,229 @@ fn ranged_get_plan_selects_exact_storage_offset_and_response_headers() {
         plan.response.headers.get(CONTENT_RANGE).unwrap(),
         "bytes 5-19/20"
     );
+}
+
+#[test]
+fn bounded_multi_range_plan_preserves_order_and_rfc_header_contract() {
+    let mut headers = HeaderMap::new();
+    headers.insert(RANGE, HeaderValue::from_static("bytes=10-12, 50-, -5, 0-1"));
+    let plan = plan_download_response_with_multi_range(
+        &headers,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+        generous_multi_range_policy(),
+    )
+    .expect("bounded multi-range should plan");
+
+    assert_eq!(plan.response.status, StatusCode::PARTIAL_CONTENT);
+    assert!(plan.response.headers.get(CONTENT_RANGE).is_none());
+    assert!(
+        plan.response
+            .headers
+            .get(CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("multipart/byteranges; boundary=aster-forge-")
+    );
+    let DavDownloadBody::Multipart(multipart) = &plan.body else {
+        panic!("multiple requested ranges should select multipart");
+    };
+    assert_eq!(multipart.requested_range_count(), 4);
+    assert_eq!(multipart.selected_length(), 10);
+    assert_eq!(
+        multipart
+            .segments()
+            .iter()
+            .map(|segment| segment.range())
+            .collect::<Vec<_>>(),
+        vec![
+            aster_forge_utils::http_range::HttpByteRange::new(10, 12, 20).unwrap(),
+            aster_forge_utils::http_range::HttpByteRange::new(15, 19, 20).unwrap(),
+            aster_forge_utils::http_range::HttpByteRange::new(0, 1, 20).unwrap(),
+        ]
+    );
+    assert_eq!(
+        plan.response.headers.get(CONTENT_LENGTH).unwrap(),
+        multipart.expected_length().to_string().as_str()
+    );
+}
+
+#[test]
+fn multi_range_policy_keeps_one_raw_range_on_the_single_part_path() {
+    let mut headers = HeaderMap::new();
+    headers.insert(RANGE, HeaderValue::from_static("bytes=5-9"));
+    let plan = plan_download_response_with_multi_range(
+        &headers,
+        false,
+        20,
+        "application/octet-stream",
+        None,
+        representation_time(),
+        generous_multi_range_policy(),
+    )
+    .expect("single range should plan");
+
+    let DavDownloadBody::Range(range) = plan.body else {
+        panic!("one raw range must not generate multipart");
+    };
+    assert_eq!((range.start(), range.end()), (5, 9));
+    assert_eq!(
+        plan.response.headers.get(CONTENT_RANGE).unwrap(),
+        "bytes 5-9/20"
+    );
+    assert_eq!(
+        plan.response.headers.get(CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+}
+
+#[test]
+fn multi_range_coalescing_handles_overlap_adjacency_nearby_gaps_and_request_order() {
+    let cases = [
+        (
+            "bytes=100-109,0-9,8-100,200-204,205-209,212-214",
+            0,
+            vec![(0, 109), (200, 209), (212, 214)],
+        ),
+        (
+            "bytes=100-109,0-9,8-100,200-204,205-209,212-214",
+            2,
+            vec![(0, 109), (200, 214)],
+        ),
+    ];
+    for (raw, gap, expected) in cases {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_str(raw).expect("range header"));
+        let plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            300,
+            "application/octet-stream",
+            None,
+            representation_time(),
+            multi_range_policy(
+                DavMultiRangeLimits::new(4096, 16, 16, 300, 16),
+                gap,
+                DavRangeLimitBehavior::RangeNotSatisfiable,
+            ),
+        )
+        .expect("coalesced range plan");
+        let DavDownloadBody::Multipart(multipart) = plan.body else {
+            panic!("multiple ranges remain a multipart response");
+        };
+        assert_eq!(
+            multipart
+                .segments()
+                .iter()
+                .map(|segment| {
+                    let range = segment.range();
+                    (range.start(), range.end())
+                })
+                .collect::<Vec<_>>(),
+            expected,
+            "gap={gap}"
+        );
+    }
+}
+
+#[test]
+fn multi_range_limits_are_exact_and_select_typed_ignore_or_reject_behavior() {
+    let raw = "bytes=0-1,10-11";
+    let mut headers = HeaderMap::new();
+    headers.insert(RANGE, HeaderValue::from_static(raw));
+    let exact = DavMultiRangeLimits::new(raw.len(), 2, 2, 4, 2);
+    let plan = plan_download_response_with_multi_range(
+        &headers,
+        false,
+        20,
+        "text/plain",
+        None,
+        representation_time(),
+        multi_range_policy(exact, 0, DavRangeLimitBehavior::RangeNotSatisfiable),
+    )
+    .expect("exact hard limits should pass");
+    assert_eq!(plan.response.status, StatusCode::PARTIAL_CONTENT);
+
+    let rejected_limits = [
+        DavMultiRangeLimits::new(raw.len() - 1, 2, 2, 4, 2),
+        DavMultiRangeLimits::new(raw.len(), 1, 2, 4, 2),
+        DavMultiRangeLimits::new(raw.len(), 2, 1, 4, 2),
+        DavMultiRangeLimits::new(raw.len(), 2, 2, 3, 2),
+        DavMultiRangeLimits::new(raw.len(), 2, 2, 4, 1),
+    ];
+    for limits in rejected_limits {
+        let plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            20,
+            "text/plain",
+            None,
+            representation_time(),
+            multi_range_policy(limits, 0, DavRangeLimitBehavior::RangeNotSatisfiable),
+        )
+        .expect("limit rejection should be a response plan");
+        assert_eq!(plan.response.status, StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(plan.body, DavDownloadBody::Empty);
+    }
+
+    let ignored = plan_download_response_with_multi_range(
+        &headers,
+        false,
+        20,
+        "text/plain",
+        None,
+        representation_time(),
+        multi_range_policy(
+            DavMultiRangeLimits::new(raw.len(), 1, 1, 1, 1),
+            0,
+            DavRangeLimitBehavior::IgnoreRange,
+        ),
+    )
+    .expect("limit ignore should plan a complete response");
+    assert_eq!(ignored.response.status, StatusCode::OK);
+    assert_eq!(ignored.body, full_download_body(20));
+}
+
+#[test]
+fn multi_range_rejects_duplicate_or_malformed_fields_and_ignores_unknown_units() {
+    let mut duplicate = HeaderMap::new();
+    duplicate.append(RANGE, HeaderValue::from_static("bytes=0-1"));
+    duplicate.append(RANGE, HeaderValue::from_static("bytes=10-11"));
+    let duplicate = plan_download_response_with_multi_range(
+        &duplicate,
+        false,
+        20,
+        "text/plain",
+        None,
+        representation_time(),
+        generous_multi_range_policy(),
+    )
+    .expect("duplicate fields should plan a rejection");
+    assert_eq!(duplicate.response.status, StatusCode::RANGE_NOT_SATISFIABLE);
+
+    for (raw, expected) in [
+        ("bytes=0-1,broken", StatusCode::RANGE_NOT_SATISFIABLE),
+        ("bytes=100-200,300-400", StatusCode::RANGE_NOT_SATISFIABLE),
+        ("items=0-1,10-11", StatusCode::OK),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_str(raw).expect("range header"));
+        let plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            20,
+            "text/plain",
+            None,
+            representation_time(),
+            generous_multi_range_policy(),
+        )
+        .expect("range result should plan");
+        assert_eq!(plan.response.status, expected, "{raw}");
+    }
 }
 
 #[test]
@@ -700,5 +1052,221 @@ fn planned_download_rejects_backend_failures_and_length_drift_without_opening_em
                 .is_none()
         );
         assert_eq!(empty.calls.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn multipart_download_opens_each_final_segment_once_and_streams_only_framing_and_bytes() {
+    futures::executor::block_on(async {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=0-2,10-11"));
+        let plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            20,
+            "text/plain",
+            None,
+            representation_time(),
+            generous_multi_range_policy(),
+        )
+        .expect("multipart plan");
+        let content_type = plan
+            .response
+            .headers
+            .get(CONTENT_TYPE)
+            .expect("multipart content type")
+            .to_str()
+            .expect("content type text");
+        let boundary = content_type
+            .strip_prefix("multipart/byteranges; boundary=")
+            .expect("boundary parameter");
+        assert!(!boundary.is_empty());
+
+        let source = MultipartDownloadSource::new(vec![
+            Ok(MultipartStreamSpec::bytes(3, &[b"a", b"bc"])),
+            Ok(MultipartStreamSpec::bytes(2, &[b"de"])),
+        ]);
+        let path = DavPath::new("/video.mp4").expect("path");
+        let opened = open_download(&source, &path, plan.body)
+            .await
+            .expect("multipart backend opens")
+            .expect("multipart body");
+        assert_eq!(
+            opened.expected_length,
+            plan.response
+                .headers
+                .get(CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        );
+        assert_eq!(
+            source.opened_ranges(),
+            vec![
+                aster_forge_utils::http_range::HttpByteRange::new(0, 2, 20).unwrap(),
+                aster_forge_utils::http_range::HttpByteRange::new(10, 11, 20).unwrap(),
+            ]
+        );
+
+        let body = opened
+            .stream
+            .map(|item| item.expect("multipart stream should complete"))
+            .collect::<Vec<_>>()
+            .await;
+        let mut expected = Vec::new();
+        expected.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-2/20\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        expected.extend_from_slice(b"abc");
+        expected.extend_from_slice(format!(
+            "\r\n--{boundary}\r\nContent-Type: text/plain\r\nContent-Range: bytes 10-11/20\r\n\r\n"
+        )
+        .as_bytes());
+        expected.extend_from_slice(b"de");
+        expected.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let actual = body
+            .into_iter()
+            .flat_map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    });
+}
+
+#[test]
+fn multipart_backend_open_failures_happen_before_a_response_stream_is_returned() {
+    futures::executor::block_on(async {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=0-1,10-11"));
+        let plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            20,
+            "application/octet-stream",
+            None,
+            representation_time(),
+            generous_multi_range_policy(),
+        )
+        .expect("multipart plan");
+        let source = MultipartDownloadSource::new(vec![
+            Ok(MultipartStreamSpec::bytes(2, &[b"ab"])),
+            Err(DavBackendErrorKind::Forbidden),
+        ]);
+        let path = DavPath::new("/video.mp4").expect("path");
+        assert!(matches!(
+            open_download(&source, &path, plan.body).await,
+            Err(DavDownloadOpenError::Backend(DavBackendError {
+                kind: DavBackendErrorKind::Forbidden,
+            }))
+        ));
+        assert_eq!(source.opened_ranges().len(), 2);
+        assert_eq!(source.dropped_streams.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn multipart_length_drift_and_stream_failures_never_pad_or_emit_a_closing_boundary() {
+    futures::executor::block_on(async {
+        let path = DavPath::new("/video.mp4").expect("path");
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=0-2,10-11"));
+
+        let mismatch_plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            20,
+            "text/plain",
+            None,
+            representation_time(),
+            generous_multi_range_policy(),
+        )
+        .expect("multipart plan");
+        let mismatch_source = MultipartDownloadSource::new(vec![
+            Ok(MultipartStreamSpec::bytes(3, &[b"abc"])),
+            Ok(MultipartStreamSpec::bytes(1, &[b"d"])),
+        ]);
+        assert!(matches!(
+            open_download(&mismatch_source, &path, mismatch_plan.body).await,
+            Err(DavDownloadOpenError::LengthMismatch {
+                planned: 2,
+                opened: 1,
+            })
+        ));
+        assert_eq!(mismatch_source.dropped_streams.load(Ordering::SeqCst), 2);
+
+        for spec in [
+            MultipartStreamSpec::bytes(3, &[b"ab"]),
+            MultipartStreamSpec::with_error(
+                3,
+                vec![
+                    Ok(Bytes::from_static(b"ab")),
+                    Err(DavBackendErrorKind::Forbidden),
+                ],
+            ),
+            MultipartStreamSpec::with_error(3, vec![Ok(Bytes::from_static(b"abcd"))]),
+        ] {
+            let plan = plan_download_response_with_multi_range(
+                &headers,
+                false,
+                20,
+                "text/plain",
+                None,
+                representation_time(),
+                generous_multi_range_policy(),
+            )
+            .expect("multipart plan");
+            let source = MultipartDownloadSource::new(vec![
+                Ok(spec),
+                Ok(MultipartStreamSpec::bytes(2, &[b"de"])),
+            ]);
+            let opened = open_download(&source, &path, plan.body)
+                .await
+                .expect("backend opens")
+                .expect("stream body");
+            let chunks = opened.stream.collect::<Vec<_>>().await;
+            assert!(chunks.iter().any(Result::is_err));
+            let body = chunks
+                .into_iter()
+                .filter_map(Result::ok)
+                .flat_map(|chunk| chunk.to_vec())
+                .collect::<Vec<_>>();
+            assert!(!body.windows(4).any(|window| window == b"\r\n--"));
+        }
+    });
+}
+
+#[test]
+fn multipart_stream_drop_cancels_remaining_backend_streams_without_more_reads() {
+    futures::executor::block_on(async {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=0-2,10-11"));
+        let plan = plan_download_response_with_multi_range(
+            &headers,
+            false,
+            20,
+            "text/plain",
+            None,
+            representation_time(),
+            generous_multi_range_policy(),
+        )
+        .expect("multipart plan");
+        let source = MultipartDownloadSource::new(vec![
+            Ok(MultipartStreamSpec::bytes(3, &[b"abc"])),
+            Ok(MultipartStreamSpec::bytes(2, &[b"de"])),
+        ]);
+        let path = DavPath::new("/video.mp4").expect("path");
+        let opened = open_download(&source, &path, plan.body)
+            .await
+            .expect("backend opens")
+            .expect("body");
+        let mut stream = opened.stream;
+        let _ = stream.next().await.expect("first framing");
+        let _ = stream.next().await.expect("first body");
+        drop(stream);
+        assert_eq!(source.dropped_streams.load(Ordering::SeqCst), 2);
     });
 }

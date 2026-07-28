@@ -122,6 +122,45 @@ let opened = aster_forge_webdav::open_download(
 .await?;
 ```
 
+普通 `plan_download_response` 保持 single-range 高效路径；需要 multipart 时，产品必须显式传入
+`DavMultiRangePolicy`：
+
+```rust
+let limits = aster_forge_webdav::DavMultiRangeLimits::new(
+    8 * 1024, // Range header bytes
+    16,      // raw range specs
+    8,       // final segments
+    64 * 1024 * 1024, // selected representation bytes
+    8,       // backend range opens
+);
+let plan = aster_forge_webdav::plan_download_response_with_multi_range(
+    &headers,
+    false,
+    metadata.len(),
+    content_type,
+    metadata.etag().as_deref(),
+    metadata.modified()?,
+    aster_forge_webdav::DavMultiRangePolicy::new(
+        limits,
+        80, // coalesce gaps no larger than the multipart overhead budget
+        aster_forge_webdav::DavRangeLimitBehavior::IgnoreRange,
+    ),
+)?;
+```
+
+多段规划遵循 [RFC 9110 Section 14.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.2)、
+[Section 14.6](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.6) 和
+[Section 15.3.7.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.3.7.2)：单个 raw
+range 永远走普通 `206`，多个 raw range 才允许生成 `multipart/byteranges`；顶层响应不带
+`Content-Range`，每个 part 都带自己的 `Content-Type` 与 `Content-Range`。不可满足的成员会被
+丢弃，全部不可满足时返回 `416`；重叠、相邻和不超过显式阈值的间隔按请求顺序合并。
+
+所有 hard limits 在 backend 打开前生效。multipart `open_download` 会先为每个最终 segment
+调用一次 `DavDownloadSource::open_range`，核对每个 stream 的精确长度，再返回一个增量 framing
+stream；它不会把 representation 拼成完整 `Vec<u8>`。short read、过读或中途 backend error
+会直接结束响应流，不补零，也不会伪造 closing boundary。客户端取消时，尚未消费的 backend
+streams 会随 transport stream 一起释放。
+
 PUT 的 `DavPutWritePlan::Replace` 使用 `DavWriteSystem`；`Partial` 只在声明能力后使用 `DavRandomWriteSystem` 或产品自己的原子 staging/session adapter。LOCK 创建空 lock-null resource 时，`ensure_lock_target_exists` 同时接收资源 backend 和顺序 write backend，并以 `finish` 作为创建提交点。
 
 这一版直接移除了混合 `DavFile` 与 `OpenOptions`。下游迁移时把原 `open` 拆为 download、sequential write 和可选 random write impl；不保留只返回 unsupported/forbidden 的旧 read/seek facade。
