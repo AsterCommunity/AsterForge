@@ -1,21 +1,67 @@
 //! Transport-neutral HTTP conditional request helpers.
 
+use std::borrow::Cow;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use headers::{ETag, Header, IfMatch, IfNoneMatch};
+use http::header::{IF_MATCH, IF_NONE_MATCH};
+use http::{HeaderMap, HeaderValue};
+
+const MAX_ETAG_LIST_ELEMENTS: usize = 128;
+const MAX_HTTP_DATE_EPOCH_SECONDS: u64 = 253_402_300_799;
 
 /// Errors produced while parsing HTTP validators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum HttpValidatorError {
-    /// A comma-separated ETag list did not contain an entity tag.
-    #[error("ETag list must contain at least one entity tag")]
-    EmptyEtagList,
+    /// An entity-tag list contained a malformed tag or mixed `*` with tags.
+    #[error("invalid ETag list")]
+    InvalidEtagList,
     /// A value was not a valid HTTP date.
     #[error("invalid HTTP date")]
     InvalidHttpDate,
 }
 
 /// Formats a system time as an IMF-fixdate HTTP date.
+#[deprecated(note = "use try_format_http_date to validate the supported HTTP-date range")]
 pub fn format_http_date(time: SystemTime) -> String {
     httpdate::fmt_http_date(time)
+}
+
+/// Validates that a system time is representable as an HTTP date without formatting it.
+pub fn validate_http_date(time: SystemTime) -> Result<(), HttpValidatorError> {
+    let duration = time
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| HttpValidatorError::InvalidHttpDate)?;
+    if duration.as_secs() > MAX_HTTP_DATE_EPOCH_SECONDS {
+        return Err(HttpValidatorError::InvalidHttpDate);
+    }
+    Ok(())
+}
+
+/// Formats a system time when it is representable by the HTTP-date implementation.
+pub fn try_format_http_date(time: SystemTime) -> Result<String, HttpValidatorError> {
+    validate_http_date(time)?;
+    Ok(httpdate::fmt_http_date(time))
+}
+
+/// Trims and validates one entity-tag, quoting an opaque backend value when needed.
+///
+/// Already rendered strong and weak entity-tags are borrowed. The wildcard is a conditional
+/// request token rather than an entity-tag and is therefore rejected.
+pub fn try_format_entity_tag(value: &str) -> Result<Cow<'_, str>, HttpValidatorError> {
+    let value = value.trim();
+    if value == "*" {
+        return Err(HttpValidatorError::InvalidEtagList);
+    }
+    let rendered = if value.starts_with('"') || value.starts_with("W/\"") {
+        Cow::Borrowed(value)
+    } else {
+        Cow::Owned(format!("\"{value}\""))
+    };
+    rendered
+        .parse::<ETag>()
+        .map_err(|_| HttpValidatorError::InvalidEtagList)?;
+    Ok(rendered)
 }
 
 /// Parses an HTTP date into system time.
@@ -37,32 +83,48 @@ pub fn if_match_header_matches(
     resource_exists: bool,
     current_etag: Option<&str>,
 ) -> Result<bool, HttpValidatorError> {
-    let raw = raw.trim();
-    if raw == "*" {
-        return Ok(resource_exists);
+    match parse_etag_list(raw.as_bytes())? {
+        ParsedEtagList::Any => Ok(resource_exists),
+        ParsedEtagList::Tags(candidates) => strong_candidates_match(
+            &candidates,
+            resource_exists.then_some(current_etag).flatten(),
+        ),
+    }
+}
+
+/// Applies `If-Match` to all field lines in an HTTP header map.
+pub fn if_match_headers_match(
+    headers: &HeaderMap,
+    resource_exists: bool,
+    current_etag: Option<&str>,
+) -> Result<Option<bool>, HttpValidatorError> {
+    let Some(raw) = combined_header_bytes(headers, IF_MATCH) else {
+        return Ok(None);
+    };
+    match parse_etag_list(&raw)? {
+        ParsedEtagList::Any => Ok(Some(resource_exists)),
+        ParsedEtagList::Tags(candidates) => strong_candidates_match(
+            &candidates,
+            resource_exists.then_some(current_etag).flatten(),
+        )
+        .map(Some),
+    }
+}
+
+fn strong_candidates_match(
+    candidates: &[ETag],
+    current_etag: Option<&str>,
+) -> Result<bool, HttpValidatorError> {
+    if candidates.is_empty() {
+        return Ok(false);
     }
     let Some(current_etag) = current_etag else {
         return Ok(false);
     };
-    let mut saw_tag = false;
-    for candidate in raw
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        saw_tag = true;
-        if is_weak_etag(candidate) {
-            continue;
-        }
-        if strong_etag_matches(candidate, current_etag) {
-            return Ok(true);
-        }
-    }
-    if saw_tag {
-        Ok(false)
-    } else {
-        Err(HttpValidatorError::EmptyEtagList)
-    }
+    let current = parse_entity_tag(current_etag)?;
+    Ok(candidates
+        .iter()
+        .any(|candidate| IfMatch::from(candidate.clone()).precondition_passes(&current)))
 }
 
 /// Applies the weak comparison required by `If-None-Match`.
@@ -71,63 +133,150 @@ pub fn if_none_match_header_matches(
     resource_exists: bool,
     current_etag: Option<&str>,
 ) -> Result<bool, HttpValidatorError> {
-    let raw = raw.trim();
-    if raw == "*" {
-        return Ok(resource_exists);
+    match parse_etag_list(raw.as_bytes())? {
+        ParsedEtagList::Any => Ok(resource_exists),
+        ParsedEtagList::Tags(candidates) => weak_candidates_match(
+            &candidates,
+            resource_exists.then_some(current_etag).flatten(),
+        ),
+    }
+}
+
+/// Applies `If-None-Match` to all field lines in an HTTP header map.
+pub fn if_none_match_headers_match(
+    headers: &HeaderMap,
+    resource_exists: bool,
+    current_etag: Option<&str>,
+) -> Result<Option<bool>, HttpValidatorError> {
+    let Some(raw) = combined_header_bytes(headers, IF_NONE_MATCH) else {
+        return Ok(None);
+    };
+    match parse_etag_list(&raw)? {
+        ParsedEtagList::Any => Ok(Some(resource_exists)),
+        ParsedEtagList::Tags(candidates) => weak_candidates_match(
+            &candidates,
+            resource_exists.then_some(current_etag).flatten(),
+        )
+        .map(Some),
+    }
+}
+
+fn weak_candidates_match(
+    candidates: &[ETag],
+    current_etag: Option<&str>,
+) -> Result<bool, HttpValidatorError> {
+    if candidates.is_empty() {
+        return Ok(false);
     }
     let Some(current_etag) = current_etag else {
         return Ok(false);
     };
-    let mut saw_tag = false;
-    for candidate in raw
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        saw_tag = true;
-        if etag_matches(candidate, current_etag) {
-            return Ok(true);
+    let current = parse_entity_tag(current_etag)?;
+    Ok(candidates
+        .iter()
+        .any(|candidate| !IfNoneMatch::from(candidate.clone()).precondition_passes(&current)))
+}
+
+enum ParsedEtagList {
+    Any,
+    Tags(Vec<ETag>),
+}
+
+fn parse_etag_list(raw: &[u8]) -> Result<ParsedEtagList, HttpValidatorError> {
+    let trimmed = trim_ows(raw);
+    if trimmed == b"*" {
+        return Ok(ParsedEtagList::Any);
+    }
+    let mut tags = Vec::new();
+    let mut remaining = raw;
+    let mut elements = 0_usize;
+    loop {
+        remaining = trim_start_ows(remaining);
+        while let Some(rest) = remaining.strip_prefix(b",") {
+            elements = elements.saturating_add(1);
+            if elements > MAX_ETAG_LIST_ELEMENTS {
+                return Err(HttpValidatorError::InvalidEtagList);
+            }
+            remaining = trim_start_ows(rest);
         }
+        if remaining.is_empty() {
+            break;
+        }
+        elements = elements.saturating_add(1);
+        if elements > MAX_ETAG_LIST_ELEMENTS {
+            return Err(HttpValidatorError::InvalidEtagList);
+        }
+        let weak = remaining.starts_with(b"W/");
+        let quoted = if weak {
+            remaining.get(2..)
+        } else {
+            Some(remaining)
+        }
+        .and_then(|value| value.strip_prefix(b"\""))
+        .ok_or(HttpValidatorError::InvalidEtagList)?;
+        let closing = quoted
+            .iter()
+            .position(|byte| *byte == b'"')
+            .ok_or(HttpValidatorError::InvalidEtagList)?;
+        let consumed = closing + 2 + usize::from(weak) * 2;
+        let candidate = remaining
+            .get(..consumed)
+            .ok_or(HttpValidatorError::InvalidEtagList)?;
+        tags.push(parse_entity_tag_bytes(candidate)?);
+        remaining = remaining
+            .get(consumed..)
+            .ok_or(HttpValidatorError::InvalidEtagList)?;
+        let trimmed = trim_start_ows(remaining);
+        if trimmed.is_empty() {
+            break;
+        }
+        remaining = trimmed
+            .strip_prefix(b",")
+            .ok_or(HttpValidatorError::InvalidEtagList)?;
     }
-    if saw_tag {
-        Ok(false)
-    } else {
-        Err(HttpValidatorError::EmptyEtagList)
+    Ok(ParsedEtagList::Tags(tags))
+}
+
+fn parse_entity_tag(value: &str) -> Result<ETag, HttpValidatorError> {
+    let rendered = try_format_entity_tag(value)?;
+    rendered
+        .parse()
+        .map_err(|_| HttpValidatorError::InvalidEtagList)
+}
+
+fn parse_entity_tag_bytes(value: &[u8]) -> Result<ETag, HttpValidatorError> {
+    let value = HeaderValue::from_bytes(value).map_err(|_| HttpValidatorError::InvalidEtagList)?;
+    ETag::decode(&mut std::iter::once(&value)).map_err(|_| HttpValidatorError::InvalidEtagList)
+}
+
+fn combined_header_bytes(headers: &HeaderMap, name: http::header::HeaderName) -> Option<Vec<u8>> {
+    let mut combined = Vec::new();
+    let mut present = false;
+    for value in headers.get_all(name).iter() {
+        if present {
+            combined.push(b',');
+        }
+        present = true;
+        combined.extend_from_slice(value.as_bytes());
     }
+    present.then_some(combined)
 }
 
-fn etag_matches(header_value: &str, current_etag: &str) -> bool {
-    let header_value = strip_weak_etag_prefix(header_value.trim());
-    let current = strip_weak_etag_prefix(current_etag.trim());
-    strip_etag_quotes(header_value) == strip_etag_quotes(current)
+fn trim_ows(value: &[u8]) -> &[u8] {
+    let value = trim_start_ows(value);
+    let end = value
+        .iter()
+        .rposition(|byte| !matches!(byte, b' ' | b'\t'))
+        .map_or(0, |index| index + 1);
+    &value[..end]
 }
 
-fn strong_etag_matches(candidate: &str, current_etag: &str) -> bool {
-    if is_weak_etag(current_etag) {
-        return false;
-    }
-    strip_etag_quotes(candidate.trim()) == strip_etag_quotes(current_etag.trim())
-}
-
-fn is_weak_etag(value: &str) -> bool {
-    value
-        .trim()
-        .get(..2)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("W/"))
-}
-
-fn strip_weak_etag_prefix(value: &str) -> &str {
-    value
-        .strip_prefix("W/")
-        .or_else(|| value.strip_prefix("w/"))
-        .unwrap_or(value)
-}
-
-fn strip_etag_quotes(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(value)
+fn trim_start_ows(value: &[u8]) -> &[u8] {
+    let start = value
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t'))
+        .unwrap_or(value.len());
+    &value[start..]
 }
 
 #[cfg(test)]
@@ -135,9 +284,14 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use super::{
-        HttpValidatorError, format_http_date, http_date_epoch_seconds, if_match_header_matches,
-        if_none_match_header_matches, parse_http_date,
+        HttpValidatorError, MAX_ETAG_LIST_ELEMENTS, MAX_HTTP_DATE_EPOCH_SECONDS,
+        http_date_epoch_seconds, if_match_header_matches, if_match_headers_match,
+        if_none_match_header_matches, if_none_match_headers_match, parse_http_date,
+        try_format_entity_tag, try_format_http_date, validate_http_date,
     };
+    use http::header::{IF_MATCH, IF_NONE_MATCH};
+    use http::{HeaderMap, HeaderValue};
+    use std::borrow::Cow;
 
     #[test]
     fn if_none_match_uses_weak_comparison() {
@@ -164,6 +318,18 @@ mod tests {
     }
 
     #[test]
+    fn opaque_backend_etags_that_start_with_weak_marker_text_are_quoted() {
+        assert_eq!(
+            if_match_header_matches(r#""W/backend-value""#, true, Some("W/backend-value")),
+            Ok(true)
+        );
+        assert_eq!(
+            if_none_match_header_matches(r#""W/backend-value""#, true, Some("W/backend-value")),
+            Ok(true)
+        );
+    }
+
+    #[test]
     fn wildcard_respects_resource_existence() {
         assert_eq!(if_match_header_matches("*", true, None), Ok(true));
         assert_eq!(if_match_header_matches("*", false, None), Ok(false));
@@ -172,26 +338,214 @@ mod tests {
     }
 
     #[test]
-    fn empty_etag_lists_are_invalid() {
+    fn empty_etag_lists_use_zero_member_rfc_semantics() {
         assert_eq!(
             if_none_match_header_matches(" , ", true, Some("etag")),
-            Err(HttpValidatorError::EmptyEtagList)
+            Ok(false)
         );
         assert_eq!(
             if_match_header_matches(" , ", true, Some("etag")),
-            Err(HttpValidatorError::EmptyEtagList)
+            Ok(false)
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_MATCH, HeaderValue::from_static(""));
+        assert_eq!(
+            if_match_headers_match(&headers, true, Some("etag")),
+            Ok(Some(false))
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_NONE_MATCH, HeaderValue::from_static(""));
+        assert_eq!(
+            if_none_match_headers_match(&headers, true, Some("etag")),
+            Ok(Some(false))
         );
     }
 
     #[test]
+    fn explicit_etag_lists_do_not_match_without_a_current_validator() {
+        assert_eq!(if_match_header_matches("\"etag-1\"", true, None), Ok(false));
+        assert_eq!(
+            if_none_match_header_matches("\"etag-1\"", true, None),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn entity_tag_formatting_borrows_rendered_values_and_quotes_opaque_values() {
+        assert_eq!(
+            try_format_entity_tag("  \"strong\"  "),
+            Ok(Cow::Borrowed("\"strong\""))
+        );
+        assert_eq!(
+            try_format_entity_tag("W/\"weak\""),
+            Ok(Cow::Borrowed("W/\"weak\""))
+        );
+        assert_eq!(
+            try_format_entity_tag(" opaque "),
+            Ok(Cow::Owned::<str>("\"opaque\"".to_owned()))
+        );
+    }
+
+    #[test]
+    fn entity_tag_formatting_rejects_wildcards_and_malformed_rendered_values() {
+        for value in [
+            "*",
+            "\"unterminated",
+            "W/\"unterminated",
+            "\"tag\" trailing",
+            "bad\netag",
+        ] {
+            assert_eq!(
+                try_format_entity_tag(value),
+                Err(HttpValidatorError::InvalidEtagList),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn conditions_that_do_not_need_a_current_tag_ignore_invalid_metadata() {
+        for raw in ["", " , "] {
+            assert_eq!(
+                if_match_header_matches(raw, true, Some("bad\netag")),
+                Ok(false)
+            );
+            assert_eq!(
+                if_none_match_header_matches(raw, true, Some("bad\netag")),
+                Ok(false)
+            );
+        }
+        assert_eq!(
+            if_match_header_matches("\"candidate\"", false, Some("bad\netag")),
+            Ok(false)
+        );
+        assert_eq!(
+            if_none_match_header_matches("\"candidate\"", false, Some("bad\netag")),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn malformed_etag_lists_are_invalid() {
+        for raw in [r#"etag-1"#, r#"*, "etag-1""#, r#""unterminated"#] {
+            assert_eq!(
+                if_none_match_header_matches(raw, true, Some(r#""etag-1""#)),
+                Err(HttpValidatorError::InvalidEtagList),
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn recipient_list_parsing_ignores_empty_members_and_preserves_opaque_commas() {
+        for raw in [
+            r#", "etag-1""#,
+            r#""etag-1","#,
+            r#", , "etag-1", ,"#,
+            r#""opaque,comma", "etag-1""#,
+        ] {
+            assert_eq!(
+                if_none_match_header_matches(raw, true, Some(r#""etag-1""#)),
+                Ok(true),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(
+            if_match_header_matches(
+                r#""opaque,comma", "other""#,
+                true,
+                Some(r#""opaque,comma""#),
+            ),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn repeated_field_lines_are_combined_as_one_rfc_list() {
+        let mut headers = HeaderMap::new();
+        headers.append(IF_MATCH, HeaderValue::from_static("\"other\""));
+        headers.append(IF_MATCH, HeaderValue::from_static("\"etag-1\""));
+        assert_eq!(
+            if_match_headers_match(&headers, true, Some("etag-1")),
+            Ok(Some(true))
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.append(IF_NONE_MATCH, HeaderValue::from_static("\"other\""));
+        headers.append(IF_NONE_MATCH, HeaderValue::from_static("W/\"etag-1\""));
+        assert_eq!(
+            if_none_match_headers_match(&headers, true, Some("etag-1")),
+            Ok(Some(true))
+        );
+    }
+
+    #[test]
+    fn obs_text_is_valid_inside_an_opaque_tag() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IF_MATCH,
+            HeaderValue::from_bytes(&[b'"', 0xff, b'"']).expect("obs-text header"),
+        );
+        assert_eq!(
+            if_match_headers_match(&headers, true, Some("etag-1")),
+            Ok(Some(false))
+        );
+    }
+
+    #[test]
+    fn reasonable_empty_members_are_bounded() {
+        let accepted = ",".repeat(MAX_ETAG_LIST_ELEMENTS - 1) + "\"etag-1\"";
+        assert_eq!(
+            if_match_header_matches(&accepted, true, Some("etag-1")),
+            Ok(true)
+        );
+
+        let rejected = ",".repeat(MAX_ETAG_LIST_ELEMENTS) + "\"etag-1\"";
+        assert_eq!(
+            if_match_header_matches(&rejected, true, Some("etag-1")),
+            Err(HttpValidatorError::InvalidEtagList)
+        );
+
+        let empty_only = ",".repeat(MAX_ETAG_LIST_ELEMENTS + 1);
+        assert_eq!(
+            if_match_header_matches(&empty_only, true, Some("etag-1")),
+            Err(HttpValidatorError::InvalidEtagList)
+        );
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "The compatibility assertion verifies the deprecated formatter on a validated time."
+    )]
     fn http_dates_round_trip_and_reject_invalid_values() {
         let time = UNIX_EPOCH + Duration::from_secs(784_111_777);
-        let formatted = format_http_date(time);
+        let formatted = super::format_http_date(time);
 
         assert_eq!(formatted, "Sun, 06 Nov 1994 08:49:37 GMT");
         assert_eq!(parse_http_date(&formatted), Ok(time));
         assert_eq!(
             parse_http_date("not a date"),
+            Err(HttpValidatorError::InvalidHttpDate)
+        );
+        assert_eq!(try_format_http_date(time), Ok(formatted));
+        assert_eq!(validate_http_date(time), Ok(()));
+        assert_eq!(
+            try_format_http_date(UNIX_EPOCH - Duration::from_secs(1)),
+            Err(HttpValidatorError::InvalidHttpDate)
+        );
+        assert_eq!(
+            validate_http_date(UNIX_EPOCH - Duration::from_secs(1)),
+            Err(HttpValidatorError::InvalidHttpDate)
+        );
+        assert_eq!(
+            try_format_http_date(UNIX_EPOCH + Duration::from_secs(MAX_HTTP_DATE_EPOCH_SECONDS + 1),),
+            Err(HttpValidatorError::InvalidHttpDate)
+        );
+        assert_eq!(
+            validate_http_date(UNIX_EPOCH + Duration::from_secs(MAX_HTTP_DATE_EPOCH_SECONDS + 1),),
             Err(HttpValidatorError::InvalidHttpDate)
         );
     }

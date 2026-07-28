@@ -7,9 +7,10 @@ use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 
 use crate::protocol::DavProtocolError;
 use crate::{
-    DavBodyError, DavBodyPolicy, DavFileSystem, DavIfEvaluationError, DavLockSystem, DavMethod,
-    DavPath, DavPrecondition, DavRequestHead, DavRequestOrigin, DavResponse, DavResponseBody,
-    IfHeader,
+    DavBodyError, DavBodyPolicy, DavCapabilityContext, DavCapabilityProvider,
+    DavCapabilitySnapshot, DavCapabilityTarget, DavConditionalPlan, DavConditionalResource,
+    DavFileSystem, DavIfEvaluationError, DavLockSystem, DavMethod, DavPath, DavRequestHead,
+    DavRequestOrigin, DavRequestTarget, DavResponse, DavResponseBody, IfHeader,
 };
 
 /// Request body prepared according to the selected WebDAV method contract.
@@ -34,21 +35,50 @@ pub fn request_head(
     request: &HttpRequest,
     mount_path: &str,
 ) -> Result<Option<DavRequestHead>, DavProtocolError> {
+    let request_target = request_target(request, mount_path)?;
     let Some(method) = DavMethod::from_name(request.method().as_str()) else {
         return Ok(None);
     };
+    let headers = convert_header_map(request.headers())?;
+    DavRequestHead::parse_known_method(method, &request_target, &headers).map(Some)
+}
+
+/// Parses the request target before resolving whether the HTTP method is known to Forge.
+pub fn request_target<'a>(
+    request: &HttpRequest,
+    mount_path: &'a str,
+) -> Result<DavRequestTarget<'a>, DavProtocolError> {
     let uri: Uri = request
         .uri()
         .to_string()
         .parse()
         .map_err(|_| DavProtocolError::bad_request("Invalid request URI"))?;
-    let headers = convert_header_map(request.headers())?;
     let connection = request.connection_info();
     let origin = DavRequestOrigin {
         scheme: connection.scheme().to_string(),
         host: connection.host().to_string(),
     };
-    DavRequestHead::parse(method, &uri, &headers, mount_path, &origin).map(Some)
+    DavRequestHead::parse_target(&uri, mount_path, &origin)
+}
+
+/// Resolves the product declaration and maps the validated capability snapshot to Actix.
+pub async fn capability_snapshot<Provider: DavCapabilityProvider>(
+    provider: &Provider,
+    target: &DavCapabilityTarget,
+    context: &DavCapabilityContext,
+) -> Result<DavCapabilitySnapshot, HttpResponse> {
+    crate::plan_capabilities_with_provider(provider, target, context)
+        .await
+        .map_err(|error| into_response(crate::capability_evaluation_error_response(&error)))
+}
+
+/// Applies the resource-aware dispatch gate to an Actix request method.
+pub fn gate_request_method(
+    request: &HttpRequest,
+    snapshot: &DavCapabilitySnapshot,
+) -> Result<DavMethod, HttpResponse> {
+    crate::gate_method(DavMethod::from_name(request.method().as_str()), snapshot)
+        .map_err(|_| into_response(crate::method_not_allowed_response(snapshot)))
 }
 
 /// Converts a transport-neutral response into an Actix response.
@@ -159,16 +189,15 @@ pub async fn enforce_parent_unlocked(
     .map_err(into_response)
 }
 
-/// Evaluates HTTP ETag preconditions from Actix headers and maps protocol failures to a response.
-pub fn evaluate_http_etag_preconditions(
+/// Converts Actix headers and runs the method-aware conditional request planner.
+pub fn plan_http_conditionals(
     headers: &actix_header::HeaderMap,
-    resource_exists: bool,
-    current_etag: Option<&str>,
-    safe_method: bool,
-) -> Result<DavPrecondition, HttpResponse> {
+    method: DavMethod,
+    resource: DavConditionalResource<'_>,
+) -> Result<DavConditionalPlan, HttpResponse> {
     let headers = converted_headers(headers)?;
-    crate::evaluate_http_etag_preconditions(&headers, resource_exists, current_etag, safe_method)
-        .map_err(protocol_error_response)
+    crate::plan_http_conditionals(method, &headers, resource)
+        .map_err(|error| into_response(crate::conditional_plan_error_response(&error)))
 }
 
 /// Copies Actix header types into the transport-neutral `http` 1.x map.

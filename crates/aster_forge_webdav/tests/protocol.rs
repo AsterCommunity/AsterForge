@@ -1,19 +1,18 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use aster_forge_webdav::{
-    DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError,
-    DavIfResourceState, DavIfStateResolver, DavMethod, DavPath, DavPathError, DavPrecondition,
-    DavProtocolErrorKind, DavRequestHead, DavRequestOrigin, Depth, IfHeader, IfStateCondition,
-    child_relative_path, destination_relative_path, enforce_if_header,
-    evaluate_http_download_preconditions, evaluate_http_etag_preconditions, href_for_relative,
-    parent_relative_path, parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth,
-    parse_lock_timeout, parse_lock_token_header, parse_move_depth, parse_propfind_depth,
-    submitted_lock_tokens, submitted_lock_tokens_for_path,
+    DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError, DavIfResourceState,
+    DavIfStateResolver, DavMethod, DavPath, DavPathError, DavProtocolErrorKind, DavRequestHead,
+    DavRequestOrigin, Depth, IfHeader, IfStateCondition, child_relative_path,
+    destination_relative_path, enforce_if_header, href_for_relative, parent_relative_path,
+    parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
+    parse_lock_token_header, parse_move_depth, parse_propfind_depth, submitted_lock_tokens,
+    submitted_lock_tokens_for_path,
 };
 use async_trait::async_trait;
-use http::header::{self, HeaderMap, HeaderName, HeaderValue};
+use http::header::{HeaderMap, HeaderName, HeaderValue};
 use http::{Method, Uri};
 
 fn headers(name: &'static str, value: &'static str) -> HeaderMap {
@@ -192,10 +191,9 @@ fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_sep
 
 #[test]
 fn advertised_methods_are_exactly_the_methods_recognized_by_the_protocol_layer() {
-    let methods = DAV_ALLOW_HEADER.split(", ").collect::<Vec<_>>();
-    assert_eq!(methods.len(), 14);
-    for method in methods {
-        assert!(DavMethod::from_name(method).is_some(), "{method}");
+    assert_eq!(DavMethod::ALL.len(), 14);
+    for method in DavMethod::ALL {
+        assert_eq!(DavMethod::from_name(method.as_str()), Some(method));
     }
 }
 
@@ -717,61 +715,6 @@ fn lock_token_header_requires_one_nonempty_angle_bracketed_token() {
 }
 
 #[test]
-fn etag_and_date_preconditions_keep_http_precedence() {
-    let mut matching = HeaderMap::new();
-    matching.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"v1\""));
-    assert_eq!(
-        evaluate_http_etag_preconditions(&matching, true, Some("\"v1\""), true)
-            .expect("safe matching If-None-Match"),
-        DavPrecondition::NotModified
-    );
-    assert!(evaluate_http_etag_preconditions(&matching, true, Some("\"v1\""), false).is_err());
-
-    let modified = UNIX_EPOCH + Duration::from_secs(2_000_000);
-    let mut download = HeaderMap::new();
-    download.insert(
-        header::IF_MODIFIED_SINCE,
-        HeaderValue::from_static("Sat, 24 Jan 1970 03:33:20 GMT"),
-    );
-    assert_eq!(
-        evaluate_http_download_preconditions(&download, None, Some(modified))
-            .expect("valid date precondition"),
-        DavPrecondition::NotModified
-    );
-
-    let mut if_match_precedence = HeaderMap::new();
-    if_match_precedence.insert(header::IF_MATCH, HeaderValue::from_static("\"v1\""));
-    if_match_precedence.insert(
-        header::IF_UNMODIFIED_SINCE,
-        HeaderValue::from_static("Thu, 01 Jan 1970 00:00:00 GMT"),
-    );
-    assert_eq!(
-        evaluate_http_download_preconditions(&if_match_precedence, Some("\"v1\""), Some(modified),)
-            .expect("a matching If-Match suppresses If-Unmodified-Since"),
-        DavPrecondition::Proceed
-    );
-
-    let mut if_none_match_precedence = HeaderMap::new();
-    if_none_match_precedence.insert(
-        header::IF_NONE_MATCH,
-        HeaderValue::from_static("\"different\""),
-    );
-    if_none_match_precedence.insert(
-        header::IF_MODIFIED_SINCE,
-        HeaderValue::from_static("Sat, 24 Jan 1970 03:33:20 GMT"),
-    );
-    assert_eq!(
-        evaluate_http_download_preconditions(
-            &if_none_match_precedence,
-            Some("\"v1\""),
-            Some(modified),
-        )
-        .expect("a nonmatching If-None-Match suppresses If-Modified-Since"),
-        DavPrecondition::Proceed
-    );
-}
-
-#[test]
 fn request_head_parses_method_specific_contract() {
     let method = DavMethod::from_method(
         &Method::from_bytes(b"COPY").expect("COPY should be a valid HTTP extension method"),
@@ -782,17 +725,14 @@ fn request_head_parses_method_specific_contract() {
     request_headers.insert("Depth", HeaderValue::from_static("0"));
     request_headers.insert("Overwrite", HeaderValue::from_static("F"));
 
-    let request = DavRequestHead::parse(
-        method,
-        &uri,
-        &request_headers,
-        "/webdav",
-        &DavRequestOrigin {
-            scheme: "https".to_string(),
-            host: "dav.example".to_string(),
-        },
-    )
-    .expect("COPY request head should parse");
+    let origin = DavRequestOrigin {
+        scheme: "https".to_string(),
+        host: "dav.example".to_string(),
+    };
+    let target = DavRequestHead::parse_target(&uri, "/webdav", &origin)
+        .expect("COPY request target should parse");
+    let request = DavRequestHead::parse_known_method(method, &target, &request_headers)
+        .expect("COPY request head should parse");
 
     assert_eq!(request.target.as_str(), "/source.txt");
     assert_eq!(request.origin.scheme, "https");
@@ -808,10 +748,8 @@ fn request_head_parses_method_specific_contract() {
 #[test]
 fn request_head_rejects_targets_outside_the_mount() {
     let uri: Uri = "/webdavish/source.txt".parse().expect("valid request URI");
-    let error = DavRequestHead::parse(
-        DavMethod::Get,
+    let error = DavRequestHead::parse_target(
         &uri,
-        &HeaderMap::new(),
         "/webdav",
         &DavRequestOrigin {
             scheme: "https".to_string(),
@@ -828,10 +766,8 @@ fn request_head_rejects_targets_outside_the_mount() {
 #[test]
 fn request_head_accepts_a_root_mount() {
     let uri: Uri = "/folder/source.txt".parse().expect("valid request URI");
-    let request = DavRequestHead::parse(
-        DavMethod::Get,
+    let target = DavRequestHead::parse_target(
         &uri,
-        &HeaderMap::new(),
         "/",
         &DavRequestOrigin {
             scheme: "https".to_string(),
@@ -839,5 +775,23 @@ fn request_head_accepts_a_root_mount() {
         },
     )
     .expect("root-mounted WebDAV should accept descendant paths");
+    let request = DavRequestHead::parse_known_method(DavMethod::Get, &target, &HeaderMap::new())
+        .expect("root-mounted WebDAV should accept descendant paths");
     assert_eq!(request.target.as_str(), "/folder/source.txt");
+}
+
+#[test]
+fn request_target_mount_boundary_is_reused_for_destination_validation() {
+    let uri: Uri = "/webdav/source.txt".parse().expect("valid request URI");
+    let origin = DavRequestOrigin {
+        scheme: "https".to_string(),
+        host: "dav.example".to_string(),
+    };
+    let target = DavRequestHead::parse_target(&uri, "/webdav", &origin)
+        .expect("request target should parse");
+    let request_headers = headers("Destination", "/other/destination.txt");
+
+    let error = DavRequestHead::parse_known_method(DavMethod::Move, &target, &request_headers)
+        .expect_err("Destination must use the request target mount boundary");
+    assert_eq!(error.message(), "Destination must stay under WebDAV prefix");
 }

@@ -132,15 +132,17 @@ WebDAV 或内部传输协议应在自己的响应边界映射错误和选择读�
 
 主要 API：
 
-- `format_http_date(time)`
+- `try_format_http_date(time)`
+- `validate_http_date(time)`
 - `parse_http_date(value)`
 - `http_date_epoch_seconds(time)`
+- `try_format_entity_tag(value)`
 - `if_match_header_matches(raw, resource_exists, current_etag)`
 - `if_none_match_header_matches(raw, resource_exists, current_etag)`
 
 该模块实现 transport-neutral 的 HTTP conditional request 基础语义：`If-Match` 使用强
-ETag 比较，`If-None-Match` 使用弱比较，二者都支持 `*`，并拒绝没有任何 entity tag
-的空列表。实现不依赖 Actix/Axum；产品负责把 `HttpValidatorError` 映射为 REST、WebDAV、
+ETag 比较，`If-None-Match` 使用弱比较，二者都支持 `*`；有界空成员会被忽略，零成员
+列表不匹配任何当前 ETag。实现不依赖 Actix/Axum；产品负责把 `HttpValidatorError` 映射为 REST、WebDAV、
 WOPI 或其他协议所需的状态码和响应体。
 
 ### net
