@@ -17,7 +17,10 @@
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[cfg(all(feature = "jemalloc", not(target_env = "msvc"), target_os = "linux"))]
-#[allow(non_upper_case_globals)]
+#[expect(
+    non_upper_case_globals,
+    reason = "jemalloc requires this exact lower-case exported symbol name."
+)]
 #[unsafe(export_name = "_rjem_malloc_conf")]
 pub static malloc_conf: Option<&'static std::ffi::c_char> = Some(unsafe {
     union Conf {
@@ -41,7 +44,10 @@ pub static malloc_conf: Option<&'static std::ffi::c_char> = Some(unsafe {
         target_os = "openbsd"
     )
 ))]
-#[allow(non_upper_case_globals)]
+#[expect(
+    non_upper_case_globals,
+    reason = "jemalloc requires this exact lower-case exported symbol name."
+)]
 #[unsafe(export_name = "_rjem_malloc_conf")]
 pub static malloc_conf: Option<&'static std::ffi::c_char> = Some(unsafe {
     union Conf {

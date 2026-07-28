@@ -233,7 +233,10 @@ where
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The supervisor accepts explicit notifier, retry, reload, cancellation, and observability dependencies."
+)]
 pub(super) async fn run_config_reload_supervisor_inner<N, R, RFut, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,

@@ -30,3 +30,6 @@ uuid.workspace = true
 name = "redis_event_bus"
 path = "tests/redis_event_bus.rs"
 required-features = ["redis"]
+
+[lints]
+workspace = true

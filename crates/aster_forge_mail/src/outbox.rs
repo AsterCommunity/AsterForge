@@ -377,7 +377,10 @@ pub fn truncate_error(error: &str, max_len: usize) -> String {
 ///
 /// Forge owns the control flow and retry classification. Product crates own time calculation,
 /// repository calls, template rendering, mail auditing, and error types.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The dispatcher accepts explicit product-owned persistence, rendering, audit, and retry callbacks."
+)]
 pub async fn dispatch_mail_outbox<
     R,
     E,
@@ -556,7 +559,6 @@ where
 }
 
 /// Runs mail outbox dispatch passes until no rows are claimed or the configured drain limit is hit.
-#[allow(clippy::too_many_arguments)]
 pub async fn drain_mail_outbox<E, Dispatch, DispatchFut>(
     config: &MailOutboxDispatchConfig,
     mut dispatch: Dispatch,

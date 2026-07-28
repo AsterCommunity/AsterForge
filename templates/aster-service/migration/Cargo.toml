@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1"
 aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db", features = ["all"] }

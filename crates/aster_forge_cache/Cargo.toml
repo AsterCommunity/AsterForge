@@ -50,3 +50,6 @@ required-features = ["memory"]
 name = "redis_container"
 path = "tests/redis_container.rs"
 required-features = ["redis"]
+
+[lints]
+workspace = true
