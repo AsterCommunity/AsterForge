@@ -130,6 +130,13 @@ fn locking_class_two_requires_class_one_and_both_lock_methods() {
         );
     }
 
+    let mut no_lock_methods = declaration(DavResourceState::File, &[DavMethod::Options]);
+    no_lock_methods.locking = DavLockingCapability::Class2;
+    assert_eq!(
+        plan_capabilities(no_lock_methods),
+        Err(DavCapabilityPlanError::Class2WithoutLockMethods)
+    );
+
     let mut valid = declaration(
         DavResourceState::File,
         &[DavMethod::Options, DavMethod::Lock, DavMethod::Unlock],
@@ -330,6 +337,77 @@ fn provider_profile_rejects_runtime_class_two_above_a_class_one_profile() {
         error,
         aster_forge_webdav::DavCapabilityEvaluationError::Plan(
             DavCapabilityPlanError::Class2ExceedsProfile
+        )
+    ));
+}
+
+struct NonDavProviderDeclaringClass1;
+
+impl DavCapabilityProvider for NonDavProviderDeclaringClass1 {
+    type Profile = DavNonDavProfile;
+
+    async fn capabilities(
+        &self,
+        _target: &DavCapabilityTarget,
+        _context: &DavCapabilityContext,
+    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+        Ok(declaration(DavResourceState::File, &[DavMethod::Options]))
+    }
+}
+
+struct Class1ProviderDeclaringVersioning;
+
+impl DavClass1Support for Class1ProviderDeclaringVersioning {}
+
+impl DavCapabilityProvider for Class1ProviderDeclaringVersioning {
+    type Profile = DavClass1Profile;
+
+    async fn capabilities(
+        &self,
+        _target: &DavCapabilityTarget,
+        _context: &DavCapabilityContext,
+    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+        let mut declaration = declaration(
+            DavResourceState::File,
+            &[
+                DavMethod::Options,
+                DavMethod::Report,
+                DavMethod::VersionControl,
+            ],
+        );
+        declaration.versioning = DavVersioningCapability::Core;
+        Ok(declaration)
+    }
+}
+
+#[test]
+fn provider_profiles_reject_class_one_and_versioning_above_the_static_maximum() {
+    let target = DavCapabilityTarget::new(DavPath::new("/file").expect("path"), false);
+    let context = DavCapabilityContext::default();
+
+    let class1_error = futures::executor::block_on(plan_capabilities_with_provider(
+        &NonDavProviderDeclaringClass1,
+        &target,
+        &context,
+    ))
+    .expect_err("class 1 exceeds a non-DAV profile");
+    assert!(matches!(
+        class1_error,
+        aster_forge_webdav::DavCapabilityEvaluationError::Plan(
+            DavCapabilityPlanError::Class1ExceedsProfile
+        )
+    ));
+
+    let versioning_error = futures::executor::block_on(plan_capabilities_with_provider(
+        &Class1ProviderDeclaringVersioning,
+        &target,
+        &context,
+    ))
+    .expect_err("versioning exceeds a class 1 profile");
+    assert!(matches!(
+        versioning_error,
+        aster_forge_webdav::DavCapabilityEvaluationError::Plan(
+            DavCapabilityPlanError::VersionControlExceedsProfile
         )
     ));
 }

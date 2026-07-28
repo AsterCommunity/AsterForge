@@ -119,10 +119,19 @@ pub fn plan_http_conditionals(
     headers: &HeaderMap,
     resource: DavConditionalResource<'_>,
 ) -> Result<DavConditionalPlan, DavConditionalPlanError> {
-    let validator_headers = validator_headers(resource)?;
+    let validator_headers = validator_headers(resource);
 
-    let if_match = http_validators::if_match_headers_match(headers, resource.exists, resource.etag)
-        .map_err(|_| DavProtocolError::bad_request("Invalid If-Match header"))?;
+    let if_match =
+        match http_validators::if_match_headers_match(headers, resource.exists, resource.etag) {
+            Ok(result) => result,
+            Err(_) => {
+                if http_validators::if_match_headers_match(headers, resource.exists, None).is_err()
+                {
+                    return Err(DavProtocolError::bad_request("Invalid If-Match header").into());
+                }
+                return Err(DavConditionalPlanError::InvalidRepresentation);
+            }
+        };
     if let Some(false) = if_match {
         return Ok(plan(
             DavConditionalOutcome::PreconditionFailed,
@@ -134,21 +143,36 @@ pub fn plan_http_conditionals(
     if if_match.is_none()
         && let Some(since) = optional_http_date(headers, IF_UNMODIFIED_SINCE)
         && resource.exists
-        && resource.last_modified.is_some_and(|last_modified| {
-            http_validators::http_date_epoch_seconds(last_modified)
-                > http_validators::http_date_epoch_seconds(since)
-        })
+        && let Some(last_modified) = resource.last_modified
     {
-        return Ok(plan(
-            DavConditionalOutcome::PreconditionFailed,
-            method,
-            validator_headers,
-        ));
+        http_validators::validate_http_date(last_modified)
+            .map_err(|_| DavConditionalPlanError::InvalidRepresentation)?;
+        if http_validators::http_date_epoch_seconds(last_modified)
+            > http_validators::http_date_epoch_seconds(since)
+        {
+            return Ok(plan(
+                DavConditionalOutcome::PreconditionFailed,
+                method,
+                validator_headers,
+            ));
+        }
     }
 
     let if_none_match =
-        http_validators::if_none_match_headers_match(headers, resource.exists, resource.etag)
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-None-Match header"))?;
+        match http_validators::if_none_match_headers_match(headers, resource.exists, resource.etag)
+        {
+            Ok(result) => result,
+            Err(_) => {
+                if http_validators::if_none_match_headers_match(headers, resource.exists, None)
+                    .is_err()
+                {
+                    return Err(
+                        DavProtocolError::bad_request("Invalid If-None-Match header").into(),
+                    );
+                }
+                return Err(DavConditionalPlanError::InvalidRepresentation);
+            }
+        };
     if let Some(true) = if_none_match {
         let outcome = if matches!(method, DavMethod::Get | DavMethod::Head) {
             DavConditionalOutcome::NotModified
@@ -162,16 +186,19 @@ pub fn plan_http_conditionals(
         && matches!(method, DavMethod::Get | DavMethod::Head)
         && let Some(since) = optional_http_date(headers, IF_MODIFIED_SINCE)
         && resource.exists
-        && resource.last_modified.is_some_and(|last_modified| {
-            http_validators::http_date_epoch_seconds(last_modified)
-                <= http_validators::http_date_epoch_seconds(since)
-        })
+        && let Some(last_modified) = resource.last_modified
     {
-        return Ok(plan(
-            DavConditionalOutcome::NotModified,
-            method,
-            validator_headers,
-        ));
+        http_validators::validate_http_date(last_modified)
+            .map_err(|_| DavConditionalPlanError::InvalidRepresentation)?;
+        if http_validators::http_date_epoch_seconds(last_modified)
+            <= http_validators::http_date_epoch_seconds(since)
+        {
+            return Ok(plan(
+                DavConditionalOutcome::NotModified,
+                method,
+                validator_headers,
+            ));
+        }
     }
 
     Ok(plan(
@@ -280,40 +307,28 @@ fn plan(
     }
 }
 
-fn validator_headers(
-    resource: DavConditionalResource<'_>,
-) -> Result<HeaderMap, DavConditionalPlanError> {
+fn validator_headers(resource: DavConditionalResource<'_>) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if !resource.exists {
-        return Ok(headers);
+        return headers;
     }
-    if let Some(last_modified) = resource.last_modified {
-        let value = http_validators::try_format_http_date(last_modified)
-            .map_err(|_| DavConditionalPlanError::InvalidRepresentation)?;
-        headers.insert(
-            LAST_MODIFIED,
-            HeaderValue::from_str(&value)
-                .map_err(|_| DavConditionalPlanError::InvalidRepresentation)?,
-        );
+    if let Some(last_modified) = resource.last_modified
+        && let Ok(value) = http_validators::try_format_http_date(last_modified)
+        && let Ok(value) = HeaderValue::from_str(&value)
+    {
+        headers.insert(LAST_MODIFIED, value);
     }
-    if let Some(etag) = resource.etag {
-        headers.insert(ETAG, entity_tag_header_value(etag)?);
+    if let Some(etag) = resource.etag
+        && let Ok(value) = entity_tag_header_value(etag)
+    {
+        headers.insert(ETAG, value);
     }
-    Ok(headers)
+    headers
 }
 
 fn entity_tag_header_value(etag: &str) -> Result<HeaderValue, DavConditionalPlanError> {
-    let etag = etag.trim();
-    let rendered = if etag.starts_with('"') || etag.starts_with("W/\"") {
-        etag.to_owned()
-    } else {
-        format!("\"{etag}\"")
-    };
-    if rendered == "*"
-        || http_validators::if_none_match_header_matches(&rendered, true, Some(&rendered)).is_err()
-    {
-        return Err(DavConditionalPlanError::InvalidRepresentation);
-    }
+    let rendered = http_validators::try_format_entity_tag(etag)
+        .map_err(|_| DavConditionalPlanError::InvalidRepresentation)?;
     HeaderValue::from_str(&rendered).map_err(|_| DavConditionalPlanError::InvalidRepresentation)
 }
 

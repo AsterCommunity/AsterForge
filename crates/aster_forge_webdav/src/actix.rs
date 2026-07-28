@@ -40,14 +40,14 @@ pub fn request_head(
         return Ok(None);
     };
     let headers = convert_header_map(request.headers())?;
-    DavRequestHead::parse_known_method(method, &request_target, &headers, mount_path).map(Some)
+    DavRequestHead::parse_known_method(method, &request_target, &headers).map(Some)
 }
 
 /// Parses the request target before resolving whether the HTTP method is known to Forge.
-pub fn request_target(
+pub fn request_target<'a>(
     request: &HttpRequest,
-    mount_path: &str,
-) -> Result<DavRequestTarget, DavProtocolError> {
+    mount_path: &'a str,
+) -> Result<DavRequestTarget<'a>, DavProtocolError> {
     let uri: Uri = request
         .uri()
         .to_string()

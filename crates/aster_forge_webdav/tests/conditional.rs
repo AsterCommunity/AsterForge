@@ -4,6 +4,7 @@ use aster_forge_webdav::{
     DavBackendError, DavConditionalEvaluationError, DavConditionalOutcome, DavConditionalPlanError,
     DavConditionalResource, DavIfResourceState, DavIfStateResolver, DavMethod, DavPath,
     DavProtocolErrorKind, DavRangeEvaluation, plan_conditionals, plan_http_conditionals,
+    protocol_error_response,
 };
 use async_trait::async_trait;
 use http::header::{
@@ -312,7 +313,33 @@ fn unsafe_methods_apply_if_unmodified_since_without_if_match() {
 }
 
 #[test]
-fn http_dates_compare_at_one_second_resolution_and_reject_unrepresentable_metadata() {
+fn retrieval_methods_return_not_modified_for_a_fresh_if_modified_since() {
+    let request_headers = headers(IF_MODIFIED_SINCE, "Sat, 24 Jan 1970 03:33:20 GMT");
+    for method in [DavMethod::Get, DavMethod::Head] {
+        let plan = plan_http_conditionals(method, &request_headers, mapped(Some("v1")))
+            .expect("valid If-Modified-Since");
+        assert_eq!(plan.outcome, DavConditionalOutcome::NotModified);
+        assert_eq!(plan.range, DavRangeEvaluation::Skip);
+    }
+
+    let request_headers = headers(IF_MODIFIED_SINCE, "Thu, 01 Jan 1970 00:00:00 GMT");
+    for method in [DavMethod::Get, DavMethod::Head] {
+        let plan = plan_http_conditionals(method, &request_headers, mapped(Some("v1")))
+            .expect("stale If-Modified-Since");
+        assert_eq!(plan.outcome, DavConditionalOutcome::Proceed);
+        assert_eq!(
+            plan.range,
+            if method == DavMethod::Get {
+                DavRangeEvaluation::Evaluate
+            } else {
+                DavRangeEvaluation::Skip
+            }
+        );
+    }
+}
+
+#[test]
+fn http_dates_compare_at_one_second_resolution_and_validate_metadata_only_when_needed() {
     let exact = DavConditionalResource {
         exists: true,
         etag: None,
@@ -331,23 +358,77 @@ fn http_dates_compare_at_one_second_resolution_and_reject_unrepresentable_metada
 
     let pre_epoch = DavConditionalResource {
         exists: true,
-        etag: None,
+        etag: Some("v1"),
         last_modified: Some(UNIX_EPOCH - Duration::from_secs(2)),
     };
+    let plan = plan_http_conditionals(DavMethod::Get, &HeaderMap::new(), pre_epoch)
+        .expect("unconditional requests skip an unrenderable date");
+    assert_eq!(plan.outcome, DavConditionalOutcome::Proceed);
+    let mut response_headers = HeaderMap::new();
+    plan.apply_response_headers(StatusCode::OK, &mut response_headers);
+    assert_eq!(response_headers.get(ETAG).expect("valid ETag"), "\"v1\"");
+    assert!(response_headers.get(LAST_MODIFIED).is_none());
     assert!(matches!(
-        plan_http_conditionals(DavMethod::Get, &HeaderMap::new(), pre_epoch,),
+        plan_http_conditionals(
+            DavMethod::Get,
+            &headers(IF_MODIFIED_SINCE, "Thu, 01 Jan 1970 00:00:00 GMT"),
+            pre_epoch,
+        ),
         Err(DavConditionalPlanError::InvalidRepresentation)
     ));
 
     let after_http_date_range = DavConditionalResource {
         exists: true,
-        etag: None,
+        etag: Some("invalid\netag"),
         last_modified: Some(UNIX_EPOCH + Duration::from_secs(253_402_300_800)),
     };
+    let plan = plan_http_conditionals(DavMethod::Get, &HeaderMap::new(), after_http_date_range)
+        .expect("unconditional requests skip all unrenderable validators");
+    let mut response_headers = HeaderMap::new();
+    plan.apply_response_headers(StatusCode::OK, &mut response_headers);
+    assert!(response_headers.is_empty());
     assert!(matches!(
-        plan_http_conditionals(DavMethod::Get, &HeaderMap::new(), after_http_date_range),
+        plan_http_conditionals(
+            DavMethod::Put,
+            &headers(IF_UNMODIFIED_SINCE, "Thu, 01 Jan 1970 00:00:00 GMT"),
+            after_http_date_range,
+        ),
         Err(DavConditionalPlanError::InvalidRepresentation)
     ));
+}
+
+#[test]
+fn etag_metadata_is_validated_only_for_conditions_that_need_the_current_tag() {
+    let resource = DavConditionalResource {
+        exists: true,
+        etag: Some("invalid\netag"),
+        last_modified: Some(modified()),
+    };
+    let plan = plan_http_conditionals(DavMethod::Get, &HeaderMap::new(), resource)
+        .expect("unconditional requests skip an invalid ETag");
+    let mut response_headers = HeaderMap::new();
+    plan.apply_response_headers(StatusCode::OK, &mut response_headers);
+    assert!(response_headers.get(ETAG).is_none());
+    assert_eq!(
+        response_headers
+            .get(LAST_MODIFIED)
+            .expect("valid Last-Modified"),
+        "Sat, 24 Jan 1970 03:33:20 GMT"
+    );
+
+    for name in [IF_MATCH, IF_NONE_MATCH] {
+        assert!(matches!(
+            plan_http_conditionals(DavMethod::Get, &headers(name, "\"candidate\""), resource),
+            Err(DavConditionalPlanError::InvalidRepresentation)
+        ));
+    }
+
+    for (name, value) in [(IF_MATCH, "*"), (IF_NONE_MATCH, "*"), (IF_MATCH, "")] {
+        assert!(
+            plan_http_conditionals(DavMethod::Get, &headers(name.clone(), value), resource).is_ok(),
+            "{name} {value:?} does not inspect the current ETag"
+        );
+    }
 }
 
 #[test]
@@ -425,6 +506,10 @@ fn response_validator_contract_covers_success_and_conditional_statuses() {
             "Sat, 24 Jan 1970 03:33:20 GMT"
         );
     }
+
+    let mut created_headers = HeaderMap::new();
+    plan.apply_response_headers(StatusCode::CREATED, &mut created_headers);
+    assert!(created_headers.is_empty());
 }
 
 struct FixedResolver(DavIfResourceState);
@@ -436,6 +521,20 @@ impl DavIfStateResolver for FixedResolver {
         _path: &DavPath,
     ) -> Result<DavIfResourceState, DavBackendError> {
         Ok(self.0.clone())
+    }
+}
+
+struct FailingResolver;
+
+#[async_trait]
+impl DavIfStateResolver for FailingResolver {
+    async fn resolve_if_state(
+        &self,
+        _path: &DavPath,
+    ) -> Result<DavIfResourceState, DavBackendError> {
+        Err(DavBackendError::new(
+            aster_forge_webdav::DavBackendErrorKind::Internal,
+        ))
     }
 }
 
@@ -467,10 +566,16 @@ fn webdav_if_runs_before_http_conditionals_through_the_combined_entrypoint() {
     ))
     .expect_err("WebDAV If should fail first");
     assert!(matches!(
-        error,
+        &error,
         DavConditionalEvaluationError::Protocol(error)
             if error.kind() == DavProtocolErrorKind::PreconditionFailed
     ));
+    let response = match &error {
+        DavConditionalEvaluationError::Protocol(error) => protocol_error_response(error),
+        _ => panic!("expected protocol precondition failure"),
+    };
+    assert_eq!(response.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 
     let passing_resolver = FixedResolver(DavIfResourceState {
         etag: Some("required".to_owned()),
@@ -492,6 +597,34 @@ fn webdav_if_runs_before_http_conditionals_through_the_combined_entrypoint() {
         error,
         DavConditionalEvaluationError::Protocol(error)
             if error.kind() == DavProtocolErrorKind::BadRequest
+    ));
+}
+
+#[test]
+fn combined_entrypoint_preserves_backend_errors() {
+    let if_header = aster_forge_webdav::parse_if_header(&headers(
+        HeaderName::from_static("if"),
+        "([\"required\"])",
+    ))
+    .expect("If grammar")
+    .expect("If header");
+    let error = futures::executor::block_on(plan_conditionals(
+        Some(&if_header),
+        &FailingResolver,
+        &DavPath::new("/file.txt").expect("path"),
+        "/webdav",
+        "https",
+        "dav.example",
+        DavMethod::Put,
+        &HeaderMap::new(),
+        mapped(Some("required")),
+    ))
+    .expect_err("backend failure should remain classified");
+    assert!(matches!(
+        error,
+        DavConditionalEvaluationError::Backend(DavBackendError {
+            kind: aster_forge_webdav::DavBackendErrorKind::Internal
+        })
     ));
 }
 

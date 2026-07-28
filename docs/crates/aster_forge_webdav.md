@@ -51,6 +51,7 @@ Forge 负责：
 - COPY/MOVE/DELETE 的资源路径关系、typed partial failure、207 与 201/204 响应选择。
 - 每个 DAV 方法的 empty/bounded XML/stream/unused body policy，以及 Actix bounded-body adapter。
 - request head 保留规范化后的请求 origin；Actix adapter 按方法一次性完成 empty/XML/stream body preparation。
+- parsed request target 借用并保留同一个 mount boundary，method parser 使用它校验 `Destination`，调用方不能为目标和目的地传入两套 prefix。
 - 通过 `plan_http_conditionals` 统一执行 method-aware HTTP conditional request planning：
   `If-Match`、`If-Unmodified-Since`、`If-None-Match`、GET/HEAD
   `If-Modified-Since`，以及 GET `Range` / `If-Range` 的后续资格。

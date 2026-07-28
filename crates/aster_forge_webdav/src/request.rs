@@ -175,9 +175,10 @@ pub struct DavRequestOrigin {
 
 /// Parsed request target shared by known and unknown method handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavRequestTarget {
+pub struct DavRequestTarget<'a> {
     pub target: DavPath,
     pub origin: DavRequestOrigin,
+    pub mount_path: &'a str,
 }
 
 /// Parsed, body-independent WebDAV request data.
@@ -194,11 +195,11 @@ pub struct DavRequestHead {
 
 impl DavRequestHead {
     /// Parses a mount-relative target before method dispatch or product code runs.
-    pub fn parse_target(
+    pub fn parse_target<'a>(
         uri: &Uri,
-        mount_path: &str,
+        mount_path: &'a str,
         origin: &DavRequestOrigin,
-    ) -> Result<DavRequestTarget, DavProtocolError> {
+    ) -> Result<DavRequestTarget<'a>, DavProtocolError> {
         let relative = strip_mount_prefix(uri.path(), mount_path).ok_or_else(|| {
             DavProtocolError::bad_request("Request target must stay under WebDAV prefix")
         })?;
@@ -207,15 +208,15 @@ impl DavRequestHead {
         Ok(DavRequestTarget {
             target,
             origin: origin.clone(),
+            mount_path,
         })
     }
 
     /// Parses method-specific protocol headers after the target has been resolved.
     pub fn parse_known_method(
         method: DavMethod,
-        request_target: &DavRequestTarget,
+        request_target: &DavRequestTarget<'_>,
         headers: &HeaderMap,
-        mount_path: &str,
     ) -> Result<Self, DavProtocolError> {
         let depth = match method {
             DavMethod::Propfind => Some(parse_propfind_depth(headers)?),
@@ -230,7 +231,7 @@ impl DavRequestHead {
                 Some(parse_overwrite(headers)?),
                 Some(destination_relative_path(
                     headers,
-                    mount_path,
+                    request_target.mount_path,
                     &request_target.origin.scheme,
                     &request_target.origin.host,
                 )?),

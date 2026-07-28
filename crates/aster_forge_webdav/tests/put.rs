@@ -1,6 +1,6 @@
 use aster_forge_webdav::{
-    DavPath, DavPutPlanError, DavPutResourceState, plan_put_request, put_plan_error_response,
-    put_success_response,
+    DavPath, DavProtocolErrorKind, DavPutPlanError, DavPutResourceState, plan_put_request,
+    put_plan_error_response, put_success_response,
 };
 use http::header::{
     CONTENT_LENGTH, CONTENT_LOCATION, ETAG, IF_MATCH, IF_NONE_MATCH, IF_UNMODIFIED_SINCE,
@@ -109,4 +109,40 @@ fn put_plan_applies_if_unmodified_since_and_retains_validators_on_412() {
             .expect("Last-Modified"),
         "Thu, 01 Jan 1970 00:00:01 GMT"
     );
+}
+
+#[test]
+fn put_plan_preserves_protocol_and_representation_error_boundaries() {
+    let mut malformed = HeaderMap::new();
+    malformed.insert(IF_MATCH, HeaderValue::from_static("bare-etag"));
+    let protocol_error = plan_put_request(&malformed, DavPutResourceState::Missing)
+        .expect_err("malformed If-Match should fail");
+    assert!(matches!(
+        &protocol_error,
+        DavPutPlanError::Protocol(error)
+            if error.kind() == DavProtocolErrorKind::BadRequest
+    ));
+    let response = put_plan_error_response(&protocol_error);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
+
+    let invalid_state = DavPutResourceState::File {
+        etag: Some("invalid\netag"),
+        last_modified: None,
+    };
+    let plan = plan_put_request(&HeaderMap::new(), invalid_state)
+        .expect("unconditional PUT should ignore an unrenderable ETag");
+    assert!(plan.resource_existed);
+
+    let mut conditional = HeaderMap::new();
+    conditional.insert(IF_MATCH, HeaderValue::from_static("\"current\""));
+    let representation_error = plan_put_request(&conditional, invalid_state)
+        .expect_err("If-Match requires a representable product ETag");
+    assert!(matches!(
+        representation_error,
+        DavPutPlanError::InvalidRepresentation
+    ));
+    let response = put_plan_error_response(&representation_error);
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 }

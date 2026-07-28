@@ -2,11 +2,12 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityDeclaration,
-    DavCompatibilityCapabilities, DavComplianceClasses, DavDownloadBody, DavDownloadPlanError,
-    DavLockingCapability, DavMethod, DavMethodSet, DavRequestHead, DavRequestOrigin,
-    DavResourceState, DavResponseBody, DavVersioningCapability, backend_error_response,
-    body_error_response, method_not_allowed_response, options_response, plan_capabilities,
-    plan_download_response, protocol_error_response, range_not_satisfiable_response,
+    DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalPlanError, DavDownloadBody,
+    DavDownloadPlanError, DavLockingCapability, DavMethod, DavMethodSet, DavRequestHead,
+    DavRequestOrigin, DavResourceState, DavResponseBody, DavVersioningCapability, DavXmlError,
+    backend_error_response, body_error_response, conditional_plan_error_response,
+    method_not_allowed_response, options_response, plan_capabilities, plan_download_response,
+    propfind_xml_error_response, protocol_error_response, range_not_satisfiable_response,
 };
 use http::StatusCode;
 use http::header::{
@@ -73,6 +74,24 @@ fn body_policy_errors_preserve_status_body_and_cache_contracts() {
     assert_eq!(not_allowed.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert!(not_allowed.headers.get(CONTENT_TYPE).is_none());
     assert!(matches!(not_allowed.body, DavResponseBody::Empty));
+}
+
+#[test]
+fn xml_and_conditional_representation_errors_have_stable_responses() {
+    for error in [DavXmlError::TooDeep, DavXmlError::Malformed] {
+        let response = propfind_xml_error_response(error).expect("XML error response");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers.get(CACHE_CONTROL).unwrap(), "no-store");
+        let DavResponseBody::Bytes(body) = response.body else {
+            panic!("invalid XML should have a text body");
+        };
+        assert_eq!(body.as_ref(), b"Invalid XML body");
+    }
+
+    let response = conditional_plan_error_response(&DavConditionalPlanError::InvalidRepresentation);
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.headers.get(CACHE_CONTROL).unwrap(), "no-store");
+    assert!(matches!(response.body, DavResponseBody::Empty));
 }
 
 #[test]
@@ -346,8 +365,22 @@ fn invalid_product_metadata_is_not_misclassified_as_a_request_error() {
     };
     assert_eq!(error, DavDownloadPlanError::InvalidRepresentation);
 
-    let error = match plan_download_response(
+    let plan = plan_download_response(
         &HeaderMap::new(),
+        false,
+        20,
+        "text/plain",
+        Some("etag\ninvalid"),
+        representation_time(),
+    )
+    .expect("unconditional download should skip an unrenderable ETag");
+    assert_eq!(plan.response.status, StatusCode::OK);
+    assert!(plan.response.headers.get(ETAG).is_none());
+
+    let mut conditional = HeaderMap::new();
+    conditional.insert(IF_MATCH, HeaderValue::from_static("\"current\""));
+    let error = match plan_download_response(
+        &conditional,
         false,
         20,
         "text/plain",
@@ -355,9 +388,88 @@ fn invalid_product_metadata_is_not_misclassified_as_a_request_error() {
         representation_time(),
     ) {
         Err(error) => error,
-        Ok(_) => panic!("invalid ETag should fail response planning"),
+        Ok(_) => panic!("If-Match requires a representable product ETag"),
     };
     assert_eq!(error, DavDownloadPlanError::InvalidRepresentation);
+}
+
+#[test]
+fn malformed_download_conditionals_remain_protocol_errors() {
+    let mut headers = HeaderMap::new();
+    headers.insert(IF_MATCH, HeaderValue::from_static("bare-etag"));
+    let error = match plan_download_response(
+        &headers,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("malformed If-Match should remain a request error"),
+    };
+    assert!(matches!(error, DavDownloadPlanError::Protocol(_)));
+}
+
+#[test]
+fn non_utf8_range_fields_and_strong_if_range_boundaries_are_explicit() {
+    let mut non_utf8_range = HeaderMap::new();
+    non_utf8_range.insert(
+        RANGE,
+        HeaderValue::from_bytes(&[0xff]).expect("opaque Range value"),
+    );
+    let plan = plan_download_response(
+        &non_utf8_range,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+    )
+    .expect("opaque Range produces a 416 plan");
+    assert_eq!(plan.response.status, StatusCode::RANGE_NOT_SATISFIABLE);
+
+    let mut non_utf8_if_range = HeaderMap::new();
+    non_utf8_if_range.insert(RANGE, HeaderValue::from_static("bytes=0-1"));
+    non_utf8_if_range.insert(
+        IF_RANGE,
+        HeaderValue::from_bytes(&[0xff]).expect("opaque If-Range value"),
+    );
+    let plan = plan_download_response(
+        &non_utf8_if_range,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+    )
+    .expect("opaque If-Range is ignored");
+    assert_eq!(plan.response.status, StatusCode::OK);
+    assert_eq!(plan.body, DavDownloadBody::Full);
+
+    for (current, candidate) in [
+        (Some("etag-1"), "\"a\"b\""),
+        (None, "\"etag-1\""),
+        (Some("W/\"etag-1\""), "\"etag-1\""),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(RANGE, HeaderValue::from_static("bytes=0-1"));
+        headers.insert(
+            IF_RANGE,
+            HeaderValue::from_str(candidate).expect("valid If-Range test value"),
+        );
+        let plan = plan_download_response(
+            &headers,
+            false,
+            20,
+            "text/plain",
+            current,
+            representation_time(),
+        )
+        .expect("non-matching strong If-Range falls back to full response");
+        assert_eq!(plan.response.status, StatusCode::OK, "{candidate}");
+        assert_eq!(plan.body, DavDownloadBody::Full, "{candidate}");
+    }
 }
 
 #[test]

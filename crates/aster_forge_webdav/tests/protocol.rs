@@ -731,7 +731,7 @@ fn request_head_parses_method_specific_contract() {
     };
     let target = DavRequestHead::parse_target(&uri, "/webdav", &origin)
         .expect("COPY request target should parse");
-    let request = DavRequestHead::parse_known_method(method, &target, &request_headers, "/webdav")
+    let request = DavRequestHead::parse_known_method(method, &target, &request_headers)
         .expect("COPY request head should parse");
 
     assert_eq!(request.target.as_str(), "/source.txt");
@@ -775,8 +775,23 @@ fn request_head_accepts_a_root_mount() {
         },
     )
     .expect("root-mounted WebDAV should accept descendant paths");
-    let request =
-        DavRequestHead::parse_known_method(DavMethod::Get, &target, &HeaderMap::new(), "/")
-            .expect("root-mounted WebDAV should accept descendant paths");
+    let request = DavRequestHead::parse_known_method(DavMethod::Get, &target, &HeaderMap::new())
+        .expect("root-mounted WebDAV should accept descendant paths");
     assert_eq!(request.target.as_str(), "/folder/source.txt");
+}
+
+#[test]
+fn request_target_mount_boundary_is_reused_for_destination_validation() {
+    let uri: Uri = "/webdav/source.txt".parse().expect("valid request URI");
+    let origin = DavRequestOrigin {
+        scheme: "https".to_string(),
+        host: "dav.example".to_string(),
+    };
+    let target = DavRequestHead::parse_target(&uri, "/webdav", &origin)
+        .expect("request target should parse");
+    let request_headers = headers("Destination", "/other/destination.txt");
+
+    let error = DavRequestHead::parse_known_method(DavMethod::Move, &target, &request_headers)
+        .expect_err("Destination must use the request target mount boundary");
+    assert_eq!(error.message(), "Destination must stay under WebDAV prefix");
 }
