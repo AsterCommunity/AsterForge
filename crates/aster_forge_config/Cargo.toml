@@ -37,3 +37,6 @@ uuid.workspace = true
 name = "redis_config_sync"
 path = "tests/redis_config_sync.rs"
 required-features = ["redis-pubsub"]
+
+[lints]
+workspace = true

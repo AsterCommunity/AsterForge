@@ -40,3 +40,6 @@ url.workspace = true
 [dev-dependencies]
 actix-web.workspace = true
 tokio.workspace = true
+
+[lints]
+workspace = true

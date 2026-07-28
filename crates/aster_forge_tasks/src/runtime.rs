@@ -835,7 +835,10 @@ mod tests {
             (),
             &|()| async {
                 panic!("boom");
-                #[allow(unreachable_code)]
+                #[expect(
+                    unreachable_code,
+                    reason = "The test intentionally panics to exercise runtime task failure handling."
+                )]
                 TestOutcome::Succeeded
             },
             &TestOutcome::Failed,

@@ -30,3 +30,6 @@ serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 utoipa = { workspace = true, optional = true }
+
+[lints]
+workspace = true

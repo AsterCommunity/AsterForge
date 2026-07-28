@@ -26,3 +26,6 @@ harness = false
 [[bench]]
 name = "xml_memory"
 harness = false
+
+[lints]
+workspace = true

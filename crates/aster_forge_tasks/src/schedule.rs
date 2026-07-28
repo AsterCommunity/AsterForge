@@ -1038,7 +1038,10 @@ mod tests {
             hooks: RecordedTaskHooks::new(
                 move |()| async move {
                     panic!("scheduled body failed");
-                    #[allow(unreachable_code)]
+                    #[expect(
+                        unreachable_code,
+                        reason = "The test intentionally panics to exercise scheduled-task failure handling."
+                    )]
                     "ok".to_string()
                 },
                 |message| format!("panic:{message}"),

@@ -16,3 +16,6 @@ jemalloc-stats = ["jemalloc", "dep:tikv-jemalloc-ctl", "tikv-jemalloc-ctl/stats"
 [dependencies]
 tikv-jemalloc-ctl = { workspace = true, optional = true }
 tracing.workspace = true
+
+[lints]
+workspace = true

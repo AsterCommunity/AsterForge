@@ -30,3 +30,6 @@ sea-orm = { workspace = true, optional = true }
 
 [dev-dependencies]
 url.workspace = true
+
+[lints]
+workspace = true

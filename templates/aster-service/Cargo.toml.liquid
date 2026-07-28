@@ -11,6 +11,14 @@ build = "build.rs"
 [workspace]
 members = [".", "migration"]
 
+[workspace.lints.clippy]
+# Keep lint suppressions explicit and detect stale expectations during Clippy runs.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
+[lints]
+workspace = true
+
 [features]
 default = []
 metrics = [

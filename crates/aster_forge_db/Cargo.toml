@@ -52,3 +52,6 @@ uuid.workspace = true
 name = "credentialed_databases"
 path = "tests/credentialed_databases.rs"
 required-features = ["database-container-tests"]
+
+[lints]
+workspace = true
