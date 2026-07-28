@@ -25,7 +25,13 @@ Forge 负责：
 - COPY/MOVE/DELETE 的资源路径关系、typed partial failure、207 与 201/204 响应选择。
 - 每个 DAV 方法的 empty/bounded XML/stream/unused body policy，以及 Actix bounded-body adapter。
 - request head 保留规范化后的请求 origin；Actix adapter 按方法一次性完成 empty/XML/stream body preparation。
-- HTTP ETag、`If-Modified-Since`、`If-Unmodified-Since` 的协议优先级。
+- 通过 `plan_http_conditionals` 统一执行 method-aware HTTP conditional request planning：
+  `If-Match`、`If-Unmodified-Since`、`If-None-Match`、GET/HEAD
+  `If-Modified-Since`，以及 GET `Range` / `If-Range` 的后续资格。
+- HTTP entity-tag 语法、RFC `#rule` 多 field-line 合并、强/弱比较、mapped/unmapped
+  资源语义，以及 `304` / `412` 结果选择。
+- `DavConditionalPlan::apply_response_headers` 统一规划 `200`、`206`、`304`、`412`、
+  `416` 的 `ETag` / `Last-Modified` validator contract。
 - GET/HEAD 的 200/206/304/416 response planning、单段 byte range 选择与读取区间。
 - PUT 的 `If-Match` / `If-None-Match` 前置条件、`create` / `create_new` 选择、`X-Expected-Entity-Length` 优先级、collection target 405 拒绝和 201/204 成功响应选择。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
@@ -68,6 +74,31 @@ DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.h
 - 文件、目录、blob、quota、storage policy 和版本业务事务。
 - dead property 和 lock 的具体持久化。
 - 产品 audit action/detail、metrics label 和用户通知。
+- 在 mutation 前提供 writer-authoritative 的 request-target `exists`、`ETag` 和
+  `Last-Modified`。Forge 不替产品选择 reader/writer 一致性来源，也不把旧 metadata
+  snapshot 当成事务保障。
+
+## HTTP 与 WebDAV 条件请求
+
+HTTP conditional planner 以 [RFC 9110 Section 13.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.2.2)
+为执行顺序：
+
+1. `If-Match`，使用 RFC 9110 Section 8.8.3.2 的强比较。
+2. 没有 `If-Match` 时执行 `If-Unmodified-Since`。
+3. `If-None-Match`，使用弱比较；GET/HEAD 匹配返回 `304`，其他方法返回 `412`。
+4. GET/HEAD 且没有 `If-None-Match` 时执行 `If-Modified-Since`。
+5. 只有 GET 且前置条件会得到 `200` 时，才继续评估 `Range` / `If-Range`。
+
+日期字段遵循 RFC 9110 Section 13.1.3 和 13.1.4：非法 HTTP-date、日期列表或产品未提供
+修改时间时忽略对应日期条件。Entity-tag 列表遵循 RFC 9110 Section 5.6.1.2：接收端容忍
+有界数量的空成员；零成员 `If-Match` 条件为假，零成员 `If-None-Match` 条件为真；`*`
+与其他 entity-tag 混用仍按 Section 13.1.1/13.1.2 视为非法。
+
+WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditionals` 或
+`plan_conditionals_with_backends` 时，Forge 先解析并执行完整 tagged/untagged WebDAV
+`If`，成功后再对 request target 执行 HTTP conditional planner。HTTP `If-Match`、
+`If-None-Match` 不会被扩展成 Destination-specific header；COPY/MOVE destination 或其他
+资源的 ETag/lock token 条件继续由 tagged WebDAV `If` 表达。
 
 ## Backend 与事件
 

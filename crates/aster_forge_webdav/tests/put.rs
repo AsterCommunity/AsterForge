@@ -1,8 +1,10 @@
 use aster_forge_webdav::{
-    DavPath, DavProtocolErrorKind, DavPutPlanError, DavPutResourceState, plan_put_request,
-    put_plan_error_response, put_success_response,
+    DavPath, DavPutPlanError, DavPutResourceState, plan_put_request, put_plan_error_response,
+    put_success_response,
 };
-use http::header::{CONTENT_LENGTH, CONTENT_LOCATION, IF_MATCH, IF_NONE_MATCH};
+use http::header::{
+    CONTENT_LENGTH, CONTENT_LOCATION, ETAG, IF_MATCH, IF_NONE_MATCH, IF_UNMODIFIED_SINCE,
+};
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 #[test]
@@ -31,22 +33,24 @@ fn put_plan_enforces_etag_preconditions_and_collection_target() {
     headers.insert(IF_MATCH, HeaderValue::from_static("*"));
     let error = plan_put_request(&headers, DavPutResourceState::Missing)
         .expect_err("If-Match star requires an existing resource");
-    assert!(matches!(
-        error,
-        DavPutPlanError::Protocol(error)
-            if error.kind() == DavProtocolErrorKind::PreconditionFailed
-    ));
+    assert!(matches!(error, DavPutPlanError::PreconditionFailed(_)));
 
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, HeaderValue::from_static("*"));
-    let error = plan_put_request(&headers, DavPutResourceState::File { etag: Some("a") })
-        .expect_err("If-None-Match star rejects an existing resource");
-    assert!(matches!(error, DavPutPlanError::Protocol(_)));
+    let error = plan_put_request(
+        &headers,
+        DavPutResourceState::File {
+            etag: Some("a"),
+            last_modified: Some(std::time::SystemTime::UNIX_EPOCH),
+        },
+    )
+    .expect_err("If-None-Match star rejects an existing resource");
+    assert!(matches!(error, DavPutPlanError::PreconditionFailed(_)));
 
-    assert_eq!(
+    assert!(matches!(
         plan_put_request(&HeaderMap::new(), DavPutResourceState::Collection),
         Err(DavPutPlanError::CollectionTarget)
-    );
+    ));
     let response = put_plan_error_response(&DavPutPlanError::CollectionTarget);
     assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
@@ -64,11 +68,45 @@ fn put_success_response_selects_created_or_no_content() {
         "/webdav/space%20file.txt"
     );
 
-    let replaced_plan =
-        plan_put_request(&HeaderMap::new(), DavPutResourceState::File { etag: None })
-            .expect("replace plan");
+    let replaced_plan = plan_put_request(
+        &HeaderMap::new(),
+        DavPutResourceState::File {
+            etag: None,
+            last_modified: None,
+        },
+    )
+    .expect("replace plan");
     let replaced =
         put_success_response(&replaced_plan, "/webdav", &path).expect("replace response");
     assert_eq!(replaced.status, StatusCode::NO_CONTENT);
     assert!(replaced.headers.get(CONTENT_LOCATION).is_none());
+}
+
+#[test]
+fn put_plan_applies_if_unmodified_since_and_retains_validators_on_412() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        IF_UNMODIFIED_SINCE,
+        HeaderValue::from_static("Thu, 01 Jan 1970 00:00:00 GMT"),
+    );
+    let error = plan_put_request(
+        &headers,
+        DavPutResourceState::File {
+            etag: Some("v1"),
+            last_modified: Some(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
+            ),
+        },
+    )
+    .expect_err("stale PUT should fail");
+    let response = put_plan_error_response(&error);
+    assert_eq!(response.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(response.headers.get(ETAG).expect("ETag"), "\"v1\"");
+    assert_eq!(
+        response
+            .headers
+            .get("Last-Modified")
+            .expect("Last-Modified"),
+        "Thu, 01 Jan 1970 00:00:01 GMT"
+    );
 }

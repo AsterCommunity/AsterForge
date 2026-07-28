@@ -3,19 +3,19 @@
 use std::time::SystemTime;
 
 use aster_forge_utils::http_range::{HttpByteRange, HttpRangeError, parse_single_byte_range};
-use aster_forge_utils::http_validators::{
-    format_http_date, http_date_epoch_seconds, parse_http_date,
-};
+use aster_forge_utils::http_validators::{http_date_epoch_seconds, parse_http_date};
 use bytes::Bytes;
 use http::header::{
     ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
-    CONTENT_TYPE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
+    CONTENT_TYPE, IF_RANGE, RANGE,
 };
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use crate::{
-    DavBackendError, DavBackendErrorKind, DavContentStream, DavErrorCondition, DavPrecondition,
-    DavProtocolError, DavProtocolErrorKind, DavXmlElement, DavXmlError, dav_error_element,
+    DavBackendError, DavBackendErrorKind, DavConditionalOutcome, DavConditionalPlan,
+    DavConditionalPlanError, DavConditionalResource, DavContentStream, DavErrorCondition,
+    DavMethod, DavProtocolError, DavProtocolErrorKind, DavRangeEvaluation, DavXmlElement,
+    DavXmlError, dav_error_element, plan_http_conditionals,
 };
 
 /// Methods advertised by the product-neutral DAV protocol engine.
@@ -158,6 +158,17 @@ pub fn protocol_error_response(error: &DavProtocolError) -> DavResponse {
     }
 }
 
+/// Maps conditional request parsing or representation failures to a response.
+#[must_use]
+pub fn conditional_plan_error_response(error: &DavConditionalPlanError) -> DavResponse {
+    match error {
+        DavConditionalPlanError::Protocol(error) => protocol_error_response(error),
+        DavConditionalPlanError::InvalidRepresentation => {
+            no_store_empty_response(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// Maps a classified product backend failure to the WebDAV status contract.
 #[must_use]
 pub fn backend_error_response(error: &DavBackendError) -> DavResponse {
@@ -248,11 +259,38 @@ pub fn plan_download_response(
     etag: Option<&str>,
     last_modified: SystemTime,
 ) -> Result<DavDownloadPlan, DavDownloadPlanError> {
-    match crate::evaluate_http_download_preconditions(headers, etag, Some(last_modified))? {
-        DavPrecondition::Proceed => {}
-        DavPrecondition::NotModified => {
+    let conditional = plan_http_conditionals(
+        if head_only {
+            DavMethod::Head
+        } else {
+            DavMethod::Get
+        },
+        headers,
+        DavConditionalResource {
+            exists: true,
+            etag,
+            last_modified: Some(last_modified),
+        },
+    )
+    .map_err(|error| match error {
+        DavConditionalPlanError::Protocol(error) => DavDownloadPlanError::Protocol(error),
+        DavConditionalPlanError::InvalidRepresentation => {
+            DavDownloadPlanError::InvalidRepresentation
+        }
+    })?;
+    match conditional.outcome {
+        DavConditionalOutcome::Proceed => {}
+        DavConditionalOutcome::NotModified => {
             let mut response = DavResponse::empty(StatusCode::NOT_MODIFIED);
-            insert_validators(&mut response.headers, etag, last_modified)?;
+            conditional.apply_response_headers(response.status, &mut response.headers);
+            return Ok(DavDownloadPlan {
+                response,
+                body: DavDownloadBody::Empty,
+            });
+        }
+        DavConditionalOutcome::PreconditionFailed => {
+            let mut response = no_store_empty_response(StatusCode::PRECONDITION_FAILED);
+            conditional.apply_response_headers(response.status, &mut response.headers);
             return Ok(DavDownloadPlan {
                 response,
                 body: DavDownloadBody::Empty,
@@ -260,11 +298,13 @@ pub fn plan_download_response(
         }
     }
 
-    let range = if head_only || !if_range_matches(headers, etag, last_modified) {
+    let range = if conditional.range == DavRangeEvaluation::Skip
+        || !if_range_matches(headers, etag, last_modified)
+    {
         None
     } else if let Some(value) = headers.get(RANGE) {
         let Ok(raw) = value.to_str() else {
-            return Ok(range_not_satisfiable_plan(content_length));
+            return Ok(range_not_satisfiable_plan(content_length, &conditional));
         };
         match parse_single_byte_range(raw, content_length) {
             Ok(range) => Some(range),
@@ -276,7 +316,7 @@ pub fn plan_download_response(
                 | HttpRangeError::InvalidNumber
                 | HttpRangeError::EmptyRepresentation
                 | HttpRangeError::Unsatisfiable,
-            ) => return Ok(range_not_satisfiable_plan(content_length)),
+            ) => return Ok(range_not_satisfiable_plan(content_length, &conditional)),
         }
     } else {
         None
@@ -309,7 +349,7 @@ pub fn plan_download_response(
             .headers
             .insert(CONTENT_RANGE, header_value(&range.content_range_header())?);
     }
-    insert_validators(&mut response.headers, etag, last_modified)?;
+    conditional.apply_response_headers(response.status, &mut response.headers);
 
     Ok(DavDownloadPlan { response, body })
 }
@@ -383,26 +423,16 @@ pub fn range_not_satisfiable_response(content_length: u64) -> DavResponse {
     response
 }
 
-fn range_not_satisfiable_plan(content_length: u64) -> DavDownloadPlan {
+fn range_not_satisfiable_plan(
+    content_length: u64,
+    conditional: &DavConditionalPlan,
+) -> DavDownloadPlan {
+    let mut response = range_not_satisfiable_response(content_length);
+    conditional.apply_response_headers(response.status, &mut response.headers);
     DavDownloadPlan {
-        response: range_not_satisfiable_response(content_length),
+        response,
         body: DavDownloadBody::Empty,
     }
-}
-
-fn insert_validators(
-    headers: &mut HeaderMap,
-    etag: Option<&str>,
-    last_modified: SystemTime,
-) -> Result<(), DavDownloadPlanError> {
-    headers.insert(
-        LAST_MODIFIED,
-        header_value(&format_http_date(last_modified))?,
-    );
-    if let Some(etag) = etag {
-        headers.insert(ETAG, header_value(&format!("\"{etag}\""))?);
-    }
-    Ok(())
 }
 
 fn header_value(value: &str) -> Result<HeaderValue, DavDownloadPlanError> {

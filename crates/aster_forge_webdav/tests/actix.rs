@@ -2,7 +2,7 @@
 
 use actix_web::http::StatusCode;
 use actix_web::{FromRequest, web};
-use aster_forge_webdav::{DavBodyError, DavMethod, DavPrecondition};
+use aster_forge_webdav::{DavBodyError, DavConditionalOutcome, DavConditionalResource, DavMethod};
 use bytes::Bytes;
 use futures::StreamExt;
 use std::pin::Pin;
@@ -121,29 +121,54 @@ fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
         .insert_header(("If-None-Match", "\"etag-a\""))
         .to_http_request();
     assert_eq!(
-        aster_forge_webdav::actix::evaluate_http_etag_preconditions(
+        aster_forge_webdav::actix::plan_http_conditionals(
             matching_none_match.headers(),
-            true,
-            Some("etag-a"),
-            true,
+            DavMethod::Get,
+            DavConditionalResource {
+                exists: true,
+                etag: Some("etag-a"),
+                last_modified: None,
+            },
         )
-        .expect("safe matching If-None-Match should be a valid precondition"),
-        DavPrecondition::NotModified
+        .expect("safe matching If-None-Match should be a valid precondition")
+        .outcome,
+        DavConditionalOutcome::NotModified
     );
 
     let mismatching_if_match = actix_web::test::TestRequest::default()
         .insert_header(("If-Match", "\"etag-b\""))
         .to_http_request();
-    let response = aster_forge_webdav::actix::evaluate_http_etag_preconditions(
-        mismatching_if_match.headers(),
-        true,
-        Some("etag-a"),
-        false,
-    )
-    .expect_err("mismatching If-Match should fail");
-    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        aster_forge_webdav::actix::plan_http_conditionals(
+            mismatching_if_match.headers(),
+            DavMethod::Put,
+            DavConditionalResource {
+                exists: true,
+                etag: Some("etag-a"),
+                last_modified: None,
+            },
+        )
+        .expect("valid mismatching If-Match should produce a plan")
+        .outcome,
+        DavConditionalOutcome::PreconditionFailed
+    );
 
-    let converted = aster_forge_webdav::actix::converted_headers(mismatching_if_match.headers())
+    let malformed_if_match = actix_web::test::TestRequest::default()
+        .insert_header(("If-Match", "bare-etag"))
+        .to_http_request();
+    let response = aster_forge_webdav::actix::plan_http_conditionals(
+        malformed_if_match.headers(),
+        DavMethod::Put,
+        DavConditionalResource {
+            exists: true,
+            etag: Some("etag-a"),
+            last_modified: None,
+        },
+    )
+    .expect_err("malformed If-Match should map to an Actix response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let converted = aster_forge_webdav::actix::converted_headers(malformed_if_match.headers())
         .expect("valid Actix headers should convert");
-    assert_eq!(converted.get("If-Match").expect("If-Match"), "\"etag-b\"");
+    assert_eq!(converted.get("If-Match").expect("If-Match"), "bare-etag");
 }

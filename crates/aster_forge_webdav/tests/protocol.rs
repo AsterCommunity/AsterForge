@@ -1,19 +1,18 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use aster_forge_webdav::{
     DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError,
-    DavIfResourceState, DavIfStateResolver, DavMethod, DavPath, DavPathError, DavPrecondition,
-    DavProtocolErrorKind, DavRequestHead, DavRequestOrigin, Depth, IfHeader, IfStateCondition,
-    child_relative_path, destination_relative_path, enforce_if_header,
-    evaluate_http_download_preconditions, evaluate_http_etag_preconditions, href_for_relative,
-    parent_relative_path, parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth,
-    parse_lock_timeout, parse_lock_token_header, parse_move_depth, parse_propfind_depth,
-    submitted_lock_tokens, submitted_lock_tokens_for_path,
+    DavIfResourceState, DavIfStateResolver, DavMethod, DavPath, DavPathError, DavProtocolErrorKind,
+    DavRequestHead, DavRequestOrigin, Depth, IfHeader, IfStateCondition, child_relative_path,
+    destination_relative_path, enforce_if_header, href_for_relative, parent_relative_path,
+    parse_copy_depth, parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
+    parse_lock_token_header, parse_move_depth, parse_propfind_depth, submitted_lock_tokens,
+    submitted_lock_tokens_for_path,
 };
 use async_trait::async_trait;
-use http::header::{self, HeaderMap, HeaderName, HeaderValue};
+use http::header::{HeaderMap, HeaderName, HeaderValue};
 use http::{Method, Uri};
 
 fn headers(name: &'static str, value: &'static str) -> HeaderMap {
@@ -714,61 +713,6 @@ fn lock_token_header_requires_one_nonempty_angle_bracketed_token() {
         HeaderValue::from_bytes(&[0xff]).expect("test header value"),
     );
     assert!(parse_lock_token_header(&non_utf8).is_err());
-}
-
-#[test]
-fn etag_and_date_preconditions_keep_http_precedence() {
-    let mut matching = HeaderMap::new();
-    matching.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"v1\""));
-    assert_eq!(
-        evaluate_http_etag_preconditions(&matching, true, Some("\"v1\""), true)
-            .expect("safe matching If-None-Match"),
-        DavPrecondition::NotModified
-    );
-    assert!(evaluate_http_etag_preconditions(&matching, true, Some("\"v1\""), false).is_err());
-
-    let modified = UNIX_EPOCH + Duration::from_secs(2_000_000);
-    let mut download = HeaderMap::new();
-    download.insert(
-        header::IF_MODIFIED_SINCE,
-        HeaderValue::from_static("Sat, 24 Jan 1970 03:33:20 GMT"),
-    );
-    assert_eq!(
-        evaluate_http_download_preconditions(&download, None, Some(modified))
-            .expect("valid date precondition"),
-        DavPrecondition::NotModified
-    );
-
-    let mut if_match_precedence = HeaderMap::new();
-    if_match_precedence.insert(header::IF_MATCH, HeaderValue::from_static("\"v1\""));
-    if_match_precedence.insert(
-        header::IF_UNMODIFIED_SINCE,
-        HeaderValue::from_static("Thu, 01 Jan 1970 00:00:00 GMT"),
-    );
-    assert_eq!(
-        evaluate_http_download_preconditions(&if_match_precedence, Some("\"v1\""), Some(modified),)
-            .expect("a matching If-Match suppresses If-Unmodified-Since"),
-        DavPrecondition::Proceed
-    );
-
-    let mut if_none_match_precedence = HeaderMap::new();
-    if_none_match_precedence.insert(
-        header::IF_NONE_MATCH,
-        HeaderValue::from_static("\"different\""),
-    );
-    if_none_match_precedence.insert(
-        header::IF_MODIFIED_SINCE,
-        HeaderValue::from_static("Sat, 24 Jan 1970 03:33:20 GMT"),
-    );
-    assert_eq!(
-        evaluate_http_download_preconditions(
-            &if_none_match_precedence,
-            Some("\"v1\""),
-            Some(modified),
-        )
-        .expect("a nonmatching If-None-Match suppresses If-Modified-Since"),
-        DavPrecondition::Proceed
-    );
 }
 
 #[test]

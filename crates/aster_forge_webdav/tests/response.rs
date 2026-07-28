@@ -2,10 +2,9 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{
     DAV_ALLOW_HEADER, DavBackendError, DavBackendErrorKind, DavBodyError, DavDownloadBody,
-    DavDownloadPlanError, DavMethod, DavProtocolErrorKind, DavRequestHead, DavRequestOrigin,
-    DavResponseBody, backend_error_response, body_error_response, method_not_allowed_response,
-    options_response, plan_download_response, protocol_error_response,
-    range_not_satisfiable_response,
+    DavDownloadPlanError, DavMethod, DavRequestHead, DavRequestOrigin, DavResponseBody,
+    backend_error_response, body_error_response, method_not_allowed_response, options_response,
+    plan_download_response, protocol_error_response, range_not_satisfiable_response,
 };
 use http::StatusCode;
 use http::header::{
@@ -159,10 +158,47 @@ fn malformed_unsatisfiable_and_empty_ranges_return_complete_416_shells() {
         );
         assert_eq!(plan.response.headers.get(ACCEPT_RANGES).unwrap(), "bytes");
         assert_eq!(
+            plan.response.headers.get(LAST_MODIFIED).unwrap(),
+            "Sun, 06 Nov 1994 08:49:37 GMT"
+        );
+        assert_eq!(
             plan.response.headers.get(CACHE_CONTROL).unwrap(),
             "no-store"
         );
     }
+}
+
+#[test]
+fn conditional_outcomes_skip_range_evaluation() {
+    let mut not_modified = HeaderMap::new();
+    not_modified.insert(IF_NONE_MATCH, HeaderValue::from_static("\"etag-1\""));
+    not_modified.insert(RANGE, HeaderValue::from_static("bytes=99-100"));
+    let plan = plan_download_response(
+        &not_modified,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+    )
+    .expect("304 skips Range");
+    assert_eq!(plan.response.status, StatusCode::NOT_MODIFIED);
+    assert!(plan.response.headers.get(CONTENT_RANGE).is_none());
+
+    let mut failed = HeaderMap::new();
+    failed.insert(IF_MATCH, HeaderValue::from_static("\"other\""));
+    failed.insert(RANGE, HeaderValue::from_static("bytes=99-100"));
+    let plan = plan_download_response(
+        &failed,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+    )
+    .expect("412 skips Range");
+    assert_eq!(plan.response.status, StatusCode::PRECONDITION_FAILED);
+    assert!(plan.response.headers.get(CONTENT_RANGE).is_none());
 }
 
 #[test]
@@ -235,7 +271,7 @@ fn if_range_requires_a_matching_strong_validator() {
 }
 
 #[test]
-fn conditional_downloads_plan_304_or_propagate_precondition_failure() {
+fn conditional_downloads_plan_distinct_304_and_412_responses() {
     let mut not_modified = HeaderMap::new();
     not_modified.insert(IF_NONE_MATCH, HeaderValue::from_static("\"etag-1\""));
     let plan = plan_download_response(
@@ -254,21 +290,22 @@ fn conditional_downloads_plan_304_or_propagate_precondition_failure() {
 
     let mut failed = HeaderMap::new();
     failed.insert(IF_MATCH, HeaderValue::from_static("\"other\""));
-    let error = match plan_download_response(
+    let plan = plan_download_response(
         &failed,
         false,
         20,
         "text/plain",
         Some("etag-1"),
         representation_time(),
-    ) {
-        Err(error) => error,
-        Ok(_) => panic!("mismatched If-Match should fail"),
-    };
-    let DavDownloadPlanError::Protocol(error) = error else {
-        panic!("precondition failure should remain a protocol error");
-    };
-    assert_eq!(error.kind(), DavProtocolErrorKind::PreconditionFailed);
+    )
+    .expect("mismatched If-Match should produce a response plan");
+    assert_eq!(plan.response.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(plan.body, DavDownloadBody::Empty);
+    assert_eq!(plan.response.headers.get(ETAG).unwrap(), "\"etag-1\"");
+    assert_eq!(
+        plan.response.headers.get(CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
 }
 
 #[test]
