@@ -159,7 +159,14 @@ fn method_parser_recognizes_webdav_extensions() {
         DavMethod::from_method(&Method::from_bytes(b"PROPFIND").expect("valid method")),
         Some(DavMethod::Propfind)
     );
-    assert_eq!(DavMethod::from_method(&Method::PATCH), None);
+    assert_eq!(
+        DavMethod::from_method(&Method::PATCH),
+        Some(DavMethod::Patch)
+    );
+    assert_eq!(
+        DavMethod::Patch.operation(),
+        aster_forge_webdav::DavOperation::Patch
+    );
 }
 
 #[test]
@@ -172,7 +179,7 @@ fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_sep
         DavMethod::Move,
         DavMethod::Unlock,
     ] {
-        assert_eq!(method.body_policy(), DavBodyPolicy::Empty);
+        assert_eq!(method.standard_body_policy(64), Some(DavBodyPolicy::Empty));
     }
     for method in [
         DavMethod::Propfind,
@@ -181,17 +188,24 @@ fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_sep
         DavMethod::Report,
         DavMethod::VersionControl,
     ] {
-        assert_eq!(method.body_policy(), DavBodyPolicy::BoundedXml);
+        assert_eq!(
+            method.standard_body_policy(64),
+            Some(DavBodyPolicy::BoundedXml { maximum: 64 })
+        );
     }
-    assert_eq!(DavMethod::Put.body_policy(), DavBodyPolicy::Stream);
+    assert_eq!(
+        DavMethod::Put.standard_body_policy(64),
+        Some(DavBodyPolicy::Stream)
+    );
     for method in [DavMethod::Get, DavMethod::Head] {
-        assert_eq!(method.body_policy(), DavBodyPolicy::Unused);
+        assert_eq!(method.standard_body_policy(64), Some(DavBodyPolicy::Unused));
     }
+    assert_eq!(DavMethod::Patch.standard_body_policy(64), None);
 }
 
 #[test]
 fn advertised_methods_are_exactly_the_methods_recognized_by_the_protocol_layer() {
-    assert_eq!(DavMethod::ALL.len(), 14);
+    assert_eq!(DavMethod::ALL.len(), 15);
     for method in DavMethod::ALL {
         assert_eq!(DavMethod::from_name(method.as_str()), Some(method));
     }

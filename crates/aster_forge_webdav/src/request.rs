@@ -19,6 +19,7 @@ pub enum DavMethod {
     Get,
     Head,
     Put,
+    Patch,
     Mkcol,
     Delete,
     Copy,
@@ -34,8 +35,10 @@ pub enum DavMethod {
 pub enum DavBodyPolicy {
     /// Reject the first non-empty body chunk.
     Empty,
-    /// Collect the body up to the product-supplied XML limit.
-    BoundedXml,
+    /// Collect an XML body up to the supplied byte limit.
+    BoundedXml { maximum: usize },
+    /// Collect an opaque body up to the patch format's byte limit.
+    Bounded { maximum: usize },
     /// Leave the body as a stream for the product storage adapter.
     Stream,
     /// Preserve the existing method behavior without consuming the body.
@@ -44,11 +47,12 @@ pub enum DavBodyPolicy {
 
 impl DavMethod {
     /// Methods in the canonical `Allow` rendering order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Options,
         Self::Get,
         Self::Head,
         Self::Put,
+        Self::Patch,
         Self::Delete,
         Self::Mkcol,
         Self::Copy,
@@ -68,16 +72,17 @@ impl DavMethod {
             Self::Get => 1,
             Self::Head => 2,
             Self::Put => 3,
-            Self::Delete => 4,
-            Self::Mkcol => 5,
-            Self::Copy => 6,
-            Self::Move => 7,
-            Self::Propfind => 8,
-            Self::Proppatch => 9,
-            Self::Lock => 10,
-            Self::Unlock => 11,
-            Self::Report => 12,
-            Self::VersionControl => 13,
+            Self::Patch => 4,
+            Self::Delete => 5,
+            Self::Mkcol => 6,
+            Self::Copy => 7,
+            Self::Move => 8,
+            Self::Propfind => 9,
+            Self::Proppatch => 10,
+            Self::Lock => 11,
+            Self::Unlock => 12,
+            Self::Report => 13,
+            Self::VersionControl => 14,
         }
     }
 
@@ -90,6 +95,7 @@ impl DavMethod {
             Self::Get => "GET",
             Self::Head => "HEAD",
             Self::Put => "PUT",
+            Self::Patch => "PATCH",
             Self::Mkcol => "MKCOL",
             Self::Delete => "DELETE",
             Self::Copy => "COPY",
@@ -117,6 +123,7 @@ impl DavMethod {
             "GET" => Some(Self::Get),
             "HEAD" => Some(Self::Head),
             "PUT" => Some(Self::Put),
+            "PATCH" => Some(Self::Patch),
             "MKCOL" => Some(Self::Mkcol),
             "DELETE" => Some(Self::Delete),
             "COPY" => Some(Self::Copy),
@@ -139,6 +146,7 @@ impl DavMethod {
             Self::Get => DavOperation::Get,
             Self::Head => DavOperation::Head,
             Self::Put => DavOperation::Put,
+            Self::Patch => DavOperation::Patch,
             Self::Mkcol => DavOperation::Mkcol,
             Self::Delete => DavOperation::Delete,
             Self::Copy => DavOperation::Copy,
@@ -150,18 +158,22 @@ impl DavMethod {
         }
     }
 
-    /// Returns the body handling contract for this method.
+    /// Returns the body handling contract that does not depend on a declared PATCH format.
+    ///
+    /// PATCH returns `None`; use [`crate::plan_patch_request`] to select its format-specific
+    /// bounded or streaming policy from the validated capability snapshot.
     #[must_use]
-    pub const fn body_policy(self) -> DavBodyPolicy {
+    pub const fn standard_body_policy(self, xml_limit: usize) -> Option<DavBodyPolicy> {
         match self {
             Self::Options | Self::Mkcol | Self::Delete | Self::Copy | Self::Move | Self::Unlock => {
-                DavBodyPolicy::Empty
+                Some(DavBodyPolicy::Empty)
             }
             Self::Propfind | Self::Proppatch | Self::Lock | Self::Report | Self::VersionControl => {
-                DavBodyPolicy::BoundedXml
+                Some(DavBodyPolicy::BoundedXml { maximum: xml_limit })
             }
-            Self::Put => DavBodyPolicy::Stream,
-            Self::Get | Self::Head => DavBodyPolicy::Unused,
+            Self::Put => Some(DavBodyPolicy::Stream),
+            Self::Get | Self::Head => Some(DavBodyPolicy::Unused),
+            Self::Patch => None,
         }
     }
 }

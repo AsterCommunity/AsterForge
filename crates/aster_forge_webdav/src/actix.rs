@@ -17,6 +17,7 @@ use crate::{
 pub enum DavPreparedBody {
     None,
     Xml(Vec<u8>),
+    Bytes(Vec<u8>),
 }
 
 impl DavPreparedBody {
@@ -24,8 +25,17 @@ impl DavPreparedBody {
     #[must_use]
     pub fn xml(&self) -> &[u8] {
         match self {
-            Self::None => &[],
+            Self::None | Self::Bytes(_) => &[],
             Self::Xml(body) => body,
+        }
+    }
+
+    /// Returns collected opaque bytes, or an empty slice for other body policies.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Bytes(body) => body,
+            Self::None | Self::Xml(_) => &[],
         }
     }
 }
@@ -244,19 +254,21 @@ pub async fn collect_bounded_xml_body(
     Ok(body)
 }
 
-/// Applies the method-owned body policy while leaving streaming PUT bodies untouched.
+/// Applies an already planned body policy while leaving streaming bodies untouched.
 pub async fn prepare_request_body(
-    method: DavMethod,
+    policy: DavBodyPolicy,
     payload: &mut actix_web::web::Payload,
-    xml_limit: usize,
 ) -> Result<DavPreparedBody, DavBodyError> {
-    match method.body_policy() {
+    match policy {
         DavBodyPolicy::Empty => ensure_empty_body(payload)
             .await
             .map(|()| DavPreparedBody::None),
-        DavBodyPolicy::BoundedXml => collect_bounded_xml_body(payload, xml_limit)
+        DavBodyPolicy::BoundedXml { maximum } => collect_bounded_xml_body(payload, maximum)
             .await
             .map(DavPreparedBody::Xml),
+        DavBodyPolicy::Bounded { maximum } => collect_bounded_xml_body(payload, maximum)
+            .await
+            .map(DavPreparedBody::Bytes),
         DavBodyPolicy::Stream | DavBodyPolicy::Unused => Ok(DavPreparedBody::None),
     }
 }

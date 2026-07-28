@@ -213,6 +213,11 @@ pub fn options_response(snapshot: &DavCapabilitySnapshot) -> DavResponse {
     if let Some(dav) = snapshot.dav_header() {
         response.headers.insert("DAV", dav.clone());
     }
+    if let Some(accept_patch) = snapshot.accept_patch_header() {
+        response
+            .headers
+            .insert("Accept-Patch", accept_patch.clone());
+    }
     if snapshot.has_ms_author_via() {
         response
             .headers

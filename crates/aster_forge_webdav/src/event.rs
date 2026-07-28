@@ -13,6 +13,7 @@ pub enum DavOperation {
     Get,
     Head,
     Put,
+    Patch,
     Mkcol,
     Delete,
     Copy,

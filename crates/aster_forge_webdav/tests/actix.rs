@@ -9,7 +9,7 @@ use aster_forge_webdav::{
     DavCapabilityDeclaration, DavCapabilityProvider, DavCapabilityTarget,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
     DavConditionalResource, DavLockingCapability, DavMethod, DavMethodSet, DavNonDavProfile,
-    DavPath, DavResourceState, DavVersioningCapability, plan_capabilities,
+    DavPath, DavResourceState, DavVersioningCapability, DavWriteCapabilities, plan_capabilities,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -98,28 +98,53 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
         ),
     ] {
         let mut xml = payload_from_bytes(Bytes::copy_from_slice(body)).await;
-        let prepared = aster_forge_webdav::actix::prepare_request_body(method, &mut xml, 64)
+        let policy = method
+            .standard_body_policy(64)
+            .expect("standard method body policy");
+        let prepared = aster_forge_webdav::actix::prepare_request_body(policy, &mut xml)
             .await
             .expect("bounded XML body");
         assert_eq!(prepared.xml(), body);
+        assert!(prepared.bytes().is_empty());
     }
 
     let mut forbidden = payload_from_bytes(Bytes::from_static(b"x")).await;
     assert!(matches!(
-        aster_forge_webdav::actix::prepare_request_body(DavMethod::Options, &mut forbidden, 64,)
-            .await,
+        aster_forge_webdav::actix::prepare_request_body(
+            DavMethod::Options
+                .standard_body_policy(64)
+                .expect("OPTIONS body policy"),
+            &mut forbidden,
+        )
+        .await,
         Err(DavBodyError::BodyNotAllowed)
     ));
 
     let mut stream = payload_from_bytes(Bytes::from_static(b"payload")).await;
-    let prepared = aster_forge_webdav::actix::prepare_request_body(DavMethod::Put, &mut stream, 64)
-        .await
-        .expect("PUT stream policy");
+    let prepared = aster_forge_webdav::actix::prepare_request_body(
+        DavMethod::Put
+            .standard_body_policy(64)
+            .expect("PUT body policy"),
+        &mut stream,
+    )
+    .await
+    .expect("PUT stream policy");
     assert!(prepared.xml().is_empty());
+    assert!(prepared.bytes().is_empty());
     assert_eq!(
         stream.next().await.expect("stream chunk").expect("chunk"),
         Bytes::from_static(b"payload")
     );
+
+    let mut bounded = payload_from_bytes(Bytes::from_static(b"patch")).await;
+    let prepared = aster_forge_webdav::actix::prepare_request_body(
+        aster_forge_webdav::DavBodyPolicy::Bounded { maximum: 5 },
+        &mut bounded,
+    )
+    .await
+    .expect("bounded patch body");
+    assert_eq!(prepared.bytes(), b"patch");
+    assert!(prepared.xml().is_empty());
 }
 
 #[test]
@@ -209,6 +234,7 @@ fn actix_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
         locking: DavLockingCapability::Disabled,
         versioning: DavVersioningCapability::Disabled,
         compatibility: DavCompatibilityCapabilities::default(),
+        writes: DavWriteCapabilities::default(),
         compliance: DavComplianceClasses { class1: true },
     })
     .expect("valid Actix capability snapshot")

@@ -1,5 +1,8 @@
 //! Resource-aware WebDAV capability declarations and response snapshots.
 
+use std::marker::PhantomData;
+
+use headers::Mime;
 use http::HeaderValue;
 
 use crate::{DavBackendError, DavMethod, DavPath};
@@ -56,6 +59,73 @@ pub struct DavCompatibilityCapabilities {
     pub ms_author_via: bool,
 }
 
+/// Conditional request policy required before a partial write can execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DavWritePrecondition {
+    /// Apply the ordinary RFC 9110 conditional request rules when headers are present.
+    Optional,
+    /// Require an `If-Match` field containing at least one strong entity-tag.
+    RequireStrongIfMatch,
+}
+
+/// RFC 9110 partial PUT support negotiated by private agreement with the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DavPartialPutCapability {
+    /// Reject every PUT request carrying `Content-Range`.
+    #[default]
+    Disabled,
+    /// Accept a single `bytes` content range under the declared precondition policy.
+    ContentRangeBytes { precondition: DavWritePrecondition },
+}
+
+/// Body handling selected by one RFC 5789 patch document format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DavPatchBodyPolicy {
+    /// Collect at most the declared number of bytes before invoking product code.
+    Bounded { maximum: usize },
+    /// Leave the body as a stream for the product patch adapter.
+    Stream,
+}
+
+/// One statically declared RFC 5789 patch document format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DavPatchFormat {
+    /// Media type advertised through `Accept-Patch` and matched against `Content-Type`.
+    pub media_type: &'static str,
+    /// Transport body contract for this patch document format.
+    pub body_policy: DavPatchBodyPolicy,
+    /// Conditional request policy required by this format's base-point semantics.
+    pub precondition: DavWritePrecondition,
+}
+
+/// RFC 5789 PATCH capability for one resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DavPatchCapability {
+    /// PATCH is unavailable and must not appear in `Allow` or `Accept-Patch`.
+    #[default]
+    Disabled,
+    /// PATCH is available for the statically declared patch document formats.
+    Formats(&'static [DavPatchFormat]),
+}
+
+/// Explicitly named private range-update compatibility surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DavPrivateUpdateRangeCapability {
+    /// Reject `X-Update-Range` instead of treating it as an ordinary PUT.
+    #[default]
+    Disabled,
+    /// Pass one validated `X-Update-Range` field to the product adapter.
+    XUpdateRange { precondition: DavWritePrecondition },
+}
+
+/// Mutation capabilities that are deliberately separate from ordinary full-replacement PUT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DavWriteCapabilities {
+    pub partial_put: DavPartialPutCapability,
+    pub patch: DavPatchCapability,
+    pub private_update_range: DavPrivateUpdateRangeCapability,
+}
+
 /// RFC compliance classes represented by the declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavComplianceClasses {
@@ -71,6 +141,15 @@ pub trait DavClass2Support: DavClass1Support {}
 /// Product implementation provides the complete RFC 3253 core versioning contract.
 pub trait DavCoreVersioningSupport: DavClass1Support {}
 
+/// Product implementation provides the storage contract required by partial PUT.
+pub trait DavPartialPutSupport: Send + Sync {}
+
+/// Product implementation provides atomic application for its declared PATCH formats.
+pub trait DavPatchSupport: Send + Sync {}
+
+/// Product implementation provides the named private `X-Update-Range` contract.
+pub trait DavPrivateUpdateRangeSupport: Send + Sync {}
+
 mod sealed {
     pub trait Sealed {}
 }
@@ -80,6 +159,9 @@ pub trait DavCapabilityProfile<Provider: ?Sized>: sealed::Sealed {
     const CLASS1: bool;
     const CLASS2: bool;
     const VERSION_CONTROL: bool;
+    const PARTIAL_PUT: bool;
+    const PATCH: bool;
+    const PRIVATE_UPDATE_RANGE: bool;
 }
 
 /// Profile for targets that expose HTTP methods without DAV compliance.
@@ -97,28 +179,55 @@ pub struct DavClass1VersioningProfile;
 /// Profile for RFC 4918 class 2 plus RFC 3253 core versioning.
 pub struct DavClass2VersioningProfile;
 
+/// Adds partial PUT to another static capability profile.
+pub struct DavWithPartialPut<Base>(PhantomData<fn() -> Base>);
+
+/// Adds RFC 5789 PATCH to another static capability profile.
+pub struct DavWithPatch<Base>(PhantomData<fn() -> Base>);
+
+/// Adds the private `X-Update-Range` surface to another static capability profile.
+pub struct DavWithPrivateUpdateRange<Base>(PhantomData<fn() -> Base>);
+
 impl sealed::Sealed for DavNonDavProfile {}
 impl sealed::Sealed for DavClass1Profile {}
 impl sealed::Sealed for DavClass2Profile {}
 impl sealed::Sealed for DavClass1VersioningProfile {}
 impl sealed::Sealed for DavClass2VersioningProfile {}
+impl<Base: sealed::Sealed> sealed::Sealed for DavWithPartialPut<Base> {}
+impl<Base: sealed::Sealed> sealed::Sealed for DavWithPatch<Base> {}
+impl<Base: sealed::Sealed> sealed::Sealed for DavWithPrivateUpdateRange<Base> {}
 
-impl<Provider: ?Sized> DavCapabilityProfile<Provider> for DavNonDavProfile {
-    const CLASS1: bool = false;
-    const CLASS2: bool = false;
-    const VERSION_CONTROL: bool = false;
+macro_rules! static_profile {
+    ($profile:ty, $class1:expr, $class2:expr, $version_control:expr) => {
+        impl<Provider: ?Sized> DavCapabilityProfile<Provider> for $profile {
+            const CLASS1: bool = $class1;
+            const CLASS2: bool = $class2;
+            const VERSION_CONTROL: bool = $version_control;
+            const PARTIAL_PUT: bool = false;
+            const PATCH: bool = false;
+            const PRIVATE_UPDATE_RANGE: bool = false;
+        }
+    };
 }
+
+static_profile!(DavNonDavProfile, false, false, false);
 
 impl<Provider: DavClass1Support + ?Sized> DavCapabilityProfile<Provider> for DavClass1Profile {
     const CLASS1: bool = true;
     const CLASS2: bool = false;
     const VERSION_CONTROL: bool = false;
+    const PARTIAL_PUT: bool = false;
+    const PATCH: bool = false;
+    const PRIVATE_UPDATE_RANGE: bool = false;
 }
 
 impl<Provider: DavClass2Support + ?Sized> DavCapabilityProfile<Provider> for DavClass2Profile {
     const CLASS1: bool = true;
     const CLASS2: bool = true;
     const VERSION_CONTROL: bool = false;
+    const PARTIAL_PUT: bool = false;
+    const PATCH: bool = false;
+    const PRIVATE_UPDATE_RANGE: bool = false;
 }
 
 impl<Provider: DavCoreVersioningSupport + ?Sized> DavCapabilityProfile<Provider>
@@ -127,6 +236,9 @@ impl<Provider: DavCoreVersioningSupport + ?Sized> DavCapabilityProfile<Provider>
     const CLASS1: bool = true;
     const CLASS2: bool = false;
     const VERSION_CONTROL: bool = true;
+    const PARTIAL_PUT: bool = false;
+    const PATCH: bool = false;
+    const PRIVATE_UPDATE_RANGE: bool = false;
 }
 
 impl<Provider: DavClass2Support + DavCoreVersioningSupport + ?Sized> DavCapabilityProfile<Provider>
@@ -135,6 +247,48 @@ impl<Provider: DavClass2Support + DavCoreVersioningSupport + ?Sized> DavCapabili
     const CLASS1: bool = true;
     const CLASS2: bool = true;
     const VERSION_CONTROL: bool = true;
+    const PARTIAL_PUT: bool = false;
+    const PATCH: bool = false;
+    const PRIVATE_UPDATE_RANGE: bool = false;
+}
+
+impl<Provider, Base> DavCapabilityProfile<Provider> for DavWithPartialPut<Base>
+where
+    Provider: DavPartialPutSupport + ?Sized,
+    Base: DavCapabilityProfile<Provider>,
+{
+    const CLASS1: bool = Base::CLASS1;
+    const CLASS2: bool = Base::CLASS2;
+    const VERSION_CONTROL: bool = Base::VERSION_CONTROL;
+    const PARTIAL_PUT: bool = true;
+    const PATCH: bool = Base::PATCH;
+    const PRIVATE_UPDATE_RANGE: bool = Base::PRIVATE_UPDATE_RANGE;
+}
+
+impl<Provider, Base> DavCapabilityProfile<Provider> for DavWithPatch<Base>
+where
+    Provider: DavPatchSupport + ?Sized,
+    Base: DavCapabilityProfile<Provider>,
+{
+    const CLASS1: bool = Base::CLASS1;
+    const CLASS2: bool = Base::CLASS2;
+    const VERSION_CONTROL: bool = Base::VERSION_CONTROL;
+    const PARTIAL_PUT: bool = Base::PARTIAL_PUT;
+    const PATCH: bool = true;
+    const PRIVATE_UPDATE_RANGE: bool = Base::PRIVATE_UPDATE_RANGE;
+}
+
+impl<Provider, Base> DavCapabilityProfile<Provider> for DavWithPrivateUpdateRange<Base>
+where
+    Provider: DavPrivateUpdateRangeSupport + ?Sized,
+    Base: DavCapabilityProfile<Provider>,
+{
+    const CLASS1: bool = Base::CLASS1;
+    const CLASS2: bool = Base::CLASS2;
+    const VERSION_CONTROL: bool = Base::VERSION_CONTROL;
+    const PARTIAL_PUT: bool = Base::PARTIAL_PUT;
+    const PATCH: bool = Base::PATCH;
+    const PRIVATE_UPDATE_RANGE: bool = true;
 }
 
 /// Compact, duplicate-free set of methods advertised for one target.
@@ -220,6 +374,7 @@ pub struct DavCapabilityDeclaration {
     pub locking: DavLockingCapability,
     pub versioning: DavVersioningCapability,
     pub compatibility: DavCompatibilityCapabilities,
+    pub writes: DavWriteCapabilities,
     pub compliance: DavComplianceClasses,
 }
 
@@ -233,6 +388,11 @@ impl DavCapabilityDeclaration {
             versioning: DavVersioningCapability::Disabled,
             compatibility: DavCompatibilityCapabilities {
                 ms_author_via: false,
+            },
+            writes: DavWriteCapabilities {
+                partial_put: DavPartialPutCapability::Disabled,
+                patch: DavPatchCapability::Disabled,
+                private_update_range: DavPrivateUpdateRangeCapability::Disabled,
             },
             compliance: DavComplianceClasses { class1: false },
         }
@@ -258,12 +418,30 @@ pub enum DavCapabilityPlanError {
     VersionControlWithoutMethods,
     #[error("VERSION-CONTROL requires the RFC 3253 core versioning capability")]
     VersionControlMethodWithoutCore,
+    #[error("partial PUT requires the PUT method")]
+    PartialPutWithoutPut,
+    #[error("PATCH requires at least one declared patch document format")]
+    PatchWithoutFormats,
+    #[error("declared patch document formats require the PATCH method")]
+    PatchFormatsWithoutMethod,
+    #[error("a patch document media type is invalid")]
+    InvalidPatchMediaType,
+    #[error("patch document media types must be unique")]
+    DuplicatePatchMediaType,
+    #[error("private X-Update-Range support requires the PUT method")]
+    PrivateUpdateRangeWithoutPut,
     #[error("runtime class 1 capability exceeds the provider's static profile")]
     Class1ExceedsProfile,
     #[error("runtime class 2 capability exceeds the provider's static profile")]
     Class2ExceedsProfile,
     #[error("runtime version-control capability exceeds the provider's static profile")]
     VersionControlExceedsProfile,
+    #[error("runtime partial PUT capability exceeds the provider's static profile")]
+    PartialPutExceedsProfile,
+    #[error("runtime PATCH capability exceeds the provider's static profile")]
+    PatchExceedsProfile,
+    #[error("runtime private update-range capability exceeds the provider's static profile")]
+    PrivateUpdateRangeExceedsProfile,
     #[error("capability header representation is invalid")]
     InvalidHeaderRepresentation,
 }
@@ -290,6 +468,7 @@ pub struct DavCapabilitySnapshot {
     declaration: DavCapabilityDeclaration,
     allow: HeaderValue,
     dav: Option<HeaderValue>,
+    accept_patch: Option<HeaderValue>,
     ms_author_via: bool,
 }
 
@@ -317,6 +496,23 @@ impl DavCapabilitySnapshot {
     #[must_use]
     pub fn dav_header(&self) -> Option<&HeaderValue> {
         self.dav.as_ref()
+    }
+
+    #[must_use]
+    pub fn accept_patch_header(&self) -> Option<&HeaderValue> {
+        self.accept_patch.as_ref()
+    }
+
+    #[must_use]
+    pub const fn writes(&self) -> DavWriteCapabilities {
+        self.declaration.writes
+    }
+
+    pub(crate) const fn patch_formats(&self) -> Option<&'static [DavPatchFormat]> {
+        match self.declaration.writes.patch {
+            DavPatchCapability::Disabled => None,
+            DavPatchCapability::Formats(formats) => Some(formats),
+        }
     }
 
     #[must_use]
@@ -370,6 +566,34 @@ pub fn plan_capabilities(
     if declaration.methods.contains(DavMethod::VersionControl) && !versioning_enabled {
         return Err(DavCapabilityPlanError::VersionControlMethodWithoutCore);
     }
+    let put_enabled = declaration.methods.contains(DavMethod::Put);
+    if declaration.writes.partial_put != DavPartialPutCapability::Disabled && !put_enabled {
+        return Err(DavCapabilityPlanError::PartialPutWithoutPut);
+    }
+    if declaration.writes.private_update_range != DavPrivateUpdateRangeCapability::Disabled
+        && !put_enabled
+    {
+        return Err(DavCapabilityPlanError::PrivateUpdateRangeWithoutPut);
+    }
+    let patch_enabled = declaration.methods.contains(DavMethod::Patch);
+    let patch_formats = match declaration.writes.patch {
+        DavPatchCapability::Disabled => {
+            if patch_enabled {
+                return Err(DavCapabilityPlanError::PatchWithoutFormats);
+            }
+            None
+        }
+        DavPatchCapability::Formats(formats) => {
+            if !patch_enabled {
+                return Err(DavCapabilityPlanError::PatchFormatsWithoutMethod);
+            }
+            if formats.is_empty() {
+                return Err(DavCapabilityPlanError::PatchWithoutFormats);
+            }
+            validate_patch_formats(formats)?;
+            Some(formats)
+        }
+    };
 
     let allow = HeaderValue::from_str(&declaration.methods.render())
         .map_err(|_| DavCapabilityPlanError::InvalidHeaderRepresentation)?;
@@ -393,12 +617,20 @@ pub fn plan_capabilities(
             )
         }
     };
+    let accept_patch = patch_formats
+        .map(render_patch_formats)
+        .map(|value| {
+            HeaderValue::from_str(&value)
+                .map_err(|_| DavCapabilityPlanError::InvalidHeaderRepresentation)
+        })
+        .transpose()?;
 
     let ms_author_via = declaration.compatibility.ms_author_via;
     Ok(DavCapabilitySnapshot {
         declaration,
         allow,
         dav: dav_text,
+        accept_patch,
         ms_author_via,
     })
 }
@@ -440,5 +672,53 @@ pub async fn plan_capabilities_with_provider<Provider: DavCapabilityProvider>(
     {
         return Err(DavCapabilityPlanError::VersionControlExceedsProfile.into());
     }
+    if declaration.writes.partial_put != DavPartialPutCapability::Disabled
+        && !Provider::Profile::PARTIAL_PUT
+    {
+        return Err(DavCapabilityPlanError::PartialPutExceedsProfile.into());
+    }
+    if declaration.writes.patch != DavPatchCapability::Disabled && !Provider::Profile::PATCH {
+        return Err(DavCapabilityPlanError::PatchExceedsProfile.into());
+    }
+    if declaration.writes.private_update_range != DavPrivateUpdateRangeCapability::Disabled
+        && !Provider::Profile::PRIVATE_UPDATE_RANGE
+    {
+        return Err(DavCapabilityPlanError::PrivateUpdateRangeExceedsProfile.into());
+    }
     plan_capabilities(declaration).map_err(Into::into)
+}
+
+fn validate_patch_formats(formats: &[DavPatchFormat]) -> Result<(), DavCapabilityPlanError> {
+    for (index, format) in formats.iter().enumerate() {
+        let media_type = format
+            .media_type
+            .parse::<Mime>()
+            .map_err(|_| DavCapabilityPlanError::InvalidPatchMediaType)?;
+        for duplicate in &formats[..index] {
+            let other = duplicate
+                .media_type
+                .parse::<Mime>()
+                .map_err(|_| DavCapabilityPlanError::InvalidPatchMediaType)?;
+            if media_type == other {
+                return Err(DavCapabilityPlanError::DuplicatePatchMediaType);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_patch_formats(formats: &[DavPatchFormat]) -> String {
+    let capacity = formats
+        .iter()
+        .map(|format| format.media_type.len())
+        .sum::<usize>()
+        + formats.len().saturating_sub(1) * 2;
+    let mut rendered = String::with_capacity(capacity);
+    for (index, format) in formats.iter().enumerate() {
+        if index != 0 {
+            rendered.push_str(", ");
+        }
+        rendered.push_str(format.media_type);
+    }
+    rendered
 }

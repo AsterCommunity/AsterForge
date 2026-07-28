@@ -2,7 +2,7 @@
 
 `aster_forge_webdav` 是 Aster 产品共用的 WebDAV 协议边界。它负责把 HTTP/WebDAV 输入解析为强类型请求，校验路径、`Depth`、`Destination`、`If`、ETag 和日期条件，并定义协议响应、产品 backend port 与操作事件。
 
-这个 crate 不拥有 AsterDrive 的文件业务。认证账号、workspace scope、权限、SeaORM entity、存储策略、quota、版本落库和审计展示仍然留在产品仓库。
+这个 crate 不拥有产品文件业务。认证账号、workspace scope、权限、ORM entity、存储策略、quota、版本落库和审计展示仍然留在产品仓库。
 
 ## Cargo 接入
 
@@ -39,6 +39,59 @@ provider trait 使用原生 `async fn` 和泛型静态分发，不为 capability
 
 `DavLockingCapability::Class2` 只有在 class 1、LOCK 和 UNLOCK 同时成立时才会通过规划；`DavVersioningCapability::Core` 只有在 class 1、REPORT 和 VERSION-CONTROL 同时成立时才会生成 `version-control` token。`MS-Author-Via` 作为独立兼容性 flag，不进入 DAV compliance token。
 
+## PUT、partial PUT 与 PATCH
+
+普通 PUT 只由 `DavMethod::Put` 控制，语义始终是完整替换。partial PUT、RFC 5789 PATCH 和私有 `X-Update-Range` 不共享开关，默认全部关闭：
+
+- 未声明 partial PUT 时，任何 PUT `Content-Range` 都在正文和存储写入前规划为 `400 Bad Request`。
+- 未声明私有兼容能力时，PUT `X-Update-Range` 同样规划为 `400`，不会被当作普通 PUT 忽略。
+- 未声明具体 patch document media type 时，PATCH 不得出现在 method set，OPTIONS 也不会输出 `Accept-Patch`。
+
+产品用静态 format slice 声明 PATCH，不需要运行时字符串注册表或 handler map：
+
+```rust
+use aster_forge_webdav::{
+    DavMethod, DavMethodSet, DavPartialPutCapability, DavPatchBodyPolicy,
+    DavPatchCapability, DavPatchFormat, DavWriteCapabilities, DavWritePrecondition,
+};
+
+static PATCH_FORMATS: [DavPatchFormat; 1] = [DavPatchFormat {
+    media_type: "application/merge-patch+json",
+    body_policy: DavPatchBodyPolicy::Bounded { maximum: 64 * 1024 },
+    precondition: DavWritePrecondition::RequireStrongIfMatch,
+}];
+
+declaration.methods = DavMethodSet::from_methods(&[
+    DavMethod::Options,
+    DavMethod::Put,
+    DavMethod::Patch,
+]);
+declaration.writes = DavWriteCapabilities {
+    partial_put: DavPartialPutCapability::ContentRangeBytes {
+        precondition: DavWritePrecondition::RequireStrongIfMatch,
+    },
+    patch: DavPatchCapability::Formats(&PATCH_FORMATS),
+    ..DavWriteCapabilities::default()
+};
+```
+
+provider 的 associated profile 必须同步声明静态上限。partial PUT 使用 `DavWithPartialPut<Base>`，PATCH 使用 `DavWithPatch<Base>`，私有 range-update 使用 `DavWithPrivateUpdateRange<Base>`；wrapper 可以组合。每个 wrapper 分别要求 provider 实现 `DavPartialPutSupport`、`DavPatchSupport` 或 `DavPrivateUpdateRangeSupport`，缺少 impl 会在编译期报错。运行时 declaration 仍按资源类型、权限和配置投影，但不能超过静态 profile。
+
+PUT handler 把同一个 capability snapshot 交给 `plan_put_request`，再按 `DavPutWritePlan::Replace`、`Partial` 或 `PrivateUpdateRange` 调用产品 adapter。Forge 使用 `headers::ContentRange` 解析 RFC 9110 `bytes` range，拒绝 unsatisfied、重复、溢出、非法 complete length 和已声明 `Content-Length` 不一致；partial plan 返回 offset、payload length 与可选 complete length。stream 的实际字节数仍由产品 adapter 在提交前核验。
+
+PATCH handler 使用 `plan_patch_request` 按结构化 `Content-Type` 选择 `DavPatchFormat`。缺失、畸形、重复或未声明 media type 返回 `415 Unsupported Media Type`，并携带 snapshot 生成的 `Accept-Patch`。plan 返回 format 和 `DavBodyPolicy`；Actix adapter 只按这个已规划 policy 收集 bounded body，stream policy 保留 payload 流：
+
+```rust
+let plan = aster_forge_webdav::plan_patch_request(&snapshot, &headers, resource)?;
+let prepared = aster_forge_webdav::actix::prepare_request_body(
+    plan.body_policy,
+    &mut payload,
+)
+.await?;
+```
+
+以上能力只定义协议和 transport contract。产品 adapter 负责 partial write 的 staging、PATCH 的完整原子应用、provider session、quota、checksum、dedup/refcount、失败清理、audit 和最终 commit。依据 [RFC 9110 Section 14.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.5)，partial PUT 只在产品确认的 client private agreement 下启用；PATCH 行为与 `Accept-Patch` 以 [RFC 5789](https://www.rfc-editor.org/rfc/rfc5789.html) 为准。
+
 ## 协议所有权
 
 Forge 负责：
@@ -49,8 +102,8 @@ Forge 负责：
 - 通过 `DavFileSystem` / `DavLockSystem` 统一执行 `If`、资源锁、父级锁、父集合存在性与 LOCK lock-null 文件前置条件；产品不再复制 resolver/guard。
 - LOCK acquire/refresh 选择、timeout/token/body 校验与成功响应 composition。
 - COPY/MOVE/DELETE 的资源路径关系、typed partial failure、207 与 201/204 响应选择。
-- 每个 DAV 方法的 empty/bounded XML/stream/unused body policy，以及 Actix bounded-body adapter。
-- request head 保留规范化后的请求 origin；Actix adapter 按方法一次性完成 empty/XML/stream body preparation。
+- 每个标准 DAV 方法的 empty/bounded XML/stream/unused body policy、PATCH format 专属 bounded/stream policy，以及 Actix bounded-body adapter。
+- request head 保留规范化后的请求 origin；Actix adapter 按已规划的 body policy 完成 empty/XML/bounded/stream body preparation。
 - parsed request target 借用并保留同一个 mount boundary，method parser 使用它校验 `Destination`，调用方不能为目标和目的地传入两套 prefix。
 - 通过 `plan_http_conditionals` 统一执行 method-aware HTTP conditional request planning：
   `If-Match`、`If-Unmodified-Since`、`If-None-Match`、GET/HEAD
@@ -73,11 +126,13 @@ Forge 负责：
 - 唯一 backend contract：`DavFileSystem`、`DavMetaData`、`DavFile`、`DavDirEntry`、
   `DavLockSystem`、`FsError` 和 `OpenOptions`；产品只实现这些 Forge port，不再复制协议 trait。
 - 批量 dead-property 读取只向 backend 传递 `DavPath`；产品 adapter 自行解析数据库身份并执行批量查询。
-- Actix transport 与 transport-neutral `http` 类型的显式转换。
+- Actix transport 与 transport-neutral `http` 类型的显式转换。Actix 仍使用 `http 0.2` 而 Forge 公共模型使用 `http 1.x`，URI/header 跨版本转换保持显式边界。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
 - resource-aware capability declaration/snapshot、RFC 4918 class dependency validation、
-  canonical `Allow`/`DAV` rendering 和未知 method 的 target-first parsing。
+  canonical `Allow`/`DAV`/`Accept-Patch` rendering 和未知 method 的 target-first parsing。
+- RFC 9110 partial PUT 默认拒绝与 typed range plan、RFC 5789 PATCH media-type dispatch，
+  以及与二者分离的私有 `X-Update-Range` capability。
 
 ## XML 请求语义
 
@@ -141,7 +196,7 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 
 - 协议输入错误使用 `DavProtocolError`，由 transport adapter 映射为 WebDAV 状态码和响应。
 - 产品 adapter 把业务错误压缩为 `DavBackendErrorKind`；详细错误和产品文案留在产品日志与 API 边界。
-- Forge 不直接返回 AsterDrive 的 envelope，也不依赖产品错误类型。
+- Forge 不直接返回产品 API envelope，也不依赖产品错误类型。
 
 ## 测试要求
 
@@ -153,6 +208,9 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 - capability 测试必须覆盖 unmapped、file、collection、mount root、GET/HEAD 规范化、
   class 1/2、locking on/off、DeltaV on/off、兼容性 headers、未知 method，以及
   OPTIONS/405/dispatch 使用同一 snapshot 的一致性。
+- 写入能力测试必须覆盖 partial PUT 默认拒绝、Content-Range 全部边界、强 If-Match、
+  PATCH media-type 与 body policy dispatch、Accept-Patch、私有 header 冲突及实际 stream
+  长度由产品提交边界核验。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 
 ## 参考项目

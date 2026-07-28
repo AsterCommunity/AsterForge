@@ -851,6 +851,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "headers",
  "http 1.4.2",
  "percent-encoding",
  "thiserror 2.0.19",

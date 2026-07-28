@@ -111,8 +111,24 @@ pub fn if_match_headers_match(
     }
 }
 
+/// Reports whether `If-Match` is present and contains at least one strong entity-tag.
+///
+/// The wildcard is a valid `If-Match` condition but is not itself an entity-tag, so it returns
+/// `Some(false)`. Malformed lists use the same parser and limits as conditional evaluation.
+pub fn if_match_headers_have_strong_tag(
+    headers: &HeaderMap,
+) -> Result<Option<bool>, HttpValidatorError> {
+    let Some(raw) = combined_header_bytes(headers, IF_MATCH) else {
+        return Ok(None);
+    };
+    Ok(Some(match parse_etag_list(&raw)? {
+        ParsedEtagList::Any => false,
+        ParsedEtagList::Tags(candidates) => candidates.iter().any(|candidate| !candidate.weak),
+    }))
+}
+
 fn strong_candidates_match(
-    candidates: &[ETag],
+    candidates: &[ParsedEntityTag],
     current_etag: Option<&str>,
 ) -> Result<bool, HttpValidatorError> {
     if candidates.is_empty() {
@@ -124,7 +140,7 @@ fn strong_candidates_match(
     let current = parse_entity_tag(current_etag)?;
     Ok(candidates
         .iter()
-        .any(|candidate| IfMatch::from(candidate.clone()).precondition_passes(&current)))
+        .any(|candidate| IfMatch::from(candidate.tag.clone()).precondition_passes(&current)))
 }
 
 /// Applies the weak comparison required by `If-None-Match`.
@@ -162,7 +178,7 @@ pub fn if_none_match_headers_match(
 }
 
 fn weak_candidates_match(
-    candidates: &[ETag],
+    candidates: &[ParsedEntityTag],
     current_etag: Option<&str>,
 ) -> Result<bool, HttpValidatorError> {
     if candidates.is_empty() {
@@ -174,12 +190,17 @@ fn weak_candidates_match(
     let current = parse_entity_tag(current_etag)?;
     Ok(candidates
         .iter()
-        .any(|candidate| !IfNoneMatch::from(candidate.clone()).precondition_passes(&current)))
+        .any(|candidate| !IfNoneMatch::from(candidate.tag.clone()).precondition_passes(&current)))
 }
 
 enum ParsedEtagList {
     Any,
-    Tags(Vec<ETag>),
+    Tags(Vec<ParsedEntityTag>),
+}
+
+struct ParsedEntityTag {
+    tag: ETag,
+    weak: bool,
 }
 
 fn parse_etag_list(raw: &[u8]) -> Result<ParsedEtagList, HttpValidatorError> {
@@ -222,7 +243,10 @@ fn parse_etag_list(raw: &[u8]) -> Result<ParsedEtagList, HttpValidatorError> {
         let candidate = remaining
             .get(..consumed)
             .ok_or(HttpValidatorError::InvalidEtagList)?;
-        tags.push(parse_entity_tag_bytes(candidate)?);
+        tags.push(ParsedEntityTag {
+            tag: parse_entity_tag_bytes(candidate)?,
+            weak,
+        });
         remaining = remaining
             .get(consumed..)
             .ok_or(HttpValidatorError::InvalidEtagList)?;
@@ -285,9 +309,9 @@ mod tests {
 
     use super::{
         HttpValidatorError, MAX_ETAG_LIST_ELEMENTS, MAX_HTTP_DATE_EPOCH_SECONDS,
-        http_date_epoch_seconds, if_match_header_matches, if_match_headers_match,
-        if_none_match_header_matches, if_none_match_headers_match, parse_http_date,
-        try_format_entity_tag, try_format_http_date, validate_http_date,
+        http_date_epoch_seconds, if_match_header_matches, if_match_headers_have_strong_tag,
+        if_match_headers_match, if_none_match_header_matches, if_none_match_headers_match,
+        parse_http_date, try_format_entity_tag, try_format_http_date, validate_http_date,
     };
     use http::header::{IF_MATCH, IF_NONE_MATCH};
     use http::{HeaderMap, HeaderValue};
@@ -314,6 +338,32 @@ mod tests {
         assert_eq!(
             if_match_header_matches(r#""etag-1""#, true, Some(r#"W/"etag-1""#)),
             Ok(false)
+        );
+    }
+
+    #[test]
+    fn strong_if_match_detection_distinguishes_tags_wildcard_and_absence() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(if_match_headers_have_strong_tag(&headers), Ok(None));
+
+        for (raw, expected) in [
+            ("*", false),
+            (" , ", false),
+            ("W/\"weak\"", false),
+            ("W/\"weak\", \"strong\"", true),
+            ("\"strong\"", true),
+        ] {
+            headers.insert(IF_MATCH, HeaderValue::from_str(raw).expect("If-Match"));
+            assert_eq!(
+                if_match_headers_have_strong_tag(&headers),
+                Ok(Some(expected))
+            );
+        }
+
+        headers.insert(IF_MATCH, HeaderValue::from_static("bare-etag"));
+        assert_eq!(
+            if_match_headers_have_strong_tag(&headers),
+            Err(HttpValidatorError::InvalidEtagList)
         );
     }
 

@@ -3,9 +3,10 @@ use std::time::{Duration, UNIX_EPOCH};
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityDeclaration,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalPlanError, DavDownloadBody,
-    DavDownloadPlanError, DavLockingCapability, DavMethod, DavMethodSet, DavRequestHead,
-    DavRequestOrigin, DavResourceState, DavResponseBody, DavVersioningCapability, DavXmlError,
-    backend_error_response, body_error_response, conditional_plan_error_response,
+    DavDownloadPlanError, DavLockingCapability, DavMethod, DavMethodSet, DavPatchBodyPolicy,
+    DavPatchCapability, DavPatchFormat, DavRequestHead, DavRequestOrigin, DavResourceState,
+    DavResponseBody, DavVersioningCapability, DavWriteCapabilities, DavWritePrecondition,
+    DavXmlError, backend_error_response, body_error_response, conditional_plan_error_response,
     method_not_allowed_response, options_response, plan_capabilities, plan_download_response,
     propfind_xml_error_response, protocol_error_response, range_not_satisfiable_response,
 };
@@ -21,6 +22,11 @@ fn representation_time() -> std::time::SystemTime {
 }
 
 fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
+    static PATCH_FORMATS: [DavPatchFormat; 1] = [DavPatchFormat {
+        media_type: "application/merge-patch+json",
+        body_policy: DavPatchBodyPolicy::Bounded { maximum: 4096 },
+        precondition: DavWritePrecondition::RequireStrongIfMatch,
+    }];
     plan_capabilities(DavCapabilityDeclaration {
         resource: DavResourceState::File,
         methods: DavMethodSet::from_methods(&DavMethod::ALL),
@@ -28,6 +34,10 @@ fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
         versioning: DavVersioningCapability::Core,
         compatibility: DavCompatibilityCapabilities {
             ms_author_via: true,
+        },
+        writes: DavWriteCapabilities {
+            patch: DavPatchCapability::Formats(&PATCH_FORMATS),
+            ..DavWriteCapabilities::default()
         },
         compliance: DavComplianceClasses { class1: true },
     })
@@ -41,10 +51,14 @@ fn options_and_method_not_allowed_share_the_canonical_method_set() {
     assert_eq!(options.status, StatusCode::OK);
     assert_eq!(
         options.headers.get(ALLOW).unwrap(),
-        "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, PROPPATCH, LOCK, UNLOCK, REPORT, VERSION-CONTROL"
+        "OPTIONS, GET, HEAD, PUT, PATCH, DELETE, MKCOL, COPY, MOVE, PROPFIND, PROPPATCH, LOCK, UNLOCK, REPORT, VERSION-CONTROL"
     );
     assert_eq!(options.headers.get("DAV").unwrap(), "1, 2, version-control");
     assert_eq!(options.headers.get("MS-Author-Via").unwrap(), "DAV");
+    assert_eq!(
+        options.headers.get("Accept-Patch").unwrap(),
+        "application/merge-patch+json"
+    );
 
     let rejected = method_not_allowed_response(&snapshot);
     assert_eq!(rejected.status, StatusCode::METHOD_NOT_ALLOWED);

@@ -26,6 +26,7 @@ pub mod conditional;
 pub mod deltav;
 pub mod event;
 pub mod lock;
+pub mod patch;
 pub mod path;
 pub mod property;
 pub mod protocol;
@@ -48,8 +49,11 @@ pub use capability::{
     DavCapabilityTarget, DavClass1Profile, DavClass1Support, DavClass1VersioningProfile,
     DavClass2Profile, DavClass2Support, DavClass2VersioningProfile, DavCompatibilityCapabilities,
     DavComplianceClasses, DavCoreVersioningSupport, DavLockingCapability, DavMethodGateError,
-    DavMethodSet, DavNonDavProfile, DavResourceState, DavVersioningCapability, plan_capabilities,
-    plan_capabilities_with_provider,
+    DavMethodSet, DavNonDavProfile, DavPartialPutCapability, DavPartialPutSupport,
+    DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat, DavPatchSupport,
+    DavPrivateUpdateRangeCapability, DavPrivateUpdateRangeSupport, DavResourceState,
+    DavVersioningCapability, DavWithPartialPut, DavWithPatch, DavWithPrivateUpdateRange,
+    DavWriteCapabilities, DavWritePrecondition, plan_capabilities, plan_capabilities_with_provider,
 };
 pub use conditional::{
     DavConditionalEvaluationError, DavConditionalOutcome, DavConditionalPlan,
@@ -69,6 +73,7 @@ pub use lock::{
     lock_xml_error_response, plan_lock_request, unlock_success_response,
     unlock_token_mismatch_response, unsubmitted_lock_conflicts,
 };
+pub use patch::{DavPatchPlan, DavPatchPlanError, patch_plan_error_response, plan_patch_request};
 pub use path::{
     DavPath, DavPathError, child_relative_path, decode_relative_path, display_name, encode_href,
     href_for_dav_path, href_for_relative, parent_relative_path,
@@ -86,8 +91,8 @@ pub use protocol::{
     parse_overwrite, parse_propfind_depth, submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
 pub use put::{
-    DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError, plan_put_request,
-    put_plan_error_response, put_success_response,
+    DavPartialPutPlan, DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError,
+    DavPutWritePlan, plan_put_request, put_plan_error_response, put_success_response,
 };
 pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin, DavRequestTarget};
 pub use resource::{

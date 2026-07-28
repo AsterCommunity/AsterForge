@@ -20,6 +20,7 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["clock"] }
 futures.workspace = true
+headers.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
 thiserror.workspace = true
