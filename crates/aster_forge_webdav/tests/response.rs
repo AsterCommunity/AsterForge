@@ -1,14 +1,17 @@
-use std::time::{Duration, UNIX_EPOCH};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityDeclaration,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalPlanError, DavDownloadBody,
-    DavDownloadPlanError, DavLockingCapability, DavMethod, DavMethodSet, DavPatchBodyPolicy,
-    DavPatchCapability, DavPatchFormat, DavRequestHead, DavRequestOrigin, DavResourceState,
-    DavResponseBody, DavVersioningCapability, DavWriteCapabilities, DavWritePrecondition,
-    DavXmlError, backend_error_response, body_error_response, conditional_plan_error_response,
-    method_not_allowed_response, options_response, plan_capabilities, plan_download_response,
-    propfind_xml_error_response, protocol_error_response, range_not_satisfiable_response,
+    DavDownloadOpenError, DavDownloadPlanError, DavDownloadSource, DavLockingCapability,
+    DavMetaData, DavMethod, DavMethodSet, DavOpenedDownload, DavPatchBodyPolicy,
+    DavPatchCapability, DavPatchFormat, DavPath, DavRequestHead, DavRequestOrigin,
+    DavResourceState, DavResponseBody, DavVersioningCapability, DavWriteCapabilities,
+    DavWritePrecondition, DavXmlError, backend_error_response, body_error_response,
+    conditional_plan_error_response, method_not_allowed_response, open_download, options_response,
+    plan_capabilities, plan_download_response, propfind_xml_error_response,
+    protocol_error_response, range_not_satisfiable_response,
 };
 use http::StatusCode;
 use http::header::{
@@ -19,6 +22,71 @@ use http::{HeaderMap, HeaderValue, Uri};
 
 fn representation_time() -> std::time::SystemTime {
     UNIX_EPOCH + Duration::from_secs(784_111_777)
+}
+
+fn full_download_body(expected_length: u64) -> DavDownloadBody {
+    DavDownloadBody::Full { expected_length }
+}
+
+struct TestDownloadSource {
+    full: Result<u64, DavBackendErrorKind>,
+    range: Result<u64, DavBackendErrorKind>,
+    calls: AtomicUsize,
+}
+
+struct TestDownloadMetadata;
+
+impl DavMetaData for TestDownloadMetadata {
+    fn len(&self) -> u64 {
+        0
+    }
+
+    fn modified(&self) -> Result<SystemTime, aster_forge_webdav::FsError> {
+        Ok(UNIX_EPOCH)
+    }
+
+    fn is_dir(&self) -> bool {
+        false
+    }
+
+    fn etag(&self) -> Option<String> {
+        None
+    }
+
+    fn created(&self) -> Result<SystemTime, aster_forge_webdav::FsError> {
+        Ok(UNIX_EPOCH)
+    }
+}
+
+impl TestDownloadSource {
+    fn opened(length: u64) -> DavOpenedDownload {
+        DavOpenedDownload::new(Box::pin(futures::stream::empty()), length)
+    }
+}
+
+impl DavDownloadSource for TestDownloadSource {
+    type Metadata = TestDownloadMetadata;
+
+    async fn metadata<'a>(&'a self, _path: &'a DavPath) -> Result<Self::Metadata, DavBackendError> {
+        Err(DavBackendError::new(DavBackendErrorKind::Internal))
+    }
+
+    async fn open_full<'a>(
+        &'a self,
+        _path: &'a DavPath,
+    ) -> Result<DavOpenedDownload, DavBackendError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.full.map(Self::opened).map_err(DavBackendError::new)
+    }
+
+    async fn open_range<'a>(
+        &'a self,
+        _path: &'a DavPath,
+        _range: aster_forge_utils::http_range::HttpByteRange,
+    ) -> Result<DavOpenedDownload, DavBackendError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.range.map(Self::opened).map_err(DavBackendError::new)
+    }
 }
 
 fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
@@ -121,7 +189,7 @@ fn full_get_plan_contains_complete_response_and_storage_contract() {
     .expect("full GET should plan");
 
     assert_eq!(plan.response.status, StatusCode::OK);
-    assert_eq!(plan.body, DavDownloadBody::Full);
+    assert_eq!(plan.body, full_download_body(20));
     assert_eq!(plan.response.headers.get(CONTENT_LENGTH).unwrap(), "20");
     assert_eq!(
         plan.response.headers.get(CONTENT_TYPE).unwrap(),
@@ -273,7 +341,7 @@ fn unsupported_and_multiple_ranges_fall_back_to_the_complete_representation() {
         .expect("unsupported range form should be ignored");
 
         assert_eq!(plan.response.status, StatusCode::OK);
-        assert_eq!(plan.body, DavDownloadBody::Full);
+        assert_eq!(plan.body, full_download_body(20));
         assert_eq!(plan.response.headers.get(CONTENT_LENGTH).unwrap(), "20");
         assert!(plan.response.headers.get(CONTENT_RANGE).is_none());
     }
@@ -289,9 +357,9 @@ fn if_range_requires_a_matching_strong_validator() {
                 aster_forge_utils::http_range::HttpByteRange::new(0, 1, 20).unwrap(),
             ),
         ),
-        ("\"other\"", StatusCode::OK, DavDownloadBody::Full),
-        ("W/\"etag-1\"", StatusCode::OK, DavDownloadBody::Full),
-        ("not-a-validator", StatusCode::OK, DavDownloadBody::Full),
+        ("\"other\"", StatusCode::OK, full_download_body(20)),
+        ("W/\"etag-1\"", StatusCode::OK, full_download_body(20)),
+        ("not-a-validator", StatusCode::OK, full_download_body(20)),
         (
             "Sun, 06 Nov 1994 08:49:37 GMT",
             StatusCode::PARTIAL_CONTENT,
@@ -302,7 +370,7 @@ fn if_range_requires_a_matching_strong_validator() {
         (
             "Sun, 06 Nov 1994 08:49:36 GMT",
             StatusCode::OK,
-            DavDownloadBody::Full,
+            full_download_body(20),
         ),
     ] {
         let mut headers = HeaderMap::new();
@@ -459,7 +527,7 @@ fn non_utf8_range_fields_and_strong_if_range_boundaries_are_explicit() {
     )
     .expect("opaque If-Range is ignored");
     assert_eq!(plan.response.status, StatusCode::OK);
-    assert_eq!(plan.body, DavDownloadBody::Full);
+    assert_eq!(plan.body, full_download_body(20));
 
     for (current, candidate) in [
         (Some("etag-1"), "\"a\"b\""),
@@ -482,7 +550,7 @@ fn non_utf8_range_fields_and_strong_if_range_boundaries_are_explicit() {
         )
         .expect("non-matching strong If-Range falls back to full response");
         assert_eq!(plan.response.status, StatusCode::OK, "{candidate}");
-        assert_eq!(plan.body, DavDownloadBody::Full, "{candidate}");
+        assert_eq!(plan.body, full_download_body(20), "{candidate}");
     }
 }
 
@@ -550,4 +618,87 @@ fn protocol_and_backend_failures_are_mapped_by_forge() {
         assert_eq!(response.status, expected);
         assert_eq!(response.headers.get(CACHE_CONTROL).unwrap(), "no-store");
     }
+}
+
+#[test]
+fn planned_download_opens_full_and_range_sources_with_exact_lengths() {
+    futures::executor::block_on(async {
+        let path = DavPath::new("/video.mp4").expect("path");
+        let source = TestDownloadSource {
+            full: Ok(20),
+            range: Ok(15),
+            calls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            source.metadata(&path).await,
+            Err(DavBackendError {
+                kind: DavBackendErrorKind::Internal,
+            })
+        ));
+        let full = open_download(&source, &path, full_download_body(20))
+            .await
+            .expect("full source should open")
+            .expect("full response has a body");
+        assert_eq!(full.expected_length, 20);
+
+        let range = aster_forge_utils::http_range::HttpByteRange::new(5, 19, 20).expect("range");
+        let ranged = open_download(&source, &path, DavDownloadBody::Range(range))
+            .await
+            .expect("range source should open")
+            .expect("range response has a body");
+        assert_eq!(ranged.expected_length, 15);
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn planned_download_rejects_backend_failures_and_length_drift_without_opening_empty_body() {
+    futures::executor::block_on(async {
+        let path = DavPath::new("/video.mp4").expect("path");
+        let backend = TestDownloadSource {
+            full: Err(DavBackendErrorKind::Forbidden),
+            range: Ok(15),
+            calls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            open_download(&backend, &path, full_download_body(20)).await,
+            Err(DavDownloadOpenError::Backend(DavBackendError {
+                kind: DavBackendErrorKind::Forbidden,
+            }))
+        ));
+
+        let mismatch = TestDownloadSource {
+            full: Ok(19),
+            range: Ok(14),
+            calls: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            open_download(&mismatch, &path, full_download_body(20)).await,
+            Err(DavDownloadOpenError::LengthMismatch {
+                planned: 20,
+                opened: 19,
+            })
+        ));
+        let range = aster_forge_utils::http_range::HttpByteRange::new(5, 19, 20).expect("range");
+        assert!(matches!(
+            open_download(&mismatch, &path, DavDownloadBody::Range(range)).await,
+            Err(DavDownloadOpenError::LengthMismatch {
+                planned: 15,
+                opened: 14,
+            })
+        ));
+
+        let empty = TestDownloadSource {
+            full: Err(DavBackendErrorKind::Internal),
+            range: Err(DavBackendErrorKind::Internal),
+            calls: AtomicUsize::new(0),
+        };
+        assert!(
+            open_download(&empty, &path, DavDownloadBody::Empty)
+                .await
+                .expect("empty response should not open a source")
+                .is_none()
+        );
+        assert_eq!(empty.calls.load(Ordering::SeqCst), 0);
+    });
 }

@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::io::SeekFrom;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
+use aster_forge_utils::http_range::HttpByteRange;
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::Stream;
 use http::StatusCode;
 
@@ -16,6 +16,31 @@ use crate::{DavPath, DavXmlElement};
 /// Stream used for product-independent WebDAV content transfer.
 pub type DavContentStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, DavBackendError>> + Send + 'static>>;
+
+/// Opened representation stream and the exact number of bytes it is expected to yield.
+pub struct DavOpenedDownload {
+    pub stream: DavContentStream,
+    pub expected_length: u64,
+}
+
+impl DavOpenedDownload {
+    #[must_use]
+    pub const fn new(stream: DavContentStream, expected_length: u64) -> Self {
+        Self {
+            stream,
+            expected_length,
+        }
+    }
+}
+
+/// Failure while opening a planned representation stream.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DavDownloadOpenError {
+    #[error(transparent)]
+    Backend(#[from] DavBackendError),
+    #[error("download source length does not match the protocol plan")]
+    LengthMismatch { planned: u64, opened: u64 },
+}
 
 /// Stable backend failure categories mapped by the protocol layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,35 +136,14 @@ pub enum ReadDirMeta {
     Data,
 }
 
-/// File open contract selected by the protocol planner.
+/// Sequential write contract selected by the protocol planner.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OpenOptions {
-    pub read: bool,
-    pub write: bool,
-    pub append: bool,
+pub struct DavWriteOptions {
     pub truncate: bool,
     pub create: bool,
     pub create_new: bool,
-    pub size: Option<u64>,
+    pub expected_length: Option<u64>,
     pub checksum: Option<String>,
-}
-
-impl OpenOptions {
-    #[must_use]
-    pub fn read() -> Self {
-        Self {
-            read: true,
-            ..Self::default()
-        }
-    }
-
-    #[must_use]
-    pub fn write() -> Self {
-        Self {
-            write: true,
-            ..Self::default()
-        }
-    }
 }
 
 /// Protocol-visible resource metadata supplied by the product adapter.
@@ -166,14 +170,66 @@ pub trait DavDirEntry: Send {
     fn metadata<'a>(&'a self) -> FsFuture<'a, Box<dyn DavMetaData>>;
 }
 
-/// Open file handle supplied by a product adapter.
-pub trait DavFile: Send {
-    fn metadata<'a>(&'a mut self) -> FsFuture<'a, Box<dyn DavMetaData>>;
-    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, Bytes>;
-    fn write_bytes(&mut self, buf: Bytes) -> FsFuture<'_, ()>;
-    fn write_buf(&mut self, buf: Box<dyn Buf + Send>) -> FsFuture<'_, ()>;
-    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64>;
-    fn flush(&mut self) -> FsFuture<'_, ()>;
+/// Product adapter used by GET/HEAD after the protocol layer selects a representation.
+pub trait DavDownloadSource: Send + Sync {
+    type Metadata: DavMetaData;
+
+    fn metadata<'a>(
+        &'a self,
+        path: &'a DavPath,
+    ) -> impl Future<Output = Result<Self::Metadata, DavBackendError>> + Send + 'a;
+    fn open_full<'a>(
+        &'a self,
+        path: &'a DavPath,
+    ) -> impl Future<Output = Result<DavOpenedDownload, DavBackendError>> + Send + 'a;
+    fn open_range<'a>(
+        &'a self,
+        path: &'a DavPath,
+        range: HttpByteRange,
+    ) -> impl Future<Output = Result<DavOpenedDownload, DavBackendError>> + Send + 'a;
+}
+
+/// Sequential write handle. A successful `finish` is the product adapter's commit boundary.
+pub trait DavWriteHandle: Send {
+    fn write_bytes(
+        &mut self,
+        buf: Bytes,
+    ) -> impl Future<Output = Result<(), DavBackendError>> + Send + '_;
+    fn finish(self) -> impl Future<Output = Result<(), DavBackendError>> + Send;
+    fn abort(self) -> impl Future<Output = Result<(), DavBackendError>> + Send;
+}
+
+/// Product adapter used for complete, sequential representation writes.
+pub trait DavWriteSystem: Send + Sync {
+    type Handle: DavWriteHandle;
+
+    fn open_write<'a>(
+        &'a self,
+        path: &'a DavPath,
+        options: DavWriteOptions,
+    ) -> impl Future<Output = Result<Self::Handle, DavBackendError>> + Send + 'a;
+}
+
+/// Explicit random-write handle used only by negotiated partial-write capabilities.
+pub trait DavRandomWriteHandle: Send {
+    fn write_at(
+        &mut self,
+        offset: u64,
+        buf: Bytes,
+    ) -> impl Future<Output = Result<(), DavBackendError>> + Send + '_;
+    fn finish(self) -> impl Future<Output = Result<(), DavBackendError>> + Send;
+    fn abort(self) -> impl Future<Output = Result<(), DavBackendError>> + Send;
+}
+
+/// Optional product adapter for random writes. Ordinary writers do not implement this port.
+pub trait DavRandomWriteSystem: Send + Sync {
+    type Handle: DavRandomWriteHandle;
+
+    fn open_random_write<'a>(
+        &'a self,
+        path: &'a DavPath,
+        options: DavWriteOptions,
+    ) -> impl Future<Output = Result<Self::Handle, DavBackendError>> + Send + 'a;
 }
 
 /// Stored dead property exchanged with the product adapter.
@@ -187,11 +243,6 @@ pub struct DavProp {
 
 /// Canonical resource and dead-property backend port.
 pub trait DavFileSystem: Send + Sync {
-    fn open<'a>(
-        &'a self,
-        path: &'a DavPath,
-        options: OpenOptions,
-    ) -> FsFuture<'a, Box<dyn DavFile>>;
     fn read_dir<'a>(
         &'a self,
         path: &'a DavPath,

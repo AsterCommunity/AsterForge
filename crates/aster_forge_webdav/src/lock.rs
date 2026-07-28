@@ -8,11 +8,11 @@ use http::{HeaderMap, HeaderValue, StatusCode};
 use crate::DavLockSystem;
 use crate::response::{no_store_empty_response, xml_request_error_response};
 use crate::{
-    DavErrorCondition, DavFileSystem, DavLock, DavLockXml, DavPath, DavProtocolError,
-    DavRequestHead, DavResponse, DavXmlElement, DavXmlError, FsError, IfHeader, OpenOptions,
-    dav_error_element, dav_lock_discovery_element, dav_lock_response_element, href_for_dav_path,
-    parent_relative_path, parse_lock_request, parse_lock_timeout, protocol_error_response,
-    submitted_lock_tokens,
+    DavBackendError, DavErrorCondition, DavFileSystem, DavLock, DavLockXml, DavPath,
+    DavProtocolError, DavRequestHead, DavResponse, DavWriteHandle, DavWriteOptions, DavWriteSystem,
+    DavXmlElement, DavXmlError, FsError, IfHeader, dav_error_element, dav_lock_discovery_element,
+    dav_lock_response_element, href_for_dav_path, parent_relative_path, parse_lock_request,
+    parse_lock_timeout, protocol_error_response, submitted_lock_tokens,
 };
 
 /// Backend operation selected from a LOCK request.
@@ -120,30 +120,30 @@ pub async fn enforce_parent_unlocked(
 ///
 /// Existing resources are left untouched. A missing collection target remains missing because
 /// creating its hierarchy is outside LOCK semantics.
-pub async fn ensure_lock_target_exists(
+pub async fn ensure_lock_target_exists<WriteSystem: DavWriteSystem>(
     filesystem: &dyn DavFileSystem,
+    write_system: &WriteSystem,
     path: &DavPath,
-) -> Result<bool, FsError> {
+) -> Result<bool, DavBackendError> {
     match filesystem.metadata(path).await {
         Ok(_) => Ok(true),
         Err(FsError::NotFound) if !path.is_collection() => {
-            let mut file = filesystem
-                .open(
+            let file = write_system
+                .open_write(
                     path,
-                    OpenOptions {
-                        write: true,
+                    DavWriteOptions {
                         create: true,
                         truncate: true,
-                        size: Some(0),
-                        ..OpenOptions::default()
+                        expected_length: Some(0),
+                        ..DavWriteOptions::default()
                     },
                 )
                 .await?;
-            file.flush().await?;
+            file.finish().await?;
             Ok(false)
         }
-        Err(FsError::NotFound) => Err(FsError::NotFound),
-        Err(error) => Err(error),
+        Err(FsError::NotFound) => Err(FsError::NotFound.into()),
+        Err(error) => Err(error.into()),
     }
 }
 

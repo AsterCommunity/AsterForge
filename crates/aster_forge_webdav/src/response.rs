@@ -14,9 +14,9 @@ use http::{HeaderMap, HeaderValue, StatusCode};
 use crate::{
     DavBackendError, DavBackendErrorKind, DavCapabilityEvaluationError, DavCapabilitySnapshot,
     DavConditionalOutcome, DavConditionalPlan, DavConditionalPlanError, DavConditionalResource,
-    DavContentStream, DavErrorCondition, DavMethod, DavMethodGateError, DavProtocolError,
-    DavProtocolErrorKind, DavRangeEvaluation, DavXmlElement, DavXmlError, dav_error_element,
-    plan_http_conditionals,
+    DavContentStream, DavDownloadOpenError, DavDownloadSource, DavErrorCondition, DavMethod,
+    DavMethodGateError, DavOpenedDownload, DavPath, DavProtocolError, DavProtocolErrorKind,
+    DavRangeEvaluation, DavXmlElement, DavXmlError, dav_error_element, plan_http_conditionals,
 };
 
 /// Failure while enforcing a request body policy in the transport adapter.
@@ -35,8 +35,8 @@ pub enum DavBodyError {
 pub enum DavDownloadBody {
     /// The response has no body because it is a HEAD, 304, or 416 response.
     Empty,
-    /// Stream the complete representation.
-    Full,
+    /// Stream the complete representation with its planned output length.
+    Full { expected_length: u64 },
     /// Stream only the selected representation range.
     Range(HttpByteRange),
 }
@@ -356,7 +356,13 @@ pub fn plan_download_response(
             DavDownloadBody::Range(range),
         ),
         None if head_only => (StatusCode::OK, content_length, DavDownloadBody::Empty),
-        None => (StatusCode::OK, content_length, DavDownloadBody::Full),
+        None => (
+            StatusCode::OK,
+            content_length,
+            DavDownloadBody::Full {
+                expected_length: content_length,
+            },
+        ),
     };
     let mut response = DavResponse::empty(status);
     response
@@ -379,6 +385,30 @@ pub fn plan_download_response(
     conditional.apply_response_headers(response.status, &mut response.headers);
 
     Ok(DavDownloadPlan { response, body })
+}
+
+/// Opens the storage stream selected by a download plan and verifies its declared length.
+///
+/// Full and range plans carry their exact selected length. Empty plans never call the backend.
+pub async fn open_download<Source: DavDownloadSource>(
+    source: &Source,
+    path: &DavPath,
+    body: DavDownloadBody,
+) -> Result<Option<DavOpenedDownload>, DavDownloadOpenError> {
+    let (opened, planned_length) = match body {
+        DavDownloadBody::Empty => return Ok(None),
+        DavDownloadBody::Full { expected_length } => {
+            (source.open_full(path).await?, expected_length)
+        }
+        DavDownloadBody::Range(range) => (source.open_range(path, range).await?, range.length()),
+    };
+    if opened.expected_length != planned_length {
+        return Err(DavDownloadOpenError::LengthMismatch {
+            planned: planned_length,
+            opened: opened.expected_length,
+        });
+    }
+    Ok(Some(opened))
 }
 
 fn if_range_matches(headers: &HeaderMap, etag: Option<&str>, last_modified: SystemTime) -> bool {

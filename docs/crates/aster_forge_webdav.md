@@ -92,6 +92,40 @@ let prepared = aster_forge_webdav::actix::prepare_request_body(
 
 以上能力只定义协议和 transport contract。产品 adapter 负责 partial write 的 staging、PATCH 的完整原子应用、provider session、quota、checksum、dedup/refcount、失败清理、audit 和最终 commit。依据 [RFC 9110 Section 14.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.5)，partial PUT 只在产品确认的 client private agreement 下启用；PATCH 行为与 `Accept-Patch` 以 [RFC 5789](https://www.rfc-editor.org/rfc/rfc5789.html) 为准。
 
+## 下载与写入 ports
+
+读取、顺序写和随机写是三组独立能力：
+
+- `DavDownloadSource` 提供下载 metadata、`open_full` 和 `open_range`。每次打开返回 `DavOpenedDownload`，同时携带 stream 与精确 `expected_length`。
+- `DavWriteSystem` 打开 `DavWriteHandle`。普通 writer 只接收顺序 `Bytes` chunk，并通过 `finish` 提交或通过 `abort` 清理；它不包含 read、seek 或虚假的随机写能力。
+- `DavRandomWriteSystem` 是 partial-write adapter 才实现的独立 port。`DavRandomWriteHandle::write_at` 显式接收 offset，不把远端对象存储伪装成本地 seekable file。
+
+这三组新 port 使用 associated metadata/handle 和 `impl Future` 静态分发。Forge 不要求为 open、每个写入 chunk、finish 或 abort 分配 boxed future/handle；产品只有在自身需要运行时异构 backend 时才在自己的 adapter 边界做 type erasure。下载 body 最终保留一次现有 stream type erasure，用于把异构 storage stream 放入 transport-neutral response。
+
+GET/HEAD handler 先用 metadata 调用 `plan_download_response`，再把选出的 `DavDownloadBody` 交给 `open_download`。Forge 会选择 full/range open，并核对 backend 声明的长度与协议 plan；HEAD、304、412 和 416 的 empty body 不会打开 storage stream。
+
+```rust
+let plan = aster_forge_webdav::plan_download_response(
+    &headers,
+    false,
+    metadata.len(),
+    content_type,
+    metadata.etag().as_deref(),
+    metadata.modified()?,
+)?;
+
+let opened = aster_forge_webdav::open_download(
+    &downloads,
+    &path,
+    plan.body,
+)
+.await?;
+```
+
+PUT 的 `DavPutWritePlan::Replace` 使用 `DavWriteSystem`；`Partial` 只在声明能力后使用 `DavRandomWriteSystem` 或产品自己的原子 staging/session adapter。LOCK 创建空 lock-null resource 时，`ensure_lock_target_exists` 同时接收资源 backend 和顺序 write backend，并以 `finish` 作为创建提交点。
+
+这一版直接移除了混合 `DavFile` 与 `OpenOptions`。下游迁移时把原 `open` 拆为 download、sequential write 和可选 random write impl；不保留只返回 unsupported/forbidden 的旧 read/seek facade。
+
 ## 协议所有权
 
 Forge 负责：
@@ -99,7 +133,7 @@ Forge 负责：
 - `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝。
 - WebDAV 方法、`Depth`、`Overwrite`、`Destination`、`If`、`Timeout` 和 `Lock-Token` header 解析。
 - `If` tagged-resource 归一化、AND/OR/Not 状态机，以及只暴露 ETag/lock token 的 resolver port。
-- 通过 `DavFileSystem` / `DavLockSystem` 统一执行 `If`、资源锁、父级锁、父集合存在性与 LOCK lock-null 文件前置条件；产品不再复制 resolver/guard。
+- 通过 `DavFileSystem` / `DavWriteSystem` / `DavLockSystem` 统一执行 `If`、资源锁、父级锁、父集合存在性与 LOCK lock-null 文件前置条件；产品不再复制 resolver/guard。
 - LOCK acquire/refresh 选择、timeout/token/body 校验与成功响应 composition。
 - COPY/MOVE/DELETE 的资源路径关系、typed partial failure、207 与 201/204 响应选择。
 - 每个标准 DAV 方法的 empty/bounded XML/stream/unused body policy、PATCH format 专属 bounded/stream policy，以及 Actix bounded-body adapter。
@@ -115,7 +149,7 @@ Forge 负责：
 - GET/HEAD 的 200/206/304/416 response planning、单段 byte range 选择与读取区间。
 - PUT 的 `If-Match` / `If-None-Match` 前置条件、`create` / `create_new` 选择、`X-Expected-Entity-Length` 优先级、collection target 405 拒绝和 201/204 成功响应选择。
 - `DavRequestHead`、`DavResponse`、`DavEvent` 等协议模型。
-- `DavEvent::completed` 从 request head 生成脱敏完成事件，不携带 `If` token、凭据或正文。
+- `DavEvent::completed` 从 request head 生成脱敏完成事件；`DavOperationObservations` 只携带可选 bytes、range/resource/backend count、failure class 和 stream outcome，不携带 `If` token、凭据、object key 或正文。
 - PROPFIND、PROPPATCH、LOCK、REPORT、VERSION-CONTROL 的 XML 安全校验、QName 语法和未知扩展处理。
 - PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
 - PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
@@ -123,8 +157,7 @@ Forge 负责：
 - 已知 request grammar 直接遍历 `aster_forge_xml` 的 source-backed arena，不先重复 validation，也不复制整棵通用 DOM；只有需要持久化或回显的 owner/property 子树才物化为 `DavXmlElement`。
 - `DavXmlElement` 只承担 DAV 持久化子树与 response composition；通用解析、安全限制、namespace 和 reader/writer 由 `aster_forge_xml` 承担。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
-- 唯一 backend contract：`DavFileSystem`、`DavMetaData`、`DavFile`、`DavDirEntry`、
-  `DavLockSystem`、`FsError` 和 `OpenOptions`；产品只实现这些 Forge port，不再复制协议 trait。
+- 产品中立 backend contracts：`DavFileSystem` / `DavMetaData` / `DavDirEntry` 负责资源机械层，`DavDownloadSource` 负责 full/range stream，`DavWriteSystem` 负责顺序提交，`DavRandomWriteSystem` 只负责显式随机写，`DavLockSystem` 负责锁持久化与冲突查询。
 - 批量 dead-property 读取只向 backend 传递 `DavPath`；产品 adapter 自行解析数据库身份并执行批量查询。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。Actix 仍使用 `http 0.2` 而 Forge 公共模型使用 `http 1.x`，URI/header 跨版本转换保持显式边界。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
@@ -190,7 +223,11 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 
 产品应把已认证、已限定 workspace 的 adapter 交给协议层。backend 调用必须同步完成影响协议正确性的操作；quota、blob 引用、lock 持久化和必要的缓存失效不能依赖事件补写。
 
-`DavEventSink` 只观察已经完成的协议操作，适合 tracing、metrics、审计适配和通知。事件使用 transport-neutral `u16` 状态码，不包含请求正文、凭据或 lock token。
+`DavEventSink` 只观察已经完成的协议操作，适合 tracing、metrics、审计适配和通知。事件使用 transport-neutral `u16` 状态码，不包含请求正文、凭据、lock token 或 object key。
+
+`DavOperationObservations` 中的 `None` 表示未采集，`Some(0)` 表示已采集且计数为零。`DavStreamOutcome` 区分 completed、cancelled、response start 前失败和 response start 后部分传输失败；默认接口不会为每个 chunk 发布事件。
+
+sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_non_authoritative`。observer 缺失或失败都会被吞掉，不能改变协议响应、quota、transaction、blob refcount、lock persistence、必要 audit 或缓存正确性。
 
 ## 错误边界
 
@@ -201,7 +238,7 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 ## 测试要求
 
 - 协议 crate 测试路径逃逸、header grammar、同源 `Destination`、条件请求和 request-head 解析。
-- fake backend 矩阵覆盖 ETag + lock token 联合解析、tagged lock root、父级锁、父集合、lock-null 文件创建，以及 metadata/open/flush 错误传播。
+- fake backend 矩阵覆盖 ETag + lock token 联合解析、tagged lock root、父级锁、父集合、lock-null 文件创建，以及 metadata/open/finish 错误传播。
 - XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、reader I/O、输入大小与深度精确临界、非法 UTF-8、转义和大属性值。
 - XML response 矩阵覆盖状态行、元素顺序、QName、namespace shadowing/undeclaration、锁字段、死属性重建、异常旧值转义，以及非法 writer model 与深度临界。
 - 产品仓库保留真实认证、数据库、存储、quota、audit、能力 provider 和客户端集成测试。
@@ -211,6 +248,8 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 - 写入能力测试必须覆盖 partial PUT 默认拒绝、Content-Range 全部边界、强 If-Match、
   PATCH media-type 与 body policy dispatch、Accept-Patch、私有 header 冲突及实际 stream
   长度由产品提交边界核验。
+- backend port 测试必须覆盖 full/range exact length、open failure、length drift、empty body 不打开 stream、顺序 finish/abort 和显式 random write。
+- observation 测试必须覆盖所有可选计数、未采集与零的区别、cancellation、response-started failure，以及 observer 缺失/失败不影响完成结果。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 
 ## 参考项目

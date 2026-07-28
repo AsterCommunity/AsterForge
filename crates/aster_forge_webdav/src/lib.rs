@@ -38,10 +38,11 @@ pub mod xml;
 pub mod xml_response;
 
 pub use backend::{
-    DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavFile, DavFileSystem,
-    DavIfResourceState, DavIfStateResolver, DavLock, DavLockError, DavLockPreflightError,
-    DavLockSystem, DavMetaData, DavProp, DavResourceKind, FsError, FsFuture, FsResult, FsStream,
-    LsFuture, OpenOptions, ReadDirMeta,
+    DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavDownloadOpenError,
+    DavDownloadSource, DavFileSystem, DavIfResourceState, DavIfStateResolver, DavLock,
+    DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavOpenedDownload, DavProp,
+    DavRandomWriteHandle, DavRandomWriteSystem, DavResourceKind, DavWriteHandle, DavWriteOptions,
+    DavWriteSystem, FsError, FsFuture, FsResult, FsStream, LsFuture, ReadDirMeta,
 };
 pub use capability::{
     DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityEvaluationError,
@@ -65,7 +66,11 @@ pub use deltav::{
     version_control_request_error_response, version_control_response,
     version_tree_non_file_response, version_tree_report_error_response, version_tree_response,
 };
-pub use event::{DavEvent, DavEventOutcome, DavEventSink, DavOperation, NoopDavEventSink};
+pub use event::{
+    DavEvent, DavEventOutcome, DavEventSink, DavObservationError, DavOperation,
+    DavOperationObservations, DavProtocolFailureClass, DavStreamOutcome, NoopDavEventSink,
+    publish_non_authoritative,
+};
 pub use lock::{
     DavLockPlan, DavLockPlanError, enforce_parent_unlocked, enforce_unlocked,
     ensure_lock_target_exists, lock_acquire_success_response, lock_conflict_response,
@@ -107,8 +112,8 @@ pub use response::{
     DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavResponse,
     DavResponseBody, backend_error_response, body_error_response,
     capability_evaluation_error_response, conditional_plan_error_response, gate_method,
-    method_not_allowed_response, options_response, plan_download_response, protocol_error_response,
-    range_not_satisfiable_response,
+    method_not_allowed_response, open_download, options_response, plan_download_response,
+    protocol_error_response, range_not_satisfiable_response,
 };
 pub use xml::{
     DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,
