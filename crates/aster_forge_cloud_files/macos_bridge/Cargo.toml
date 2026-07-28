@@ -21,3 +21,6 @@ thiserror.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+
+[lints]
+workspace = true

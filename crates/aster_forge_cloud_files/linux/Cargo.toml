@@ -27,3 +27,6 @@ tokio = { workspace = true, features = ["sync"] }
 [[example]]
 name = "linux_memory_cloud_drive"
 path = "examples/memory_cloud_drive.rs"
+
+[lints]
+workspace = true
