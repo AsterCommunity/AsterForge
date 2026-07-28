@@ -16,3 +16,6 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 aster_forge_test = { path = "../aster_forge_test" }
 serde_json.workspace = true
+
+[lints]
+workspace = true

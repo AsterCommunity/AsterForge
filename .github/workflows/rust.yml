@@ -9,6 +9,7 @@ on:
       - 'crates/aster_forge_xml/fuzz/Cargo.toml'
       - 'templates/aster-service/**'
       - 'scripts/coverage-summary.mjs'
+      - 'scripts/check-lint-attributes.pl'
       - '.github/workflows/rust.yml'
     branches: [master]
   pull_request:
@@ -19,6 +20,7 @@ on:
       - 'crates/aster_forge_xml/fuzz/Cargo.toml'
       - 'templates/aster-service/**'
       - 'scripts/coverage-summary.mjs'
+      - 'scripts/check-lint-attributes.pl'
       - '.github/workflows/rust.yml'
     branches: [master, develop]
 
@@ -61,6 +63,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Lint attribute policy
+        run: perl scripts/check-lint-attributes.pl
 
       - name: Prepare coverage output directory
         run: mkdir -p coverage/rust

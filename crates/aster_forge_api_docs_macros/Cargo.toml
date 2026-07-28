@@ -19,3 +19,6 @@ openapi = ["dep:utoipa"]
 proc-macro2.workspace = true
 quote.workspace = true
 utoipa = { workspace = true, optional = true }
+
+[lints]
+workspace = true

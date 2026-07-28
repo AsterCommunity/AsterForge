@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use aster_forge_utils::numbers::i64_to_u64;
 use aster_forge_xml::{BorrowedDocument, ValidatedXml, XmlSafetyPolicy, validate_xml_input};
 use support::{
-    memory_fixtures, validate_forge_stream, walk_forge_stream, walk_quick_xml_events,
+    cpu_fixtures, multistatus, validate_forge_stream, walk_forge_stream, walk_quick_xml_events,
     walk_quick_xml_ns_buffered, write_forge_multistatus, write_quick_xml_multistatus,
     write_xmltree_multistatus,
 };
@@ -23,6 +23,14 @@ static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 static TOTAL: AtomicUsize = AtomicUsize::new(0);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+fn memory_fixtures() -> Vec<(&'static str, Vec<u8>)> {
+    let mut fixtures = cpu_fixtures();
+    // This fixture remains below the default 10 MiB input, 100,000-element, one-million-event,
+    // and 64 MiB writer limits; it is retained here specifically for large-document memory data.
+    fixtures.push(("multistatus_10000", multistatus(10_000).into_bytes()));
+    fixtures
+}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;

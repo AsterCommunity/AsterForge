@@ -11,3 +11,6 @@ publish = false
 [dependencies]
 thiserror.workspace = true
 unicode-normalization = "0.1"
+
+[lints]
+workspace = true

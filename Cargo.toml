@@ -41,6 +41,11 @@ authors = [
     "AptS-1543 <apts-1543@esaps.net>",
 ]
 
+[workspace.lints.clippy]
+# Suppressions must remain observable: `expect` reports when its justification goes stale.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
 [workspace.dependencies]
 actix-web = "4.14.0"
 actix-governor = "0.10"

@@ -19,3 +19,6 @@ tokio = { workspace = true, features = ["sync"] }
 [[test]]
 name = "coordination_containers"
 path = "tests/coordination_containers.rs"
+
+[lints]
+workspace = true

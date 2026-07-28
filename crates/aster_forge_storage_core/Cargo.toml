@@ -11,3 +11,6 @@ publish = false
 [dependencies]
 http.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -23,15 +23,6 @@ pub(crate) fn cpu_fixtures() -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
-#[allow(dead_code)] // This shared module is also compiled into the CPU-only bench target.
-pub(crate) fn memory_fixtures() -> Vec<(&'static str, Vec<u8>)> {
-    let mut fixtures = cpu_fixtures();
-    // This fixture remains below the default 10 MiB input, 100,000-element, one-million-event,
-    // and 64 MiB writer limits; it is retained here specifically for large-document memory data.
-    fixtures.push(("multistatus_10000", multistatus(10_000).into_bytes()));
-    fixtures
-}
-
 pub(crate) fn wopi_discovery(actions: usize) -> String {
     let mut xml =
         String::from("<wopi-discovery><net-zone name=\"external-https\"><app name=\"Word\">");

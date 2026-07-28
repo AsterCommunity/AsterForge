@@ -171,7 +171,10 @@ pub type SharedDbMetricsRecorder = Arc<dyn DbMetricsRecorder>;
 ///
 /// Product crates should keep domain-specific metrics in extension traits or subsystem recorders.
 /// The methods here cover infrastructure signals that are shared by Aster services.
-#[allow(unused_variables)]
+#[expect(
+    unused_variables,
+    reason = "Default trait methods intentionally ignore metric inputs so products can implement only the signals they collect."
+)]
 pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
     /// Records an HTTP request.
     ///

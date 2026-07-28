@@ -23,3 +23,6 @@ futures.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

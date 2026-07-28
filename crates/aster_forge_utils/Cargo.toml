@@ -25,3 +25,6 @@ rand.workspace = true
 [dev-dependencies]
 percent-encoding.workspace = true
 tokio.workspace = true
+
+[lints]
+workspace = true

@@ -16,3 +16,6 @@ prometheus = ["aster_forge_metrics/backend-prometheus"]
 actix-web.workspace = true
 aster_forge_metrics = { path = "../aster_forge_metrics" }
 tracing.workspace = true
+
+[lints]
+workspace = true

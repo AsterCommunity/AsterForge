@@ -52,7 +52,23 @@ impl ExternalAuthProviderRegistry {
 
     /// Creates a registry populated with all feature-enabled built-in drivers.
     pub fn new() -> Self {
-        #[allow(unused_mut)]
+        #[cfg(not(any(
+            feature = "oidc",
+            feature = "oauth2",
+            feature = "github",
+            feature = "google",
+            feature = "microsoft",
+            feature = "qq"
+        )))]
+        let registry = Self::empty();
+        #[cfg(any(
+            feature = "oidc",
+            feature = "oauth2",
+            feature = "github",
+            feature = "google",
+            feature = "microsoft",
+            feature = "qq"
+        ))]
         let mut registry = Self::empty();
         #[cfg(feature = "oidc")]
         registry.register_builtin(OidcProviderDriver::new());
