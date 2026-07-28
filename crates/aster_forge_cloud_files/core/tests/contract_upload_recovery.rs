@@ -148,6 +148,7 @@ async fn create_dirty_entry(
     key: ContentCacheKey,
     snapshot: LocalContentSnapshot,
 ) {
+    store.activate_content_upload_generation(key.item_key().scope().clone(), generation(1));
     store
         .create_content_entry(ContentStorageEntry::new(
             key.clone(),
@@ -280,7 +281,7 @@ async fn upload_intent_requires_current_dirty_snapshot_and_holds_eviction_lease(
     create_dirty_entry(&store, key.clone(), source.clone()).await;
     let intent = upload_intent("upload-lease", key.clone(), source);
     store
-        .persist_content_upload_intent(intent)
+        .persist_content_upload_intent(intent, generation(1))
         .await
         .expect("upload intent should persist");
 
@@ -314,35 +315,43 @@ async fn resumable_checkpoint_is_monotonic_and_commit_requires_complete_snapshot
     let intent = upload_intent("checkpoint", key, source);
     let operation = intent.operation_id().clone();
     store
-        .persist_content_upload_intent(intent)
+        .persist_content_upload_intent(intent, generation(1))
         .await
         .expect("upload intent should persist");
     store
-        .record_content_upload_session(&operation, upload_session("session-1", 4))
+        .record_content_upload_session(&operation, upload_session("session-1", 4), generation(1))
         .await
         .expect("first checkpoint should persist");
     let error = store
-        .begin_content_upload_remote_commit(&operation)
+        .begin_content_upload_remote_commit(&operation, generation(1))
         .await
         .expect_err("partial upload must not start remote commit");
     assert_eq!(error.kind(), CloudFilesStoreErrorKind::InvalidTransition);
     assert_eq!(
         store
-            .record_content_upload_session(&operation, upload_session("session-1", 2))
+            .record_content_upload_session(
+                &operation,
+                upload_session("session-1", 2),
+                generation(1)
+            )
             .await
             .expect("stale checkpoint should be fenced"),
         StoreWriteStatus::Fenced
     );
     assert_eq!(
         store
-            .record_content_upload_session(&operation, upload_session("session-1", 8))
+            .record_content_upload_session(
+                &operation,
+                upload_session("session-1", 8),
+                generation(1)
+            )
             .await
             .expect("complete checkpoint should advance"),
         StoreWriteStatus::Applied
     );
     assert_eq!(
         store
-            .begin_content_upload_remote_commit(&operation)
+            .begin_content_upload_remote_commit(&operation, generation(1))
             .await
             .expect("complete upload may start remote commit"),
         StoreWriteStatus::Applied
@@ -359,21 +368,26 @@ async fn committed_upload_outcome_requires_current_item_metadata() {
     let intent = upload_intent("missing-item", key, source);
     let operation = intent.operation_id().clone();
     store
-        .persist_content_upload_intent(intent)
+        .persist_content_upload_intent(intent, generation(1))
         .await
         .expect("upload intent should persist");
     store
-        .record_content_upload_session(&operation, upload_session("missing-item-session", 8))
+        .record_content_upload_session(
+            &operation,
+            upload_session("missing-item-session", 8),
+            generation(1),
+        )
         .await
         .expect("complete checkpoint should persist");
     store
-        .begin_content_upload_remote_commit(&operation)
+        .begin_content_upload_remote_commit(&operation, generation(1))
         .await
         .expect("remote commit should begin");
     let error = store
         .record_content_upload_remote_outcome(
             &operation,
             MutationRemoteOutcome::Committed { item: None },
+            generation(1),
         )
         .await
         .expect_err("upload commit must return the current revision-bearing item");
@@ -390,21 +404,26 @@ async fn remote_commit_unknown_is_reconciled_without_reuploading_bytes() {
     let intent = upload_intent("unknown-upload", key.clone(), source);
     let operation = intent.operation_id().clone();
     store
-        .persist_content_upload_intent(intent)
+        .persist_content_upload_intent(intent, generation(1))
         .await
         .expect("upload intent should persist");
     store
-        .record_content_upload_session(&operation, upload_session("unknown-session", 8))
+        .record_content_upload_session(
+            &operation,
+            upload_session("unknown-session", 8),
+            generation(1),
+        )
         .await
         .expect("complete checkpoint should persist");
     store
-        .begin_content_upload_remote_commit(&operation)
+        .begin_content_upload_remote_commit(&operation, generation(1))
         .await
         .expect("remote commit marker should persist");
     store
         .record_content_upload_remote_outcome(
             &operation,
             MutationRemoteOutcome::RemoteOutcomeUnknown,
+            generation(1),
         )
         .await
         .expect("unknown outcome should persist");
@@ -424,11 +443,12 @@ async fn remote_commit_unknown_is_reconciled_without_reuploading_bytes() {
             MutationRemoteOutcome::AlreadyCommitted {
                 item: Some(uploaded_item(&backend, "unknown-reconciled", 8)),
             },
+            generation(1),
         )
         .await
         .expect("status reconciliation should prove existing commit");
     store
-        .reconcile_content_upload_metadata(&operation)
+        .reconcile_content_upload_metadata(&operation, generation(1))
         .await
         .expect("known outcome should reconcile metadata");
     assert!(
@@ -451,15 +471,19 @@ async fn stale_upload_completion_never_clears_a_newer_local_generation() {
     let intent = upload_intent("stale-completion", key.clone(), first);
     let operation = intent.operation_id().clone();
     store
-        .persist_content_upload_intent(intent)
+        .persist_content_upload_intent(intent, generation(1))
         .await
         .expect("first upload intent should persist");
     store
-        .record_content_upload_session(&operation, upload_session("stale-session", 8))
+        .record_content_upload_session(
+            &operation,
+            upload_session("stale-session", 8),
+            generation(1),
+        )
         .await
         .expect("complete checkpoint should persist");
     store
-        .begin_content_upload_remote_commit(&operation)
+        .begin_content_upload_remote_commit(&operation, generation(1))
         .await
         .expect("remote commit should begin");
     store
@@ -468,6 +492,7 @@ async fn stale_upload_completion_never_clears_a_newer_local_generation() {
             MutationRemoteOutcome::Committed {
                 item: Some(uploaded_item(&backend, "stale-committed", 8)),
             },
+            generation(1),
         )
         .await
         .expect("remote outcome should persist");
@@ -479,7 +504,7 @@ async fn stale_upload_completion_never_clears_a_newer_local_generation() {
         .expect("newer local write should supersede the uploading snapshot");
     assert_eq!(
         store
-            .reconcile_content_upload_metadata(&operation)
+            .reconcile_content_upload_metadata(&operation, generation(1))
             .await
             .expect("stale completion should be recorded but fenced"),
         StoreWriteStatus::Fenced
@@ -502,15 +527,19 @@ async fn precondition_failure_keeps_local_content_dirty_for_conflict_policy() {
     let intent = upload_intent("precondition", key.clone(), source.clone());
     let operation = intent.operation_id().clone();
     store
-        .persist_content_upload_intent(intent)
+        .persist_content_upload_intent(intent, generation(1))
         .await
         .expect("upload intent should persist");
     store
-        .record_content_upload_session(&operation, upload_session("precondition-session", 8))
+        .record_content_upload_session(
+            &operation,
+            upload_session("precondition-session", 8),
+            generation(1),
+        )
         .await
         .expect("complete checkpoint should persist");
     store
-        .begin_content_upload_remote_commit(&operation)
+        .begin_content_upload_remote_commit(&operation, generation(1))
         .await
         .expect("remote commit should begin");
     store
@@ -520,11 +549,12 @@ async fn precondition_failure_keeps_local_content_dirty_for_conflict_policy() {
                 metadata_revision: None,
                 content_revision: Some(revision("remote-newer")),
             },
+            generation(1),
         )
         .await
         .expect("precondition outcome should persist");
     store
-        .reconcile_content_upload_metadata(&operation)
+        .reconcile_content_upload_metadata(&operation, generation(1))
         .await
         .expect("conflict metadata should reconcile without dropping local bytes");
     assert_eq!(
@@ -552,12 +582,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
         .failures()
         .arm(FailurePoint::AfterContentUploadIntentPersistBeforeReturn);
     store
-        .persist_content_upload_intent(intent.clone())
+        .persist_content_upload_intent(intent.clone(), generation(1))
         .await
         .expect_err("intent return should be lost");
     assert_eq!(
         store
-            .persist_content_upload_intent(intent)
+            .persist_content_upload_intent(intent, generation(1))
             .await
             .expect("intent retry should find durable state"),
         StoreWriteStatus::AlreadyApplied
@@ -568,12 +598,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
         .failures()
         .arm(FailurePoint::AfterContentUploadCheckpointPersistBeforeReturn);
     store
-        .record_content_upload_session(&operation, session.clone())
+        .record_content_upload_session(&operation, session.clone(), generation(1))
         .await
         .expect_err("checkpoint return should be lost");
     assert_eq!(
         store
-            .record_content_upload_session(&operation, session)
+            .record_content_upload_session(&operation, session, generation(1))
             .await
             .expect("checkpoint retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
@@ -583,12 +613,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
         .failures()
         .arm(FailurePoint::AfterContentUploadRemoteCommitPersistBeforeReturn);
     store
-        .begin_content_upload_remote_commit(&operation)
+        .begin_content_upload_remote_commit(&operation, generation(1))
         .await
         .expect_err("remote commit marker return should be lost");
     assert_eq!(
         store
-            .begin_content_upload_remote_commit(&operation)
+            .begin_content_upload_remote_commit(&operation, generation(1))
             .await
             .expect("remote commit marker retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
@@ -601,12 +631,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
         .failures()
         .arm(FailurePoint::AfterContentUploadOutcomePersistBeforeReturn);
     store
-        .record_content_upload_remote_outcome(&operation, outcome.clone())
+        .record_content_upload_remote_outcome(&operation, outcome.clone(), generation(1))
         .await
         .expect_err("outcome return should be lost");
     assert_eq!(
         store
-            .record_content_upload_remote_outcome(&operation, outcome)
+            .record_content_upload_remote_outcome(&operation, outcome, generation(1))
             .await
             .expect("outcome retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
@@ -616,12 +646,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
         .failures()
         .arm(FailurePoint::AfterContentUploadMetadataPersistBeforeReturn);
     store
-        .reconcile_content_upload_metadata(&operation)
+        .reconcile_content_upload_metadata(&operation, generation(1))
         .await
         .expect_err("metadata return should be lost");
     assert_eq!(
         store
-            .reconcile_content_upload_metadata(&operation)
+            .reconcile_content_upload_metadata(&operation, generation(1))
             .await
             .expect("metadata retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
@@ -631,12 +661,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
         .failures()
         .arm(FailurePoint::AfterContentUploadCompletionPersistBeforeReturn);
     store
-        .complete_content_upload(&operation)
+        .complete_content_upload(&operation, generation(1))
         .await
         .expect_err("completion return should be lost");
     assert_eq!(
         store
-            .complete_content_upload(&operation)
+            .complete_content_upload(&operation, generation(1))
             .await
             .expect("completion retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
@@ -663,13 +693,13 @@ async fn upload_store_rejects_missing_stale_and_conflicting_dirty_snapshots() {
         ))
         .await
         .expect("clean entry should be created");
+    store.activate_content_upload_generation(clean_key.item_key().scope().clone(), generation(1));
     assert_eq!(
         store
-            .persist_content_upload_intent(upload_intent(
-                "clean",
-                clean_key,
-                snapshot(&backend, 1, "clean-source", 8),
-            ))
+            .persist_content_upload_intent(
+                upload_intent("clean", clean_key, snapshot(&backend, 1, "clean-source", 8),),
+                generation(1)
+            )
             .await
             .expect_err("upload without dirty state should fail")
             .kind(),
@@ -681,22 +711,28 @@ async fn upload_store_rejects_missing_stale_and_conflicting_dirty_snapshots() {
     create_dirty_entry(&store, key.clone(), current).await;
     assert_eq!(
         store
-            .persist_content_upload_intent(upload_intent(
-                "stale",
-                key.clone(),
-                snapshot(&backend, 1, "stale-source", 8),
-            ))
+            .persist_content_upload_intent(
+                upload_intent(
+                    "stale",
+                    key.clone(),
+                    snapshot(&backend, 1, "stale-source", 8),
+                ),
+                generation(1)
+            )
             .await
             .expect("stale generation should be fenced"),
         StoreWriteStatus::Fenced
     );
     assert_eq!(
         store
-            .persist_content_upload_intent(upload_intent(
-                "same-generation-different-bytes",
-                key,
-                snapshot(&backend, 2, "different-source", 8),
-            ))
+            .persist_content_upload_intent(
+                upload_intent(
+                    "same-generation-different-bytes",
+                    key,
+                    snapshot(&backend, 2, "different-source", 8),
+                ),
+                generation(1)
+            )
             .await
             .expect_err("different snapshot for current generation should conflict")
             .kind(),
@@ -720,27 +756,30 @@ async fn upload_operation_idempotency_and_lease_id_conflicts_are_distinct() {
     );
     assert_eq!(
         store
-            .persist_content_upload_intent(original.clone())
+            .persist_content_upload_intent(original.clone(), generation(1))
             .await
             .expect("first intent should persist"),
         StoreWriteStatus::Applied
     );
     assert_eq!(
         store
-            .persist_content_upload_intent(original)
+            .persist_content_upload_intent(original, generation(1))
             .await
             .expect("same intent should be idempotent"),
         StoreWriteStatus::AlreadyApplied
     );
     assert_eq!(
         store
-            .persist_content_upload_intent(upload_intent_with_ids(
-                "operation-a",
-                "idempotency-other",
-                "lease-other",
-                key.clone(),
-                source.clone(),
-            ))
+            .persist_content_upload_intent(
+                upload_intent_with_ids(
+                    "operation-a",
+                    "idempotency-other",
+                    "lease-other",
+                    key.clone(),
+                    source.clone(),
+                ),
+                generation(1)
+            )
             .await
             .expect_err("same operation id with another intent should conflict")
             .kind(),
@@ -748,13 +787,16 @@ async fn upload_operation_idempotency_and_lease_id_conflicts_are_distinct() {
     );
     assert_eq!(
         store
-            .persist_content_upload_intent(upload_intent_with_ids(
-                "operation-b",
-                "idempotency-a",
-                "lease-b",
-                key.clone(),
-                source.clone(),
-            ))
+            .persist_content_upload_intent(
+                upload_intent_with_ids(
+                    "operation-b",
+                    "idempotency-a",
+                    "lease-b",
+                    key.clone(),
+                    source.clone(),
+                ),
+                generation(1)
+            )
             .await
             .expect_err("reused idempotency key should conflict")
             .kind(),
@@ -762,13 +804,10 @@ async fn upload_operation_idempotency_and_lease_id_conflicts_are_distinct() {
     );
     assert_eq!(
         store
-            .persist_content_upload_intent(upload_intent_with_ids(
-                "operation-c",
-                "idempotency-c",
-                "lease-a",
-                key,
-                source,
-            ))
+            .persist_content_upload_intent(
+                upload_intent_with_ids("operation-c", "idempotency-c", "lease-a", key, source,),
+                generation(1)
+            )
             .await
             .expect_err("reused lease id should conflict")
             .kind(),
@@ -799,7 +838,7 @@ async fn concurrent_uploads_hold_independent_leases_until_each_completion() {
     );
     for intent in [first.clone(), second.clone()] {
         store
-            .persist_content_upload_intent(intent)
+            .persist_content_upload_intent(intent, generation(1))
             .await
             .expect("upload intent should persist");
     }
@@ -819,11 +858,12 @@ async fn concurrent_uploads_hold_independent_leases_until_each_completion() {
             .record_content_upload_session(
                 intent.operation_id(),
                 upload_session(&format!("session-{}", intent.operation_id().as_str()), 8),
+                generation(1),
             )
             .await
             .expect("session should persist");
         store
-            .begin_content_upload_remote_commit(intent.operation_id())
+            .begin_content_upload_remote_commit(intent.operation_id(), generation(1))
             .await
             .expect("remote commit should begin");
         store
@@ -833,17 +873,18 @@ async fn concurrent_uploads_hold_independent_leases_until_each_completion() {
                     metadata_revision: None,
                     content_revision: None,
                 },
+                generation(1),
             )
             .await
             .expect("precondition outcome should persist");
         store
-            .reconcile_content_upload_metadata(intent.operation_id())
+            .reconcile_content_upload_metadata(intent.operation_id(), generation(1))
             .await
             .expect("metadata should reconcile");
     }
 
     store
-        .complete_content_upload(first.operation_id())
+        .complete_content_upload(first.operation_id(), generation(1))
         .await
         .expect("first upload should complete");
     let after_first = store
@@ -872,7 +913,7 @@ async fn concurrent_uploads_hold_independent_leases_until_each_completion() {
         }
     );
     store
-        .complete_content_upload(second.operation_id())
+        .complete_content_upload(second.operation_id(), generation(1))
         .await
         .expect("second upload should complete");
     assert_eq!(
@@ -896,13 +937,16 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
     create_dirty_entry(&store, key.clone(), source.clone()).await;
     for operation in ["z-upload", "a-upload"] {
         store
-            .persist_content_upload_intent(upload_intent_with_ids(
-                operation,
-                &format!("idem-{operation}"),
-                &format!("lease-{operation}"),
-                key.clone(),
-                source.clone(),
-            ))
+            .persist_content_upload_intent(
+                upload_intent_with_ids(
+                    operation,
+                    &format!("idem-{operation}"),
+                    &format!("lease-{operation}"),
+                    key.clone(),
+                    source.clone(),
+                ),
+                generation(1),
+            )
             .await
             .expect("upload intent should persist");
     }
@@ -911,13 +955,16 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
         snapshot_for_key(other_key.item_key().clone(), 1, "other-recovery-source", 8);
     create_dirty_entry(&store, other_key.clone(), other_source.clone()).await;
     store
-        .persist_content_upload_intent(upload_intent_with_ids(
-            "m-other-upload",
-            "idem-other-upload",
-            "lease-other-upload",
-            other_key.clone(),
-            other_source,
-        ))
+        .persist_content_upload_intent(
+            upload_intent_with_ids(
+                "m-other-upload",
+                "idem-other-upload",
+                "lease-other-upload",
+                other_key.clone(),
+                other_source,
+            ),
+            generation(1),
+        )
         .await
         .expect("other-scope upload intent should persist");
     assert_eq!(
@@ -943,11 +990,15 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
 
     let completed = operation_id("a-upload");
     store
-        .record_content_upload_session(&completed, upload_session("completed-session", 8))
+        .record_content_upload_session(
+            &completed,
+            upload_session("completed-session", 8),
+            generation(1),
+        )
         .await
         .expect("session should persist");
     store
-        .begin_content_upload_remote_commit(&completed)
+        .begin_content_upload_remote_commit(&completed, generation(1))
         .await
         .expect("remote commit should begin");
     store
@@ -957,15 +1008,16 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
                 metadata_revision: None,
                 content_revision: None,
             },
+            generation(1),
         )
         .await
         .expect("outcome should persist");
     store
-        .reconcile_content_upload_metadata(&completed)
+        .reconcile_content_upload_metadata(&completed, generation(1))
         .await
         .expect("metadata should reconcile");
     store
-        .complete_content_upload(&completed)
+        .complete_content_upload(&completed, generation(1))
         .await
         .expect("upload should complete");
     assert_eq!(

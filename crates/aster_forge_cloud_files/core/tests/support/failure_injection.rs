@@ -6,8 +6,10 @@ use aster_forge_cloud_files_core::{CloudFilesStoreError, CloudFilesStoreErrorKin
 pub enum FailurePoint {
     BeforeMutationIntentPersist,
     AfterMutationIntentPersistBeforeReturn,
+    AfterRemoteApplyPersistBeforeReturn,
     AfterRemoteOutcomePersistBeforeReturn,
     AfterPlatformReconciledPersistBeforeReturn,
+    AfterMutationCompletionPersistBeforeReturn,
     AfterChangeBatchPersistBeforeReturn,
     AfterChangeEffectsReplayablePersistBeforeReturn,
     AfterCursorCommitPersistBeforeReturn,

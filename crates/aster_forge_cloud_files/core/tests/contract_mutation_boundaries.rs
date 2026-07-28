@@ -514,3 +514,27 @@ fn completed_mutation_rejects_a_different_late_remote_outcome() {
         })
     );
 }
+
+#[test]
+fn committed_and_already_committed_with_the_same_item_are_one_durable_fact() {
+    let item = current_file("item", 4);
+    let mut record = MutationRecord::persist(intent("operation-equivalent", "item"))
+        .expect("record fixture should be valid");
+    record
+        .begin_remote_apply()
+        .expect("remote apply should begin");
+    record
+        .record_remote_outcome(MutationRemoteOutcome::Committed {
+            item: Some(item.clone()),
+        })
+        .expect("committed outcome should persist");
+
+    assert_eq!(
+        record.record_remote_outcome(MutationRemoteOutcome::AlreadyCommitted { item: Some(item) }),
+        Ok(MutationRecordTransition::AlreadyApplied)
+    );
+    assert!(matches!(
+        record.remote_outcome(),
+        Some(MutationRemoteOutcome::Committed { .. })
+    ));
+}

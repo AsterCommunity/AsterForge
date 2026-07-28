@@ -4,7 +4,7 @@
 
 这个 crate 不是 AsterDrive SDK，也不是某个云盘 HTTP client。它不包含 endpoint、DTO、认证、账户、个人/团队空间、权限、产品冲突文案或 native platform type。产品仓库负责实现 backend adapter；后续 `aster_forge_cloud_files_windows`、`aster_forge_cloud_files_macos_bridge` 和 `aster_forge_cloud_files_linux` 负责平台映射。
 
-当前 Phase 1 已完成 Batch 1～6：除基础 value model 外，已经包含 item/page/change/reset、revision-bound whole/range read、backend error classification、临时只读 backend ports、durable cursor checkpoint、mutation journal/session fence ports、runtime-neutral hydration coordinator、content-storage ownership/sparse coverage、recoverable provider-cache writes、immutable local dirty generations、resumable upload backend/store contracts、lease/dirty/pin eviction guards、durable eviction recovery，以及 Full/Limited/ReadOnly synthetic profiles。当前 backend/store/coordinator API 仍是 executable-model contract；native platform binding 会在对应 PoC 建立后进入后续阶段。
+当前 Phase 1 已完成 Batch 1～6，并在 Linux Phase 4 Batch 2C～2E 补齐 runtime-neutral resumable upload runner 与 generic mutation runner：除基础 value model 外，已经包含 item/page/change/reset、revision-bound whole/range read、backend error classification、临时只读 backend ports、durable cursor checkpoint、mutation journal/session fence ports、runtime-neutral hydration coordinator、content-storage ownership/sparse coverage、recoverable provider-cache writes、immutable local dirty generations、resumable upload backend/store/runner、generic mutation backend/store/runner、lease/dirty/pin eviction guards、durable eviction recovery，以及 Full/Limited/ReadOnly synthetic profiles。当前 backend/store/coordinator API 仍是 executable-model contract；native platform binding 会在对应 PoC 建立后进入后续阶段。
 
 ## 适用场景
 
@@ -22,7 +22,8 @@
 - 分开记录 provider cache sparse ranges 与 platform-observed materialization state。
 - 在 physical bytes 可观察后提交 provider coverage，支持 cache-write crash replay。
 - 将本地修改捕获成 immutable `LocalContentSnapshot`，用 generation fence 防止旧上传清除新修改。
-- 保存 resumable upload session/accepted offset，并通过 idempotency/status reconciliation 恢复 remote outcome unknown。
+- 使用调用方 executor 驱动 resumable upload session/chunk/commit，并通过 idempotency/status reconciliation 恢复 remote outcome unknown。
+- 使用同一个通用 mutation runner 推进 create、metadata/content mutation 与 delete 的 durable apply/reconcile/platform completion 状态机。
 - 在 pin、dirty、open/read/write/hydration/upload/verification lease 保护下执行可恢复 eviction。
 - 在 Windows adapter 编码 CFAPI `FileIdentity` 后检查 4 KB 等 native limit。
 
@@ -41,7 +42,7 @@
 aster_forge_cloud_files_core = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-当前没有 feature flag，也不依赖具体异步 runtime、数据库或网络 client。只读 backend、upload backend 与 durable store port 使用 `async-trait` 提供临时 object-safe dispatch；hydration coordinator 使用 `futures` shared future/channel，在调用方 executor 上被 waiter 驱动，不自行创建 Tokio runtime 或后台 task。content-storage public model 只描述 ownership、coverage、guard 和 durable transition，不创建缓存文件，也不调用 native eviction API。upload chunk 当前使用 `bytes::Bytes`；最终 caller-owned buffer、streaming、transaction adapter 和 lease registry 仍由平台 PoC 验证。
+当前没有 feature flag，也不依赖具体异步 runtime、数据库或网络 client。只读 backend、upload/mutation backend、immutable snapshot reader 与 durable store port 使用 `async-trait` 提供 object-safe dispatch；hydration coordinator 使用 `futures` shared future/channel，在调用方 executor 上被 waiter 驱动，不自行创建 Tokio runtime 或后台 task。`ContentUploadRunner` 与 `MutationRunner` 同样不 spawn、不 sleep、不创建 runtime，只在调用方 future 中推进 durable record。content-storage public model 只描述 ownership、coverage、guard 和 durable transition，不创建缓存文件，也不调用 native eviction API。upload chunk 当前使用 `bytes::Bytes`；transaction adapter 和 lease registry 仍由产品 store 实现。
 
 ## Scoped identity
 
@@ -290,6 +291,50 @@ Accepting -> Closing -> Draining -> Closed
 
 当前 deterministic `MemoryCloudFilesStore` 只存在于 `tests/support/`，用于验证所有 durable boundary。生产 crate 不包含把内存模型伪装成数据库的 test scaffolding。
 
+### Generic mutation runner
+
+`MutationRunner` 把 journal contract 收成一个 runtime-neutral 执行器：
+
+```text
+durable MutationIntent
+-> generation-aware begin_remote_apply
+-> CloudMutationBackend::apply_mutation
+-> known outcome | RemoteOutcomeUnknown
+-> CloudMutationBackend::reconcile_mutation
+-> generation-aware product/platform reconciliation
+-> completion
+```
+
+产品实现 `CloudMutationBackend`，负责 endpoint、认证、DTO、revision precondition、idempotency/status query 和 stable/provisional item identity 映射。`apply_mutation()` 必须使用 intent 已有的 `IdempotencyKey`；transport 已发出请求但无法证明是否提交时，返回 `RemoteOutcomeUnknown`，而不是把它降成普通 backend error。后续 invocation 只在 durable state 已经是 unknown 时调用 `reconcile_mutation()`。
+
+```rust
+use aster_forge_cloud_files_core::{
+    CloudMutationBackend, MutationIntent, MutationJournalStore, MutationRunOutcome,
+    MutationRunner, SessionGeneration,
+};
+
+async fn resume_mutation(
+    intent: MutationIntent,
+    generation: SessionGeneration,
+    store: &dyn MutationJournalStore,
+    backend: &dyn CloudMutationBackend,
+) -> aster_forge_cloud_files_core::MutationRunResult<MutationRunOutcome> {
+    MutationRunner
+        .submit(intent, generation, store, backend)
+        .await
+}
+```
+
+`MutationJournalStore::mark_platform_reconciled()` 是产品 durable reconciliation boundary，不是空 marker。实现必须在同一个 active-generation transaction 中完成或耐久排入所需 local metadata、namespace mapping 与 platform effect；无法与数据库事务合并的 native invalidation 应先形成可重放的 durable effect/queue，再标记 reconciled。core runner 不直接调用 CFAPI、File Provider 或 FUSE API。
+
+runner 会验证 known outcome 的基本产品无关结构：create 必须返回匹配 scope/parent/name/kind 的 item；modify-content 必须返回同 key 的 file；metadata mutation 必须返回同 key 且反映显式请求的 parent/name；delete 可以返回 `item: None`。create 的最终 stable key 或 provisional/final mapping 仍由产品 store reconciliation 根据 operation identity 校验，core 不从 pathname 推导该 identity。
+
+`MutationRunOutcome` 分为：
+
+- `Completed`：known outcome、产品/platform reconciliation 与 completion 都已耐久；
+- `RemoteOutcomePending`：status reconciliation 仍无法证明远端结果，由产品 scheduler 决定 backoff 后再次调用 `resume()`；
+- `Fenced`：executor generation 已过期，由新 session generation 恢复同一 durable intent。
+
 ## Capability negotiation
 
 `CloudFilesCapabilities` 当前包含：
@@ -376,7 +421,7 @@ pub trait CloudFilesBackend:
 }
 ```
 
-这些 trait 当前 object-safe，便于 product host 使用 `dyn CloudFilesBackend` 组装 executable model。resumable upload 使用独立的 `CloudContentUploadBackend`，durable checkpoint 使用 `ContentUploadStore`；它们没有塞进 read-only `CloudFilesBackend`，避免让只读 backend 被迫实现虚假的 mutation 方法，也避免把 backend transport、local database 和 platform completion 塞进一个万能 trait。
+这些 trait 当前 object-safe，便于 product host 使用 `dyn CloudFilesBackend` 组装 executable model。resumable upload 使用独立的 `CloudContentUploadBackend`，generic durable mutation 使用独立的 `CloudMutationBackend`，对应 checkpoint/journal 使用 `ContentUploadStore` 与 `MutationJournalStore`；它们没有塞进 read-only `CloudFilesBackend`，避免让只读 backend 被迫实现虚假的 mutation 方法，也避免把 backend transport、local database 和 platform completion 塞进一个万能 trait。
 
 backend 返回自己的 constraints。该 backend 不负责限制的 capability 维度从 `CloudFilesCapabilities::unconstrained()` 开始；例如物理 materialization 通常由 platform/host 决定，而 change-feed 和 revision 能力主要由 backend 决定。
 
@@ -689,6 +734,19 @@ pub trait CloudContentUploadBackend: Send + Sync {
 }
 ```
 
+immutable bytes 使用另一个独立 port，opaque local reference 的解释仍留在产品：
+
+```rust
+pub trait LocalContentSnapshotReader: Send + Sync {
+    async fn read_snapshot(
+        &self,
+        snapshot: &LocalContentSnapshot,
+        offset: u64,
+        length: u64,
+    ) -> StoreResult<Bytes>;
+}
+```
+
 `ContentUploadSession` 保存 opaque backend session ID 和 accepted offset。checkpoint 只能单调前进；更小 offset 返回 fence。chunk 必须：
 
 - 属于同一 backend session；
@@ -710,9 +768,41 @@ IntentPersisted
 
 `Committed` / `AlreadyCommitted` upload outcome 必须带当前 revision-bearing `CloudItem`，并满足 item identity 与 snapshot size。content upload 不接受缺少 item metadata 的 committed outcome，因为后续 adapter 需要新的 metadata/content revision 继续同步。
 
-remote commit 后、outcome marker 前退出时，恢复流程使用 idempotency key 和 `reconcile_upload()` 查询结果，不重新上传已确认的 chunks，也不盲目重复 commit。precondition failure 保留 dirty snapshot，交给 product conflict policy；committed outcome 只清除 exact matching local generation。
+accepted bytes 完整后，runner 先持久化 `RemoteCommitting` marker，再调用 backend 的幂等 conditional commit。进程在 marker 与 known outcome 之间退出时，`resume()` 可以用同一 intent/idempotency key 重发 commit；如果 transport 已经不能证明远端是否执行，backend 必须返回 `RemoteOutcomeUnknown`，后续 invocation 才使用 `reconcile_upload()` 查询 status/idempotency/change feed。这个流程不重新上传已 checkpoint 的 chunks，也不会把不确定结果当作普通 backend error。precondition failure 保留 dirty snapshot，交给 product conflict policy；committed outcome 只清除 exact matching local generation。
 
 upload intent persistence 会原子验证 active dirty snapshot、获取 operation-owned `Upload` lease 并写入 record。completion 释放 lease。dirty 与 upload lease 都会阻止 eviction。
+
+`ContentUploadRunner` 把上述 contract 组装成 runtime-neutral 执行器：
+
+```rust
+use aster_forge_cloud_files_core::{
+    ContentUploadRunOutcome, ContentUploadRunner, SessionGeneration,
+};
+
+let runner = ContentUploadRunner::new(8 * 1024 * 1024)?;
+let outcome = runner
+    .submit(
+        intent,
+        SessionGeneration::new(active_generation)?,
+        &product_upload_store,
+        &product_upload_backend,
+        &product_snapshot_reader,
+    )
+    .await?;
+
+match outcome {
+    ContentUploadRunOutcome::Completed => {}
+    ContentUploadRunOutcome::RemoteOutcomePending => schedule_reconciliation(),
+    ContentUploadRunOutcome::Fenced => stop_stale_executor(),
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+runner 会从 durable accepted offset 读取 exact snapshot range，校验 source byte count、chunk session/generation/offset/total size 与 backend exact ack，然后逐步落下 checkpoint、remote-commit marker、outcome、metadata reconciliation 和 completion。它遇到第一个 backend/store/contract failure 就返回，由产品根据 `RetryAdvice`、store error kind、lifecycle 和 backoff policy 决定何时再次 `resume()`；它自己不循环等待。
+
+`ContentUploadStore` 所有 mutating transition 都接收本次执行者的 `SessionGeneration`。真实 store 必须在同一数据库事务内比较 active generation 并写 transition；较旧 mount/extension/connection 的晚到 checkpoint、outcome、metadata reconcile 和 completion 返回 `StoreWriteStatus::Fenced`。较新的 generation 可以继续旧 intent 的 immutable snapshot，旧 generation 只标识最初接收者，不阻止 startup takeover。
+
+Linux writable adapter 不直接调用 backend transport。产品 `LinuxWritebackStore` 在 write/truncate 的 durable transaction 中保存 immutable snapshot 和调用方分配的 `ContentUploadIntent`，FUSE reply 后再由产品 worker 调用 runner。这样不会制造“snapshot 已回复成功、upload intent 尚未可恢复”的额外 crash window。Windows/macOS 也使用同一个 runner，只替换 snapshot reader、durable store 和 backend adapter。
 
 ## 产品接入形状
 
@@ -741,7 +831,7 @@ product API / credential / repository
 - 为 session 创建绑定正确 backend 的 `HydrationCoordinator`，并把 native request/cancel/completion 映射为 waiter lifecycle。
 - 把 provider cache 删除、platform eviction 与 native/kernel invalidation 分别实现为可观察、幂等 physical effect。
 - 把 temporary/sparse cache physical commit 与 coverage transaction 分开，并在 restart 时观察真实 physical state。
-- 实现 immutable local snapshot reader 和 `CloudContentUploadBackend`，保留产品 transport、认证、分片协议与 status endpoint。
+- 实现 immutable local snapshot reader、`CloudContentUploadBackend` 和 generation-aware `ContentUploadStore`，保留产品 operation identity、transport、认证、分片协议、status endpoint、retry/backoff 和 worker lifecycle。
 
 最小调用方向为：
 
@@ -804,6 +894,15 @@ store diagnostic context 面向 adapter 日志，不是产品用户文案。数�
 - `Backend`：product-owned content backend 的结构化失败；
 - `Contract`：返回 revision、size、offset、length 或 assembly coverage 违反 Forge contract。
 
+`ContentUploadRunError` 与 `MutationRunError` 都区分：
+
+- `Backend`：产品 transport adapter 失败；
+- `Store`：durable store 或 immutable source 失败；
+- `Contract`：backend outcome、source 或 durable transition 违反共享合同；
+- `RecordNotFound`：scheduler 请求恢复的 operation 没有 durable record。
+
+runner outcome unknown 不是 error；它使用 `RemoteOutcomePending` 明确交还产品 scheduler。generation takeover 也不是 store failure；它返回 `Fenced`，让旧 executor 停止并由新 generation 恢复。
+
 platform adapter 负责把这些分类映射到 CFAPI failure completion、File Provider error 或 FUSE errno/reply lifecycle。
 
 产品 API 层负责把这些错误映射成自己的状态码、错误 envelope、日志字段和用户文案。
@@ -815,7 +914,7 @@ cargo test -p aster_forge_cloud_files_core
 cargo clippy -p aster_forge_cloud_files_core --all-targets -- -D warnings
 ```
 
-当前 contract tests 覆盖：
+当前共有 230 个 contract tests，覆盖：
 
 - 所有公开 opaque/string/byte value object 的 constructor、accessor、consume、`Display`/`Debug`、精确字节保留与各自 empty-field classification；
 - scope collision isolation；
@@ -857,7 +956,14 @@ cargo clippy -p aster_forge_cloud_files_core --all-targets -- -D warnings
 - content mutation 必须携带 exact-item immutable snapshot，non-content mutation 禁止携带 snapshot；
 - completed mutation 不进入 recovery scan、不重复 remote effect；
 - completed mutation 对相同 late durable marker 幂等，对不同 late outcome 报 conflict；
+- `Committed` 与同 item 的 `AlreadyCommitted` 被视为同一个 durable effect，允许并发 idempotent apply 收敛；
 - multi-scope mutation recovery 隔离并按 operation ID 稳定排序。
+- generic mutation runner 覆盖 submit/resume、committed/already-committed/precondition outcome、delete 无 item、create/modify 返回 item 结构验证；
+- mutation apply/reconcile backend failure 保留最后一个 durable retry point，lost remote return 使用同一 idempotent intent 重放；
+- mutation intent/apply/outcome/platform/completion 每个 post-persist response-loss window 均可恢复；
+- explicit unknown outcome 可多次返回 pending，known reconciliation 后继续完成且不形成忙循环；
+- runner 拒绝宣称 transition 成功但 durable record 未前进的 store；旧 generation 在 remote apply 前或 remote effect 后的晚到 outcome write 都会被 fence，新 generation 可恢复同一 intent；
+- 两个并发 mutation runner invocation 通过 idempotent backend 与 durable store transition 收敛到一个 completed record。
 - exact concurrent hydration 只产生一个 backend read；
 - concurrent whole-file hydration 只产生一个 whole read；
 - overlapping/nested/subset range 复用 shared segment，只下载 uncovered gap；
@@ -901,6 +1007,14 @@ cargo clippy -p aster_forge_cloud_files_core --all-targets -- -D warnings
 - precondition failure 保留 dirty snapshot；
 - upload intent/checkpoint/commit/outcome/metadata/completion 每个 post-persist response-loss window；
 - cache-write、upload 与 eviction recovery 都验证 scope filtering、stable ordering 和 completed exclusion。
+- runner 按配置分片读取 exact immutable source，覆盖空文件、尾分片和 durable accepted-offset resume；
+- runner 拒绝 partial/oversized source、越界 start offset、错误 session/ack，并保留最后一个 durable checkpoint；
+- runner 拒绝宣称成功但 durable record 没有前进的 store transition，避免错误实现触发忙循环；
+- source/store/backend failure、checkpoint lost return 和 remote-commit retry 都可从 durable state 继续；
+- unknown commit 可多次返回 pending，再通过 reconcile 完成，期间不重复上传 chunk 或再次 commit；
+- precondition outcome 完成 upload lease lifecycle，但保留 dirty snapshot 交给产品冲突策略；
+- 较新 active `SessionGeneration` fence 旧 executor，并可以继续同一 immutable intent；
+- 两个并发 runner invocation 通过 idempotent backend 与 monotonic store transition 收敛到一个 completed record。
 
 这些测试固定公开行为合同和可恢复边界，不以把 defensive impossible branch 暴露成测试接口为目标。当前仍未由安全公共 API 到达的分支主要是 `usize`/ID/counter 理论溢出、mutex poison 恢复，以及 private constructor 对公共类型形状已经排除的防御检查；生产代码不会为覆盖率数字加入 test hook。
 

@@ -307,12 +307,18 @@ async fn every_missing_upload_transition_is_not_found() {
                         .expect("session fixture should be valid"),
                     0,
                 ),
+                SessionGeneration::new(1).expect("generation fixture should be valid"),
             )
             .await,
         CloudFilesStoreErrorKind::NotFound,
     );
     assert_store_error_kind(
-        store.begin_content_upload_remote_commit(&operation).await,
+        store
+            .begin_content_upload_remote_commit(
+                &operation,
+                SessionGeneration::new(1).expect("generation fixture should be valid"),
+            )
+            .await,
         CloudFilesStoreErrorKind::NotFound,
     );
     assert_store_error_kind(
@@ -320,16 +326,27 @@ async fn every_missing_upload_transition_is_not_found() {
             .record_content_upload_remote_outcome(
                 &operation,
                 MutationRemoteOutcome::RemoteOutcomeUnknown,
+                SessionGeneration::new(1).expect("generation fixture should be valid"),
             )
             .await,
         CloudFilesStoreErrorKind::NotFound,
     );
     assert_store_error_kind(
-        store.reconcile_content_upload_metadata(&operation).await,
+        store
+            .reconcile_content_upload_metadata(
+                &operation,
+                SessionGeneration::new(1).expect("generation fixture should be valid"),
+            )
+            .await,
         CloudFilesStoreErrorKind::NotFound,
     );
     assert_store_error_kind(
-        store.complete_content_upload(&operation).await,
+        store
+            .complete_content_upload(
+                &operation,
+                SessionGeneration::new(1).expect("generation fixture should be valid"),
+            )
+            .await,
         CloudFilesStoreErrorKind::NotFound,
     );
 }

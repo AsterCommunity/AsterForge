@@ -1,9 +1,11 @@
 //! Product-neutral Linux FUSE bindings for Forge cloud-files core.
 //!
 //! This crate owns stable inode/generation mappings, directory-handle snapshots, file-handle
-//! revision fences, read-only FUSE reply mapping, and bounded callback-to-async dispatch. Product
-//! crates retain backend adapters, durable inode-record storage, daemon/service packaging, mount
-//! UX, authentication, permissions, and user-visible errors.
+//! revision fences, direct-I/O writeback, durable regular-file create acceptance,
+//! mount-generation recovery, FUSE reply mapping, and bounded callback-to-async dispatch. Product
+//! crates retain identity allocation, backend adapters, durable inode/content storage, remote
+//! mutation workers, daemon/service packaging, mount UX, authentication, permissions, and
+//! user-visible errors.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![deny(clippy::undocumented_unsafe_blocks, unsafe_op_in_unsafe_fn)]
 #![cfg_attr(
@@ -22,6 +24,8 @@ mod dispatch;
 mod engine;
 mod error;
 mod inode;
+mod namespace;
+mod writeback;
 
 #[cfg(target_os = "linux")]
 mod native;
@@ -34,12 +38,26 @@ pub use engine::{
     LinuxFileAttributes, LinuxFileHandle, LinuxNode, LinuxNodeKind, LinuxReadOnlyEngine,
     validate_linux_name,
 };
-pub use error::{LinuxCloudFilesError, LinuxErrorCode, Result, backend_error_code};
+pub use error::{
+    LinuxCloudFilesError, LinuxErrorCode, Result, backend_error_code, namespace_store_error_code,
+    writeback_store_error_code,
+};
 pub use inode::{
     LINUX_ROOT_INODE, LinuxInode, LinuxInodeGeneration, LinuxInodeRecord, LinuxInodeTable,
 };
+pub use namespace::{
+    LinuxCreateFileAcceptance, LinuxCreateFileRequest, LinuxCreatedFile,
+    LinuxNamespaceMutationStore, LinuxNamespaceMutationStoreError,
+    LinuxNamespaceMutationStoreErrorKind, LinuxNamespaceStoreResult,
+};
 #[cfg(target_os = "linux")]
-pub use native::{LinuxReadOnlyFilesystem, mount_read_only};
+pub use native::{
+    LinuxReadOnlyFilesystem, LinuxWritableFilesystem, mount_read_only, mount_writable,
+};
+pub use writeback::{
+    LinuxFileAccess, LinuxWritableEngine, LinuxWriteCommit, LinuxWriteOpenRequest,
+    LinuxWriteSession, LinuxWriteSessionId, LinuxWritebackStore,
+};
 
 /// Native mount-session configuration kept independent from product daemon policy.
 #[derive(Debug, Clone, PartialEq, Eq)]

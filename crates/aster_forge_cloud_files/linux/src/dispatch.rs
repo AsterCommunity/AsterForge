@@ -113,6 +113,29 @@ impl LinuxRequestDispatcher {
         }
     }
 
+    /// Dispatches mandatory cleanup for an already accepted native handle.
+    ///
+    /// Cleanup bypasses the normal request semaphore and closing fence because FUSE issues one
+    /// final `release` per successful `open`; rejecting that cleanup would leak adapter and
+    /// product-owned session state. Callers must use this only for bounded-by-open-handle terminal
+    /// work, never for new backend requests.
+    pub fn spawn_cleanup<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.inner.metrics.accepted.fetch_add(1, Ordering::Relaxed);
+        let inner = self.inner.clone();
+        let runtime = inner.runtime.clone();
+        let task = async move {
+            let outcome = AssertUnwindSafe(future).catch_unwind().await;
+            if outcome.is_err() {
+                inner.metrics.panicked.fetch_add(1, Ordering::Relaxed);
+            }
+            inner.metrics.completed.fetch_add(1, Ordering::Release);
+        };
+        std::mem::drop(runtime.spawn(task));
+    }
+
     /// Begins idempotent closing and rejects every subsequent reservation.
     pub fn close(&self) {
         if !self.inner.closing.swap(true, Ordering::AcqRel) {

@@ -402,13 +402,16 @@ pub trait ContentCacheWriteStore: Send + Sync {
 ///
 /// Intent persistence atomically validates the active immutable dirty snapshot and acquires its
 /// operation-owned upload lease. Metadata reconciliation clears dirty state only when the upload's
-/// local generation is still current; a newer generation fences stale completion.
+/// local generation is still current; a newer generation fences stale completion. Every mutating
+/// transition also receives the executor's platform session generation. Implementations must
+/// compare it with the active generation in the same transaction as the requested transition.
 #[async_trait]
 pub trait ContentUploadStore: Send + Sync {
-    /// Atomically validates dirty state, acquires the upload lease, and persists the intent.
+    /// Atomically validates dirty state and generation, acquires the lease, and persists intent.
     async fn persist_content_upload_intent(
         &self,
         intent: ContentUploadIntent,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus>;
 
     /// Loads one durable upload record.
@@ -423,36 +426,41 @@ pub trait ContentUploadStore: Send + Sync {
         scope: &CloudScope,
     ) -> StoreResult<Vec<ContentUploadRecord>>;
 
-    /// Records a backend session or monotonically advances its accepted offset.
+    /// Records a backend session or monotonically advances its accepted offset when unfenced.
     async fn record_content_upload_session(
         &self,
         operation_id: &OperationId,
         session: ContentUploadSession,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus>;
 
-    /// Marks remote commit started after all immutable bytes were accepted.
+    /// Marks remote commit started after all immutable bytes were accepted when unfenced.
     async fn begin_content_upload_remote_commit(
         &self,
         operation_id: &OperationId,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus>;
 
-    /// Records a known or unknown remote upload outcome.
+    /// Records a known or unknown remote upload outcome when the executor remains active.
     async fn record_content_upload_remote_outcome(
         &self,
         operation_id: &OperationId,
         outcome: MutationRemoteOutcome,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus>;
 
-    /// Reconciles the remote outcome and conditionally clears the matching dirty generation.
+    /// Reconciles the outcome and conditionally clears dirty state when the executor is active.
     async fn reconcile_content_upload_metadata(
         &self,
         operation_id: &OperationId,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus>;
 
-    /// Marks the upload terminal and releases its operation-owned upload lease.
+    /// Marks the upload terminal and releases its lease when the executor remains active.
     async fn complete_content_upload(
         &self,
         operation_id: &OperationId,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus>;
 }
 
@@ -513,7 +521,12 @@ pub trait MutationJournalStore: Send + Sync {
         outcome: MutationRemoteOutcome,
     ) -> StoreResult<StoreWriteStatus>;
 
-    /// Marks required platform state reconciled for a still-active generation.
+    /// Durably reconciles required product/local platform state for a still-active generation.
+    ///
+    /// Implementations must generation-check and complete, or durably enqueue, the required local
+    /// metadata, namespace mapping, and platform reconciliation in the same transaction as this
+    /// marker. This method must not write a marker that falsely claims reconciliation while the
+    /// corresponding product/platform effect remains neither durable nor replayable.
     async fn mark_platform_reconciled(
         &self,
         operation_id: &OperationId,

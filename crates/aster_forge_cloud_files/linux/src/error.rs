@@ -1,6 +1,8 @@
 //! Linux adapter errors and their portable errno classifications.
 
-use aster_forge_cloud_files_core::{CloudBackendError, CloudBackendErrorKind};
+use aster_forge_cloud_files_core::{
+    CloudBackendError, CloudBackendErrorKind, CloudFilesStoreError, CloudFilesStoreErrorKind,
+};
 
 /// Result returned by the Linux cloud-files adapter.
 pub type Result<T> = std::result::Result<T, LinuxCloudFilesError>;
@@ -10,6 +12,8 @@ pub type Result<T> = std::result::Result<T, LinuxCloudFilesError>;
 pub enum LinuxErrorCode {
     /// No matching inode, handle, item, or directory entry exists.
     NotFound,
+    /// A namespace create collided with an existing parent/name entry.
+    AlreadyExists,
     /// The caller lacks access or must authenticate before access can proceed.
     AccessDenied,
     /// The read-only adapter rejected a mutation attempt.
@@ -62,6 +66,9 @@ pub enum LinuxCloudFilesError {
     /// An open file or directory handle no longer belongs to the requested inode.
     #[error("stale linux file handle")]
     StaleHandle,
+    /// A file-handle operation did not match the access mode selected at open time.
+    #[error("linux file handle access mode does not permit this operation")]
+    AccessModeMismatch,
     /// In-memory handle allocation exhausted the native handle domain.
     #[error("linux file handle space is exhausted")]
     HandleExhausted,
@@ -92,6 +99,15 @@ pub enum LinuxCloudFilesError {
     /// The product-owned backend reported a classified failure.
     #[error(transparent)]
     Backend(#[from] CloudBackendError),
+    /// The product-owned durable writeback store reported a classified failure.
+    #[error(transparent)]
+    WritebackStore(#[from] CloudFilesStoreError),
+    /// The product-owned durable namespace store reported a classified failure.
+    #[error(transparent)]
+    NamespaceStore(#[from] crate::LinuxNamespaceMutationStoreError),
+    /// Native create was requested without a product namespace transaction port.
+    #[error("linux namespace mutation store is not configured")]
+    NamespaceMutationNotConfigured,
 }
 
 impl LinuxCloudFilesError {
@@ -100,9 +116,13 @@ impl LinuxCloudFilesError {
         match self {
             Self::UnknownInode { .. } => LinuxErrorCode::NotFound,
             Self::StaleHandle => LinuxErrorCode::Stale,
+            Self::AccessModeMismatch => LinuxErrorCode::AccessDenied,
             Self::InvalidName { .. } => LinuxErrorCode::InvalidArgument,
             Self::NotDirectory | Self::NotFile => LinuxErrorCode::NotFound,
             Self::Backend(error) => backend_error_code(error.kind()),
+            Self::WritebackStore(error) => writeback_store_error_code(error.kind()),
+            Self::NamespaceStore(error) => namespace_store_error_code(error.kind()),
+            Self::NamespaceMutationNotConfigured => LinuxErrorCode::NotSupported,
             Self::ZeroInode
             | Self::ZeroGeneration
             | Self::RootInodeMismatch
@@ -114,6 +134,29 @@ impl LinuxCloudFilesError {
             | Self::InvalidConfiguration { .. }
             | Self::InvalidBackendResponse { .. } => LinuxErrorCode::Io,
         }
+    }
+}
+
+/// Maps durable Linux namespace failures to FUSE-visible classifications.
+pub const fn namespace_store_error_code(
+    kind: crate::LinuxNamespaceMutationStoreErrorKind,
+) -> LinuxErrorCode {
+    match kind {
+        crate::LinuxNamespaceMutationStoreErrorKind::NotFound => LinuxErrorCode::NotFound,
+        crate::LinuxNamespaceMutationStoreErrorKind::AlreadyExists => LinuxErrorCode::AlreadyExists,
+        crate::LinuxNamespaceMutationStoreErrorKind::Fenced => LinuxErrorCode::Stale,
+        crate::LinuxNamespaceMutationStoreErrorKind::Conflict
+        | crate::LinuxNamespaceMutationStoreErrorKind::PersistenceFailure => LinuxErrorCode::Io,
+    }
+}
+
+/// Maps durable local-write failures to FUSE-visible classifications.
+pub const fn writeback_store_error_code(kind: CloudFilesStoreErrorKind) -> LinuxErrorCode {
+    match kind {
+        CloudFilesStoreErrorKind::NotFound => LinuxErrorCode::NotFound,
+        CloudFilesStoreErrorKind::Conflict => LinuxErrorCode::Stale,
+        CloudFilesStoreErrorKind::InvalidTransition
+        | CloudFilesStoreErrorKind::PersistenceFailure => LinuxErrorCode::Io,
     }
 }
 

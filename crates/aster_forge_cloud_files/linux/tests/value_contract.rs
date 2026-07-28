@@ -1,12 +1,16 @@
 use std::time::Duration;
 
 use aster_forge_cloud_files_core::{
-    CloudBackendErrorKind, CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope,
+    CloudBackendErrorKind, CloudFilesStoreErrorKind, CloudItemId, CloudItemKey, CloudNamespaceId,
+    CloudRootId, CloudScope, ContentRevision, LocalContentGeneration, LocalContentReference,
+    LocalContentSnapshot, SessionGeneration,
 };
 use aster_forge_cloud_files_linux::{
     LINUX_ROOT_INODE, LinuxAttributePolicy, LinuxCloudFilesError, LinuxDispatchRejection,
     LinuxErrorCode, LinuxInode, LinuxInodeGeneration, LinuxInodeRecord, LinuxInodeTable,
-    LinuxMountConfig, LinuxRequestDispatcher, backend_error_code,
+    LinuxMountConfig, LinuxNamespaceMutationStoreErrorKind, LinuxRequestDispatcher,
+    LinuxWriteCommit, LinuxWriteOpenRequest, LinuxWriteSession, LinuxWriteSessionId,
+    backend_error_code, namespace_store_error_code, writeback_store_error_code,
 };
 
 fn scope(namespace: &str, root: &str) -> CloudScope {
@@ -167,6 +171,46 @@ fn every_backend_error_kind_has_a_stable_linux_classification() {
     for (kind, expected) in cases {
         assert_eq!(backend_error_code(kind), expected, "{kind:?}");
     }
+    let store_cases = [
+        (CloudFilesStoreErrorKind::NotFound, LinuxErrorCode::NotFound),
+        (CloudFilesStoreErrorKind::Conflict, LinuxErrorCode::Stale),
+        (
+            CloudFilesStoreErrorKind::InvalidTransition,
+            LinuxErrorCode::Io,
+        ),
+        (
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            LinuxErrorCode::Io,
+        ),
+    ];
+    for (kind, expected) in store_cases {
+        assert_eq!(writeback_store_error_code(kind), expected, "{kind:?}");
+    }
+    let namespace_cases = [
+        (
+            LinuxNamespaceMutationStoreErrorKind::NotFound,
+            LinuxErrorCode::NotFound,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::AlreadyExists,
+            LinuxErrorCode::AlreadyExists,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::Fenced,
+            LinuxErrorCode::Stale,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::Conflict,
+            LinuxErrorCode::Io,
+        ),
+        (
+            LinuxNamespaceMutationStoreErrorKind::PersistenceFailure,
+            LinuxErrorCode::Io,
+        ),
+    ];
+    for (kind, expected) in namespace_cases {
+        assert_eq!(namespace_store_error_code(kind), expected, "{kind:?}");
+    }
     assert_eq!(
         LinuxCloudFilesError::MissingInodeRecord.error_code(),
         LinuxErrorCode::Io
@@ -196,6 +240,54 @@ fn every_backend_error_kind_has_a_stable_linux_classification() {
         LinuxDispatchRejection::Closing.error_code(),
         LinuxErrorCode::Io
     );
+}
+
+#[test]
+fn writeback_values_preserve_exact_opaque_and_revision_bound_fields() {
+    assert!(LinuxWriteSessionId::new("").is_err());
+    let session_id =
+        LinuxWriteSessionId::new("session-secret").expect("session id should be valid");
+    assert_eq!(session_id.as_str(), "session-secret");
+    assert!(!format!("{session_id:?}").contains("session-secret"));
+
+    let active = scope("provider", "root-a");
+    let item_key = key(&active, "item-a");
+    let revision =
+        ContentRevision::from_slice(b"content-v1").expect("content revision should be valid");
+    let mount_generation = SessionGeneration::new(11).expect("generation should be valid");
+    let request =
+        LinuxWriteOpenRequest::new(item_key.clone(), revision.clone(), 17, mount_generation);
+    assert_eq!(request.key(), &item_key);
+    assert_eq!(request.base_revision(), &revision);
+    assert_eq!(request.base_size(), 17);
+    assert_eq!(request.session_generation(), mount_generation);
+
+    let session = LinuxWriteSession::new(session_id, item_key.clone(), 19, mount_generation);
+    assert_eq!(session.id().as_str(), "session-secret");
+    assert_eq!(session.key(), &item_key);
+    assert_eq!(session.size(), 19);
+    assert_eq!(session.session_generation(), mount_generation);
+    assert!(session.snapshot().is_none());
+
+    let snapshot = LocalContentSnapshot::new(
+        item_key.clone(),
+        LocalContentGeneration::new(3).expect("generation should be valid"),
+        LocalContentReference::new("local-reference").expect("reference should be valid"),
+        19,
+        None,
+    );
+    let recovered = LinuxWriteSession::from_recovered(
+        LinuxWriteSessionId::new("recovered-secret").expect("session id should be valid"),
+        snapshot.clone(),
+        mount_generation,
+    );
+    assert_eq!(recovered.key(), &item_key);
+    assert_eq!(recovered.size(), 19);
+    assert_eq!(recovered.session_generation(), mount_generation);
+    assert_eq!(recovered.snapshot(), Some(&snapshot));
+    let commit = LinuxWriteCommit::new(snapshot.clone());
+    assert_eq!(commit.snapshot(), &snapshot);
+    assert_eq!(commit.into_snapshot(), snapshot);
 }
 
 #[test]
@@ -266,4 +358,15 @@ async fn dispatcher_validates_capacity_and_counts_panics_as_terminal_tasks() {
         dispatcher.reserve(),
         Err(LinuxDispatchRejection::Closing)
     ));
+
+    dispatcher.spawn_cleanup(async {});
+    for _ in 0..16 {
+        if dispatcher.metrics().completed == 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let metrics = dispatcher.metrics();
+    assert_eq!(metrics.accepted, 2);
+    assert_eq!(metrics.completed, 2);
 }

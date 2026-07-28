@@ -46,11 +46,19 @@ struct StoreState {
 pub struct MemoryCloudFilesStore {
     state: Mutex<StoreState>,
     failures: FailureInjector,
+    stall_next_remote_apply: Mutex<bool>,
 }
 
 impl MemoryCloudFilesStore {
     pub fn failures(&self) -> &FailureInjector {
         &self.failures
+    }
+
+    pub fn stall_next_remote_apply(&self) {
+        *self
+            .stall_next_remote_apply
+            .lock()
+            .expect("mutation stall mutex should not be poisoned") = true;
     }
 
     fn store_error(
@@ -467,7 +475,24 @@ impl MutationJournalStore for MemoryCloudFilesStore {
         operation_id: &OperationId,
         generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
-        self.with_fenced_mutation(operation_id, generation, MutationRecord::begin_remote_apply)
+        if std::mem::take(
+            &mut *self
+                .stall_next_remote_apply
+                .lock()
+                .expect("mutation stall mutex should not be poisoned"),
+        ) {
+            return Ok(StoreWriteStatus::Applied);
+        }
+        let status = self.with_fenced_mutation(
+            operation_id,
+            generation,
+            MutationRecord::begin_remote_apply,
+        )?;
+        if status == StoreWriteStatus::Applied {
+            self.failures
+                .trip(FailurePoint::AfterRemoteApplyPersistBeforeReturn)?;
+        }
+        Ok(status)
     }
 
     async fn record_remote_outcome(
@@ -508,6 +533,12 @@ impl MutationJournalStore for MemoryCloudFilesStore {
         operation_id: &OperationId,
         generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
-        self.with_fenced_mutation(operation_id, generation, MutationRecord::complete)
+        let status =
+            self.with_fenced_mutation(operation_id, generation, MutationRecord::complete)?;
+        if status == StoreWriteStatus::Applied {
+            self.failures
+                .trip(FailurePoint::AfterMutationCompletionPersistBeforeReturn)?;
+        }
+        Ok(status)
     }
 }

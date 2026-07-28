@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 aster_forge_cloud_files_core = { path = "../core" }
+async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
 thiserror.workspace = true
@@ -19,7 +20,8 @@ tokio = { workspace = true, features = ["sync"] }
 fuser.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [[example]]

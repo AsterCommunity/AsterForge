@@ -8,8 +8,10 @@
 //! capability negotiation, read-only backend ports, durable checkpoint/mutation store contracts,
 //! runtime-neutral hydration work sharing with waiter-scoped cancellation, and revision-bound
 //! content-storage ownership with guarded eviction, recoverable provider-cache writes, immutable
-//! local generations, and resumable upload recovery. Native platform validation has started in
-//! the sibling Windows crate while these product-neutral contracts remain platform-independent.
+//! local generations, resumable upload recovery, a runtime-neutral upload runner, and a generic
+//! durable mutation runner with remote-outcome reconciliation. Native platform validation has
+//! started in the sibling platform crates while these product-neutral contracts remain
+//! platform-independent.
 #![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
@@ -74,8 +76,9 @@ pub use identity::{CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, Clo
 pub use item::{CloudContentMetadata, CloudItem, CloudItemKind, CloudItemPage};
 pub use local_content::{LocalContentGeneration, LocalContentReference, LocalContentSnapshot};
 pub use mutation::{
-    DesiredMutation, IdempotencyKey, MutationIntent, MutationOrigin, MutationPreconditions,
-    MutationRecord, MutationRecordTransition, MutationRemoteOutcome, MutationRetryMetadata,
+    CloudMutationBackend, DesiredMutation, IdempotencyKey, MutationIntent, MutationOrigin,
+    MutationPreconditions, MutationRecord, MutationRecordTransition, MutationRemoteOutcome,
+    MutationRetryMetadata, MutationRunError, MutationRunOutcome, MutationRunResult, MutationRunner,
     MutationState, OperationId, PlatformRequestCorrelation, RemoteReconciliationKey,
     SessionGeneration, SessionState,
 };
@@ -88,6 +91,7 @@ pub use store::{
 };
 pub use upload::{
     CloudContentUploadBackend, ContentUploadChunk, ContentUploadChunkAck, ContentUploadIntent,
-    ContentUploadRecord, ContentUploadRecordTransition, ContentUploadSession,
-    ContentUploadSessionId, ContentUploadState,
+    ContentUploadRecord, ContentUploadRecordTransition, ContentUploadRunError,
+    ContentUploadRunOutcome, ContentUploadRunResult, ContentUploadRunner, ContentUploadSession,
+    ContentUploadSessionId, ContentUploadState, LocalContentSnapshotReader,
 };

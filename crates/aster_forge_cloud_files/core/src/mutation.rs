@@ -2,9 +2,12 @@
 
 use std::{fmt, num::NonZeroU64, time::SystemTime};
 
+use async_trait::async_trait;
+
 use crate::{
-    CloudFilesCoreError, CloudItem, CloudItemId, CloudItemKey, CloudItemKind, CloudScope,
-    ContentRevision, LocalContentSnapshot, MetadataRevision, Result,
+    BackendResult, CloudBackendError, CloudFilesCoreError, CloudFilesStoreError, CloudItem,
+    CloudItemId, CloudItemKey, CloudItemKind, CloudScope, ContentRevision, LocalContentSnapshot,
+    MetadataRevision, MutationJournalStore, Result, StoreWriteStatus,
 };
 
 macro_rules! opaque_string {
@@ -492,6 +495,344 @@ impl MutationRemoteOutcome {
             | Self::PreconditionFailed { .. } => MutationState::RemoteOutcomeKnown,
         }
     }
+
+    fn same_committed_effect(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (
+                Self::Committed { item: left } | Self::AlreadyCommitted { item: left },
+                Self::Committed { item: right } | Self::AlreadyCommitted { item: right },
+            ) if left == right
+        )
+    }
+}
+
+/// Product-owned adapter for applying and reconciling durable mutations.
+///
+/// Implementations own transport, authentication, product DTOs, stable/provisional identity
+/// mapping, and backend-specific status queries. [`Self::apply_mutation`] must use the intent's
+/// idempotency identity. A transport result that does not prove whether the effect committed must
+/// return [`MutationRemoteOutcome::RemoteOutcomeUnknown`] rather than an ordinary backend error.
+#[async_trait]
+pub trait CloudMutationBackend: Send + Sync {
+    /// Applies one idempotently identified mutation to the product backend.
+    async fn apply_mutation(&self, intent: &MutationIntent)
+    -> BackendResult<MutationRemoteOutcome>;
+
+    /// Resolves an explicitly unknown remote outcome through status or change reconciliation.
+    async fn reconcile_mutation(
+        &self,
+        intent: &MutationIntent,
+    ) -> BackendResult<MutationRemoteOutcome>;
+}
+
+/// Result returned by one mutation-runner invocation.
+pub type MutationRunResult<T> = std::result::Result<T, MutationRunError>;
+
+/// Product-neutral failure while driving one durable mutation record.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MutationRunError {
+    /// The product-owned remote mutation adapter failed.
+    #[error(transparent)]
+    Backend(#[from] CloudBackendError),
+    /// The durable mutation journal failed.
+    #[error(transparent)]
+    Store(#[from] CloudFilesStoreError),
+    /// A backend outcome or durable record violated the mutation contract.
+    #[error(transparent)]
+    Contract(#[from] CloudFilesCoreError),
+    /// The requested operation has no durable mutation record.
+    #[error("mutation record was not found")]
+    RecordNotFound,
+}
+
+/// Stable outcome of one mutation-runner invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutationRunOutcome {
+    /// Remote outcome, product/platform reconciliation, and completion are durable.
+    Completed,
+    /// Remote application may have committed, but reconciliation still has no known outcome.
+    RemoteOutcomePending,
+    /// A newer active platform session fenced this executor before its next durable transition.
+    Fenced,
+}
+
+/// Runtime-neutral driver for one durable product-neutral mutation.
+///
+/// The runner does not allocate identities, spawn tasks, sleep, select retry delays, call native
+/// platform APIs, or own product transport. One invocation advances a durable record until it
+/// completes, reaches an unknown remote outcome, is fenced, or returns the first backend, store,
+/// or contract failure.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MutationRunner;
+
+impl MutationRunner {
+    /// Persists a caller-owned intent, then advances its durable record.
+    pub async fn submit(
+        &self,
+        intent: MutationIntent,
+        execution_generation: SessionGeneration,
+        store: &dyn MutationJournalStore,
+        backend: &dyn CloudMutationBackend,
+    ) -> MutationRunResult<MutationRunOutcome> {
+        if intent.session_generation() != execution_generation {
+            return Err(CloudFilesCoreError::invalid_mutation_intent(
+                "submitted mutation generation must match the executor generation",
+            )
+            .into());
+        }
+        let operation_id = intent.operation_id().clone();
+        if store.persist_mutation_intent(intent).await? == StoreWriteStatus::Fenced {
+            return Ok(MutationRunOutcome::Fenced);
+        }
+        self.resume(&operation_id, execution_generation, store, backend)
+            .await
+    }
+
+    /// Advances one already-persisted mutation using the active executor generation.
+    pub async fn resume(
+        &self,
+        operation_id: &OperationId,
+        execution_generation: SessionGeneration,
+        store: &dyn MutationJournalStore,
+        backend: &dyn CloudMutationBackend,
+    ) -> MutationRunResult<MutationRunOutcome> {
+        loop {
+            let record = store
+                .load_mutation(operation_id)
+                .await?
+                .ok_or(MutationRunError::RecordNotFound)?;
+            match record.state() {
+                MutationState::IntentPersisted => {
+                    let status = store
+                        .begin_remote_apply(operation_id, execution_generation)
+                        .await?;
+                    if observe_mutation_transition(status, &record, operation_id, store, false)
+                        .await?
+                        .is_none()
+                    {
+                        return Ok(MutationRunOutcome::Fenced);
+                    }
+                }
+                MutationState::RemoteApplying => {
+                    let outcome = backend.apply_mutation(record.intent()).await?;
+                    validate_remote_outcome(record.intent(), &outcome)?;
+                    let pending = matches!(outcome, MutationRemoteOutcome::RemoteOutcomeUnknown);
+                    let status = store
+                        .record_remote_outcome(operation_id, execution_generation, outcome)
+                        .await?;
+                    let Some(current) =
+                        observe_mutation_transition(status, &record, operation_id, store, false)
+                            .await?
+                    else {
+                        return Ok(MutationRunOutcome::Fenced);
+                    };
+                    if pending && current.state() == MutationState::RemoteOutcomeUnknown {
+                        return Ok(MutationRunOutcome::RemoteOutcomePending);
+                    }
+                }
+                MutationState::RemoteOutcomeUnknown => {
+                    let outcome = backend.reconcile_mutation(record.intent()).await?;
+                    validate_remote_outcome(record.intent(), &outcome)?;
+                    let pending = matches!(outcome, MutationRemoteOutcome::RemoteOutcomeUnknown);
+                    let status = store
+                        .record_remote_outcome(operation_id, execution_generation, outcome)
+                        .await?;
+                    let Some(current) =
+                        observe_mutation_transition(status, &record, operation_id, store, pending)
+                            .await?
+                    else {
+                        return Ok(MutationRunOutcome::Fenced);
+                    };
+                    if pending && current.state() == MutationState::RemoteOutcomeUnknown {
+                        return Ok(MutationRunOutcome::RemoteOutcomePending);
+                    }
+                }
+                MutationState::RemoteOutcomeKnown => {
+                    validate_recorded_outcome(&record)?;
+                    let status = store
+                        .mark_platform_reconciled(operation_id, execution_generation)
+                        .await?;
+                    if observe_mutation_transition(status, &record, operation_id, store, false)
+                        .await?
+                        .is_none()
+                    {
+                        return Ok(MutationRunOutcome::Fenced);
+                    }
+                }
+                MutationState::PlatformReconciled => {
+                    validate_recorded_outcome(&record)?;
+                    let status = store
+                        .complete_mutation(operation_id, execution_generation)
+                        .await?;
+                    if observe_mutation_transition(status, &record, operation_id, store, false)
+                        .await?
+                        .is_none()
+                    {
+                        return Ok(MutationRunOutcome::Fenced);
+                    }
+                }
+                MutationState::Completed => {
+                    validate_recorded_outcome(&record)?;
+                    return Ok(MutationRunOutcome::Completed);
+                }
+            }
+        }
+    }
+}
+
+fn validate_recorded_outcome(record: &MutationRecord) -> Result<()> {
+    let outcome = record.remote_outcome().ok_or_else(|| {
+        CloudFilesCoreError::invalid_mutation_transition(
+            "known, reconciled, or completed mutation omitted its remote outcome",
+        )
+    })?;
+    if matches!(outcome, MutationRemoteOutcome::RemoteOutcomeUnknown) {
+        return Err(CloudFilesCoreError::invalid_mutation_transition(
+            "known, reconciled, or completed mutation retained an unknown remote outcome",
+        ));
+    }
+    validate_remote_outcome(record.intent(), outcome)
+}
+
+fn validate_remote_outcome(intent: &MutationIntent, outcome: &MutationRemoteOutcome) -> Result<()> {
+    let item = match outcome {
+        MutationRemoteOutcome::Committed { item }
+        | MutationRemoteOutcome::AlreadyCommitted { item } => item.as_ref(),
+        MutationRemoteOutcome::PreconditionFailed { .. }
+        | MutationRemoteOutcome::RemoteOutcomeUnknown => return Ok(()),
+    };
+
+    match intent.desired() {
+        DesiredMutation::Create {
+            scope,
+            parent_id,
+            name,
+            kind,
+        } => {
+            let item = item.ok_or_else(|| {
+                CloudFilesCoreError::invalid_mutation_transition(
+                    "committed create outcome requires current item metadata",
+                )
+            })?;
+            if item.key().scope() != scope {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed create outcome belongs to another scope",
+                ));
+            }
+            if item.parent_id() != Some(parent_id) {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed create outcome has another parent",
+                ));
+            }
+            if item.name() != name {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed create outcome has another name",
+                ));
+            }
+            if item.kind() != *kind {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed create outcome has another item kind",
+                ));
+            }
+        }
+        DesiredMutation::ModifyContent { key } => {
+            let item = required_existing_item(
+                item,
+                key,
+                "committed content mutation outcome requires current item metadata",
+                "committed content mutation outcome belongs to another item",
+            )?;
+            if item.kind() != CloudItemKind::File {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed content mutation outcome must describe a file",
+                ));
+            }
+        }
+        DesiredMutation::ModifyMetadata {
+            key,
+            parent_id,
+            name,
+        } => {
+            let item = required_existing_item(
+                item,
+                key,
+                "committed metadata mutation outcome requires current item metadata",
+                "committed metadata mutation outcome belongs to another item",
+            )?;
+            if parent_id
+                .as_ref()
+                .is_some_and(|parent_id| item.parent_id() != Some(parent_id))
+            {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed metadata mutation outcome did not apply the requested parent",
+                ));
+            }
+            if name
+                .as_ref()
+                .is_some_and(|name| item.name() != name.as_str())
+            {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed metadata mutation outcome did not apply the requested name",
+                ));
+            }
+        }
+        DesiredMutation::Delete { key } => {
+            if let Some(item) = item
+                && item.key() != key
+            {
+                return Err(CloudFilesCoreError::invalid_mutation_transition(
+                    "committed delete outcome belongs to another item",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn required_existing_item<'a>(
+    item: Option<&'a CloudItem>,
+    key: &CloudItemKey,
+    missing_reason: &'static str,
+    mismatch_reason: &'static str,
+) -> Result<&'a CloudItem> {
+    let item =
+        item.ok_or_else(|| CloudFilesCoreError::invalid_mutation_transition(missing_reason))?;
+    if item.key() != key {
+        return Err(CloudFilesCoreError::invalid_mutation_transition(
+            mismatch_reason,
+        ));
+    }
+    Ok(item)
+}
+
+async fn observe_mutation_transition(
+    status: StoreWriteStatus,
+    previous: &MutationRecord,
+    operation_id: &OperationId,
+    store: &dyn MutationJournalStore,
+    allow_stable_unknown: bool,
+) -> MutationRunResult<Option<MutationRecord>> {
+    let current = store
+        .load_mutation(operation_id)
+        .await?
+        .ok_or(MutationRunError::RecordNotFound)?;
+    if &current != previous {
+        return Ok(Some(current));
+    }
+    if status == StoreWriteStatus::Fenced {
+        return Ok(None);
+    }
+    if allow_stable_unknown
+        && status == StoreWriteStatus::AlreadyApplied
+        && current.state() == MutationState::RemoteOutcomeUnknown
+    {
+        return Ok(Some(current));
+    }
+    Err(CloudFilesCoreError::invalid_mutation_transition(
+        "mutation store reported a transition without durable progress",
+    )
+    .into())
 }
 
 /// Result of applying an idempotent mutation record transition.
@@ -558,7 +899,9 @@ impl MutationRecord {
         outcome: MutationRemoteOutcome,
     ) -> Result<MutationRecordTransition> {
         let next_state = outcome.durable_state();
-        if self.remote_outcome.as_ref() == Some(&outcome) {
+        if let Some(current) = self.remote_outcome.as_ref()
+            && (current == &outcome || current.same_committed_effect(&outcome))
+        {
             return Ok(MutationRecordTransition::AlreadyApplied);
         }
         if !matches!(

@@ -10,8 +10,8 @@ use aster_forge_cloud_files_core::{
     ContentLeaseKind, ContentStorageEntry, ContentStorageStore, ContentUploadIntent,
     ContentUploadRecord, ContentUploadRecordTransition, ContentUploadSession, ContentUploadState,
     ContentUploadStore, DirtyContentTransition, LocalContentGeneration, LocalContentSnapshot,
-    MutationRemoteOutcome, OperationId, PlatformMaterializationState, StoreResult,
-    StoreWriteStatus,
+    MutationRemoteOutcome, OperationId, PlatformMaterializationState, SessionGeneration,
+    StoreResult, StoreWriteStatus,
 };
 use async_trait::async_trait;
 
@@ -23,6 +23,8 @@ struct ContentStorageState {
     cache_writes: HashMap<ContentCacheWriteOperationId, ContentCacheWriteRecord>,
     evictions: HashMap<ContentEvictionOperationId, ContentEvictionRecord>,
     uploads: HashMap<OperationId, ContentUploadRecord>,
+    active_upload_generations: HashMap<CloudScope, SessionGeneration>,
+    stall_next_upload_session: bool,
 }
 
 #[derive(Debug, Default)]
@@ -34,6 +36,40 @@ pub struct MemoryContentStorageStore {
 impl MemoryContentStorageStore {
     pub fn failures(&self) -> &FailureInjector {
         &self.failures
+    }
+
+    pub fn activate_content_upload_generation(
+        &self,
+        scope: CloudScope,
+        generation: SessionGeneration,
+    ) -> StoreWriteStatus {
+        let mut state = self
+            .state
+            .lock()
+            .expect("memory content store mutex should not be poisoned");
+        match state.active_upload_generations.get(&scope).copied() {
+            Some(current) if current > generation => StoreWriteStatus::Fenced,
+            Some(current) if current == generation => StoreWriteStatus::AlreadyApplied,
+            _ => {
+                state.active_upload_generations.insert(scope, generation);
+                StoreWriteStatus::Applied
+            }
+        }
+    }
+
+    pub fn stall_next_content_upload_session(&self) {
+        self.state
+            .lock()
+            .expect("memory content store mutex should not be poisoned")
+            .stall_next_upload_session = true;
+    }
+
+    fn upload_execution_is_active(
+        state: &ContentStorageState,
+        scope: &CloudScope,
+        generation: SessionGeneration,
+    ) -> bool {
+        state.active_upload_generations.get(scope).copied() == Some(generation)
     }
 
     fn store_error(
@@ -108,6 +144,7 @@ impl ContentUploadStore for MemoryContentStorageStore {
     async fn persist_content_upload_intent(
         &self,
         intent: ContentUploadIntent,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
         let operation_id = intent.operation_id().clone();
         let cache_key = intent.base_cache_key().clone();
@@ -115,6 +152,15 @@ impl ContentUploadStore for MemoryContentStorageStore {
             .state
             .lock()
             .expect("memory content store mutex should not be poisoned");
+        if intent.session_generation() != execution_generation
+            || !Self::upload_execution_is_active(
+                &state,
+                intent.base_cache_key().item_key().scope(),
+                execution_generation,
+            )
+        {
+            return Ok(StoreWriteStatus::Fenced);
+        }
         if let Some(existing) = state.uploads.get(&operation_id) {
             return if existing.intent() == &intent {
                 Ok(StoreWriteStatus::AlreadyApplied)
@@ -203,17 +249,32 @@ impl ContentUploadStore for MemoryContentStorageStore {
         &self,
         operation_id: &OperationId,
         session: ContentUploadSession,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
         let mut state = self
             .state
             .lock()
             .expect("memory content store mutex should not be poisoned");
-        let record = state.uploads.get_mut(operation_id).ok_or_else(|| {
+        let record = state.uploads.get(operation_id).ok_or_else(|| {
             Self::store_error(
                 CloudFilesStoreErrorKind::NotFound,
                 "content upload operation was not found",
             )
         })?;
+        if !Self::upload_execution_is_active(
+            &state,
+            record.intent().base_cache_key().item_key().scope(),
+            execution_generation,
+        ) {
+            return Ok(StoreWriteStatus::Fenced);
+        }
+        if std::mem::take(&mut state.stall_next_upload_session) {
+            return Ok(StoreWriteStatus::AlreadyApplied);
+        }
+        let record = state
+            .uploads
+            .get_mut(operation_id)
+            .expect("upload record existence was checked above");
         let transition = record
             .record_session(session)
             .map_err(Self::transition_error)?;
@@ -229,17 +290,29 @@ impl ContentUploadStore for MemoryContentStorageStore {
     async fn begin_content_upload_remote_commit(
         &self,
         operation_id: &OperationId,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
         let mut state = self
             .state
             .lock()
             .expect("memory content store mutex should not be poisoned");
-        let record = state.uploads.get_mut(operation_id).ok_or_else(|| {
+        let record = state.uploads.get(operation_id).ok_or_else(|| {
             Self::store_error(
                 CloudFilesStoreErrorKind::NotFound,
                 "content upload operation was not found",
             )
         })?;
+        if !Self::upload_execution_is_active(
+            &state,
+            record.intent().base_cache_key().item_key().scope(),
+            execution_generation,
+        ) {
+            return Ok(StoreWriteStatus::Fenced);
+        }
+        let record = state
+            .uploads
+            .get_mut(operation_id)
+            .expect("upload record existence was checked above");
         let transition = record
             .begin_remote_commit()
             .map_err(Self::transition_error)?;
@@ -256,17 +329,29 @@ impl ContentUploadStore for MemoryContentStorageStore {
         &self,
         operation_id: &OperationId,
         outcome: MutationRemoteOutcome,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
         let mut state = self
             .state
             .lock()
             .expect("memory content store mutex should not be poisoned");
-        let record = state.uploads.get_mut(operation_id).ok_or_else(|| {
+        let record = state.uploads.get(operation_id).ok_or_else(|| {
             Self::store_error(
                 CloudFilesStoreErrorKind::NotFound,
                 "content upload operation was not found",
             )
         })?;
+        if !Self::upload_execution_is_active(
+            &state,
+            record.intent().base_cache_key().item_key().scope(),
+            execution_generation,
+        ) {
+            return Ok(StoreWriteStatus::Fenced);
+        }
+        let record = state
+            .uploads
+            .get_mut(operation_id)
+            .expect("upload record existence was checked above");
         let transition = record
             .record_remote_outcome(outcome)
             .map_err(Self::transition_error)?;
@@ -282,6 +367,7 @@ impl ContentUploadStore for MemoryContentStorageStore {
     async fn reconcile_content_upload_metadata(
         &self,
         operation_id: &OperationId,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
         let mut state = self
             .state
@@ -293,6 +379,13 @@ impl ContentUploadStore for MemoryContentStorageStore {
                 "content upload operation was not found",
             )
         })?;
+        if !Self::upload_execution_is_active(
+            &state,
+            record.intent().base_cache_key().item_key().scope(),
+            execution_generation,
+        ) {
+            return Ok(StoreWriteStatus::Fenced);
+        }
         if matches!(
             record.state(),
             ContentUploadState::MetadataReconciled | ContentUploadState::Completed
@@ -338,6 +431,7 @@ impl ContentUploadStore for MemoryContentStorageStore {
     async fn complete_content_upload(
         &self,
         operation_id: &OperationId,
+        execution_generation: SessionGeneration,
     ) -> StoreResult<StoreWriteStatus> {
         let mut state = self
             .state
@@ -349,6 +443,13 @@ impl ContentUploadStore for MemoryContentStorageStore {
                 "content upload operation was not found",
             )
         })?;
+        if !Self::upload_execution_is_active(
+            &state,
+            record.intent().base_cache_key().item_key().scope(),
+            execution_generation,
+        ) {
+            return Ok(StoreWriteStatus::Fenced);
+        }
         if record.state() == ContentUploadState::Completed {
             return Ok(StoreWriteStatus::AlreadyApplied);
         }

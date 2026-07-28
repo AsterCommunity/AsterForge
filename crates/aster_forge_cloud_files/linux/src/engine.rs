@@ -8,13 +8,13 @@ use std::{
 
 use aster_forge_cloud_files_core::{
     ByteRange, CloudFilesBackend, CloudItem, CloudItemKey, CloudItemKind, ContentReadRequest,
-    ContentRevision, PageCursor,
+    ContentRevision, PageCursor, SessionGeneration,
 };
 use bytes::Bytes;
 
 use crate::{
-    LINUX_ROOT_INODE, LinuxCloudFilesError, LinuxInode, LinuxInodeGeneration, LinuxInodeTable,
-    Result,
+    LINUX_ROOT_INODE, LinuxCloudFilesError, LinuxInode, LinuxInodeGeneration, LinuxInodeRecord,
+    LinuxInodeTable, Result,
 };
 
 const FUSE_BLOCK_SIZE: u64 = 512;
@@ -237,6 +237,12 @@ impl LinuxNode {
     pub const fn attributes(&self) -> &LinuxFileAttributes {
         &self.attributes
     }
+
+    pub(crate) fn with_size(mut self, size: u64) -> Self {
+        self.attributes.size = size;
+        self.attributes.blocks = size.div_ceil(FUSE_BLOCK_SIZE);
+        self
+    }
 }
 
 /// Non-zero open-file handle scoped to one mount process.
@@ -306,6 +312,15 @@ impl LinuxDirectoryEntry {
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
+
+    pub(crate) fn from_node(name: String, node: &LinuxNode) -> Self {
+        Self {
+            inode: node.attributes.inode,
+            generation: node.generation,
+            name,
+            kind: node.attributes.kind,
+        }
+    }
 }
 
 /// Immutable directory stream captured at `opendir` time.
@@ -330,6 +345,18 @@ impl LinuxDirectorySnapshot {
     /// Returns children in the backend enumeration order captured by this handle.
     pub fn entries(&self) -> &[LinuxDirectoryEntry] {
         &self.entries
+    }
+
+    pub(crate) fn with_entries(
+        directory: LinuxInode,
+        parent: LinuxInode,
+        entries: Vec<LinuxDirectoryEntry>,
+    ) -> Self {
+        Self {
+            directory,
+            parent,
+            entries: entries.into(),
+        }
     }
 }
 
@@ -456,6 +483,43 @@ where
             },
         );
         Ok(handle)
+    }
+
+    pub(crate) async fn hydrate_for_write(
+        &self,
+        inode: LinuxInode,
+        session_generation: SessionGeneration,
+    ) -> Result<(crate::LinuxWriteOpenRequest, Bytes)> {
+        let item = self.load_item(inode).await?;
+        if item.kind() != CloudItemKind::File {
+            return Err(LinuxCloudFilesError::NotFile);
+        }
+        let content = item
+            .content()
+            .ok_or(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "regular file omitted content metadata",
+            })?;
+        let request = ContentReadRequest::whole(
+            item.key().clone(),
+            content.revision().clone(),
+            content.size(),
+        );
+        let response = self.inner.backend.read_content(&request).await?;
+        request.validate_response(&response).map_err(|_| {
+            LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "write hydration violated the requested revision or complete-file extent",
+            }
+        })?;
+        let (_, _, bytes, _) = response.into_parts();
+        Ok((
+            crate::LinuxWriteOpenRequest::new(
+                item.key().clone(),
+                content.revision().clone(),
+                content.size(),
+                session_generation,
+            ),
+            bytes,
+        ))
     }
 
     /// Reads an exact range using the revision captured by `open_file`.
@@ -645,6 +709,22 @@ where
             .inodes
             .by_key(item.key())
             .ok_or(LinuxCloudFilesError::MissingInodeRecord)?;
+        self.node_from_item_and_record(item, record)
+    }
+
+    pub(crate) fn node_from_item_and_record(
+        &self,
+        item: &CloudItem,
+        record: &LinuxInodeRecord,
+    ) -> Result<LinuxNode> {
+        if !item.is_root() {
+            validate_linux_name(item.name())?;
+        }
+        if item.key() != record.key() {
+            return Err(LinuxCloudFilesError::InvalidBackendResponse {
+                reason: "linux inode record did not match the item stable identity",
+            });
+        }
         let (kind, size, permissions, links) = match item.kind() {
             CloudItemKind::File => {
                 let Some(content) = item.content() else {
