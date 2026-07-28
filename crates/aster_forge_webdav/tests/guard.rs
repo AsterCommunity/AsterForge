@@ -5,11 +5,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use aster_forge_webdav::{
-    DavBackendErrorKind, DavDirEntry, DavFile, DavFileSystem, DavIfEvaluationError, DavLock,
-    DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavPath, DavResponseBody,
-    FsError, FsFuture, FsStream, LsFuture, OpenOptions, ReadDirMeta,
+    DavBackendErrorKind, DavConditionalEvaluationError, DavConditionalOutcome,
+    DavConditionalResource, DavDirEntry, DavFile, DavFileSystem, DavIfEvaluationError, DavLock,
+    DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavMethod, DavPath,
+    DavResponseBody, FsError, FsFuture, FsStream, LsFuture, OpenOptions, ReadDirMeta,
     enforce_if_header_with_backends, enforce_parent_collection, enforce_parent_unlocked,
-    enforce_unlocked, ensure_lock_target_exists, parse_if_header, unsubmitted_lock_conflicts,
+    enforce_unlocked, ensure_lock_target_exists, parse_if_header, plan_conditionals_with_backends,
+    unsubmitted_lock_conflicts,
 };
 use bytes::{Buf, Bytes};
 use http::StatusCode;
@@ -236,6 +238,111 @@ fn lock(path: &str, token: &str) -> DavLock {
         shared: false,
         deep: true,
     }
+}
+
+#[test]
+fn backend_conditional_entrypoint_covers_success_backend_and_representation_failures() {
+    let path = DavPath::new("/file.txt").expect("path");
+    let mut if_headers = HeaderMap::new();
+    if_headers.insert("If", HeaderValue::from_static("([\"v1\"])"));
+    let if_header = parse_if_header(&if_headers)
+        .expect("If grammar")
+        .expect("If header");
+    let mut filesystem = TestFileSystem::default();
+    filesystem
+        .etags
+        .insert(path.as_str().to_owned(), "v1".to_owned());
+    let locks = TestLockSystem::default();
+    let resource = DavConditionalResource {
+        exists: true,
+        etag: Some("v1"),
+        last_modified: Some(SystemTime::UNIX_EPOCH),
+    };
+
+    let plan = futures::executor::block_on(plan_conditionals_with_backends(
+        Some(&if_header),
+        &filesystem,
+        &locks,
+        &path,
+        "/webdav",
+        "https",
+        "dav.example",
+        DavMethod::Put,
+        &HeaderMap::new(),
+        resource,
+    ))
+    .expect("backend conditional plan");
+    assert_eq!(plan.outcome, DavConditionalOutcome::Proceed);
+
+    filesystem
+        .failures
+        .insert(path.as_str().to_owned(), FsError::GeneralFailure);
+    let error = futures::executor::block_on(plan_conditionals_with_backends(
+        Some(&if_header),
+        &filesystem,
+        &locks,
+        &path,
+        "/webdav",
+        "https",
+        "dav.example",
+        DavMethod::Put,
+        &HeaderMap::new(),
+        resource,
+    ))
+    .expect_err("filesystem error should cross the backend boundary");
+    assert!(matches!(
+        error,
+        DavConditionalEvaluationError::Backend(error)
+            if error.kind == DavBackendErrorKind::Internal
+    ));
+
+    let plan = futures::executor::block_on(plan_conditionals_with_backends(
+        None,
+        &filesystem,
+        &locks,
+        &path,
+        "/webdav",
+        "https",
+        "dav.example",
+        DavMethod::Get,
+        &HeaderMap::new(),
+        DavConditionalResource {
+            exists: true,
+            etag: None,
+            last_modified: Some(SystemTime::UNIX_EPOCH - Duration::from_secs(1)),
+        },
+    ))
+    .expect("unconditional planning should skip unrepresentable metadata");
+    let mut response_headers = HeaderMap::new();
+    plan.apply_response_headers(http::StatusCode::OK, &mut response_headers);
+    assert!(response_headers.is_empty());
+
+    let mut conditional_headers = HeaderMap::new();
+    conditional_headers.insert(
+        "If-Modified-Since",
+        HeaderValue::from_static("Thu, 01 Jan 1970 00:00:00 GMT"),
+    );
+    let error = futures::executor::block_on(plan_conditionals_with_backends(
+        None,
+        &filesystem,
+        &locks,
+        &path,
+        "/webdav",
+        "https",
+        "dav.example",
+        DavMethod::Get,
+        &conditional_headers,
+        DavConditionalResource {
+            exists: true,
+            etag: None,
+            last_modified: Some(SystemTime::UNIX_EPOCH - Duration::from_secs(1)),
+        },
+    ))
+    .expect_err("an active date condition requires representable metadata");
+    assert!(matches!(
+        error,
+        DavConditionalEvaluationError::InvalidRepresentation
+    ));
 }
 
 fn if_header(value: &'static str) -> aster_forge_webdav::IfHeader {

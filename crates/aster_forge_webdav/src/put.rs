@@ -1,17 +1,23 @@
 //! PUT request planning and success response composition.
 
+use std::time::SystemTime;
+
 use http::header::{CACHE_CONTROL, CONTENT_LOCATION, IF_MATCH, IF_NONE_MATCH};
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use crate::{
-    DavPath, DavProtocolError, DavResponse, evaluate_http_etag_preconditions, href_for_dav_path,
+    DavConditionalOutcome, DavConditionalPlan, DavConditionalPlanError, DavConditionalResource,
+    DavMethod, DavPath, DavProtocolError, DavResponse, href_for_dav_path, plan_http_conditionals,
 };
 
 /// Resolved state of the PUT request target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavPutResourceState<'a> {
     Missing,
-    File { etag: Option<&'a str> },
+    File {
+        etag: Option<&'a str>,
+        last_modified: Option<SystemTime>,
+    },
     Collection,
 }
 
@@ -25,10 +31,14 @@ pub struct DavPutPlan {
 }
 
 /// Failure while planning a PUT request.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum DavPutPlanError {
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
+    #[error("PUT request precondition failed")]
+    PreconditionFailed(DavConditionalPlan),
+    #[error("invalid PUT representation metadata")]
+    InvalidRepresentation,
     #[error("PUT cannot replace a collection")]
     CollectionTarget,
 }
@@ -43,14 +53,30 @@ pub fn plan_put_request(
     headers: &HeaderMap,
     state: DavPutResourceState<'_>,
 ) -> Result<DavPutPlan, DavPutPlanError> {
-    let (resource_existed, etag) = match state {
-        DavPutResourceState::Missing => (false, None),
-        DavPutResourceState::File { etag } => (true, etag),
+    let resource = match state {
+        DavPutResourceState::Missing => DavConditionalResource::missing(),
+        DavPutResourceState::File {
+            etag,
+            last_modified,
+        } => DavConditionalResource {
+            exists: true,
+            etag,
+            last_modified,
+        },
         DavPutResourceState::Collection => return Err(DavPutPlanError::CollectionTarget),
     };
-    evaluate_http_etag_preconditions(headers, resource_existed, etag, false)?;
+    let conditional =
+        plan_http_conditionals(DavMethod::Put, headers, resource).map_err(|error| match error {
+            DavConditionalPlanError::Protocol(error) => DavPutPlanError::Protocol(error),
+            DavConditionalPlanError::InvalidRepresentation => {
+                DavPutPlanError::InvalidRepresentation
+            }
+        })?;
+    if conditional.outcome != DavConditionalOutcome::Proceed {
+        return Err(DavPutPlanError::PreconditionFailed(conditional));
+    }
     Ok(DavPutPlan {
-        resource_existed,
+        resource_existed: resource.exists,
         create: !header_equals(headers, IF_MATCH, "*"),
         create_new: header_equals(headers, IF_NONE_MATCH, "*"),
         content_length_hint: content_length_hint(headers),
@@ -62,6 +88,21 @@ pub fn plan_put_request(
 pub fn put_plan_error_response(error: &DavPutPlanError) -> DavResponse {
     match error {
         DavPutPlanError::Protocol(error) => crate::protocol_error_response(error),
+        DavPutPlanError::PreconditionFailed(plan) => {
+            let mut response = DavResponse::empty(StatusCode::PRECONDITION_FAILED);
+            response
+                .headers
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            plan.apply_response_headers(response.status, &mut response.headers);
+            response
+        }
+        DavPutPlanError::InvalidRepresentation => {
+            let mut response = DavResponse::empty(StatusCode::INTERNAL_SERVER_ERROR);
+            response
+                .headers
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
         DavPutPlanError::CollectionTarget => {
             let mut response = DavResponse::empty(StatusCode::METHOD_NOT_ALLOWED);
             response

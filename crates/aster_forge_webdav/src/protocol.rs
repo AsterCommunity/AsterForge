@@ -1,8 +1,8 @@
 //! WebDAV header parsing and protocol precondition rules.
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use http::header::{self, HeaderMap, HeaderValue};
+use http::header::HeaderMap;
 use http::uri::Authority;
 use http::{StatusCode, Uri};
 use percent_encoding::percent_decode_str;
@@ -81,15 +81,6 @@ pub enum DavIfEvaluationError {
     Protocol(#[from] DavProtocolError),
     #[error(transparent)]
     Backend(#[from] DavBackendError),
-}
-
-/// Outcome of HTTP entity-tag and modification-date precondition evaluation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DavPrecondition {
-    /// Continue processing the request.
-    Proceed,
-    /// Return `304 Not Modified` for a safe method.
-    NotModified,
 }
 
 /// Stable protocol error classification for transport adapters.
@@ -492,110 +483,6 @@ pub fn parse_lock_token_header(headers: &HeaderMap) -> Result<String, DavProtoco
         .filter(|token| !token.is_empty() && !token.contains(['<', '>']))
         .ok_or_else(|| DavProtocolError::bad_request("Invalid Lock-Token header"))?;
     Ok(token.to_owned())
-}
-
-/// Evaluates `If-Match` and `If-None-Match` for a resource operation.
-pub fn evaluate_http_etag_preconditions(
-    headers: &HeaderMap,
-    resource_exists: bool,
-    current_etag: Option<&str>,
-    safe_method: bool,
-) -> Result<DavPrecondition, DavProtocolError> {
-    if let Some(value) = headers.get(header::IF_MATCH) {
-        let raw = value
-            .to_str()
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-Match header"))?;
-        if !http_validators::if_match_header_matches(raw, resource_exists, current_etag)
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-Match header"))?
-        {
-            return Err(DavProtocolError::precondition_failed());
-        }
-    }
-
-    if let Some(value) = headers.get(header::IF_NONE_MATCH) {
-        let raw = value
-            .to_str()
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-None-Match header"))?;
-        if http_validators::if_none_match_header_matches(raw, resource_exists, current_etag)
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-None-Match header"))?
-        {
-            return if safe_method {
-                Ok(DavPrecondition::NotModified)
-            } else {
-                Err(DavProtocolError::precondition_failed())
-            };
-        }
-    }
-
-    Ok(DavPrecondition::Proceed)
-}
-
-/// Evaluates RFC 7232 download preconditions in their required precedence order.
-pub fn evaluate_http_download_preconditions(
-    headers: &HeaderMap,
-    current_etag: Option<&str>,
-    last_modified: Option<SystemTime>,
-) -> Result<DavPrecondition, DavProtocolError> {
-    let has_if_match = headers.contains_key(header::IF_MATCH);
-    if let Some(value) = headers.get(header::IF_MATCH) {
-        let raw = value
-            .to_str()
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-Match header"))?;
-        if !http_validators::if_match_header_matches(raw, true, current_etag)
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-Match header"))?
-        {
-            return Err(DavProtocolError::precondition_failed());
-        }
-    }
-
-    if !has_if_match
-        && let (Some(value), Some(last_modified)) =
-            (headers.get(header::IF_UNMODIFIED_SINCE), last_modified)
-    {
-        let since = parse_http_date_header(value, "Invalid If-Unmodified-Since header")?;
-        if http_validators::http_date_epoch_seconds(last_modified)
-            > http_validators::http_date_epoch_seconds(since)
-        {
-            return Err(DavProtocolError::precondition_failed());
-        }
-    }
-
-    let has_if_none_match = headers.contains_key(header::IF_NONE_MATCH);
-    if let Some(value) = headers.get(header::IF_NONE_MATCH) {
-        let raw = value
-            .to_str()
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-None-Match header"))?;
-        if http_validators::if_none_match_header_matches(raw, true, current_etag)
-            .map_err(|_| DavProtocolError::bad_request("Invalid If-None-Match header"))?
-        {
-            return Ok(DavPrecondition::NotModified);
-        }
-    }
-
-    if !has_if_none_match
-        && let (Some(value), Some(last_modified)) =
-            (headers.get(header::IF_MODIFIED_SINCE), last_modified)
-    {
-        let since = parse_http_date_header(value, "Invalid If-Modified-Since header")?;
-        if http_validators::http_date_epoch_seconds(last_modified)
-            <= http_validators::http_date_epoch_seconds(since)
-        {
-            return Ok(DavPrecondition::NotModified);
-        }
-    }
-
-    Ok(DavPrecondition::Proceed)
-}
-
-fn parse_http_date_header(
-    value: &HeaderValue,
-    invalid_message: &'static str,
-) -> Result<SystemTime, DavProtocolError> {
-    let raw = value
-        .to_str()
-        .map_err(|_| DavProtocolError::bad_request(invalid_message))?;
-    http_validators::parse_http_date(raw)
-        .map_err(|_| DavProtocolError::bad_request(invalid_message))
 }
 
 fn origin_authority_matches(

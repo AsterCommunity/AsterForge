@@ -12,13 +12,17 @@
         clippy::expect_used,
         clippy::panic,
         clippy::unimplemented,
-        clippy::todo
+        clippy::todo,
+        clippy::allow_attributes,
+        clippy::allow_attributes_without_reason
     )
 )]
 
 #[cfg(feature = "actix")]
 pub mod actix;
 pub mod backend;
+pub mod capability;
+pub mod conditional;
 pub mod deltav;
 pub mod event;
 pub mod lock;
@@ -37,6 +41,20 @@ pub use backend::{
     DavIfResourceState, DavIfStateResolver, DavLock, DavLockError, DavLockPreflightError,
     DavLockSystem, DavMetaData, DavProp, DavResourceKind, FsError, FsFuture, FsResult, FsStream,
     LsFuture, OpenOptions, ReadDirMeta,
+};
+pub use capability::{
+    DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityEvaluationError,
+    DavCapabilityPlanError, DavCapabilityProfile, DavCapabilityProvider, DavCapabilitySnapshot,
+    DavCapabilityTarget, DavClass1Profile, DavClass1Support, DavClass1VersioningProfile,
+    DavClass2Profile, DavClass2Support, DavClass2VersioningProfile, DavCompatibilityCapabilities,
+    DavComplianceClasses, DavCoreVersioningSupport, DavLockingCapability, DavMethodGateError,
+    DavMethodSet, DavNonDavProfile, DavResourceState, DavVersioningCapability, plan_capabilities,
+    plan_capabilities_with_provider,
+};
+pub use conditional::{
+    DavConditionalEvaluationError, DavConditionalOutcome, DavConditionalPlan,
+    DavConditionalPlanError, DavConditionalResource, DavRangeEvaluation, plan_conditionals,
+    plan_conditionals_with_backends, plan_http_conditionals,
 };
 pub use deltav::{
     DavVersionTreeReportError, validate_version_control_request, validate_version_tree_report,
@@ -61,19 +79,17 @@ pub use property::{
     propfind_request_label, propfind_xml_error_response, proppatch_xml_error_response,
 };
 pub use protocol::{
-    DavIfEvaluationError, DavPrecondition, DavProtocolError, DavProtocolErrorKind, Depth,
-    Destination, IfHeader, IfResourceGroup, IfStateCondition, IfStateList,
-    destination_relative_path, enforce_if_header, enforce_if_header_with_backends,
-    evaluate_http_download_preconditions, evaluate_http_etag_preconditions, parse_copy_depth,
-    parse_delete_depth, parse_if_header, parse_lock_depth, parse_lock_timeout,
-    parse_lock_token_header, parse_move_depth, parse_overwrite, parse_propfind_depth,
-    submitted_lock_tokens, submitted_lock_tokens_for_path,
+    DavIfEvaluationError, DavProtocolError, DavProtocolErrorKind, Depth, Destination, IfHeader,
+    IfResourceGroup, IfStateCondition, IfStateList, destination_relative_path, enforce_if_header,
+    enforce_if_header_with_backends, parse_copy_depth, parse_delete_depth, parse_if_header,
+    parse_lock_depth, parse_lock_timeout, parse_lock_token_header, parse_move_depth,
+    parse_overwrite, parse_propfind_depth, submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
 pub use put::{
     DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError, plan_put_request,
     put_plan_error_response, put_success_response,
 };
-pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin};
+pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin, DavRequestTarget};
 pub use resource::{
     DavCopyMoveMethod, DavCopyMovePlan, DavMutationFailure, DavMutationPlanError,
     DavMutationResponseError, collection_created_response, delete_success_response,
@@ -83,8 +99,9 @@ pub use resource::{
     validate_collection_create_target, validate_delete_target,
 };
 pub use response::{
-    DAV_ALLOW_HEADER, DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError,
-    DavResponse, DavResponseBody, backend_error_response, body_error_response,
+    DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavResponse,
+    DavResponseBody, backend_error_response, body_error_response,
+    capability_evaluation_error_response, conditional_plan_error_response, gate_method,
     method_not_allowed_response, options_response, plan_download_response, protocol_error_response,
     range_not_satisfiable_response,
 };
