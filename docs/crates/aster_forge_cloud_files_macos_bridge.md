@@ -11,21 +11,22 @@
 - metadata/content revision 到 `NSFileProviderItemVersion` 的独立映射；
 - 每个 version component 的 128-byte File Provider 限制；
 - root item 与 root child 的 `NSFileProviderRootContainerItemIdentifier` 映射；
-- paged enumeration 的 parent/scope、duplicate identifier、duplicate filename 校验；
-- requested content revision 绑定的 whole-file fetch；
+- Rust 与 Swift 实际 File Provider 路径共用的 item identity/root role、enumeration parent、duplicate identifier、duplicate filename 和 repeated cursor 校验；
+- 单 identity field 1,024 bytes、encoded identifier 4,128 bytes、单页 4,096 items、单 enumerator 100,000 items/16 MiB retained key data 的显式预算；
+- requested content revision 绑定的 fetch plan 与 bounded chunk reads；
 - extension generation、closing、draining、closed 和非 clone request lease；
 - Swift-owned opaque session/request handles；
 - owned byte buffer 与单次 release；
 - null、UTF-8、NUL、panic 和 backend error 的稳定分类；
 - Swift read-only item/error/version/capability mapping；
-- item lookup、whole-file fetch、opaque page enumeration 和数据源提供的 opaque sync anchor；
+- item lookup、数据源流式写入后交付的 revision-bound staging URL、opaque page enumeration 和数据源提供的 opaque sync anchor；
 - updated/deleted change batch、`moreComing`、500-byte anchor limit 和 expired-anchor reset；
 - materialized directory 的 anchor-before-list、paged enumeration、anchored changes reconciliation；
-- materialized refresh coalescing、cancellation/token fence 和迟到结果抑制；
+- materialized refresh coalescing、非递归 continuation、重复 page/anchor 终止、cancellation/token fence 和迟到结果抑制；
 - 可替换的 materialized store contract 与原子 JSON file implementation；
 - replicated extension working-set `signalEnumerator` bridge；
 - `Progress` cancellation、exactly-once terminal completion 和 request lease release；
-- File Provider 同 volume temporary directory 中的原子 content staging；
+- data source 直接在 File Provider 同 volume temporary directory 中流式创建 content staging，runtime 不持有整文件 `Data`；
 - CMake Xcode generator 生成 host app、embedded `.appex`、Info.plist 和 entitlement；
 - synthetic memory catalog：`README.txt`、`Documents/`、`Documents/hello.txt`；
 - 可独立运行的 `macos_memory_cloud_drive` example，覆盖 Swift/Rust C ABI error value、session/request ownership、identifier encoding、目录枚举、内容读取、change feed 和 materialized working set。
@@ -55,7 +56,7 @@ File Provider identifier 是 adapter mapping，不是路径或产品 DTO。普�
 ```rust
 use aster_forge_cloud_files_macos_bridge::MacosFileProviderIdentifier;
 
-let identifier = MacosFileProviderIdentifier::encode(&item_key);
+let identifier = MacosFileProviderIdentifier::encode(&item_key)?;
 let restored = MacosFileProviderIdentifier::parse(identifier.as_str())?;
 assert_eq!(restored.item_key()?, &item_key);
 ```
@@ -89,9 +90,15 @@ crates/aster_forge_cloud_files/macos_bridge/swift
 
 它不依赖产品 DTO 或 API，数据源通过 `MacosCloudFilesDataSource` 注入。SwiftPM、Xcode 和本地签名生成物由各自目录内的 `.gitignore` 管理，不污染仓库根规则。
 
+`MacosReadOnlyFileProviderRuntime` 必须显式注入当前 domain 的 `(namespace, root)` scope 和一个 `MacosPersistentIdentifierDecoding` 实现。fixture 的 `RustMacosIdentifierDecoder` 通过 `aster_forge_cloud_files_macos_identifier_decode` 调用 Rust C ABI，因此实际 extension 路径会在 Rust 侧校验 identifier version、canonical base64url、UTF-8、字段长度与 scope，而不是信任 Swift 拆出的字符串。
+
 `MacosCloudFilesDataSource` 同时提供当前 `MacosSyncAnchor` 和 anchored change enumeration。anchor 是最多 500 bytes 的 opaque token；Forge 不解析 cursor 内容，也不从时间戳、文件名或产品 revision 推导它。`MacosChangeBatch` 分开携带 updated snapshots 与 deleted identifiers，禁止重复 identifier 以及同一 batch 内的 update/delete 冲突。每个 change request 与 item/page/fetch 一样获取 Rust session lease，并在完成、错误或 enumerator invalidation 时 exactly-once release。
 
-`MacosFileProviderMaterializedItemsReader` 按 Apple 要求先捕获 current anchor，再从空 page 开始完整分页，最后枚举 captured anchor 之后的所有 change batch，直到 `moreComing == false`。它只保存 materialized directory identifier；change 中同 identifier 变为普通文件时会移除，delete 同样移除。`MacosMaterializedSetTracker` 会合并连续 refresh 通知，extension invalidation 会取消 active enumerator，token fence 会阻止迟到 success 覆盖 store。`MacosFileMaterializedSetStore` 是可替换 contract 的原子文件实现；App Group ID、目录位置和生产数据库仍由产品注入。replicated extension 只 signal working set，`MacosWorkingSetSignaler` 不伪造 parent-container signal。
+content fetch 不再返回完整 `Data`。Rust backend adapter 先通过 `prepare_content_fetch` 校验 identity、kind、metadata 与 requested revision，随后用 `read_content_chunk` 按有限 chunk 写入 native staging storage；Swift 产品 data source 同样必须把远端内容以分块或 stream 写入注入的 File Provider temporary directory，再以 `MacosFetchedContent.stagingURL` 交给 shell。shell 会复查 identifier、requested content version、文件类型和实际文件大小。请求在 staging 完成前被取消或 runtime invalidation 时，data source 的 `discardFetchedContents(at:)` 负责删除迟到文件。这个合同避免 extension RSS 随文件大小和并发 fetch 数量线性增长，也避免 runtime 再复制和重写一次完整内容。
+
+`MacosReadOnlyFileProviderRuntime.invalidate()` 会先关闭 ingress，再取消 runtime 登记的 item、fetch 和所有 enumerator 操作，然后推进 Rust session closing/disconnected。generation/terminal gate 会屏蔽迟到 callback；每个已接受 lease 仍严格释放一次。
+
+`MacosFileProviderMaterializedItemsReader` 按 Apple 要求先捕获 current anchor，再从空 page 开始完整分页，最后枚举 captured anchor 之后的所有 change batch，直到 `moreComing == false`。分页和 change continuation 调度到后续 work item，不会因同步 backend callback 形成递归栈；重复 page token、重复 change anchor 和超量目录集会终止 reconciliation。它只保存 materialized directory identifier；change 中同 identifier 变为普通文件时会移除，delete 同样移除。`MacosMaterializedSetTracker` 会合并连续 refresh 通知，在锁外持久化，extension invalidation 会取消 active enumerator，token fence 会阻止迟到 success 覆盖 store。`MacosFileMaterializedSetStore` 是可替换 contract 的原子文件实现；损坏或未知 schema 的旧文件会先隔离为 `corrupt-*.json`，随后返回可重建的空 snapshot。App Group ID、目录位置和生产数据库仍由产品注入。replicated extension 只 signal working set，`MacosWorkingSetSignaler` 不伪造 parent-container signal。
 
 ## Standalone 内存云盘 Example
 
@@ -177,7 +184,7 @@ cmake --build /tmp/aster-forge-macos-fixture --config Debug \
 ctest --test-dir /tmp/aster-forge-macos-fixture -C Debug --output-on-failure
 ```
 
-当前 deterministic tests 覆盖 identifier/system container/version limit、root mapping、paged enumeration、失败 page 的原子状态、backend identity/parent/revision/whole-file extent drift、完整 backend error mapping、session lifecycle、FFI null/zero/UTF-8/NUL/malformed input、buffer 与 opaque handle ownership。Swift XCTest 额外覆盖 1/128/129-byte version、499/500/501-byte page 与 sync anchor、精确 Apple error mapping、同步完成后取消、并发 terminal winner、session rejection、临时文件失败与迟到清理、opaque page/change anchor round trip、updated/deleted/more-coming change batch、expired anchor、enumerator invalidate 取消和 lease release。materialized tests 额外覆盖 store reopen/corruption、initial empty state、paged list + anchored changes、目录变文件、delete、`moreComing`、missing anchor、取消迟到回调、refresh coalescing、持久化失败、invalidate 后迟到 success fence 和 working-set signal error。example support tests 覆盖 command/default/help、root alias、nested path、argument cardinality、unknown command/anchor、absolute/traversal/empty component、list/change/smoke stable output；Swift XCTest 当前共 43 个。CTest 以 11 个进程级 case 运行 standalone binary，覆盖 smoke、root/nested list、nested cat、initial changes、working set，以及 traversal、missing item、list-file、cat-directory 和 expired-anchor failure。开发签名 runner 留作 Finder enumeration、system hydration/eviction、App Group reopen、extension termination 和 hostless hydration 的可选最终验收。
+当前 deterministic tests 覆盖 identifier/system container/version/identifier byte limit、root mapping、单页 enumeration limit、失败 page 的原子状态、backend identity/parent/revision/whole-file extent drift、完整 backend error mapping、session lifecycle、FFI null/zero/UTF-8/NUL/malformed/oversized input、buffer 与 opaque handle ownership。Swift XCTest 额外覆盖 response identity/version/size validation、runtime 与 enumerator invalidation、同步完成后取消、并发 terminal winner、session rejection、staging URL 迟到清理、opaque page/change anchor round trip、updated/deleted/more-coming change batch、expired anchor 和 lease release。materialized tests 额外覆盖 store reopen/corrupt quarantine/rebuild、paged list + anchored changes、目录变文件、delete、`moreComing`、missing anchor、取消迟到回调、refresh coalescing、锁外持久化失败、invalidate 后迟到 success fence 和 working-set signal error。example support tests 覆盖 command/default/help、root alias、nested path、argument cardinality、unknown command/anchor、absolute/traversal/empty component、list/change/smoke stable output；Swift XCTest 当前共 45 个。CTest 以 11 个进程级 case 运行 standalone binary，覆盖 smoke、root/nested list、nested cat、initial changes、working set，以及 traversal、missing item、list-file、cat-directory 和 expired-anchor failure。开发签名 runner 留作 Finder enumeration、system hydration/eviction、App Group reopen、extension termination 和 hostless hydration 的可选最终验收。
 
 ## 参考
 

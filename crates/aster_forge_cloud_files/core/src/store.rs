@@ -17,6 +17,35 @@ use crate::{
 /// Result returned by cloud-files durable-store ports.
 pub type StoreResult<T> = std::result::Result<T, CloudFilesStoreError>;
 
+/// One bounded, deterministically ordered recovery page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryPage<T> {
+    items: Vec<T>,
+    has_more: bool,
+}
+
+impl<T> RecoveryPage<T> {
+    /// Creates a page from at most `limit` records and an explicit continuation flag.
+    pub fn new(items: Vec<T>, has_more: bool) -> Self {
+        Self { items, has_more }
+    }
+
+    /// Returns the records in this page.
+    pub fn items(&self) -> &[T] {
+        &self.items
+    }
+
+    /// Returns whether another page exists after this one.
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    /// Consumes the page and returns its records.
+    pub fn into_items(self) -> Vec<T> {
+        self.items
+    }
+}
+
 /// Stable classification of a persistence-layer failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CloudFilesStoreErrorKind {
@@ -329,11 +358,15 @@ pub trait ContentStorageStore: Send + Sync {
         operation_id: &ContentEvictionOperationId,
     ) -> StoreResult<Option<ContentEvictionRecord>>;
 
-    /// Lists non-completed eviction records for startup reconciliation.
-    async fn recoverable_content_evictions(
+    /// Loads one bounded eviction-recovery page.
+    ///
+    /// Implementations must apply `limit` at the storage boundary with stable operation-id order.
+    async fn recoverable_content_evictions_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentEvictionRecord>>;
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentEvictionRecord>>;
 
     /// Records one idempotent physical effect observed by cache/platform reconciliation.
     async fn record_content_eviction_effect(
@@ -373,11 +406,13 @@ pub trait ContentCacheWriteStore: Send + Sync {
         operation_id: &ContentCacheWriteOperationId,
     ) -> StoreResult<Option<ContentCacheWriteRecord>>;
 
-    /// Lists non-completed cache writes for startup physical-state observation.
-    async fn recoverable_content_cache_writes(
+    /// Loads one bounded cache-write recovery page.
+    async fn recoverable_content_cache_writes_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentCacheWriteRecord>>;
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentCacheWriteRecord>>;
 
     /// Records that the intended bytes are physically committed and observable.
     async fn record_content_cache_write_physical_commit(
@@ -420,11 +455,13 @@ pub trait ContentUploadStore: Send + Sync {
         operation_id: &OperationId,
     ) -> StoreResult<Option<ContentUploadRecord>>;
 
-    /// Lists non-completed upload records for startup resume or outcome reconciliation.
-    async fn recoverable_content_uploads(
+    /// Loads one bounded upload-recovery page.
+    async fn recoverable_content_uploads_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentUploadRecord>>;
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentUploadRecord>>;
 
     /// Records a backend session or monotonically advances its accepted offset when unfenced.
     async fn record_content_upload_session(
@@ -500,8 +537,13 @@ pub trait MutationJournalStore: Send + Sync {
         operation_id: &OperationId,
     ) -> StoreResult<Option<MutationRecord>>;
 
-    /// Lists non-completed records for deterministic startup recovery.
-    async fn recoverable_mutations(&self, scope: &CloudScope) -> StoreResult<Vec<MutationRecord>>;
+    /// Loads one bounded mutation-recovery page.
+    async fn recoverable_mutations_page(
+        &self,
+        scope: &CloudScope,
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<MutationRecord>>;
 
     /// Marks remote application started under the active generation.
     ///

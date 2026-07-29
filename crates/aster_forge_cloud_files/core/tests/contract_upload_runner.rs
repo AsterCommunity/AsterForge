@@ -207,6 +207,8 @@ struct UploadBackendState {
     start_offset_override: Option<u64>,
     bad_ack_once: bool,
     chunk_fail_once: bool,
+    chunk_conflict_once: bool,
+    chunk_reconcile_calls: usize,
     commit_plans: VecDeque<CommitPlan>,
     reconcile_plans: VecDeque<CommitPlan>,
 }
@@ -222,6 +224,8 @@ impl Default for UploadBackendState {
             start_offset_override: None,
             bad_ack_once: false,
             chunk_fail_once: false,
+            chunk_conflict_once: false,
+            chunk_reconcile_calls: 0,
             commit_plans: VecDeque::from([CommitPlan::Committed]),
             reconcile_plans: VecDeque::from([CommitPlan::Committed]),
         }
@@ -263,6 +267,13 @@ impl ScriptedUploadBackend {
             .lock()
             .expect("upload backend mutex should not be poisoned")
             .chunk_fail_once = true;
+    }
+
+    fn conflict_chunk_once(&self) {
+        self.state
+            .lock()
+            .expect("upload backend mutex should not be poisoned")
+            .chunk_conflict_once = true;
     }
 
     fn set_commit_plans(&self, plans: impl IntoIterator<Item = CommitPlan>) {
@@ -356,6 +367,9 @@ impl CloudContentUploadBackend for ScriptedUploadBackend {
             ));
         }
         state.chunks.push((chunk.offset(), chunk.bytes().clone()));
+        if std::mem::take(&mut state.chunk_conflict_once) {
+            return Err(CloudBackendError::new(CloudBackendErrorKind::Conflict));
+        }
         let accepted_offset = if std::mem::take(&mut state.bad_ack_once) {
             chunk.offset()
         } else {
@@ -364,6 +378,30 @@ impl CloudContentUploadBackend for ScriptedUploadBackend {
         Ok(ContentUploadChunkAck::new(
             chunk.session_id().clone(),
             accepted_offset,
+        ))
+    }
+
+    async fn reconcile_upload_chunk(
+        &self,
+        _intent: &ContentUploadIntent,
+        session: &ContentUploadSession,
+        chunk: &ContentUploadChunk,
+    ) -> BackendResult<ContentUploadChunkAck> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("upload backend mutex should not be poisoned");
+        state.chunk_reconcile_calls += 1;
+        let start = usize::try_from(chunk.offset())
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidRequest))?;
+        let end = usize::try_from(chunk.end_exclusive())
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidRequest))?;
+        if end > state.remote.len() || state.remote.get(start..end) != Some(chunk.bytes()) {
+            return Err(CloudBackendError::new(CloudBackendErrorKind::Conflict));
+        }
+        Ok(ContentUploadChunkAck::new(
+            session.id().clone(),
+            chunk.end_exclusive(),
         ))
     }
 
@@ -459,6 +497,32 @@ async fn runner_uploads_exact_chunks_and_completes_metadata_and_lease() {
         .expect("entry should exist");
     assert!(!entry.is_dirty());
     assert_eq!(entry.lease_counts().upload, 0);
+}
+
+#[tokio::test]
+async fn runner_reconciles_a_chunk_accepted_before_checkpoint() {
+    let fixture = SyntheticBackend::full();
+    let bytes = Bytes::from_static(b"replayed-chunk");
+    let intent = intent(&fixture, &bytes);
+    let store = MemoryContentStorageStore::default();
+    prepare_store(&store, &intent).await;
+    let source = MemorySnapshotReader::new(bytes);
+    let backend = ScriptedUploadBackend::default();
+    backend.conflict_chunk_once();
+
+    assert_eq!(
+        ContentUploadRunner::new(64)
+            .expect("runner config should be valid")
+            .submit(intent.clone(), generation(1), &store, &backend, &source)
+            .await
+            .expect("accepted chunk should be reconciled"),
+        ContentUploadRunOutcome::Completed
+    );
+    let state = backend
+        .state
+        .lock()
+        .expect("upload backend mutex should not be poisoned");
+    assert_eq!(state.chunk_reconcile_calls, 1);
 }
 
 #[tokio::test]

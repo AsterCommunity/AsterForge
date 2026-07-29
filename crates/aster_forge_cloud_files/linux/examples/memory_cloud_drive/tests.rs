@@ -114,6 +114,149 @@
         }
 
         #[tokio::test]
+        async fn remote_chunk_reconciliation_requires_the_exact_accepted_bytes() {
+            let (cloud, _) = MemoryCloud::fixture().unwrap();
+            let scope = cloud.scope.clone();
+            let generation = SessionGeneration::new(1).unwrap();
+            let store = Arc::new(MemoryWritebackStore::new(scope.clone(), None).unwrap());
+            let acceptance = accepted_create(&store, &scope, generation).await;
+            let commit = write_created(&store, &acceptance, b"chunk-reconcile").await;
+            let operation_id = upload_operation(commit.snapshot());
+            let record = store
+                .load_content_upload(&operation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let backend = MemoryRemoteMutationBackend::new(store.clone(), None).unwrap();
+            let session = backend.start_upload(record.intent()).await.unwrap();
+            let chunk = ContentUploadChunk::new(
+                session.id().clone(),
+                record.intent().snapshot().generation(),
+                0,
+                Bytes::from_static(b"chunk-reconcile"),
+                record.intent().snapshot().size(),
+            )
+            .unwrap();
+            backend.upload_chunk(record.intent(), &chunk).await.unwrap();
+            assert_eq!(
+                backend
+                    .reconcile_upload_chunk(record.intent(), &session, &chunk)
+                    .await
+                    .unwrap()
+                    .accepted_offset(),
+                chunk.end_exclusive()
+            );
+            let wrong = ContentUploadChunk::new(
+                session.id().clone(),
+                record.intent().snapshot().generation(),
+                0,
+                Bytes::from_static(b"wrong-reconcile"),
+                record.intent().snapshot().size(),
+            )
+            .unwrap();
+            assert_eq!(
+                backend
+                    .reconcile_upload_chunk(record.intent(), &session, &wrong)
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                CloudBackendErrorKind::PreconditionFailed
+            );
+        }
+
+        #[tokio::test]
+        async fn completed_upload_history_and_immutable_generations_are_bounded() {
+            let (cloud, _) = MemoryCloud::fixture().unwrap();
+            let scope = cloud.scope.clone();
+            let generation = SessionGeneration::new(1).unwrap();
+            let store = Arc::new(MemoryWritebackStore::new(scope.clone(), None).unwrap());
+            let acceptance = accepted_create(&store, &scope, generation).await;
+            let backend = MemoryRemoteMutationBackend::new(store.clone(), None).unwrap();
+            let runner = ContentUploadRunner::new(8).unwrap();
+
+            for value in 0..(TERMINAL_RECORD_LIMIT + 3) {
+                let commit = store
+                    .write(
+                        acceptance.session().id(),
+                        0,
+                        Bytes::from(vec![u8::try_from(value % 251).unwrap(); 32]),
+                    )
+                    .await
+                    .unwrap();
+                let operation_id = upload_operation(commit.snapshot());
+                assert_eq!(
+                    runner
+                        .resume(&operation_id, generation, &*store, &backend, &*store)
+                        .await
+                        .unwrap(),
+                    ContentUploadRunOutcome::Completed
+                );
+            }
+
+            let state = lock(&store.state);
+            assert_eq!(state.uploads.len(), TERMINAL_RECORD_LIMIT);
+            assert_eq!(state.upload_idempotency_keys.len(), TERMINAL_RECORD_LIMIT);
+            assert_eq!(state.immutable_snapshots.len(), TERMINAL_RECORD_LIMIT);
+            assert!(state.uploads.values().all(|record| {
+                record.state() == ContentUploadState::Completed
+            }));
+        }
+
+        #[tokio::test]
+        async fn recovery_pages_are_ordered_bounded_and_cursor_driven() {
+            let (cloud, _) = MemoryCloud::fixture().unwrap();
+            let scope = cloud.scope.clone();
+            let generation = SessionGeneration::new(1).unwrap();
+            let store = Arc::new(MemoryWritebackStore::new(scope.clone(), None).unwrap());
+            let acceptance = accepted_create(&store, &scope, generation).await;
+            for value in [b'a', b'b', b'c'] {
+                store
+                    .write(
+                        acceptance.session().id(),
+                        0,
+                        Bytes::from(vec![value; 4]),
+                    )
+                    .await
+                    .unwrap();
+            }
+
+            let first = store
+                .recoverable_content_uploads_page(&scope, None, 2)
+                .await
+                .unwrap();
+            assert_eq!(first.items().len(), 2);
+            assert!(first.has_more());
+            let cursor = first.items()[1]
+                .intent()
+                .operation_id()
+                .as_str()
+                .to_owned();
+            let second = store
+                .recoverable_content_uploads_page(&scope, Some(&cursor), 2)
+                .await
+                .unwrap();
+            assert_eq!(second.items().len(), 1);
+            assert!(!second.has_more());
+            assert!(second.items()[0].intent().operation_id().as_str() > cursor.as_str());
+            assert_eq!(
+                store
+                    .recoverable_content_uploads_page(&scope, None, 0)
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                CloudFilesStoreErrorKind::InvalidTransition
+            );
+            assert_eq!(
+                store
+                    .recoverable_mutations_page(&scope, None, 0)
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                CloudFilesStoreErrorKind::InvalidTransition
+            );
+        }
+
+        #[tokio::test]
         async fn older_upload_completion_preserves_newer_dirty_generation_and_immutable_bytes() {
             let (cloud, _) = MemoryCloud::fixture().unwrap();
             let scope = cloud.scope.clone();
@@ -319,9 +462,10 @@
 
             let recovered = MemoryWritebackStore::new(scope.clone(), Some(&directory)).unwrap();
             let records = recovered
-                .recoverable_content_uploads(&scope)
+                .recoverable_content_uploads_page(&scope, None, RECOVERY_BATCH_LIMIT)
                 .await
-                .unwrap();
+                .unwrap()
+                .into_items();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].state(), ContentUploadState::IntentPersisted);
             assert_eq!(
@@ -404,7 +548,14 @@
                     .unwrap()
                     .is_empty()
             );
-            assert!(store.recoverable_content_uploads(&scope).await.unwrap().is_empty());
+            assert!(
+                store
+                    .recoverable_content_uploads_page(&scope, None, RECOVERY_BATCH_LIMIT)
+                    .await
+                    .unwrap()
+                    .items()
+                    .is_empty()
+            );
             fs::remove_file(directory).unwrap();
         }
 
@@ -542,7 +693,11 @@
         fs::write(&writeback, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
 
         let recovered = MemoryWritebackStore::new(scope.clone(), Some(&directory)).unwrap();
-        let records = recovered.recoverable_mutations(&scope).await.unwrap();
+        let records = recovered
+            .recoverable_mutations_page(&scope, None, RECOVERY_BATCH_LIMIT)
+            .await
+            .unwrap()
+            .into_items();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].state(), MutationState::IntentPersisted);
         fs::remove_dir_all(directory).unwrap();
@@ -597,9 +752,10 @@
         assert_eq!(error.kind(), LinuxNamespaceMutationStoreErrorKind::Fenced);
         assert!(
             store
-                .recoverable_mutations(&scope)
+                .recoverable_mutations_page(&scope, None, RECOVERY_BATCH_LIMIT)
                 .await
                 .unwrap()
+                .items()
                 .is_empty()
         );
     }

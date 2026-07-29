@@ -4,18 +4,23 @@ import Foundation
 public final class MacosReadOnlyFileProviderRuntime {
     private let dataSource: any MacosCloudFilesDataSource
     private let session: any MacosBridgeSession
-    private let temporaryContentStore: any MacosTemporaryContentStore
+    private let validator: MacosBackendResponseValidator
+    private let cancellations = MacosCancellationRegistry()
     private let stateLock = NSLock()
     private var invalidated = false
 
     public init(
         dataSource: any MacosCloudFilesDataSource,
         session: any MacosBridgeSession,
-        temporaryContentStore: any MacosTemporaryContentStore
+        scope: (namespace: String, root: String),
+        identifierDecoder: any MacosPersistentIdentifierDecoding
     ) {
         self.dataSource = dataSource
         self.session = session
-        self.temporaryContentStore = temporaryContentStore
+        validator = MacosBackendResponseValidator(
+            scope: scope,
+            identifierDecoder: identifierDecoder
+        )
     }
 
     public func invalidate() {
@@ -26,6 +31,7 @@ public final class MacosReadOnlyFileProviderRuntime {
         }
         invalidated = true
         stateLock.unlock()
+        cancellations.invalidate()
         session.beginClosing()
         session.markDisconnected()
     }
@@ -39,21 +45,39 @@ public final class MacosReadOnlyFileProviderRuntime {
             return progress
         }
         let terminal = MacosTerminalGate()
+        var operationIdentifier: UUID?
         let cancellation = MacosCancellationSlot {
             terminal.finish {
+                if let operationIdentifier {
+                    self.cancellations.remove(operationIdentifier)
+                }
                 lease.release()
                 completionHandler(nil, MacosFileProviderErrorMapper.error(for: .cancelled))
             }
         }
+        guard let insertedIdentifier = cancellations.insert(cancellation) else {
+            cancellation.cancel()
+            return progress
+        }
+        operationIdentifier = insertedIdentifier
         progress.cancellationHandler = { cancellation.cancel() }
         let operation = dataSource.item(for: identifier.rawValue) { result in
             terminal.finish {
                 cancellation.complete()
+                self.cancellations.remove(insertedIdentifier)
                 lease.release()
                 progress.completedUnitCount = 1
                 switch result {
                 case let .success(snapshot):
-                    completionHandler(MacosFileProviderItem(snapshot: snapshot), nil)
+                    do {
+                        try self.validator.validateItem(
+                            snapshot,
+                            requestedIdentifier: identifier.rawValue
+                        )
+                        completionHandler(MacosFileProviderItem(snapshot: snapshot), nil)
+                    } catch {
+                        completionHandler(nil, MacosFileProviderErrorMapper.normalize(error))
+                    }
                 case let .failure(error):
                     completionHandler(nil, MacosFileProviderErrorMapper.normalize(error))
                 }
@@ -73,12 +97,21 @@ public final class MacosReadOnlyFileProviderRuntime {
             return progress
         }
         let terminal = MacosTerminalGate()
+        var operationIdentifier: UUID?
         let cancellation = MacosCancellationSlot {
             terminal.finish {
+                if let operationIdentifier {
+                    self.cancellations.remove(operationIdentifier)
+                }
                 lease.release()
                 completionHandler(nil, nil, MacosFileProviderErrorMapper.error(for: .cancelled))
             }
         }
+        guard let insertedIdentifier = cancellations.insert(cancellation) else {
+            cancellation.cancel()
+            return progress
+        }
+        operationIdentifier = insertedIdentifier
         progress.cancellationHandler = { cancellation.cancel() }
         let requestedContentVersion = requestedVersion?.contentVersion
         let operation = dataSource.fetchContents(
@@ -87,33 +120,30 @@ public final class MacosReadOnlyFileProviderRuntime {
         ) { result in
             switch result {
             case let .success(content):
-                if let requestedContentVersion,
-                   content.item.contentVersion != requestedContentVersion
-                {
-                    terminal.finish {
-                        cancellation.complete()
-                        lease.release()
-                        completionHandler(
-                            nil,
-                            nil,
-                            MacosFileProviderErrorMapper.error(for: .versionOutOfDate)
-                        )
-                    }
-                    return
-                }
                 do {
-                    let url = try self.temporaryContentStore.write(content.bytes)
+                    try self.validator.validateFetchedContent(
+                        content,
+                        requestedIdentifier: identifier.rawValue,
+                        requestedContentVersion: requestedContentVersion
+                    )
                     if !terminal.finish({
                         cancellation.complete()
+                        self.cancellations.remove(insertedIdentifier)
                         lease.release()
                         progress.completedUnitCount = 1
-                        completionHandler(url, MacosFileProviderItem(snapshot: content.item), nil)
+                        completionHandler(
+                            content.stagingURL,
+                            MacosFileProviderItem(snapshot: content.item),
+                            nil
+                        )
                     }) {
-                        self.temporaryContentStore.removeIfPresent(url)
+                        self.dataSource.discardFetchedContents(at: content.stagingURL)
                     }
                 } catch {
+                    self.dataSource.discardFetchedContents(at: content.stagingURL)
                     terminal.finish {
                         cancellation.complete()
+                        self.cancellations.remove(insertedIdentifier)
                         lease.release()
                         completionHandler(nil, nil, MacosFileProviderErrorMapper.normalize(error))
                     }
@@ -121,6 +151,7 @@ public final class MacosReadOnlyFileProviderRuntime {
             case let .failure(error):
                 terminal.finish {
                     cancellation.complete()
+                    self.cancellations.remove(insertedIdentifier)
                     lease.release()
                     completionHandler(nil, nil, MacosFileProviderErrorMapper.normalize(error))
                 }
@@ -136,10 +167,12 @@ public final class MacosReadOnlyFileProviderRuntime {
         guard isAccepting else {
             throw MacosBridgeFailure(code: .providerNotFound)
         }
-        return MacosReadOnlyFileProviderEnumerator(
+        return try MacosReadOnlyFileProviderEnumerator(
             dataSource: dataSource,
             session: session,
-            containerIdentifier: containerIdentifier
+            containerIdentifier: containerIdentifier,
+            runtimeCancellations: cancellations,
+            validator: validator
         )
     }
 
@@ -172,15 +205,25 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
     private let session: any MacosBridgeSession
     private let containerIdentifier: NSFileProviderItemIdentifier
     private let cancellations = MacosCancellationRegistry()
+    private let runtimeCancellations: MacosCancellationRegistry
+    private let validator: MacosBackendResponseValidator
+    private let validationState: MacosEnumerationValidationState
 
     init(
         dataSource: any MacosCloudFilesDataSource,
         session: any MacosBridgeSession,
-        containerIdentifier: NSFileProviderItemIdentifier
-    ) {
+        containerIdentifier: NSFileProviderItemIdentifier,
+        runtimeCancellations: MacosCancellationRegistry,
+        validator: MacosBackendResponseValidator
+    ) throws {
         self.dataSource = dataSource
         self.session = session
         self.containerIdentifier = containerIdentifier
+        self.runtimeCancellations = runtimeCancellations
+        self.validator = validator
+        validationState = try validator.makeEnumerationState(
+            containerIdentifier: containerIdentifier.rawValue
+        )
         super.init()
     }
 
@@ -202,11 +245,15 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
         }
         let terminal = MacosTerminalGate()
         var operationIdentifier: UUID?
+        var runtimeOperationIdentifier: UUID?
         let slot = MacosCancellationSlot {
             terminal.finish {
                 lease.release()
                 if let operationIdentifier {
                     self.cancellations.remove(operationIdentifier)
+                }
+                if let runtimeOperationIdentifier {
+                    self.runtimeCancellations.remove(runtimeOperationIdentifier)
                 }
                 observer.finishEnumeratingWithError(
                     MacosFileProviderErrorMapper.normalize(
@@ -219,6 +266,12 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
             slot.cancel()
             return
         }
+        guard let runtimeIdentifier = runtimeCancellations.insert(slot) else {
+            cancellations.remove(insertedIdentifier)
+            slot.cancel()
+            return
+        }
+        runtimeOperationIdentifier = runtimeIdentifier
         operationIdentifier = insertedIdentifier
         let operation = dataSource.enumerate(
             containerIdentifier: containerIdentifier.rawValue,
@@ -228,12 +281,20 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
                 slot.complete()
                 lease.release()
                 self.cancellations.remove(insertedIdentifier)
+                self.runtimeCancellations.remove(runtimeIdentifier)
                 switch result {
                 case let .success(page):
-                    observer.didEnumerate(page.items.map(MacosFileProviderItem.init(snapshot:)))
-                    observer.finishEnumerating(
-                        upTo: page.nextPage.map { $0 as NSData as NSFileProviderPage }
-                    )
+                    do {
+                        try self.validationState.accept(page, validator: self.validator)
+                        observer.didEnumerate(page.items.map(MacosFileProviderItem.init(snapshot:)))
+                        observer.finishEnumerating(
+                            upTo: page.nextPage.map { $0 as NSData as NSFileProviderPage }
+                        )
+                    } catch {
+                        observer.finishEnumeratingWithError(
+                            MacosFileProviderErrorMapper.normalize(error)
+                        )
+                    }
                 case let .failure(error):
                     observer.finishEnumeratingWithError(
                         MacosFileProviderErrorMapper.normalize(error)
@@ -264,11 +325,15 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
         }
         let terminal = MacosTerminalGate()
         var operationIdentifier: UUID?
+        var runtimeOperationIdentifier: UUID?
         let slot = MacosCancellationSlot {
             terminal.finish {
                 lease.release()
                 if let operationIdentifier {
                     self.cancellations.remove(operationIdentifier)
+                }
+                if let runtimeOperationIdentifier {
+                    self.runtimeCancellations.remove(runtimeOperationIdentifier)
                 }
                 observer.finishEnumeratingWithError(
                     MacosFileProviderErrorMapper.normalize(
@@ -281,6 +346,12 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
             slot.cancel()
             return
         }
+        guard let runtimeIdentifier = runtimeCancellations.insert(slot) else {
+            cancellations.remove(insertedIdentifier)
+            slot.cancel()
+            return
+        }
+        runtimeOperationIdentifier = runtimeIdentifier
         operationIdentifier = insertedIdentifier
         let operation = dataSource.enumerateChanges(
             containerIdentifier: containerIdentifier.rawValue,
@@ -290,8 +361,17 @@ public final class MacosReadOnlyFileProviderEnumerator: NSObject, NSFileProvider
                 slot.complete()
                 lease.release()
                 self.cancellations.remove(insertedIdentifier)
+                self.runtimeCancellations.remove(runtimeIdentifier)
                 switch result {
                 case let .success(batch):
+                    do {
+                        try self.validator.validateChanges(batch)
+                    } catch {
+                        observer.finishEnumeratingWithError(
+                            MacosFileProviderErrorMapper.normalize(error)
+                        )
+                        return
+                    }
                     if !batch.updatedItems.isEmpty {
                         observer.didUpdate(
                             batch.updatedItems.map(MacosFileProviderItem.init(snapshot:))

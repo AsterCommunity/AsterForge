@@ -4,7 +4,10 @@ use std::{
     ffi::OsString,
     fmt,
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU8, AtomicU64, Ordering},
+    },
 };
 
 use aster_forge_cloud_files_core::HydrationCoordinator;
@@ -220,7 +223,10 @@ pub struct WindowsCallbackInfoSnapshot {
 
 impl WindowsCallbackInfoSnapshot {
     /// Creates and validates a fully owned callback-info snapshot.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the flat, versioned CF_CALLBACK_INFO ownership boundary"
+    )]
     pub fn new(
         generation: SessionGeneration,
         connection_key: WindowsConnectionKey,
@@ -601,13 +607,13 @@ impl WindowsRestartHydration {
 /// hydration. It owns no terminal completion authority.
 #[derive(Debug, Clone)]
 pub struct WindowsFetchDataProgressReporter {
-    info: WindowsCallbackInfoSnapshot,
+    correlation: WindowsFetchDataCorrelation,
 }
 
 impl WindowsFetchDataProgressReporter {
     /// Returns the owned callback correlation used for progress reporting.
-    pub const fn info(&self) -> &WindowsCallbackInfoSnapshot {
-        &self.info
+    pub const fn correlation(&self) -> WindowsFetchDataCorrelation {
+        self.correlation
     }
 
     /// Reports one monotonic progress sample and refreshes the matching local watchdog.
@@ -618,20 +624,78 @@ impl WindowsFetchDataProgressReporter {
         progress: crate::WindowsFetchDataProgress,
         now: std::time::Instant,
     ) -> Result<usize> {
-        let updated = registry.report_progress(&self.info, progress, now)?;
+        let updated = registry.report_progress_correlation(self.correlation, progress, now)?;
         if updated != 0 {
-            crate::native_connection::report_fetch_progress(&self.info, progress)?;
+            crate::native_connection::report_fetch_progress(self.correlation, progress)?;
         }
         Ok(updated)
     }
 }
 
-#[derive(Debug, Default)]
-struct FetchTerminalGate {
-    state: FetchTerminalState,
+/// Compact scalar correlation needed by waiter lookup and `CfReportProviderProgress`.
+///
+/// Unlike [`WindowsCallbackInfoSnapshot`], this value owns no paths, identities, or process text,
+/// so cloning a progress reporter does not duplicate callback payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WindowsFetchDataCorrelation {
+    generation: SessionGeneration,
+    connection_key: WindowsConnectionKey,
+    transfer_key: WindowsTransferKey,
+    request_key: WindowsRequestKey,
+    file_id: i64,
 }
 
-#[allow(dead_code)]
+impl WindowsFetchDataCorrelation {
+    pub(crate) fn from_info(info: &WindowsCallbackInfoSnapshot) -> Self {
+        Self {
+            generation: info.generation(),
+            connection_key: info.connection_key(),
+            transfer_key: info.transfer_key(),
+            request_key: info.request_key(),
+            file_id: info.file_id(),
+        }
+    }
+
+    /// Returns the accepting session generation.
+    pub const fn generation(self) -> SessionGeneration {
+        self.generation
+    }
+
+    /// Returns the native connection key.
+    pub const fn connection_key(self) -> WindowsConnectionKey {
+        self.connection_key
+    }
+
+    /// Returns the native transfer key.
+    pub const fn transfer_key(self) -> WindowsTransferKey {
+        self.transfer_key
+    }
+
+    /// Returns the native request key.
+    pub const fn request_key(self) -> WindowsRequestKey {
+        self.request_key
+    }
+
+    /// Returns the native placeholder file identifier.
+    pub const fn file_id(self) -> i64 {
+        self.file_id
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FetchTerminalGate {
+    state: Arc<AtomicU8>,
+}
+
+impl Default for FetchTerminalGate {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(FetchTerminalState::Pending as u8)),
+        }
+    }
+}
+
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum FetchTerminalState {
     #[default]
@@ -642,47 +706,65 @@ enum FetchTerminalState {
 }
 
 impl FetchTerminalGate {
-    const fn attempted(&self) -> bool {
-        matches!(self.state, FetchTerminalState::NativeAttempted)
+    fn state(&self) -> FetchTerminalState {
+        match self.state.load(Ordering::Acquire) {
+            value if value == FetchTerminalState::NativeAttempted as u8 => {
+                FetchTerminalState::NativeAttempted
+            }
+            value if value == FetchTerminalState::PlatformCancelled as u8 => {
+                FetchTerminalState::PlatformCancelled
+            }
+            value if value == FetchTerminalState::WatchdogTimedOut as u8 => {
+                FetchTerminalState::WatchdogTimedOut
+            }
+            _ => FetchTerminalState::Pending,
+        }
     }
 
-    const fn platform_cancelled(&self) -> bool {
-        matches!(self.state, FetchTerminalState::PlatformCancelled)
+    fn attempted(&self) -> bool {
+        self.state() == FetchTerminalState::NativeAttempted
     }
 
-    const fn watchdog_timed_out(&self) -> bool {
-        matches!(self.state, FetchTerminalState::WatchdogTimedOut)
+    pub(crate) fn platform_cancelled(&self) -> bool {
+        self.state() == FetchTerminalState::PlatformCancelled
+    }
+
+    pub(crate) fn watchdog_timed_out(&self) -> bool {
+        self.state() == FetchTerminalState::WatchdogTimedOut
     }
 
     #[cfg(any(windows, test))]
-    fn begin_native(&mut self) -> bool {
-        if matches!(
-            self.state,
-            FetchTerminalState::Pending | FetchTerminalState::WatchdogTimedOut
-        ) {
-            self.state = FetchTerminalState::NativeAttempted;
-            true
-        } else {
-            false
-        }
+    pub(crate) fn begin_native(&self) -> bool {
+        self.transition(
+            FetchTerminalState::Pending,
+            FetchTerminalState::NativeAttempted,
+        ) || self.transition(
+            FetchTerminalState::WatchdogTimedOut,
+            FetchTerminalState::NativeAttempted,
+        )
     }
 
-    fn cancel_by_platform(&mut self) -> bool {
-        if self.state == FetchTerminalState::Pending {
-            self.state = FetchTerminalState::PlatformCancelled;
-            true
-        } else {
-            false
-        }
+    pub(crate) fn cancel_by_platform(&self) -> bool {
+        self.transition(
+            FetchTerminalState::Pending,
+            FetchTerminalState::PlatformCancelled,
+        ) || self.transition(
+            FetchTerminalState::WatchdogTimedOut,
+            FetchTerminalState::PlatformCancelled,
+        )
     }
 
-    fn cancel_by_watchdog(&mut self) -> bool {
-        if self.state == FetchTerminalState::Pending {
-            self.state = FetchTerminalState::WatchdogTimedOut;
-            true
-        } else {
-            false
-        }
+    pub(crate) fn cancel_by_watchdog(&self) -> bool {
+        self.transition(
+            FetchTerminalState::Pending,
+            FetchTerminalState::WatchdogTimedOut,
+        )
+    }
+
+    fn transition(&self, from: FetchTerminalState, to: FetchTerminalState) -> bool {
+        self.state
+            .compare_exchange(from as u8, to as u8, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
 }
 
@@ -698,7 +780,7 @@ impl WindowsFetchDataRequest {
     }
 
     /// Returns whether this request already made its one terminal native completion attempt.
-    pub const fn terminal_attempted(&self) -> bool {
+    pub fn terminal_attempted(&self) -> bool {
         self.terminal.attempted()
     }
 
@@ -706,7 +788,7 @@ impl WindowsFetchDataRequest {
     /// awaits hydration.
     pub fn progress_reporter(&self) -> WindowsFetchDataProgressReporter {
         WindowsFetchDataProgressReporter {
-            info: self.snapshot.info().clone(),
+            correlation: WindowsFetchDataCorrelation::from_info(self.snapshot.info()),
         }
     }
 
@@ -714,7 +796,7 @@ impl WindowsFetchDataRequest {
     /// placeholder bytes or revision are no longer valid. This consumes the terminal native
     /// attempt for the old callback; CFAPI will issue a subsequent callback for the restart.
     #[cfg(windows)]
-    pub fn restart_hydration(mut self, replacement: WindowsRestartHydration) -> Result<()> {
+    pub fn restart_hydration(self, replacement: WindowsRestartHydration) -> Result<()> {
         replacement.validate_for(self.snapshot.info())?;
         if !self.terminal.begin_native() {
             return Ok(());
@@ -792,24 +874,26 @@ impl WindowsFetchDataRequest {
             }
         };
         let waiter = coordinator.request(hydration)?;
-        let registration =
-            registry.register(&self.snapshot, range, waiter.cancellation_handle())?;
+        let registration = registry.register(
+            &self.snapshot,
+            range,
+            waiter.cancellation_handle(),
+            self.terminal.clone(),
+        )?;
         let response = waiter.wait().await;
         let platform_cancelled = registration.platform_cancelled();
         let watchdog_timed_out = registration.watchdog_timed_out();
         drop(registration);
+        if platform_cancelled {
+            return Ok(WindowsFetchDataPreparation::Cancelled);
+        }
+        if watchdog_timed_out {
+            return Ok(WindowsFetchDataPreparation::TimedOut);
+        }
         match response {
             Ok(response) => {
                 WindowsFetchDataTransfer::from_response(&self.snapshot, &revision, response)
                     .map(WindowsFetchDataPreparation::Transfer)
-            }
-            Err(HydrationError::Cancelled) if platform_cancelled => {
-                self.terminal.cancel_by_platform();
-                Ok(WindowsFetchDataPreparation::Cancelled)
-            }
-            Err(HydrationError::Cancelled) if watchdog_timed_out => {
-                self.terminal.cancel_by_watchdog();
-                Ok(WindowsFetchDataPreparation::TimedOut)
             }
             Err(error) => Err(error.into()),
         }
@@ -1233,6 +1317,7 @@ impl WindowsFetchDataFailure {
         match error {
             HydrationError::Cancelled => Self::Cancelled,
             HydrationError::Contract(_) => Self::InvalidRequest,
+            HydrationError::InFlightLimitExceeded { .. } => Self::InsufficientResources,
             HydrationError::Backend(error) => match error.kind() {
                 CloudBackendErrorKind::AuthenticationRequired => Self::AuthenticationFailed,
                 CloudBackendErrorKind::PermissionDenied => Self::AccessDenied,
@@ -1359,13 +1444,74 @@ impl WindowsCallbackRequest {
 struct ConnectionLifecycle {
     state: SessionState,
     active_callbacks: usize,
-    queue_metrics: WindowsCallbackQueueMetrics,
+}
+
+#[derive(Debug, Default)]
+struct AtomicWindowsCallbackQueueMetrics {
+    accepted_callbacks: AtomicU64,
+    queued_fetch_data: AtomicU64,
+    queued_cancel_observations: AtomicU64,
+    queued_preflights: AtomicU64,
+    queued_observations: AtomicU64,
+    fetch_queue_full: AtomicU64,
+    cancel_observation_queue_full: AtomicU64,
+    preflight_queue_full: AtomicU64,
+    observation_queue_full: AtomicU64,
+    receiver_disconnected: AtomicU64,
+    closing_rejections: AtomicU64,
+    invalid_snapshot_rejections: AtomicU64,
+    panic_failures: AtomicU64,
+}
+
+impl AtomicWindowsCallbackQueueMetrics {
+    fn snapshot(&self) -> WindowsCallbackQueueMetrics {
+        WindowsCallbackQueueMetrics {
+            accepted_callbacks: self.accepted_callbacks.load(Ordering::Relaxed),
+            queued_fetch_data: self.queued_fetch_data.load(Ordering::Relaxed),
+            queued_cancel_observations: self.queued_cancel_observations.load(Ordering::Relaxed),
+            queued_preflights: self.queued_preflights.load(Ordering::Relaxed),
+            queued_observations: self.queued_observations.load(Ordering::Relaxed),
+            fetch_queue_full: self.fetch_queue_full.load(Ordering::Relaxed),
+            cancel_observation_queue_full: self
+                .cancel_observation_queue_full
+                .load(Ordering::Relaxed),
+            preflight_queue_full: self.preflight_queue_full.load(Ordering::Relaxed),
+            observation_queue_full: self.observation_queue_full.load(Ordering::Relaxed),
+            receiver_disconnected: self.receiver_disconnected.load(Ordering::Relaxed),
+            closing_rejections: self.closing_rejections.load(Ordering::Relaxed),
+            invalid_snapshot_rejections: self.invalid_snapshot_rejections.load(Ordering::Relaxed),
+            panic_failures: self.panic_failures.load(Ordering::Relaxed),
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    fn increment(&self, event: QueueMetricEvent) {
+        let counter = match event {
+            QueueMetricEvent::Accepted => &self.accepted_callbacks,
+            QueueMetricEvent::QueuedFetch => &self.queued_fetch_data,
+            QueueMetricEvent::QueuedCancel => &self.queued_cancel_observations,
+            QueueMetricEvent::QueuedPreflight => &self.queued_preflights,
+            QueueMetricEvent::QueuedObservation => &self.queued_observations,
+            QueueMetricEvent::FetchFull => &self.fetch_queue_full,
+            QueueMetricEvent::CancelFull => &self.cancel_observation_queue_full,
+            QueueMetricEvent::PreflightFull => &self.preflight_queue_full,
+            QueueMetricEvent::ObservationFull => &self.observation_queue_full,
+            QueueMetricEvent::Disconnected => &self.receiver_disconnected,
+            QueueMetricEvent::Closing => &self.closing_rejections,
+            QueueMetricEvent::Invalid => &self.invalid_snapshot_rejections,
+            QueueMetricEvent::Panic => &self.panic_failures,
+        };
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            Some(value.saturating_add(1))
+        });
+    }
 }
 
 #[derive(Debug)]
 struct ConnectionSessionInner {
     generation: SessionGeneration,
     lifecycle: Mutex<ConnectionLifecycle>,
+    queue_metrics: AtomicWindowsCallbackQueueMetrics,
 }
 
 /// Shareable lifecycle fence for one active native connection generation.
@@ -1383,8 +1529,8 @@ impl WindowsConnectionSession {
                 lifecycle: Mutex::new(ConnectionLifecycle {
                     state: SessionState::Accepting,
                     active_callbacks: 0,
-                    queue_metrics: WindowsCallbackQueueMetrics::default(),
                 }),
+                queue_metrics: AtomicWindowsCallbackQueueMetrics::default(),
             }),
         }
     }
@@ -1406,34 +1552,12 @@ impl WindowsConnectionSession {
 
     /// Returns a point-in-time bounded callback ingress snapshot.
     pub fn queue_metrics(&self) -> WindowsCallbackQueueMetrics {
-        lock_lifecycle(&self.inner).queue_metrics
+        self.inner.queue_metrics.snapshot()
     }
 
     #[cfg(any(windows, test))]
     fn record_queue_event(&self, event: QueueMetricEvent) {
-        let mut lifecycle = lock_lifecycle(&self.inner);
-        let counter = match event {
-            QueueMetricEvent::Accepted => &mut lifecycle.queue_metrics.accepted_callbacks,
-            QueueMetricEvent::QueuedFetch => &mut lifecycle.queue_metrics.queued_fetch_data,
-            QueueMetricEvent::QueuedCancel => {
-                &mut lifecycle.queue_metrics.queued_cancel_observations
-            }
-            QueueMetricEvent::QueuedPreflight => &mut lifecycle.queue_metrics.queued_preflights,
-            QueueMetricEvent::QueuedObservation => &mut lifecycle.queue_metrics.queued_observations,
-            QueueMetricEvent::FetchFull => &mut lifecycle.queue_metrics.fetch_queue_full,
-            QueueMetricEvent::CancelFull => {
-                &mut lifecycle.queue_metrics.cancel_observation_queue_full
-            }
-            QueueMetricEvent::PreflightFull => &mut lifecycle.queue_metrics.preflight_queue_full,
-            QueueMetricEvent::ObservationFull => {
-                &mut lifecycle.queue_metrics.observation_queue_full
-            }
-            QueueMetricEvent::Disconnected => &mut lifecycle.queue_metrics.receiver_disconnected,
-            QueueMetricEvent::Closing => &mut lifecycle.queue_metrics.closing_rejections,
-            QueueMetricEvent::Invalid => &mut lifecycle.queue_metrics.invalid_snapshot_rejections,
-            QueueMetricEvent::Panic => &mut lifecycle.queue_metrics.panic_failures,
-        };
-        *counter = counter.saturating_add(1);
+        self.inner.queue_metrics.increment(event);
     }
 
     #[cfg(any(windows, test))]
@@ -1691,11 +1815,13 @@ fn validate_request_generation(
 
 #[cfg(test)]
 mod tests {
-    use super::{FetchTerminalGate, SessionGeneration, WindowsConnectionSession, lock_lifecycle};
+    use std::sync::atomic::Ordering;
+
+    use super::{FetchTerminalGate, SessionGeneration, WindowsConnectionSession};
 
     #[test]
     fn fetch_terminal_gate_allows_exactly_one_attempt() {
-        let mut gate = FetchTerminalGate::default();
+        let gate = FetchTerminalGate::default();
         assert!(!gate.attempted());
         assert!(gate.begin_native());
         assert!(gate.attempted());
@@ -1706,7 +1832,7 @@ mod tests {
 
     #[test]
     fn platform_cancellation_suppresses_every_native_attempt() {
-        let mut gate = FetchTerminalGate::default();
+        let gate = FetchTerminalGate::default();
         assert!(gate.cancel_by_platform());
         assert!(!gate.attempted());
         assert!(!gate.cancel_by_platform());
@@ -1716,7 +1842,7 @@ mod tests {
 
     #[test]
     fn watchdog_timeout_preserves_one_native_failure_attempt() {
-        let mut gate = FetchTerminalGate::default();
+        let gate = FetchTerminalGate::default();
         assert!(gate.cancel_by_watchdog());
         assert!(gate.watchdog_timed_out());
         assert!(!gate.attempted());
@@ -1757,10 +1883,29 @@ mod tests {
         assert_eq!(metrics.invalid_snapshot_rejections(), 1);
         assert_eq!(metrics.panic_failures(), 1);
 
-        lock_lifecycle(&session.inner)
+        session
+            .inner
             .queue_metrics
-            .accepted_callbacks = u64::MAX;
+            .accepted_callbacks
+            .store(u64::MAX, Ordering::Relaxed);
         session.record_accepted_callback();
         assert_eq!(session.queue_metrics().accepted_callbacks(), u64::MAX);
+    }
+
+    #[test]
+    fn callback_queue_metrics_do_not_lose_concurrent_updates() {
+        let generation = SessionGeneration::new(1).expect("generation fixture should be valid");
+        let session = WindowsConnectionSession::new(generation);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let session = session.clone();
+                scope.spawn(move || {
+                    for _ in 0..1_000 {
+                        session.record_accepted_callback();
+                    }
+                });
+            }
+        });
+        assert_eq!(session.queue_metrics().accepted_callbacks(), 8_000);
     }
 }

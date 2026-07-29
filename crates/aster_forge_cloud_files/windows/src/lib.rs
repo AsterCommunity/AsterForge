@@ -38,11 +38,12 @@ pub use connection::{
     WindowsCallbackLease, WindowsCallbackQueueMetrics, WindowsCallbackRange,
     WindowsCallbackRangeLength, WindowsCallbackRequest, WindowsCancelFetchDataFlags,
     WindowsCancelFetchDataRequest, WindowsCancelFetchDataSnapshot, WindowsConnectionKey,
-    WindowsConnectionSession, WindowsFetchDataFailure, WindowsFetchDataFlags,
-    WindowsFetchDataPreparation, WindowsFetchDataProgressReporter, WindowsFetchDataRequest,
-    WindowsFetchDataSnapshot, WindowsFetchDataTransfer, WindowsObservedNotification,
-    WindowsPreflightRequest, WindowsPreflightSnapshot, WindowsProcessInfoSnapshot,
-    WindowsRequestKey, WindowsRestartHydration, WindowsSyncRootConnectOptions, WindowsTransferKey,
+    WindowsConnectionSession, WindowsFetchDataCorrelation, WindowsFetchDataFailure,
+    WindowsFetchDataFlags, WindowsFetchDataPreparation, WindowsFetchDataProgressReporter,
+    WindowsFetchDataRequest, WindowsFetchDataSnapshot, WindowsFetchDataTransfer,
+    WindowsObservedNotification, WindowsPreflightRequest, WindowsPreflightSnapshot,
+    WindowsProcessInfoSnapshot, WindowsRequestKey, WindowsRestartHydration,
+    WindowsSyncRootConnectOptions, WindowsTransferKey,
 };
 pub use error::{Result, WindowsCloudFilesError};
 pub use identity::{CFAPI_FILE_IDENTITY_MAX_BYTES, WindowsFileIdentity};

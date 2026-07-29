@@ -39,12 +39,19 @@ mod windows_example {
         bytes: Bytes,
     }
 
-    #[derive(Default)]
     struct MemoryCloud {
         files: Mutex<HashMap<CloudItemKey, MemoryFile>>,
+        read_delay: Duration,
     }
 
     impl MemoryCloud {
+        fn new(read_delay: Duration) -> Self {
+            Self {
+                files: Mutex::new(HashMap::new()),
+                read_delay,
+            }
+        }
+
         fn insert(&self, key: CloudItemKey, revision: ContentRevision, bytes: Bytes) {
             lock(&self.files).insert(key, MemoryFile { revision, bytes });
         }
@@ -64,6 +71,9 @@ mod windows_example {
             &self,
             request: &ContentReadRequest,
         ) -> BackendResult<ContentReadResponse> {
+            if !self.read_delay.is_zero() {
+                tokio::time::sleep(self.read_delay).await;
+            }
             let files = lock(&self.files);
             let file = files
                 .get(request.key())
@@ -117,14 +127,18 @@ mod windows_example {
         );
         let root_id = CloudItemId::new("root")?;
         let root_key = CloudItemKey::new(scope.clone(), root_id.clone());
-        let cloud = Arc::new(MemoryCloud::default());
+        let read_delay = duration_from_env("ASTER_FORGE_CLOUD_FILES_READ_DELAY_MS", 1)?;
+        let smoke_duration = duration_from_env("ASTER_FORGE_CLOUD_FILES_SMOKE_SECONDS", 1_000)?;
+        let disable_watchdog_poll =
+            std::env::var_os("ASTER_FORGE_CLOUD_FILES_DISABLE_WATCHDOG_POLL").is_some();
+        let cloud = Arc::new(MemoryCloud::new(read_delay.unwrap_or_default()));
         let items = memory_items(&scope, &root_id, &cloud)?;
         let registration = WindowsSyncRootRegistration::new(
             "AsterForge Memory Cloud",
             env!("CARGO_PKG_VERSION"),
             WindowsProviderId::new(0x2b7c_1d94_f321_4dc1_8b45_714b_15bd_38d2)?,
             WindowsSyncRootIdentity::encode(&scope)?,
-            Some(WindowsFileIdentity::encode(&root_key)?),
+            WindowsFileIdentity::encode(&root_key)?,
             WindowsSyncRootPolicies {
                 hydration: WindowsHydrationPolicy {
                     primary: WindowsHydrationPolicyPrimary::Progressive,
@@ -199,10 +213,16 @@ mod windows_example {
             "after this process stops, unhydrated files report \
              ERROR_CLOUD_FILE_PROVIDER_TERMINATED (0x80070194) until the provider reconnects"
         );
+        let smoke_deadline = smoke_duration.map(|duration| std::time::Instant::now() + duration);
         loop {
+            if smoke_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                println!("smoke duration elapsed; disconnecting cleanly");
+                break;
+            }
             match receiver.recv_timeout(Duration::from_millis(250)) {
                 Ok(WindowsCallbackRequest::FetchData(request)) => {
                     let key = request.snapshot().info().file_identity().decode()?;
+                    println!("fetch data: {:?}", key);
                     let Some(revision) = cloud.revision(&key) else {
                         request.fail(WindowsFetchDataFailure::NotInSync)?;
                         continue;
@@ -234,7 +254,9 @@ mod windows_example {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    let _ = waiters.poll_watchdog(std::time::Instant::now());
+                    if !disable_watchdog_poll {
+                        let _ = waiters.poll_watchdog(std::time::Instant::now());
+                    }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
             }
@@ -301,6 +323,22 @@ mod windows_example {
             return Err("sync-root path must be absolute".into());
         }
         Ok((path, unregister_only))
+    }
+
+    fn duration_from_env(name: &str, unit_millis: u64) -> ExampleResult<Option<Duration>> {
+        let Some(raw) = std::env::var_os(name) else {
+            return Ok(None);
+        };
+        let raw = raw
+            .into_string()
+            .map_err(|_| format!("{name} must contain UTF-8 decimal digits"))?;
+        let value = raw
+            .parse::<u64>()
+            .map_err(|_| format!("{name} must be an unsigned integer"))?;
+        let millis = value
+            .checked_mul(unit_millis)
+            .ok_or_else(|| format!("{name} exceeds the supported duration"))?;
+        Ok(Some(Duration::from_millis(millis)))
     }
 
     fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

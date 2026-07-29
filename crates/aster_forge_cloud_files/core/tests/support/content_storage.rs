@@ -10,8 +10,8 @@ use aster_forge_cloud_files_core::{
     ContentLeaseKind, ContentStorageEntry, ContentStorageStore, ContentUploadIntent,
     ContentUploadRecord, ContentUploadRecordTransition, ContentUploadSession, ContentUploadState,
     ContentUploadStore, DirtyContentTransition, LocalContentGeneration, LocalContentSnapshot,
-    MutationRemoteOutcome, OperationId, PlatformMaterializationState, SessionGeneration,
-    StoreResult, StoreWriteStatus,
+    MutationRemoteOutcome, OperationId, PlatformMaterializationState, RecoveryPage,
+    SessionGeneration, StoreResult, StoreWriteStatus,
 };
 use async_trait::async_trait;
 
@@ -34,6 +34,8 @@ pub struct MemoryContentStorageStore {
 }
 
 impl MemoryContentStorageStore {
+    const TEST_RECOVERY_PAGE_SIZE: usize = 64;
+
     pub fn failures(&self) -> &FailureInjector {
         &self.failures
     }
@@ -62,6 +64,102 @@ impl MemoryContentStorageStore {
             .lock()
             .expect("memory content store mutex should not be poisoned")
             .stall_next_upload_session = true;
+    }
+
+    pub async fn collect_upload_backlog(
+        &self,
+        scope: &CloudScope,
+    ) -> StoreResult<Vec<ContentUploadRecord>> {
+        let mut records = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .recoverable_content_uploads_page(
+                    scope,
+                    after.as_deref(),
+                    Self::TEST_RECOVERY_PAGE_SIZE,
+                )
+                .await?;
+            let has_more = page.has_more();
+            after = page
+                .items()
+                .last()
+                .map(|record| record.intent().operation_id().as_str().to_owned());
+            records.extend(page.into_items());
+            if !has_more {
+                return Ok(records);
+            }
+            if after.is_none() {
+                return Err(Self::store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    "upload recovery page cannot continue without a cursor",
+                ));
+            }
+        }
+    }
+
+    pub async fn collect_cache_write_backlog(
+        &self,
+        scope: &CloudScope,
+    ) -> StoreResult<Vec<ContentCacheWriteRecord>> {
+        let mut records = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .recoverable_content_cache_writes_page(
+                    scope,
+                    after.as_deref(),
+                    Self::TEST_RECOVERY_PAGE_SIZE,
+                )
+                .await?;
+            let has_more = page.has_more();
+            after = page
+                .items()
+                .last()
+                .map(|record| record.intent().operation_id().as_str().to_owned());
+            records.extend(page.into_items());
+            if !has_more {
+                return Ok(records);
+            }
+            if after.is_none() {
+                return Err(Self::store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    "cache-write recovery page cannot continue without a cursor",
+                ));
+            }
+        }
+    }
+
+    pub async fn collect_eviction_backlog(
+        &self,
+        scope: &CloudScope,
+    ) -> StoreResult<Vec<ContentEvictionRecord>> {
+        let mut records = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .recoverable_content_evictions_page(
+                    scope,
+                    after.as_deref(),
+                    Self::TEST_RECOVERY_PAGE_SIZE,
+                )
+                .await?;
+            let has_more = page.has_more();
+            after = page
+                .items()
+                .last()
+                .map(|record| record.intent().operation_id().as_str().to_owned());
+            records.extend(page.into_items());
+            if !has_more {
+                return Ok(records);
+            }
+            if after.is_none() {
+                return Err(Self::store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    "eviction recovery page cannot continue without a cursor",
+                ));
+            }
+        }
     }
 
     fn upload_execution_is_active(
@@ -219,10 +317,12 @@ impl ContentUploadStore for MemoryContentStorageStore {
         Ok(state.uploads.get(operation_id).cloned())
     }
 
-    async fn recoverable_content_uploads(
+    async fn recoverable_content_uploads_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentUploadRecord>> {
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentUploadRecord>> {
         let state = self
             .state
             .lock()
@@ -242,7 +342,12 @@ impl ContentUploadStore for MemoryContentStorageStore {
                 .as_str()
                 .cmp(right.intent().operation_id().as_str())
         });
-        Ok(records)
+        if let Some(after) = after_operation_id {
+            records.retain(|record| record.intent().operation_id().as_str() > after);
+        }
+        let has_more = records.len() > limit;
+        records.truncate(limit);
+        Ok(RecoveryPage::new(records, has_more))
     }
 
     async fn record_content_upload_session(
@@ -525,10 +630,12 @@ impl ContentCacheWriteStore for MemoryContentStorageStore {
         Ok(state.cache_writes.get(operation_id).cloned())
     }
 
-    async fn recoverable_content_cache_writes(
+    async fn recoverable_content_cache_writes_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentCacheWriteRecord>> {
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentCacheWriteRecord>> {
         let state = self
             .state
             .lock()
@@ -548,7 +655,12 @@ impl ContentCacheWriteStore for MemoryContentStorageStore {
                 .as_str()
                 .cmp(right.intent().operation_id().as_str())
         });
-        Ok(records)
+        if let Some(after) = after_operation_id {
+            records.retain(|record| record.intent().operation_id().as_str() > after);
+        }
+        let has_more = records.len() > limit;
+        records.truncate(limit);
+        Ok(RecoveryPage::new(records, has_more))
     }
 
     async fn record_content_cache_write_physical_commit(
@@ -743,7 +855,9 @@ impl ContentStorageStore for MemoryContentStorageStore {
             .state
             .lock()
             .expect("memory content store mutex should not be poisoned");
-        let changed = Self::entry_mut(&mut state, key)?.set_pinned(pinned);
+        let changed = Self::entry_mut(&mut state, key)?
+            .set_pinned(pinned)
+            .map_err(Self::transition_error)?;
         Ok(Self::write_status(changed))
     }
 
@@ -862,10 +976,12 @@ impl ContentStorageStore for MemoryContentStorageStore {
         Ok(state.evictions.get(operation_id).cloned())
     }
 
-    async fn recoverable_content_evictions(
+    async fn recoverable_content_evictions_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentEvictionRecord>> {
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentEvictionRecord>> {
         let state = self
             .state
             .lock()
@@ -885,7 +1001,12 @@ impl ContentStorageStore for MemoryContentStorageStore {
                 .as_str()
                 .cmp(right.intent().operation_id().as_str())
         });
-        Ok(records)
+        if let Some(after) = after_operation_id {
+            records.retain(|record| record.intent().operation_id().as_str() > after);
+        }
+        let has_more = records.len() > limit;
+        records.truncate(limit);
+        Ok(RecoveryPage::new(records, has_more))
     }
 
     async fn record_content_eviction_effect(

@@ -185,7 +185,10 @@ fn is_reserved_device_name(stem: &str) -> bool {
             .strip_prefix("COM")
             .or_else(|| upper.strip_prefix("LPT"))
             .is_some_and(|suffix| {
-                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
             })
 }
 

@@ -244,7 +244,7 @@ impl MemoryWritebackStore {
                     .insert(
                         key,
                         StagedFile {
-                            bytes: persisted.bytes,
+                            bytes: persisted.bytes.into(),
                             snapshot,
                             base_revision,
                         },
@@ -277,7 +277,7 @@ impl MemoryWritebackStore {
                         (key, generation),
                         ImmutableSnapshotBytes {
                             reference,
-                            bytes: persisted.bytes,
+                            bytes: persisted.bytes.into(),
                         },
                     )
                     .is_some()
@@ -295,7 +295,7 @@ impl MemoryWritebackStore {
                         .entry((key.clone(), snapshot.generation()))
                         .or_insert_with(|| ImmutableSnapshotBytes {
                             reference: snapshot.reference().clone(),
-                            bytes: file.bytes.clone(),
+                            bytes: Arc::clone(&file.bytes),
                         });
                     if immutable.reference != *snapshot.reference()
                         || immutable.bytes.len() != file.bytes.len()
@@ -401,6 +401,20 @@ impl MemoryWritebackStore {
         let Some(state_file) = self.state_file.as_ref() else {
             return Ok(());
         };
+        let persist_state = || Self::persist_blocking(state_file, state);
+        if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            tokio::task::block_in_place(persist_state)
+        } else {
+            persist_state()
+        }
+    }
+
+    fn persist_blocking(
+        state_file: &Path,
+        state: &MemoryWritebackState,
+    ) -> StoreResult<()> {
         let mut files = state
             .files
             .iter()
@@ -408,7 +422,7 @@ impl MemoryWritebackStore {
                 namespace_id: key.scope().namespace_id().as_str().to_owned(),
                 root_id: key.scope().root_id().as_str().to_owned(),
                 item_id: key.item_id().as_str().to_owned(),
-                bytes: file.bytes.clone(),
+                bytes: file.bytes.to_vec(),
                 generation: file
                     .snapshot
                     .as_ref()
@@ -505,7 +519,7 @@ impl MemoryWritebackStore {
                 item_id: key.item_id().as_str().to_owned(),
                 generation: generation.get(),
                 local_reference: snapshot.reference.as_str().to_owned(),
-                bytes: snapshot.bytes.clone(),
+                bytes: snapshot.bytes.to_vec(),
             })
             .collect::<Vec<_>>();
         immutable_snapshots.sort_by(|left, right| {
@@ -552,7 +566,260 @@ impl MemoryWritebackStore {
                 uploads
             },
         };
-        let bytes = serde_json::to_vec_pretty(&document).map_err(|error| {
+        write_durable_document(state_file, &document)
+    }
+
+    fn session_key(
+        state: &MemoryWritebackState,
+        session: &LinuxWriteSessionId,
+    ) -> StoreResult<CloudItemKey> {
+        state
+            .sessions
+            .get(session)
+            .map(|binding| binding.key.clone())
+            .ok_or_else(|| {
+                store_error(
+                    CloudFilesStoreErrorKind::NotFound,
+                    "missing memory write session",
+                )
+            })
+    }
+
+    fn require_active_session(
+        state: &MemoryWritebackState,
+        session: &LinuxWriteSessionId,
+    ) -> StoreResult<()> {
+        let binding = state.sessions.get(session).ok_or_else(|| {
+            store_error(
+                CloudFilesStoreErrorKind::NotFound,
+                "missing memory write session",
+            )
+        })?;
+        if state.active_generation != Some(binding.generation)
+            || state.active_session_state != Some(SessionState::Accepting)
+        {
+            return Err(store_error(
+                CloudFilesStoreErrorKind::Conflict,
+                "memory write session was fenced by a newer mount",
+            ));
+        }
+        Ok(())
+    }
+
+    fn compact_terminal_records(state: &mut MemoryWritebackState) {
+        let mut completed_mutations = state
+            .mutations
+            .iter()
+            .filter(|(_, record)| record.state() == MutationState::Completed)
+            .map(|(operation_id, _)| operation_id.clone())
+            .collect::<Vec<_>>();
+        completed_mutations.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        let remove_mutations = completed_mutations
+            .len()
+            .saturating_sub(TERMINAL_RECORD_LIMIT);
+        for operation_id in completed_mutations.into_iter().take(remove_mutations) {
+            if let Some(record) = state.mutations.remove(&operation_id) {
+                state.idempotency_keys.remove(record.intent().idempotency_key());
+            }
+        }
+
+        let mut completed_uploads = state
+            .uploads
+            .iter()
+            .filter(|(_, record)| record.state() == ContentUploadState::Completed)
+            .map(|(operation_id, _)| operation_id.clone())
+            .collect::<Vec<_>>();
+        completed_uploads.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        let remove_uploads = completed_uploads
+            .len()
+            .saturating_sub(TERMINAL_RECORD_LIMIT);
+        for operation_id in completed_uploads.into_iter().take(remove_uploads) {
+            let Some(record) = state.uploads.remove(&operation_id) else {
+                continue;
+            };
+            state
+                .upload_idempotency_keys
+                .remove(record.intent().idempotency_key());
+            let snapshot_key = (
+                record.intent().snapshot().item_key().clone(),
+                record.intent().snapshot().generation(),
+            );
+            let still_current = state
+                .files
+                .get(&snapshot_key.0)
+                .and_then(|file| file.snapshot.as_ref())
+                .is_some_and(|snapshot| snapshot.generation() == snapshot_key.1);
+            let still_referenced = state.uploads.values().any(|upload| {
+                upload.intent().snapshot().item_key() == &snapshot_key.0
+                    && upload.intent().snapshot().generation() == snapshot_key.1
+            });
+            if !still_current && !still_referenced {
+                state.immutable_snapshots.remove(&snapshot_key);
+            }
+        }
+    }
+
+    fn commit(
+        &self,
+        state: &mut MemoryWritebackState,
+        session: &LinuxWriteSessionId,
+        bytes: Arc<[u8]>,
+    ) -> StoreResult<LinuxWriteCommit> {
+        let binding = state.sessions.get(session).cloned().ok_or_else(|| {
+            store_error(
+                CloudFilesStoreErrorKind::NotFound,
+                "missing memory write session",
+            )
+        })?;
+        let key = binding.key;
+        let next_generation = state.next_generation.checked_add(1).ok_or_else(|| {
+            store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                "memory write generation exhausted",
+            )
+        })?;
+        let generation = LocalContentGeneration::new(next_generation).map_err(|_| {
+            store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                "memory write generation was invalid",
+            )
+        })?;
+        let file = state.files.get(&key).ok_or_else(|| {
+            store_error(
+                CloudFilesStoreErrorKind::NotFound,
+                "missing memory staged file",
+            )
+        })?;
+        let size = u64::try_from(bytes.len()).map_err(|_| {
+            store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                "memory staged file length exceeded u64",
+            )
+        })?;
+        let snapshot = LocalContentSnapshot::new(
+            key.clone(),
+            generation,
+            LocalContentReference::new(format!("memory-dirty-{}", generation.get())).map_err(
+                |_| {
+                    store_error(
+                        CloudFilesStoreErrorKind::InvalidTransition,
+                        "memory local reference was invalid",
+                    )
+                },
+            )?,
+            size,
+            None,
+        );
+        let immutable = ImmutableSnapshotBytes {
+            reference: snapshot.reference().clone(),
+            bytes: Arc::clone(&bytes),
+        };
+        let base_revision = file.base_revision.clone();
+        if state
+            .immutable_snapshots
+            .contains_key(&(key.clone(), generation))
+        {
+            return Err(store_error(
+                CloudFilesStoreErrorKind::Conflict,
+                "memory immutable generation already existed",
+            ));
+        }
+        let operation_id = OperationId::new(format!(
+            "content-upload-op-{:020}",
+            generation.get()
+        ))
+        .map_err(|error| {
+            store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                error.to_string(),
+            )
+        })?;
+        let idempotency_key = IdempotencyKey::new(format!(
+            "content-upload-key-{:020}",
+            generation.get()
+        ))
+        .map_err(|error| {
+            store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                error.to_string(),
+            )
+        })?;
+        let intent = ContentUploadIntent::new(
+            operation_id.clone(),
+            idempotency_key.clone(),
+            ContentCacheKey::new(key.clone(), base_revision.clone()),
+            snapshot.clone(),
+            ContentLeaseId::new(format!(
+                "content-upload-lease-{:020}",
+                generation.get()
+            ))
+            .map_err(|error| {
+                store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    error.to_string(),
+                )
+            })?,
+            binding.generation,
+        )
+        .map_err(|error| {
+            store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                error.to_string(),
+            )
+        })?;
+        if state.uploads.contains_key(&operation_id)
+            || state.upload_idempotency_keys.contains_key(&idempotency_key)
+        {
+            return Err(store_error(
+                CloudFilesStoreErrorKind::Conflict,
+                "memory upload identity already existed",
+            ));
+        }
+        let old_generation = state.next_generation;
+        let old_file = state
+            .files
+            .insert(
+                key.clone(),
+                StagedFile {
+                    bytes,
+                    snapshot: Some(snapshot.clone()),
+                    base_revision,
+                },
+            )
+            .ok_or_else(|| {
+                store_error(
+                    CloudFilesStoreErrorKind::NotFound,
+                    "memory staged file disappeared before commit",
+                )
+            })?;
+        state.next_generation = next_generation;
+        state
+            .immutable_snapshots
+            .insert((key.clone(), generation), immutable);
+        state
+            .upload_idempotency_keys
+            .insert(idempotency_key.clone(), operation_id.clone());
+        state.uploads.insert(
+            operation_id.clone(),
+            ContentUploadRecord::persist(intent),
+        );
+        if let Err(error) = self.persist(state) {
+            state.next_generation = old_generation;
+            state.files.insert(key.clone(), old_file);
+            state.immutable_snapshots.remove(&(key, generation));
+            state.upload_idempotency_keys.remove(&idempotency_key);
+            state.uploads.remove(&operation_id);
+            return Err(error);
+        }
+        Ok(LinuxWriteCommit::new(snapshot))
+    }
+}
+
+fn write_durable_document(
+    state_file: &Path,
+    document: &DurableWritebackDocument,
+) -> StoreResult<()> {
+        let bytes = serde_json::to_vec(document).map_err(|error| {
             store_error(
                 CloudFilesStoreErrorKind::PersistenceFailure,
                 format!("serialize synthetic writeback state: {error}"),
@@ -610,169 +877,4 @@ impl MemoryWritebackStore {
                     format!("sync synthetic writeback directory: {error}"),
                 )
             })
-    }
-
-    fn session_key(
-        state: &MemoryWritebackState,
-        session: &LinuxWriteSessionId,
-    ) -> StoreResult<CloudItemKey> {
-        state
-            .sessions
-            .get(session)
-            .map(|binding| binding.key.clone())
-            .ok_or_else(|| {
-                store_error(
-                    CloudFilesStoreErrorKind::NotFound,
-                    "missing memory write session",
-                )
-            })
-    }
-
-    fn require_active_session(
-        state: &MemoryWritebackState,
-        session: &LinuxWriteSessionId,
-    ) -> StoreResult<()> {
-        let binding = state.sessions.get(session).ok_or_else(|| {
-            store_error(
-                CloudFilesStoreErrorKind::NotFound,
-                "missing memory write session",
-            )
-        })?;
-        if state.active_generation != Some(binding.generation)
-            || state.active_session_state != Some(SessionState::Accepting)
-        {
-            return Err(store_error(
-                CloudFilesStoreErrorKind::Conflict,
-                "memory write session was fenced by a newer mount",
-            ));
-        }
-        Ok(())
-    }
-
-    fn commit(
-        &self,
-        state: &mut MemoryWritebackState,
-        session: &LinuxWriteSessionId,
-    ) -> StoreResult<LinuxWriteCommit> {
-        let binding = state.sessions.get(session).cloned().ok_or_else(|| {
-            store_error(
-                CloudFilesStoreErrorKind::NotFound,
-                "missing memory write session",
-            )
-        })?;
-        let key = binding.key;
-        state.next_generation = state.next_generation.checked_add(1).ok_or_else(|| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                "memory write generation exhausted",
-            )
-        })?;
-        let generation = LocalContentGeneration::new(state.next_generation).map_err(|_| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                "memory write generation was invalid",
-            )
-        })?;
-        let file = state.files.get_mut(&key).ok_or_else(|| {
-            store_error(
-                CloudFilesStoreErrorKind::NotFound,
-                "missing memory staged file",
-            )
-        })?;
-        let size = u64::try_from(file.bytes.len()).map_err(|_| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                "memory staged file length exceeded u64",
-            )
-        })?;
-        let snapshot = LocalContentSnapshot::new(
-            key.clone(),
-            generation,
-            LocalContentReference::new(format!("memory-dirty-{}", generation.get())).map_err(
-                |_| {
-                    store_error(
-                        CloudFilesStoreErrorKind::InvalidTransition,
-                        "memory local reference was invalid",
-                    )
-                },
-            )?,
-            size,
-            None,
-        );
-        file.snapshot = Some(snapshot.clone());
-        let immutable = ImmutableSnapshotBytes {
-            reference: snapshot.reference().clone(),
-            bytes: file.bytes.clone(),
-        };
-        let base_revision = file.base_revision.clone();
-        if state
-            .immutable_snapshots
-            .insert((key.clone(), generation), immutable)
-            .is_some()
-        {
-            return Err(store_error(
-                CloudFilesStoreErrorKind::Conflict,
-                "memory immutable generation already existed",
-            ));
-        }
-        let operation_id = OperationId::new(format!(
-            "content-upload-op-{:020}",
-            generation.get()
-        ))
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                error.to_string(),
-            )
-        })?;
-        let idempotency_key = IdempotencyKey::new(format!(
-            "content-upload-key-{:020}",
-            generation.get()
-        ))
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                error.to_string(),
-            )
-        })?;
-        let intent = ContentUploadIntent::new(
-            operation_id.clone(),
-            idempotency_key.clone(),
-            ContentCacheKey::new(key, base_revision),
-            snapshot.clone(),
-            ContentLeaseId::new(format!(
-                "content-upload-lease-{:020}",
-                generation.get()
-            ))
-            .map_err(|error| {
-                store_error(
-                    CloudFilesStoreErrorKind::InvalidTransition,
-                    error.to_string(),
-                )
-            })?,
-            binding.generation,
-        )
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                error.to_string(),
-            )
-        })?;
-        if state.uploads.contains_key(&operation_id)
-            || state
-                .upload_idempotency_keys
-                .insert(idempotency_key, operation_id.clone())
-                .is_some()
-        {
-            return Err(store_error(
-                CloudFilesStoreErrorKind::Conflict,
-                "memory upload identity already existed",
-            ));
-        }
-        state
-            .uploads
-            .insert(operation_id, ContentUploadRecord::persist(intent));
-        self.persist(state)?;
-        Ok(LinuxWriteCommit::new(snapshot))
-    }
 }

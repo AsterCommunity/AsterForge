@@ -471,6 +471,8 @@ range request offset 等于 EOF 时可以返回 empty bytes；offset 超过 EOF 
 
 `HydrationCoordinator` 固定绑定一个 product-owned `CloudContentBackend`，避免不同 adapter 实例意外共享同一 in-flight work：
 
+coordinator 默认限制同时保留的 backend work 数量（全局 1024、单 content key 128）。产品可通过 `HydrationCoordinator::with_limits` 为 extension/daemon 设置更小的 `HydrationLimits`；达到上限时 request 返回 `HydrationError::InFlightLimitExceeded`，等待现有 waiter 释放后再重试。
+
 ```rust
 use aster_forge_cloud_files_core::{
     Alignment, ByteRange, ContentRevision, HydrationCoordinator, HydrationRequest,
@@ -803,6 +805,12 @@ runner 会从 durable accepted offset 读取 exact snapshot range，校验 sourc
 `ContentUploadStore` 所有 mutating transition 都接收本次执行者的 `SessionGeneration`。真实 store 必须在同一数据库事务内比较 active generation 并写 transition；较旧 mount/extension/connection 的晚到 checkpoint、outcome、metadata reconcile 和 completion 返回 `StoreWriteStatus::Fenced`。较新的 generation 可以继续旧 intent 的 immutable snapshot，旧 generation 只标识最初接收者，不阻止 startup takeover。
 
 Linux writable adapter 不直接调用 backend transport。产品 `LinuxWritebackStore` 在 write/truncate 的 durable transaction 中保存 immutable snapshot 和调用方分配的 `ContentUploadIntent`，FUSE reply 后再由产品 worker 调用 runner。这样不会制造“snapshot 已回复成功、upload intent 尚未可恢复”的额外 crash window。Windows/macOS 也使用同一个 runner，只替换 snapshot reader、durable store 和 backend adapter。
+
+### 有界 recovery page
+
+四个 durable store trait 只提供带 `after_operation_id` 与 `usize` limit 的 `recoverable_*_page`。数据库实现必须在 SQL 层使用 `ORDER BY operation_id LIMIT`，避免启动时把整个 backlog 装入内存。
+
+`CloudContentUploadBackend::reconcile_upload_chunk` 为 chunk 已被远端接受但 checkpoint 尚未落盘的崩溃窗口提供显式查询边界。backend 必须按 session、offset 和 immutable bytes 返回已接受的 chunk end。
 
 ## 产品接入形状
 

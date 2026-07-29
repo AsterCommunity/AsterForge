@@ -12,9 +12,16 @@ final class MemoryCloudDataSource: MacosCloudFilesDataSource {
     private let children: [String: [MacosCloudItemSnapshot]]
     private let currentAnchor: MacosSyncAnchor
     private let materializedStore: (any MacosMaterializedSetPersisting)?
+    private let stagingDirectory: URL
 
     init(materializedStore: (any MacosMaterializedSetPersisting)? = nil) throws {
         self.materializedStore = materializedStore
+        stagingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aster-forge-memory-cloud-staging", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stagingDirectory,
+            withIntermediateDirectories: true
+        )
         let namespace = "aster-forge-fixture"
         let root = "memory-cloud"
         let rootIdentifier = NSFileProviderItemIdentifier.rootContainer.rawValue
@@ -184,11 +191,23 @@ final class MemoryCloudDataSource: MacosCloudFilesDataSource {
             return MacosNoopCancellation()
         }
         do {
-            completion(.success(try MacosFetchedContent(item: entry.snapshot, bytes: content)))
+            let stagingURL = stagingDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: false)
+            try content.write(to: stagingURL, options: .atomic)
+            completion(
+                .success(
+                    try MacosFetchedContent(item: entry.snapshot, stagingURL: stagingURL)
+                )
+            )
         } catch {
             completion(.failure(error))
         }
         return MacosNoopCancellation()
+    }
+
+    func discardFetchedContents(at stagingURL: URL) {
+        guard stagingURL.deletingLastPathComponent() == stagingDirectory else { return }
+        try? FileManager.default.removeItem(at: stagingURL)
     }
 
     private static func snapshot(
@@ -212,15 +231,4 @@ final class MemoryCloudDataSource: MacosCloudFilesDataSource {
                 : UTType.plainText.identifier
         )
     }
-}
-
-final class UnavailableTemporaryContentStore: MacosTemporaryContentStore {
-    private let error: Error
-
-    init(error: Error) {
-        self.error = error
-    }
-
-    func write(_: Data) throws -> URL { throw error }
-    func removeIfPresent(_: URL) {}
 }

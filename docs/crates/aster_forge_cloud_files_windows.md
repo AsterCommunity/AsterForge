@@ -159,7 +159,7 @@ root bytes
 CFAPI_SYNC_ROOT_IDENTITY_MAX_BYTES == 65536
 ```
 
-root 自身还可以提供一个 optional `WindowsFileIdentity`。如果提供，constructor 会解码并验证它与 sync-root identity 属于同一 namespace/root scope；不同 scope 的 root file identity 会被拒绝。
+root 必须提供一个 `WindowsFileIdentity`，constructor 会解码并验证它与 sync-root identity 属于同一 namespace/root scope；不同 scope 的 root file identity 会被拒绝。该约束保证 root callback 与普通 item callback 使用同一套非空 identity 解码合同，不会出现注册成功但 root callback 无法表示的状态。
 
 `WindowsSyncRootRegistration` 还要求：
 
@@ -317,7 +317,7 @@ core `SessionGeneration` 是 durable fence，CFAPI `ConnectionKey` 是当前 nat
 
 受控 constructor 会拒绝 snapshot/lease generation mismatch。调用 disconnect 时先建立 closing fence，因此 `CfDisconnectSyncRoot` 调用期间仍到达的 callback 会被明确失败，不会进入 worker。native disconnect 返回后不再接收 callback，Box-backed context 才会释放；已经进入 channel 的 owned request 不借用 context，并通过 lease 继续 drain。最后一个 lease 释放后 session 才进入 `Closed`。
 
-显式 `disconnect` 和 `Drop` 共享 exactly-once native attempt gate。若 native disconnect 报错，CFAPI channel 可能仍持有 callback context，因此该 context 会保留到进程结束，避免释放后继续收到 callback 造成悬空访问。
+显式 `disconnect` 和 `Drop` 共享连接状态机。native disconnect 失败后状态保持可重试，后续显式调用会再次执行 `CfDisconnectSyncRoot`；同时 bounded ingress sender 会独立关闭，让 worker receiver 正常结束。只有对象最终 Drop 且重试仍失败时，才保留 CFAPI 仍可能引用的稳定 callback context，避免释放后继续收到 callback 造成悬空访问；被保留的 context 已不再持有 sender。
 
 ### Hydration 与 terminal completion
 
@@ -334,7 +334,7 @@ WindowsFetchDataRequest::hydrate(
 
 Windows adapter 会把 callback item key、file size、required range、session generation、CFAPI 4096-byte alignment 和 backend alignment 组合成 `HydrationRequest`。`CF_EOF` 会解析为直到 snapshot file size 的精确 range；offset 必须 4096-byte aligned，非 EOF transfer length 也必须 4096-byte aligned。coordinator 返回的 revision、offset、length 和 total size 必须完全匹配，随后其 owned `Bytes` 在同步 `CfExecute` 期间保持存活，不进行额外 payload copy。
 
-高级 worker 可以调用 `prepare_transfer` 自己编排不带 native cancellation 的读取，也可以调用 `prepare_registered_transfer` 获得 `Transfer` / `Cancelled` / `TimedOut` portable outcome。前者只等待 coordinator 并返回 `WindowsFetchDataTransfer`，不会消耗 terminal ownership；调用方之后仍必须 `complete` 或 `fail`。普通 worker 应直接调用带 `WindowsFetchDataWaiterRegistry` 的 `hydrate`，由 request 保证所有 setup/backend/contract error 都先映射成 terminal CFAPI failure。success、failure、platform cancellation 和 Drop 共用 non-clone terminal gate；首次 native attempt 前即消耗 gate，即使 `CfExecute` 自身报错，Drop 也不会重复提交。若 CFAPI cancellation 赢得 core waiter race，则 gate 进入 platform-cancelled 状态，Drop 不会再伪造 `ProviderTerminated` completion。
+高级 worker 可以调用 `prepare_transfer` 自己编排不带 native cancellation 的读取，也可以调用 `prepare_registered_transfer` 获得 `Transfer` / `Cancelled` / `TimedOut` portable outcome。前者只等待 coordinator 并返回 `WindowsFetchDataTransfer`，不会消耗 terminal ownership；调用方之后仍必须 `complete` 或 `fail`。普通 worker 应直接调用带 `WindowsFetchDataWaiterRegistry` 的 `hydrate`，由 request 保证所有 setup/backend/contract error 都先映射成 terminal CFAPI failure。success、failure、platform cancellation、watchdog 和 Drop 共用原子 terminal gate；registry 持有同一 gate，在 callback thread 内先发布 platform-cancelled 状态，再唤醒 core waiter。因此 cancel 后立刻 abort hydration task 时，request Drop 也不会伪造 `ProviderTerminated` completion。首次 native attempt 前即消耗 gate，即使 `CfExecute` 自身报错，Drop 也不会重复提交。
 
 ### Active waiter cancellation registry
 
@@ -364,9 +364,9 @@ CFAPI callback 的固定 timeout 是 60 秒。Forge 暴露 `WINDOWS_CFAPI_CALLBA
 let progress = request.progress_reporter();
 ```
 
-`WindowsFetchDataProgressReporter` 只持有 owned callback correlation，不持有 terminal completion authority，因此可移动到另一个 worker。`WindowsFetchDataProgress::new(total, completed)` 验证 `completed <= total`、signed 64-bit native boundary、固定 total 和 monotonic completed；duplicate sample 合法，regression 与 total 变化在 native call 前拒绝。Windows target 上 `report` 先刷新匹配 waiters 的 watchdog，再用一个最小 `unsafe` block 调用 `CfReportProviderProgress(ConnectionKey, TransferKey, total, completed)`。registry 中已无匹配 waiter 时返回 0，不在 terminal 后继续调用 native progress。
+`WindowsFetchDataProgressReporter` 只持有 generation、connection/transfer/request key 和 file ID 这些标量 correlation，不复制 callback 路径、identity、volume 或 process 字符串，也不持有 terminal completion authority，因此可低成本移动到另一个 worker。`WindowsFetchDataProgress::new(total, completed)` 验证 `completed <= total`、signed 64-bit native boundary、固定 total 和 monotonic completed；duplicate sample 合法，regression 与 total 变化在 native call 前拒绝。Windows target 上 `report` 先刷新匹配 waiters 的 watchdog，再用一个最小 `unsafe` block 调用 `CfReportProviderProgress(ConnectionKey, TransferKey, total, completed)`。registry 中已无匹配 waiter 时返回 0，不在 terminal 后继续调用 native progress。
 
-`WindowsFetchDataWaiterMetrics` 额外记录 watchdog timeout、progress callback 和实际 deadline refresh。`WindowsSyncRootConnection::queue_metrics` 返回当前 generation 的饱和累加 ingress counters：accepted、queued fetch、queued cancel observation、fetch queue full、cancel observation queue full、receiver disconnected、queued preflight/observation、对应 queue full、closing rejection、invalid snapshot rejection 和 callback panic。fetch/preflight queue full/disconnected 必须提交 terminal failure；cancel observation queue full 只丢诊断事件，实际 registry cancellation 已在此前完成。
+`WindowsFetchDataWaiterMetrics` 额外记录 watchdog timeout、progress callback 和实际 deadline refresh。`WindowsSyncRootConnection::queue_metrics` 返回当前 generation 的饱和累加 ingress counters：accepted、queued fetch、queued cancel observation、fetch queue full、cancel observation queue full、receiver disconnected、queued preflight/observation、对应 queue full、closing rejection、invalid snapshot rejection 和 callback panic。累加计数使用独立原子值，不再与 lifecycle state/active callback 共用一把 mutex；snapshot 是诊断视图，不承诺跨 counter 的事务一致性。fetch/preflight queue full/disconnected 必须提交 terminal failure；cancel observation queue full 只丢诊断事件，实际 registry cancellation 已在此前完成。
 
 ### Restart、recovery 与 native mutation observation
 

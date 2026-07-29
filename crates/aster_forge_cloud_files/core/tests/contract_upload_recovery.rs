@@ -190,6 +190,21 @@ impl CloudContentUploadBackend for SyntheticUploadBackend {
         ))
     }
 
+    async fn reconcile_upload_chunk(
+        &self,
+        intent: &ContentUploadIntent,
+        session: &ContentUploadSession,
+        chunk: &ContentUploadChunk,
+    ) -> BackendResult<ContentUploadChunkAck> {
+        chunk
+            .validate_for(intent, session)
+            .expect("synthetic upload chunk should satisfy the recovery contract");
+        Ok(ContentUploadChunkAck::new(
+            chunk.session_id().clone(),
+            chunk.end_exclusive(),
+        ))
+    }
+
     async fn commit_upload(
         &self,
         intent: &ContentUploadIntent,
@@ -673,7 +688,7 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
     );
     assert!(
         store
-            .recoverable_content_uploads(backend.scope())
+            .collect_upload_backlog(backend.scope())
             .await
             .expect("recovery scan should succeed")
             .is_empty()
@@ -969,7 +984,7 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
         .expect("other-scope upload intent should persist");
     assert_eq!(
         store
-            .recoverable_content_uploads(backend.scope())
+            .collect_upload_backlog(backend.scope())
             .await
             .expect("recovery scan should succeed")
             .iter()
@@ -979,7 +994,7 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
     );
     assert_eq!(
         store
-            .recoverable_content_uploads(other_key.item_key().scope())
+            .collect_upload_backlog(other_key.item_key().scope())
             .await
             .expect("other-scope recovery scan should succeed")
             .iter()
@@ -1022,7 +1037,7 @@ async fn upload_recovery_is_scope_filtered_sorted_and_excludes_completed_records
         .expect("upload should complete");
     assert_eq!(
         store
-            .recoverable_content_uploads(backend.scope())
+            .collect_upload_backlog(backend.scope())
             .await
             .expect("recovery scan should succeed")
             .iter()

@@ -282,7 +282,7 @@ fn registration_text_uses_utf16_code_unit_boundary_and_rejects_empty_or_nul() {
         ("provider name", "bad\0name", "1"),
         ("provider version", "Forge", "bad\0version"),
     ] {
-        let error = registration(name, version, None).unwrap_err();
+        let error = registration(name, version).unwrap_err();
         assert!(matches!(
             error,
             WindowsCloudFilesError::InvalidRegistrationString { field: actual, .. }
@@ -290,15 +290,15 @@ fn registration_text_uses_utf16_code_unit_boundary_and_rejects_empty_or_nul() {
         ));
     }
 
-    registration(&"a".repeat(255), &"😀".repeat(127), None)
+    registration(&"a".repeat(255), &"😀".repeat(127))
         .expect("255 ASCII and 254 UTF-16 units should pass");
-    registration(&("😀".repeat(127) + "a"), "1", None).expect("exact 255 UTF-16 units should pass");
+    registration(&("😀".repeat(127) + "a"), "1").expect("exact 255 UTF-16 units should pass");
 
     for (field, name, version) in [
         ("provider name", "a".repeat(256), "1".to_owned()),
         ("provider version", "Forge".to_owned(), "😀".repeat(128)),
     ] {
-        let error = registration(&name, &version, None).unwrap_err();
+        let error = registration(&name, &version).unwrap_err();
         assert!(matches!(
             error,
             WindowsCloudFilesError::InvalidRegistrationString { field: actual, .. }
@@ -311,7 +311,7 @@ fn registration_text_uses_utf16_code_unit_boundary_and_rejects_empty_or_nul() {
 fn registration_rejects_root_file_identity_from_another_scope() {
     let other_identity = WindowsFileIdentity::encode(&key("ns", "other-root", "root-item"))
         .expect("identity fixture should encode");
-    let error = registration("Forge", "1.0", Some(other_identity)).unwrap_err();
+    let error = registration_with_root_identity("Forge", "1.0", other_identity).unwrap_err();
     assert!(matches!(
         error,
         WindowsCloudFilesError::RootFileIdentityScopeMismatch
@@ -321,8 +321,9 @@ fn registration_rejects_root_file_identity_from_another_scope() {
 #[test]
 fn registration_accessors_and_owned_parts_preserve_complete_contract() {
     let file_identity = WindowsFileIdentity::encode(&key("ns", "root", "root-item")).unwrap();
-    let registration = registration("Forge Cloud Files", "1.2.3", Some(file_identity.clone()))
-        .expect("registration fixture should be valid");
+    let registration =
+        registration_with_root_identity("Forge Cloud Files", "1.2.3", file_identity.clone())
+            .expect("registration fixture should be valid");
 
     assert_eq!(registration.provider_name(), "Forge Cloud Files");
     assert_eq!(registration.provider_version(), "1.2.3");
@@ -331,7 +332,7 @@ fn registration_accessors_and_owned_parts_preserve_complete_contract() {
         registration.sync_root_identity().decode().unwrap(),
         scope("ns", "root")
     );
-    assert_eq!(registration.root_file_identity(), Some(&file_identity));
+    assert_eq!(registration.root_file_identity(), &file_identity);
     assert_eq!(registration.policies(), policies());
     assert_eq!(
         registration.options(),
@@ -351,7 +352,7 @@ fn registration_accessors_and_owned_parts_preserve_complete_contract() {
     assert_eq!(version, "1.2.3");
     assert_eq!(id, provider_id());
     assert_eq!(sync_identity.decode().unwrap(), scope("ns", "root"));
-    assert_eq!(root_identity, Some(file_identity));
+    assert_eq!(root_identity, file_identity);
     assert_eq!(actual_policies, policies());
     assert!(options.update_existing);
     assert!(options.disable_on_demand_population_on_root);
@@ -400,7 +401,19 @@ fn every_primary_population_and_hard_link_shape_validates_on_modern_platform() {
 fn registration(
     name: &str,
     version: &str,
-    root_file_identity: Option<WindowsFileIdentity>,
+) -> Result<WindowsSyncRootRegistration, WindowsCloudFilesError> {
+    registration_with_root_identity(
+        name,
+        version,
+        WindowsFileIdentity::encode(&key("ns", "root", "root-item"))
+            .expect("default root identity fixture should encode"),
+    )
+}
+
+fn registration_with_root_identity(
+    name: &str,
+    version: &str,
+    root_file_identity: WindowsFileIdentity,
 ) -> Result<WindowsSyncRootRegistration, WindowsCloudFilesError> {
     WindowsSyncRootRegistration::new(
         name,

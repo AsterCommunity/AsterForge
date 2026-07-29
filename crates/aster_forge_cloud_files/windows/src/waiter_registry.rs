@@ -3,10 +3,7 @@
 use std::{
     collections::HashMap,
     fmt,
-    sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, MutexGuard},
     time::Instant,
 };
 
@@ -16,38 +13,17 @@ use aster_forge_cloud_files_core::{
 
 use crate::{
     Result, WindowsCallbackInfoSnapshot, WindowsCancelFetchDataSnapshot, WindowsCloudFilesError,
-    WindowsConnectionKey, WindowsFetchDataProgress, WindowsFetchDataSnapshot,
-    WindowsFetchDataWatchdog, WindowsFetchDataWatchdogConfig, WindowsRequestKey,
-    WindowsTransferKey,
+    WindowsFetchDataCorrelation, WindowsFetchDataProgress, WindowsFetchDataSnapshot,
+    WindowsFetchDataWatchdog, WindowsFetchDataWatchdogConfig, connection::FetchTerminalGate,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct FetchCorrelation {
-    generation: u64,
-    connection_key: WindowsConnectionKey,
-    transfer_key: WindowsTransferKey,
-    request_key: WindowsRequestKey,
-    file_id: i64,
-}
-
-impl FetchCorrelation {
-    fn from_info(info: &WindowsCallbackInfoSnapshot) -> Self {
-        Self {
-            generation: info.generation().get(),
-            connection_key: info.connection_key(),
-            transfer_key: info.transfer_key(),
-            request_key: info.request_key(),
-            file_id: info.file_id(),
-        }
-    }
-}
+type FetchCorrelation = WindowsFetchDataCorrelation;
 
 struct ActiveWaiter {
     id: u64,
     range: ByteRange,
     cancellation: HydrationCancellationHandle,
-    platform_cancelled: Arc<AtomicBool>,
-    watchdog_timed_out: Arc<AtomicBool>,
+    terminal: FetchTerminalGate,
     watchdog: WindowsFetchDataWatchdog,
     progress: Option<WindowsFetchDataProgress>,
 }
@@ -268,10 +244,7 @@ impl WindowsFetchDataWaiterRegistry {
             for waiter in waiters {
                 if range_covers(cancellation_range, waiter.range) {
                     fully_matched = fully_matched.saturating_add(1);
-                    targets.push((
-                        waiter.cancellation.clone(),
-                        Arc::clone(&waiter.platform_cancelled),
-                    ));
+                    targets.push((waiter.cancellation.clone(), waiter.terminal.clone()));
                 } else if ranges_overlap(cancellation_range, waiter.range) {
                     partially_matched = partially_matched.saturating_add(1);
                 }
@@ -288,10 +261,10 @@ impl WindowsFetchDataWaiterRegistry {
             partially_matched,
             ..WindowsFetchDataCancellationOutcome::default()
         };
-        for (cancellation, platform_cancelled) in targets {
-            // Publish the platform origin before waking the waiter. If completion already won, the
-            // flag is ignored because the waiter still returns its successful response.
-            platform_cancelled.store(true, Ordering::Release);
+        for (cancellation, terminal) in targets {
+            // Publish the terminal platform state before waking the waiter. Request drop observes
+            // the same atomic gate, so aborting the hydration task cannot emit ProviderTerminated.
+            terminal.cancel_by_platform();
             match cancellation.cancel() {
                 HydrationCancellationOutcome::Cancelled => {
                     outcome.cancelled = outcome.cancelled.saturating_add(1);
@@ -337,7 +310,15 @@ impl WindowsFetchDataWaiterRegistry {
         progress: WindowsFetchDataProgress,
         now: Instant,
     ) -> Result<usize> {
-        let correlation = FetchCorrelation::from_info(snapshot);
+        self.report_progress_correlation(FetchCorrelation::from_info(snapshot), progress, now)
+    }
+
+    pub(crate) fn report_progress_correlation(
+        &self,
+        correlation: WindowsFetchDataCorrelation,
+        progress: WindowsFetchDataProgress,
+        now: Instant,
+    ) -> Result<usize> {
         let mut state = lock(&self.state);
         state.metrics.progress_callbacks = state.metrics.progress_callbacks.saturating_add(1);
         let Some(waiters) = state.waiters.get_mut(&correlation) else {
@@ -369,12 +350,10 @@ impl WindowsFetchDataWaiterRegistry {
             let mut state = lock(&self.state);
             for waiters in state.waiters.values_mut() {
                 for waiter in waiters {
-                    if waiter.watchdog_timed_out.load(Ordering::Acquire)
-                        || !waiter.watchdog.is_due(now)
-                    {
+                    if waiter.terminal.watchdog_timed_out() || !waiter.watchdog.is_due(now) {
                         continue;
                     }
-                    waiter.watchdog_timed_out.store(true, Ordering::Release);
+                    waiter.terminal.cancel_by_watchdog();
                     targets.push(waiter.cancellation.clone());
                 }
             }
@@ -400,8 +379,9 @@ impl WindowsFetchDataWaiterRegistry {
         snapshot: &WindowsFetchDataSnapshot,
         range: ByteRange,
         cancellation: HydrationCancellationHandle,
+        terminal: FetchTerminalGate,
     ) -> Result<WindowsFetchDataWaiterRegistration> {
-        self.register_at(snapshot, range, cancellation, Instant::now())
+        self.register_at(snapshot, range, cancellation, terminal, Instant::now())
     }
 
     fn register_at(
@@ -409,10 +389,10 @@ impl WindowsFetchDataWaiterRegistry {
         snapshot: &WindowsFetchDataSnapshot,
         range: ByteRange,
         cancellation: HydrationCancellationHandle,
+        terminal: FetchTerminalGate,
         now: Instant,
     ) -> Result<WindowsFetchDataWaiterRegistration> {
         let correlation = FetchCorrelation::from_info(snapshot.info());
-        let platform_cancelled = Arc::new(AtomicBool::new(false));
         let mut state = lock(&self.state);
         let id = state.next_id;
         let next_id = state
@@ -427,7 +407,6 @@ impl WindowsFetchDataWaiterRegistry {
         state.next_id = next_id;
         state.metrics.active_waiters = active_waiters;
         state.metrics.registered_waiters = state.metrics.registered_waiters.saturating_add(1);
-        let watchdog_timed_out = Arc::new(AtomicBool::new(false));
         let watchdog_config = state.watchdog_config;
         state
             .waiters
@@ -437,8 +416,7 @@ impl WindowsFetchDataWaiterRegistry {
                 id,
                 range,
                 cancellation,
-                platform_cancelled: Arc::clone(&platform_cancelled),
-                watchdog_timed_out: Arc::clone(&watchdog_timed_out),
+                terminal: terminal.clone(),
                 watchdog: WindowsFetchDataWatchdog::started(watchdog_config, now),
                 progress: None,
             });
@@ -447,8 +425,7 @@ impl WindowsFetchDataWaiterRegistry {
             registry: self.clone(),
             correlation,
             id,
-            platform_cancelled,
-            watchdog_timed_out,
+            terminal,
             registered: true,
         })
     }
@@ -485,18 +462,17 @@ pub(crate) struct WindowsFetchDataWaiterRegistration {
     registry: WindowsFetchDataWaiterRegistry,
     correlation: FetchCorrelation,
     id: u64,
-    platform_cancelled: Arc<AtomicBool>,
-    watchdog_timed_out: Arc<AtomicBool>,
+    terminal: FetchTerminalGate,
     registered: bool,
 }
 
 impl WindowsFetchDataWaiterRegistration {
     pub(crate) fn platform_cancelled(&self) -> bool {
-        self.platform_cancelled.load(Ordering::Acquire)
+        self.terminal.platform_cancelled()
     }
 
     pub(crate) fn watchdog_timed_out(&self) -> bool {
-        self.watchdog_timed_out.load(Ordering::Acquire)
+        self.terminal.watchdog_timed_out()
     }
 
     fn unregister(&mut self) {
@@ -660,7 +636,12 @@ mod tests {
             .expect("waiter fixture should register");
         let registry = WindowsFetchDataWaiterRegistry::new();
         let registration = registry
-            .register(&snapshot, range, waiter.cancellation_handle())
+            .register(
+                &snapshot,
+                range,
+                waiter.cancellation_handle(),
+                FetchTerminalGate::default(),
+            )
             .expect("registry fixture should register");
         waiter
             .wait()
@@ -679,6 +660,47 @@ mod tests {
         assert_eq!(registry.metrics().completion_races(), 1);
         drop(registration);
         assert_eq!(registry.metrics().active_waiters(), 0);
+    }
+
+    #[test]
+    fn cancellation_publishes_shared_terminal_gate_before_waiter_resumes() {
+        let snapshot = fetch_snapshot();
+        let range = ByteRange::new(0, 4096).expect("range fixture should be valid");
+        let revision =
+            ContentRevision::from_slice(b"revision").expect("revision fixture should be valid");
+        let coordinator = HydrationCoordinator::new(Arc::new(ImmediateBackend));
+        let waiter = coordinator
+            .request(HydrationRequest::range(
+                item_key(),
+                revision,
+                4096,
+                range,
+                Alignment::ONE,
+                generation(),
+            ))
+            .expect("waiter fixture should register");
+        let terminal = FetchTerminalGate::default();
+        let registry = WindowsFetchDataWaiterRegistry::new();
+        let _registration = registry
+            .register(
+                &snapshot,
+                range,
+                waiter.cancellation_handle(),
+                terminal.clone(),
+            )
+            .expect("registry fixture should register");
+        let cancel = WindowsCancelFetchDataSnapshot::new(
+            snapshot.info().clone(),
+            WindowsCancelFetchDataFlags::IO_ABORTED,
+            WindowsCallbackRange::exact(0, 4096).expect("range fixture should construct"),
+        );
+
+        registry
+            .cancel(&cancel)
+            .expect("cancellation fixture should validate");
+
+        assert!(terminal.platform_cancelled());
+        assert!(!terminal.begin_native());
     }
 
     #[test]
@@ -703,7 +725,12 @@ mod tests {
         let identity_overflow = WindowsFetchDataWaiterRegistry::new();
         lock(&identity_overflow.state).next_id = u64::MAX;
         assert!(matches!(
-            identity_overflow.register(&snapshot, range, cancellation.clone()),
+            identity_overflow.register(
+                &snapshot,
+                range,
+                cancellation.clone(),
+                FetchTerminalGate::default(),
+            ),
             Err(WindowsCloudFilesError::ActiveFetchWaiterIdOverflow)
         ));
         assert_eq!(identity_overflow.metrics().active_waiters(), 0);
@@ -711,7 +738,7 @@ mod tests {
         let count_overflow = WindowsFetchDataWaiterRegistry::new();
         lock(&count_overflow.state).metrics.active_waiters = usize::MAX;
         assert!(matches!(
-            count_overflow.register(&snapshot, range, cancellation),
+            count_overflow.register(&snapshot, range, cancellation, FetchTerminalGate::default(),),
             Err(WindowsCloudFilesError::ActiveFetchWaiterCountOverflow)
         ));
         assert_eq!(lock(&count_overflow.state).next_id, 0);
@@ -740,7 +767,13 @@ mod tests {
         let registry = WindowsFetchDataWaiterRegistry::with_watchdog_config(config);
         let start = std::time::Instant::now();
         let registration = registry
-            .register_at(&snapshot, range, waiter.cancellation_handle(), start)
+            .register_at(
+                &snapshot,
+                range,
+                waiter.cancellation_handle(),
+                FetchTerminalGate::default(),
+                start,
+            )
             .expect("registry fixture should register");
         let progress = WindowsFetchDataProgress::new(4096, 1).expect("progress should be valid");
         assert_eq!(
@@ -790,7 +823,13 @@ mod tests {
         let registry = WindowsFetchDataWaiterRegistry::new();
         let start = Instant::now();
         let registration = registry
-            .register_at(&snapshot, range, waiter.cancellation_handle(), start)
+            .register_at(
+                &snapshot,
+                range,
+                waiter.cancellation_handle(),
+                FetchTerminalGate::default(),
+                start,
+            )
             .expect("registry fixture should register");
         registry
             .report_progress(

@@ -100,10 +100,19 @@ public final class MacosFileMaterializedSetStore: MacosMaterializedSetPersisting
                 directoryIdentifiers: Set(record.directoryIdentifiers),
                 syncAnchor: MacosSyncAnchor(bytes: record.syncAnchor)
             )
-        } catch let error as MacosBridgeFailure {
-            throw error
         } catch {
-            throw MacosBridgeFailure(code: .internal)
+            let quarantineURL = fileURL
+                .deletingPathExtension()
+                .appendingPathExtension("corrupt-\(UUID().uuidString).json")
+            do {
+                try fileManager.moveItem(at: fileURL, to: quarantineURL)
+                return try MacosMaterializedSetSnapshot(
+                    directoryIdentifiers: [],
+                    syncAnchor: .initial
+                )
+            } catch {
+                throw MacosBridgeFailure(code: .internal)
+            }
         }
     }
 }
@@ -149,6 +158,8 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
     private var directoryIdentifiers: Set<String> = []
     private var capturedAnchor: NSFileProviderSyncAnchor?
     private var completion: ((Result<MacosMaterializedSetSnapshot, Error>) -> Void)?
+    private var seenPages: Set<Data> = []
+    private var seenChangeAnchors: Set<Data> = []
 
     init(
         enumerator: NSFileProviderEnumerator,
@@ -176,11 +187,14 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
                 return
             }
             self.capturedAnchor = anchor
+            self.seenChangeAnchors.insert(anchor as NSData as Data)
             self.lock.unlock()
-            self.enumerator.enumerateItems(
-                for: self,
-                startingAt: Data() as NSData as NSFileProviderPage
-            )
+            self.schedule {
+                self.enumerator.enumerateItems(
+                    for: self,
+                    startingAt: Data() as NSData as NSFileProviderPage
+                )
+            }
         }
     }
 
@@ -197,13 +211,27 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
         for item in updatedItems where item.contentType?.conforms(to: .folder) == true {
             directoryIdentifiers.insert(item.itemIdentifier.rawValue)
         }
+        let exceededLimit = directoryIdentifiers.count > macosMaximumEnumerationItems
         lock.unlock()
+        if exceededLimit {
+            finish(.failure(MacosBridgeFailure(code: .internal)))
+        }
     }
 
     func finishEnumerating(upTo nextPage: NSFileProviderPage?) {
         guard isActive else { return }
         if let nextPage {
-            enumerator.enumerateItems(for: self, startingAt: nextPage)
+            let pageBytes = nextPage as NSData as Data
+            lock.lock()
+            let inserted = seenPages.insert(pageBytes).inserted
+            lock.unlock()
+            guard inserted else {
+                finish(.failure(MacosBridgeFailure(code: .internal)))
+                return
+            }
+            schedule {
+                self.enumerator.enumerateItems(for: self, startingAt: nextPage)
+            }
             return
         }
         lock.lock()
@@ -217,7 +245,7 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
             finish(.failure(MacosBridgeFailure(code: .notSupported)))
             return
         }
-        enumerateChanges(self, anchor)
+        schedule { enumerateChanges(self, anchor) }
     }
 
     func didUpdate(_ updatedItems: [NSFileProviderItem]) {
@@ -232,7 +260,11 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
                 directoryIdentifiers.insert(item.itemIdentifier.rawValue)
             }
         }
+        let exceededLimit = directoryIdentifiers.count > macosMaximumEnumerationItems
         lock.unlock()
+        if exceededLimit {
+            finish(.failure(MacosBridgeFailure(code: .internal)))
+        }
     }
 
     func didDeleteItems(withIdentifiers deletedItemIdentifiers: [NSFileProviderItemIdentifier]) {
@@ -257,7 +289,15 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
                 finish(.failure(MacosBridgeFailure(code: .notSupported)))
                 return
             }
-            enumerateChanges(self, anchor)
+            let anchorBytes = anchor as NSData as Data
+            lock.lock()
+            let inserted = seenChangeAnchors.insert(anchorBytes).inserted
+            lock.unlock()
+            guard inserted else {
+                finish(.failure(MacosBridgeFailure(code: .internal)))
+                return
+            }
+            schedule { enumerateChanges(self, anchor) }
             return
         }
         do {
@@ -298,6 +338,10 @@ private final class MacosMaterializedItemsReadOperation: NSObject,
         lock.unlock()
         enumerator.invalidate()
         completion(result)
+    }
+
+    private func schedule(_ action: @escaping () -> Void) {
+        DispatchQueue.global(qos: .utility).async(execute: action)
     }
 }
 
@@ -381,17 +425,12 @@ public final class MacosMaterializedSetTracker {
             lock.unlock()
             return
         }
-        let persistedResult: Result<Void, Error>
-        switch result {
-        case let .success(snapshot):
-            do {
-                try store.replace(with: snapshot)
-                persistedResult = .success(())
-            } catch {
-                persistedResult = .failure(error)
-            }
-        case let .failure(error):
-            persistedResult = .failure(error)
+        lock.unlock()
+        let persistedResult = persist(result)
+        lock.lock()
+        guard activeToken == token, !invalidated else {
+            lock.unlock()
+            return
         }
 
         activeOperation = nil
@@ -414,5 +453,21 @@ public final class MacosMaterializedSetTracker {
             errorHandler(error)
         }
         completions.forEach { $0() }
+    }
+
+    private func persist(
+        _ result: Result<MacosMaterializedSetSnapshot, Error>
+    ) -> Result<Void, Error> {
+        switch result {
+        case let .success(snapshot):
+            do {
+                try store.replace(with: snapshot)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        case let .failure(error):
+            return .failure(error)
+        }
     }
 }

@@ -6,6 +6,7 @@ use aster_forge_cloud_files_core::{
     CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope,
 };
 
+use crate::identifier::{MAX_FILE_PROVIDER_IDENTIFIER_BYTES, MAX_IDENTITY_FIELD_BYTES};
 use crate::{
     MacosBridgeError, MacosErrorCode, MacosExtensionRequestLease, MacosExtensionSession,
     MacosFileProviderIdentifier, Result,
@@ -254,11 +255,12 @@ pub unsafe extern "C" fn aster_forge_cloud_files_macos_identifier_encode(
 ) -> MacosFfiResult {
     ffi_result(|| {
         // SAFETY: upheld by the exported function contract; each value is copied before return.
-        let namespace = unsafe { read_utf8(namespace_ptr, namespace_len) }?;
+        let namespace =
+            unsafe { read_utf8(namespace_ptr, namespace_len, MAX_IDENTITY_FIELD_BYTES) }?;
         // SAFETY: upheld by the exported function contract; each value is copied before return.
-        let root = unsafe { read_utf8(root_ptr, root_len) }?;
+        let root = unsafe { read_utf8(root_ptr, root_len, MAX_IDENTITY_FIELD_BYTES) }?;
         // SAFETY: upheld by the exported function contract; each value is copied before return.
-        let item = unsafe { read_utf8(item_ptr, item_len) }?;
+        let item = unsafe { read_utf8(item_ptr, item_len, MAX_IDENTITY_FIELD_BYTES) }?;
         if namespace.contains('\0') || root.contains('\0') || item.contains('\0') {
             return Err(MacosBridgeError::InvalidFfiInput {
                 reason: "FFI identity fields must not contain NUL",
@@ -275,7 +277,7 @@ pub unsafe extern "C" fn aster_forge_cloud_files_macos_identifier_encode(
             reason: "FFI item must not be empty",
         })?;
         let key = CloudItemKey::new(CloudScope::new(namespace, root), item);
-        Ok(MacosFileProviderIdentifier::encode(&key)
+        Ok(MacosFileProviderIdentifier::encode(&key)?
             .into_string()
             .into_bytes())
     })
@@ -294,7 +296,13 @@ pub unsafe extern "C" fn aster_forge_cloud_files_macos_identifier_decode(
 ) -> MacosFfiResult {
     ffi_result(|| {
         // SAFETY: upheld by the exported function contract; the identifier is copied.
-        let identifier = unsafe { read_utf8(identifier_ptr, identifier_len) }?;
+        let identifier = unsafe {
+            read_utf8(
+                identifier_ptr,
+                identifier_len,
+                MAX_FILE_PROVIDER_IDENTIFIER_BYTES,
+            )
+        }?;
         let parsed = MacosFileProviderIdentifier::parse(identifier)?;
         let key = parsed.item_key()?;
         let fields = [
@@ -360,7 +368,7 @@ fn ffi_code(operation: impl FnOnce() -> Result<()>) -> MacosErrorCode {
     }
 }
 
-unsafe fn read_utf8(pointer: *const u8, length: usize) -> Result<String> {
+unsafe fn read_utf8(pointer: *const u8, length: usize, maximum_length: usize) -> Result<String> {
     if length == 0 {
         return Err(MacosBridgeError::InvalidFfiInput {
             reason: "FFI string must not be empty",
@@ -369,6 +377,11 @@ unsafe fn read_utf8(pointer: *const u8, length: usize) -> Result<String> {
     if pointer.is_null() {
         return Err(MacosBridgeError::InvalidFfiInput {
             reason: "non-empty FFI string used a null pointer",
+        });
+    }
+    if length > maximum_length {
+        return Err(MacosBridgeError::InvalidFfiInput {
+            reason: "FFI string exceeds the accepted byte length",
         });
     }
     // SAFETY: the C caller promises `pointer` references `length` readable bytes for this call.

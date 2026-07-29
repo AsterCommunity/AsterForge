@@ -159,7 +159,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         var completions = 0
         var result: NSFileProviderItem?
@@ -210,7 +211,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let rejectedRuntime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: rejectedSession,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         var rejection: NSError?
         _ = rejectedRuntime.item(for: NSFileProviderItemIdentifier("file")) { _, error in
@@ -224,7 +226,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         runtime.invalidate()
         runtime.invalidate()
@@ -242,20 +245,19 @@ final class ShellEdgeContractTests: XCTestCase {
         XCTAssertEqual(session.accepted, 0)
     }
 
-    func testDataSourceAndTemporaryStoreFailuresReleaseTheirLeases() throws {
+    func testDataSourceFailuresReleaseTheirLeases() throws {
         let item = try makeSnapshot(size: 5)
         let source = try EdgeDataSource(
             item: item,
             itemResult: .failure(MacosBridgeFailure(code: .notFound)),
-            fetchedContent: try MacosFetchedContent(item: item, bytes: Data("hello".utf8))
+            fetchedContent: nil
         )
         let session = EdgeSession()
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore(
-                writeError: MacosBridgeFailure(code: .tryAgain)
-            )
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
 
         var itemError: NSError?
@@ -269,7 +271,7 @@ final class ShellEdgeContractTests: XCTestCase {
             for: NSFileProviderItemIdentifier("file"),
             requestedVersion: nil
         ) { _, _, error in fetchError = error as NSError? }
-        XCTAssertEqual(fetchError?.code, NSFileProviderError.Code.serverUnreachable.rawValue)
+        XCTAssertEqual(fetchError?.code, NSFileProviderError.Code.noSuchItem.rawValue)
         XCTAssertEqual(session.accepted, 2)
         XCTAssertEqual(session.released, 2)
     }
@@ -282,12 +284,12 @@ final class ShellEdgeContractTests: XCTestCase {
             fetchedContent: content,
             delayFetch: true
         )
-        let store = EdgeTemporaryStore()
         let session = EdgeSession()
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: store
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         var completions = 0
         var terminalError: NSError?
@@ -308,8 +310,7 @@ final class ShellEdgeContractTests: XCTestCase {
         XCTAssertEqual(completions, 1)
         XCTAssertEqual(terminalError?.code, NSUserCancelledError)
         XCTAssertTrue(source.fetchCancellation.cancelled)
-        XCTAssertEqual(store.writeCalls, 1)
-        XCTAssertEqual(store.removedURLs, [store.outputURL])
+        XCTAssertEqual(source.discardedURLs, [content.stagingURL])
         XCTAssertEqual(session.released, 1)
     }
 
@@ -321,7 +322,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         let enumerator = try XCTUnwrap(
             runtime.enumerator(for: .rootContainer)
@@ -347,6 +349,69 @@ final class ShellEdgeContractTests: XCTestCase {
         XCTAssertEqual(session.released, 1)
     }
 
+    func testRuntimeInvalidationCancelsPendingEnumeratorOperation() throws {
+        let item = try makeSnapshot(size: 5)
+        let source = try EdgeDataSource(item: item, delayEnumeration: true)
+        let session = EdgeSession()
+        let runtime = MacosReadOnlyFileProviderRuntime(
+            dataSource: source,
+            session: session,
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
+        )
+        let enumerator = try XCTUnwrap(
+            runtime.enumerator(for: .rootContainer) as? MacosReadOnlyFileProviderEnumerator
+        )
+        let observer = EdgeEnumerationObserver()
+
+        enumerator.enumerateItems(
+            for: observer,
+            startingAt: NSFileProviderPage.initialPageSortedByName as NSFileProviderPage
+        )
+        runtime.invalidate()
+        source.completeDelayedEnumeration()
+
+        XCTAssertTrue(source.enumerationCancellation.cancelled)
+        XCTAssertEqual(observer.finishCalls, 1)
+        XCTAssertEqual((observer.error as NSError?)?.code, NSUserCancelledError)
+        XCTAssertEqual(session.released, 1)
+    }
+
+    func testRuntimeRejectsMismatchedItemAndEnumerationResponses() throws {
+        let requested = try makeSnapshot(identifier: "requested", size: 5)
+        let wrong = try makeSnapshot(identifier: "wrong", size: 5)
+        let source = try EdgeDataSource(
+            item: requested,
+            itemResult: .success(wrong),
+            page: MacosEnumerationPage(items: [wrong], nextPage: nil)
+        )
+        let session = EdgeSession()
+        let runtime = MacosReadOnlyFileProviderRuntime(
+            dataSource: source,
+            session: session,
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
+        )
+        var itemError: NSError?
+
+        _ = runtime.item(for: NSFileProviderItemIdentifier("requested")) { _, error in
+            itemError = error as NSError?
+        }
+        XCTAssertEqual(itemError?.domain, NSCocoaErrorDomain)
+
+        let enumerator = try XCTUnwrap(
+            runtime.enumerator(for: NSFileProviderItemIdentifier("requested"))
+                as? MacosReadOnlyFileProviderEnumerator
+        )
+        let observer = EdgeEnumerationObserver()
+        enumerator.enumerateItems(
+            for: observer,
+            startingAt: NSFileProviderPage.initialPageSortedByName as NSFileProviderPage
+        )
+        XCTAssertEqual(observer.finishCalls, 1)
+        XCTAssertNotNil(observer.error)
+    }
+
     func testChangeEnumerationInvalidationCancelsBackendAndIgnoresLateCompletion() throws {
         let item = try makeSnapshot(size: 5)
         let anchor = try MacosSyncAnchor(bytes: Data("current".utf8))
@@ -365,7 +430,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         let enumerator = try XCTUnwrap(
             runtime.enumerator(for: .workingSet) as? MacosReadOnlyFileProviderEnumerator
@@ -402,7 +468,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         let enumerator = try XCTUnwrap(
             runtime.enumerator(for: .workingSet) as? MacosReadOnlyFileProviderEnumerator
@@ -430,7 +497,8 @@ final class ShellEdgeContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: EdgeTemporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         let enumerator = try XCTUnwrap(
             runtime.enumerator(for: .workingSet) as? MacosReadOnlyFileProviderEnumerator
@@ -521,27 +589,6 @@ private final class EdgeSession: MacosBridgeSession {
     func markDisconnected() { markDisconnectedCalls += 1 }
 }
 
-private final class EdgeTemporaryStore: MacosTemporaryContentStore {
-    let outputURL = URL(fileURLWithPath: "/tmp/aster-forge-edge-content")
-    private let writeError: Error?
-    private(set) var writeCalls = 0
-    private(set) var removedURLs: [URL] = []
-
-    init(writeError: Error? = nil) {
-        self.writeError = writeError
-    }
-
-    func write(_: Data) throws -> URL {
-        writeCalls += 1
-        if let writeError { throw writeError }
-        return outputURL
-    }
-
-    func removeIfPresent(_ url: URL) {
-        removedURLs.append(url)
-    }
-}
-
 private final class EdgeDataSource: MacosCloudFilesDataSource {
     let itemCancellation = EdgeCancellation()
     let fetchCancellation = EdgeCancellation()
@@ -559,6 +606,7 @@ private final class EdgeDataSource: MacosCloudFilesDataSource {
     private var changeCompletion: ((Result<MacosChangeBatch, Error>) -> Void)?
     private(set) var lastEnumerationPage: Data?
     private(set) var lastChangeAnchor: MacosSyncAnchor?
+    private(set) var discardedURLs: [URL] = []
 
     init(
         item: MacosCloudItemSnapshot,
@@ -663,6 +711,11 @@ private final class EdgeDataSource: MacosCloudFilesDataSource {
 
     func completeDelayedChanges() {
         changeCompletion?(changeResult)
+    }
+
+    func discardFetchedContents(at stagingURL: URL) {
+        discardedURLs.append(stagingURL)
+        try? Foundation.FileManager().removeItem(at: stagingURL)
     }
 }
 

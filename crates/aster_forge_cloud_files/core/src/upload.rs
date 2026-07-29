@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::{
-    BackendResult, CloudBackendError, CloudFilesCoreError, CloudFilesStoreError, ContentCacheKey,
-    ContentLeaseId, ContentUploadStore, IdempotencyKey, LocalContentGeneration,
-    LocalContentSnapshot, MutationRemoteOutcome, OperationId, Result, SessionGeneration,
-    StoreResult, StoreWriteStatus,
+    BackendResult, CloudBackendError, CloudBackendErrorKind, CloudFilesCoreError,
+    CloudFilesStoreError, ContentCacheKey, ContentLeaseId, ContentUploadStore, IdempotencyKey,
+    LocalContentGeneration, LocalContentSnapshot, MutationRemoteOutcome, OperationId, Result,
+    SessionGeneration, StoreResult, StoreWriteStatus,
 };
 
 /// Opaque backend upload-session identity.
@@ -316,6 +316,17 @@ pub trait CloudContentUploadBackend: Send + Sync {
         chunk: &ContentUploadChunk,
     ) -> BackendResult<ContentUploadChunkAck>;
 
+    /// Reconciles a chunk that may already have been accepted before its durable checkpoint.
+    ///
+    /// Backends with strict offset semantics return the current accepted offset for the exact
+    /// `(session, offset, bytes)` replay.
+    async fn reconcile_upload_chunk(
+        &self,
+        intent: &ContentUploadIntent,
+        session: &ContentUploadSession,
+        chunk: &ContentUploadChunk,
+    ) -> BackendResult<ContentUploadChunkAck>;
+
     /// Conditionally and idempotently commits the fully uploaded content.
     ///
     /// The runner may call this again from a durable `RemoteCommitting` record. If transport
@@ -501,7 +512,22 @@ impl ContentUploadRunner {
                             record.intent().snapshot().size(),
                         )?;
                         chunk.validate_for(record.intent(), session)?;
-                        let acknowledgement = backend.upload_chunk(record.intent(), &chunk).await?;
+                        let acknowledgement =
+                            match backend.upload_chunk(record.intent(), &chunk).await {
+                                Ok(acknowledgement) => acknowledgement,
+                                Err(error)
+                                    if matches!(
+                                        error.kind(),
+                                        CloudBackendErrorKind::Conflict
+                                            | CloudBackendErrorKind::PreconditionFailed
+                                    ) =>
+                                {
+                                    backend
+                                        .reconcile_upload_chunk(record.intent(), session, &chunk)
+                                        .await?
+                                }
+                                Err(error) => return Err(error.into()),
+                            };
                         acknowledgement.validate_for(&chunk)?;
                         let checkpoint = ContentUploadSession::new(
                             acknowledgement.session_id().clone(),

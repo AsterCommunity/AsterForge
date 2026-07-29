@@ -158,7 +158,7 @@ set(
   "${SWIFT_SHELL_ROOT}/Sources/AsterForgeCloudFilesMacosShell/MaterializedItems.swift"
   "${SWIFT_SHELL_ROOT}/Sources/AsterForgeCloudFilesMacosShell/OperationState.swift"
   "${SWIFT_SHELL_ROOT}/Sources/AsterForgeCloudFilesMacosShell/ReadOnlyRuntime.swift"
-  "${SWIFT_SHELL_ROOT}/Sources/AsterForgeCloudFilesMacosShell/TemporaryContentStore.swift"
+  "${SWIFT_SHELL_ROOT}/Sources/AsterForgeCloudFilesMacosShell/BackendResponseValidation.swift"
   "${SWIFT_SHELL_ROOT}/Sources/AsterForgeCloudFilesMacosShell/WorkingSetSignaler.swift"
 )
 

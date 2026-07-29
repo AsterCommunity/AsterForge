@@ -70,7 +70,7 @@ pub use cursor::{ChangeCursor, DirectoryCookie, PageCursor};
 pub use error::{CloudFilesCoreError, Result};
 pub use hydration::{
     HydrationCancellationHandle, HydrationCancellationOutcome, HydrationCoordinator,
-    HydrationError, HydrationRequest, HydrationResult, HydrationWaiter,
+    HydrationError, HydrationLimits, HydrationRequest, HydrationResult, HydrationWaiter,
 };
 pub use identity::{CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope};
 pub use item::{CloudContentMetadata, CloudItem, CloudItemKind, CloudItemPage};
@@ -86,8 +86,8 @@ pub use revision::{ContentDigest, ContentDigestAlgorithm, ContentRevision, Metad
 pub use store::{
     ChangeBatchId, ChangeCheckpointStore, ChangeCursorCheckpoint, CloudFilesStoreError,
     CloudFilesStoreErrorKind, ContentCacheWriteStore, ContentStorageStore, ContentUploadStore,
-    MutationJournalStore, PersistedChangeBatch, PersistedChangeBatchState, StoreResult,
-    StoreWriteStatus,
+    MutationJournalStore, PersistedChangeBatch, PersistedChangeBatchState, RecoveryPage,
+    StoreResult, StoreWriteStatus,
 };
 pub use upload::{
     CloudContentUploadBackend, ContentUploadChunk, ContentUploadChunkAck, ContentUploadIntent,

@@ -75,26 +75,19 @@ enum MemoryCloudDriveExample {
 
 private final class MemoryCloudFixture {
     private let runtime: MacosReadOnlyFileProviderRuntime
-    private let temporaryDirectory: URL
 
     init(source: MemoryCloudDataSource? = nil) throws {
         let source = try source ?? MemoryCloudDataSource()
-        temporaryDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "aster-forge-macos-memory-content-\(UUID().uuidString)",
-            isDirectory: true
-        )
         runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: try RustMacosBridgeSession(generation: 1),
-            temporaryContentStore: try MacosDirectoryTemporaryContentStore(
-                directory: temporaryDirectory
-            )
+            scope: (namespace: "aster-forge-fixture", root: "memory-cloud"),
+            identifierDecoder: RustMacosIdentifierDecoder()
         )
     }
 
     deinit {
         runtime.invalidate()
-        try? FileManager.default.removeItem(at: temporaryDirectory)
     }
 
     func list(_ path: MacosMemoryCloudExamplePath) throws -> [NSFileProviderItem] {

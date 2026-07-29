@@ -3,7 +3,8 @@ use aster_forge_cloud_files_core::{
 };
 use aster_forge_cloud_files_macos_bridge::{
     FILE_PROVIDER_CURRENT_WORKING_SET_IDENTIFIER, FILE_PROVIDER_ROOT_CONTAINER_IDENTIFIER,
-    FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER, MacosBridgeError, MacosFileProviderIdentifier,
+    FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER, MAX_FILE_PROVIDER_IDENTIFIER_BYTES,
+    MAX_IDENTITY_FIELD_BYTES, MacosBridgeError, MacosFileProviderIdentifier,
     MacosFileProviderSystemContainer,
 };
 
@@ -20,7 +21,8 @@ fn key(namespace: &str, root: &str, item: &str) -> CloudItemKey {
 #[test]
 fn item_identifier_round_trips_unicode_delimiters_and_path_like_values() {
     let original = key("命名.空间/one", "root:team", "文件/../stable.item");
-    let encoded = MacosFileProviderIdentifier::encode(&original);
+    let encoded =
+        MacosFileProviderIdentifier::encode(&original).expect("identifier fixture should fit");
     assert!(encoded.as_str().starts_with("afcf1."));
     assert!(!encoded.as_str().contains("文件"));
     let decoded =
@@ -83,13 +85,15 @@ fn malformed_version_field_count_base64_utf8_and_empty_fields_are_rejected() {
 
 #[test]
 fn identical_item_ids_remain_distinct_across_scopes_and_rename_has_no_identity_effect() {
-    let first = MacosFileProviderIdentifier::encode(&key("namespace-a", "root", "same"));
-    let second = MacosFileProviderIdentifier::encode(&key("namespace-b", "root", "same"));
+    let first = MacosFileProviderIdentifier::encode(&key("namespace-a", "root", "same"))
+        .expect("identifier fixture should fit");
+    let second = MacosFileProviderIdentifier::encode(&key("namespace-b", "root", "same"))
+        .expect("identifier fixture should fit");
     assert_ne!(first, second);
     let stable = key("namespace-a", "root", "same");
     assert_eq!(
-        MacosFileProviderIdentifier::encode(&stable),
-        MacosFileProviderIdentifier::encode(&stable)
+        MacosFileProviderIdentifier::encode(&stable).expect("identifier fixture should fit"),
+        MacosFileProviderIdentifier::encode(&stable).expect("identifier fixture should fit")
     );
     assert!(first.system_container().is_none());
     assert_eq!(first.clone().into_string(), first.as_str());
@@ -110,4 +114,22 @@ fn item_debug_output_reports_shape_without_disclosing_opaque_identity() {
     let system = MacosFileProviderIdentifier::parse(FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER)
         .expect("trash should parse");
     assert!(format!("{system:?}").contains("Trash"));
+}
+
+#[test]
+fn identifier_limits_accept_the_boundary_and_reject_boundary_plus_one() {
+    let at_limit = key(&"n".repeat(MAX_IDENTITY_FIELD_BYTES), "root", "item");
+    let encoded = MacosFileProviderIdentifier::encode(&at_limit)
+        .expect("identity field at the limit should encode");
+    assert!(encoded.as_str().len() <= MAX_FILE_PROVIDER_IDENTIFIER_BYTES);
+
+    let oversized = key(&"n".repeat(MAX_IDENTITY_FIELD_BYTES + 1), "root", "item");
+    assert!(matches!(
+        MacosFileProviderIdentifier::encode(&oversized),
+        Err(MacosBridgeError::InvalidIdentifier { .. })
+    ));
+    assert!(matches!(
+        MacosFileProviderIdentifier::parse("x".repeat(MAX_FILE_PROVIDER_IDENTIFIER_BYTES + 1)),
+        Err(MacosBridgeError::InvalidIdentifier { .. })
+    ));
 }

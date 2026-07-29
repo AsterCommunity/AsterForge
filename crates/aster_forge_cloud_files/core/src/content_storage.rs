@@ -49,6 +49,9 @@ pub struct ContentRangeSet {
 }
 
 impl ContentRangeSet {
+    /// Maximum number of disjoint ranges retained for one sparse entry.
+    pub const MAX_RANGES: usize = 8_192;
+
     /// Creates an empty sparse coverage set.
     pub const fn new() -> Self {
         Self { ranges: Vec::new() }
@@ -91,13 +94,21 @@ impl ContentRangeSet {
         if !inserted {
             merged.push(ByteRange::new(start, end.saturating_sub(start))?);
         }
+        if merged.len() > Self::MAX_RANGES {
+            return Err(CloudFilesCoreError::invalid_content_storage(
+                "provider cache range fragmentation exceeds the supported limit",
+            ));
+        }
         self.ranges = merged;
         Ok(true)
     }
 
     /// Returns whether every byte in one range is cached.
     pub fn covers(&self, range: ByteRange) -> bool {
-        self.ranges.iter().any(|existing| {
+        let index = self
+            .ranges
+            .partition_point(|existing| existing.end_exclusive() <= range.offset());
+        self.ranges.get(index).is_some_and(|existing| {
             existing.offset() <= range.offset() && existing.end_exclusive() >= range.end_exclusive()
         })
     }
@@ -498,15 +509,25 @@ impl ContentStorageEntry {
         Ok(true)
     }
 
-    /// Updates the product/native pin guard.
-    pub fn set_pinned(&mut self, pinned: bool) -> bool {
+    /// Updates the product/native pin guard and reports a late blocker transition.
+    pub fn set_pinned(&mut self, pinned: bool) -> Result<bool> {
+        if pinned && self.eviction_reserved {
+            return Err(CloudFilesCoreError::invalid_content_storage(
+                "content cannot become pinned during eviction",
+            ));
+        }
         let changed = self.pinned != pinned;
         self.pinned = pinned;
-        changed
+        Ok(changed)
     }
 
     /// Records an immutable dirty snapshot and fences older local generations.
     pub fn mark_dirty(&mut self, snapshot: LocalContentSnapshot) -> Result<DirtyContentTransition> {
+        if self.eviction_reserved {
+            return Err(CloudFilesCoreError::invalid_content_storage(
+                "dirty content cannot start during eviction",
+            ));
+        }
         if snapshot.item_key() != self.key.item_key() {
             return Err(CloudFilesCoreError::invalid_content_storage(
                 "dirty snapshot item does not match the content entry",

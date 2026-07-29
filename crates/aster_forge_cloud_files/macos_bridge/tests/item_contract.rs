@@ -168,7 +168,8 @@ fn conversion_rejects_scope_root_role_filename_and_version_violations() {
 #[test]
 fn identifier_debug_output_redacts_item_identity_but_classifies_system_values() {
     let scope = scope("secret-namespace", "secret-root");
-    let item = MacosFileProviderIdentifier::encode(&key(&scope, "secret-item"));
+    let item = MacosFileProviderIdentifier::encode(&key(&scope, "secret-item"))
+        .expect("identifier fixture should fit");
     let debug = format!("{item:?}");
     assert!(debug.contains("kind"));
     assert!(debug.contains("byte_len"));

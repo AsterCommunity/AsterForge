@@ -260,6 +260,121 @@ mod namespace_tests {
     }
 
     #[tokio::test]
+    async fn recreated_and_renamed_entries_supersede_same_name_tombstones() {
+        let (engine, _, _) = activate(None, SessionGeneration::new(1).unwrap()).await;
+
+        let (_, first_handle) = engine
+            .create_file(
+                LINUX_ROOT_INODE,
+                "reused.txt",
+                0o644,
+                0,
+                aster_forge_cloud_files_linux::LinuxFileAccess::ReadWrite,
+            )
+            .await
+            .unwrap();
+        engine.release_file(first_handle).await.unwrap();
+        engine
+            .remove(LINUX_ROOT_INODE, "reused.txt", LinuxNodeKind::File)
+            .await
+            .unwrap();
+        let (recreated, recreated_handle) = engine
+            .create_file(
+                LINUX_ROOT_INODE,
+                "reused.txt",
+                0o644,
+                0,
+                aster_forge_cloud_files_linux::LinuxFileAccess::ReadWrite,
+            )
+            .await
+            .unwrap();
+        engine
+            .write_file(
+                recreated.attributes().inode(),
+                recreated_handle,
+                0,
+                Bytes::from_static(b"second"),
+            )
+            .await
+            .unwrap();
+        engine.release_file(recreated_handle).await.unwrap();
+
+        engine
+            .create_directory(LINUX_ROOT_INODE, "reused-dir", 0o755, 0)
+            .await
+            .unwrap();
+        engine
+            .remove(LINUX_ROOT_INODE, "reused-dir", LinuxNodeKind::Directory)
+            .await
+            .unwrap();
+        engine
+            .create_directory(LINUX_ROOT_INODE, "reused-dir", 0o755, 0)
+            .await
+            .unwrap();
+
+        let (_, destination_handle) = engine
+            .create_file(
+                LINUX_ROOT_INODE,
+                "renamed-into-tombstone.txt",
+                0o644,
+                0,
+                aster_forge_cloud_files_linux::LinuxFileAccess::ReadWrite,
+            )
+            .await
+            .unwrap();
+        engine.release_file(destination_handle).await.unwrap();
+        engine
+            .remove(
+                LINUX_ROOT_INODE,
+                "renamed-into-tombstone.txt",
+                LinuxNodeKind::File,
+            )
+            .await
+            .unwrap();
+        let (_, source_handle) = engine
+            .create_file(
+                LINUX_ROOT_INODE,
+                "rename-source.txt",
+                0o644,
+                0,
+                aster_forge_cloud_files_linux::LinuxFileAccess::ReadWrite,
+            )
+            .await
+            .unwrap();
+        engine.release_file(source_handle).await.unwrap();
+        engine
+            .rename(
+                LINUX_ROOT_INODE,
+                "rename-source.txt",
+                LINUX_ROOT_INODE,
+                "renamed-into-tombstone.txt",
+                false,
+            )
+            .await
+            .unwrap();
+
+        let handle = engine.open_directory(LINUX_ROOT_INODE).await.unwrap();
+        let names = snapshot_names(&engine, LINUX_ROOT_INODE, handle);
+        assert!(names.iter().any(|name| name == "reused.txt"));
+        assert!(names.iter().any(|name| name == "reused-dir"));
+        assert!(
+            names
+                .iter()
+                .any(|name| name == "renamed-into-tombstone.txt")
+        );
+        assert!(!names.iter().any(|name| name == "rename-source.txt"));
+        assert_eq!(
+            engine
+                .lookup(LINUX_ROOT_INODE, "reused.txt")
+                .await
+                .unwrap()
+                .attributes()
+                .size(),
+            6
+        );
+    }
+
+    #[tokio::test]
     async fn namespace_overlay_and_stable_inodes_survive_a_new_mount_generation() {
         let directory = test_directory("restart");
         fs::create_dir_all(&directory).unwrap();
@@ -588,6 +703,7 @@ mod namespace_tests {
                     None,
                 ),
             ))
+            .await
             .unwrap();
         assert_eq!(
             create_plan,
@@ -636,6 +752,7 @@ mod namespace_tests {
                     None,
                 ),
             ))
+            .await
             .unwrap();
         assert_eq!(
             move_plan,
@@ -692,6 +809,7 @@ mod namespace_tests {
                         None,
                     ),
                 ))
+                .await
                 .is_err()
         );
         assert_eq!(
@@ -715,6 +833,7 @@ mod namespace_tests {
         assert_eq!(
             engine
                 .apply_remote_change(LinuxRemoteChange::Delete(delete))
+                .await
                 .unwrap(),
             vec![LinuxInvalidation::Delete {
                 parent: docs.attributes().inode(),
@@ -729,6 +848,129 @@ mod namespace_tests {
                 .unwrap_err()
                 .error_code(),
             aster_forge_cloud_files_linux::LinuxErrorCode::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_overlay_rejects_stale_previous_and_unproven_replacements_atomically() {
+        let (engine, _, scope) = activate(None, SessionGeneration::new(1).unwrap()).await;
+        let remote_key = key(&scope, "remote-validation").unwrap();
+        let remote_record = LinuxInodeRecord::new(
+            remote_key.clone(),
+            LinuxInode::new(110).unwrap(),
+            LinuxInodeGeneration::new(1).unwrap(),
+        );
+        let initial = CloudItem::directory(
+            remote_key.clone(),
+            Some(CloudItemId::new("root").unwrap()),
+            "remote-validation",
+            metadata_revision("remote-validation-m1").unwrap(),
+        )
+        .unwrap();
+        engine
+            .apply_remote_change(LinuxRemoteChange::Upsert(
+                aster_forge_cloud_files_linux::LinuxRemoteUpsert::new(
+                    LinuxRemoteEntry::new(initial, remote_record.clone()),
+                    None,
+                    None,
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let docs = engine.lookup(LINUX_ROOT_INODE, "docs").await.unwrap();
+        let moved = CloudItem::directory(
+            remote_key.clone(),
+            Some(docs.key().item_id().clone()),
+            "remote-moved",
+            metadata_revision("remote-validation-m2").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            engine
+                .apply_remote_change(LinuxRemoteChange::Upsert(
+                    aster_forge_cloud_files_linux::LinuxRemoteUpsert::new(
+                        LinuxRemoteEntry::new(moved, remote_record.clone()),
+                        Some(
+                            aster_forge_cloud_files_linux::LinuxRemoteLocation::new(
+                                key(&scope, "root").unwrap(),
+                                "wrong-current-name",
+                            )
+                            .unwrap(),
+                        ),
+                        None,
+                    ),
+                ))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .lookup(LINUX_ROOT_INODE, "remote-validation")
+                .await
+                .unwrap()
+                .attributes()
+                .inode(),
+            remote_record.inode()
+        );
+
+        let colliding_key = key(&scope, "remote-collision").unwrap();
+        let colliding_record = LinuxInodeRecord::new(
+            colliding_key.clone(),
+            LinuxInode::new(111).unwrap(),
+            LinuxInodeGeneration::new(1).unwrap(),
+        );
+        let colliding = CloudItem::directory(
+            colliding_key,
+            Some(CloudItemId::new("root").unwrap()),
+            "docs",
+            metadata_revision("remote-collision-m1").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            engine
+                .apply_remote_change(LinuxRemoteChange::Upsert(
+                    aster_forge_cloud_files_linux::LinuxRemoteUpsert::new(
+                        LinuxRemoteEntry::new(colliding.clone(), colliding_record.clone()),
+                        None,
+                        None,
+                    ),
+                ))
+                .await
+                .is_err()
+        );
+
+        let wrong_kind_replacement = LinuxRemoteDelete::new(
+            docs.key().clone(),
+            LinuxInodeRecord::new(
+                docs.key().clone(),
+                docs.attributes().inode(),
+                docs.generation(),
+            ),
+            key(&scope, "root").unwrap(),
+            "docs",
+            LinuxNodeKind::File,
+        )
+        .unwrap();
+        assert!(
+            engine
+                .apply_remote_change(LinuxRemoteChange::Upsert(
+                    aster_forge_cloud_files_linux::LinuxRemoteUpsert::new(
+                        LinuxRemoteEntry::new(colliding, colliding_record),
+                        None,
+                        Some(wrong_kind_replacement),
+                    ),
+                ))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .lookup(LINUX_ROOT_INODE, "docs")
+                .await
+                .unwrap()
+                .key(),
+            docs.key()
         );
     }
 }

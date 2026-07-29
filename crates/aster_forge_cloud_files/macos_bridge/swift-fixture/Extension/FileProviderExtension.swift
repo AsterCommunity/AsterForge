@@ -16,18 +16,6 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         }
 
         let manager = NSFileProviderManager(for: domain)
-        let temporaryStore: any MacosTemporaryContentStore
-        do {
-            guard let manager else {
-                throw MacosBridgeFailure(code: .providerNotFound)
-            }
-            temporaryStore = try MacosDirectoryTemporaryContentStore(
-                directory: manager.temporaryDirectoryURL()
-            )
-        } catch {
-            temporaryStore = UnavailableTemporaryContentStore(error: error)
-        }
-
         let materializedStore: (any MacosMaterializedSetPersisting)?
         if let manager,
            let appGroupURL = FileManager.default.containerURL(
@@ -61,7 +49,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: dataSource,
             session: session,
-            temporaryContentStore: temporaryStore
+            scope: (namespace: "aster-forge-fixture", root: "memory-cloud"),
+            identifierDecoder: RustMacosIdentifierDecoder()
         )
         super.init()
     }

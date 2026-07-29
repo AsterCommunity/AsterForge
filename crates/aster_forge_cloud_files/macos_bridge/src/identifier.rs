@@ -21,6 +21,10 @@ pub const FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER: &str =
 
 const PREFIX: &str = "afcf1.";
 const FIELD_COUNT: usize = 3;
+/// Maximum UTF-8 byte length accepted for one opaque identity field.
+pub const MAX_IDENTITY_FIELD_BYTES: usize = 1_024;
+/// Maximum UTF-8 byte length accepted for one encoded persistent identifier.
+pub const MAX_FILE_PROVIDER_IDENTIFIER_BYTES: usize = 4_128;
 
 /// File Provider system container that does not represent a product item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -44,7 +48,16 @@ pub enum MacosFileProviderIdentifier {
 
 impl MacosFileProviderIdentifier {
     /// Encodes one stable path-independent item key as a File Provider identifier.
-    pub fn encode(key: &CloudItemKey) -> Self {
+    pub fn encode(key: &CloudItemKey) -> Result<Self> {
+        for field in [
+            key.scope().namespace_id().as_str(),
+            key.scope().root_id().as_str(),
+            key.item_id().as_str(),
+        ] {
+            if field.len() > MAX_IDENTITY_FIELD_BYTES {
+                return Err(invalid("identifier field exceeds the accepted byte length"));
+            }
+        }
         let encoded = [
             key.scope().namespace_id().as_str(),
             key.scope().root_id().as_str(),
@@ -52,15 +65,22 @@ impl MacosFileProviderIdentifier {
         ]
         .map(|value| URL_SAFE_NO_PAD.encode(value.as_bytes()))
         .join(".");
-        Self::Item {
-            encoded: format!("{PREFIX}{encoded}"),
-            key: key.clone(),
+        let encoded = format!("{PREFIX}{encoded}");
+        if encoded.len() > MAX_FILE_PROVIDER_IDENTIFIER_BYTES {
+            return Err(invalid("identifier exceeds the accepted byte length"));
         }
+        Ok(Self::Item {
+            encoded,
+            key: key.clone(),
+        })
     }
 
     /// Parses an identifier received from Swift/File Provider.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
+        if value.len() > MAX_FILE_PROVIDER_IDENTIFIER_BYTES {
+            return Err(invalid("identifier exceeds the accepted byte length"));
+        }
         match value.as_str() {
             FILE_PROVIDER_ROOT_CONTAINER_IDENTIFIER => {
                 return Ok(Self::System(MacosFileProviderSystemContainer::Root));
@@ -90,6 +110,9 @@ impl MacosFileProviderIdentifier {
             let bytes = URL_SAFE_NO_PAD
                 .decode(field)
                 .map_err(|_| invalid("identifier field is not canonical base64url"))?;
+            if bytes.len() > MAX_IDENTITY_FIELD_BYTES {
+                return Err(invalid("identifier field exceeds the accepted byte length"));
+            }
             let text = String::from_utf8(bytes)
                 .map_err(|_| invalid("identifier field is not valid UTF-8"))?;
             if URL_SAFE_NO_PAD.encode(text.as_bytes()) != field {

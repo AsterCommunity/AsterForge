@@ -48,7 +48,7 @@ impl MacosFileProviderItem {
         let identifier = if item.is_root() {
             MacosFileProviderIdentifier::System(crate::MacosFileProviderSystemContainer::Root)
         } else {
-            MacosFileProviderIdentifier::encode(item.key())
+            MacosFileProviderIdentifier::encode(item.key())?
         };
         let parent_identifier = match item.parent_id() {
             Some(parent_id) => {
@@ -58,7 +58,7 @@ impl MacosFileProviderItem {
                         crate::MacosFileProviderSystemContainer::Root,
                     )
                 } else {
-                    MacosFileProviderIdentifier::encode(&parent_key)
+                    MacosFileProviderIdentifier::encode(&parent_key)?
                 }
             }
             None => {

@@ -25,7 +25,7 @@ use aster_forge_cloud_files_core::{
     MutationIntent, MutationJournalStore, MutationOrigin, MutationPreconditions, MutationRecord,
     MutationRecordTransition, MutationRemoteOutcome, MutationRunOutcome, MutationRunner,
     MutationState, OperationId, PageCursor, RangeHydrationCapabilities, RevisionCapabilities,
-    SessionGeneration, SessionState, StoreResult, StoreWriteStatus,
+    RecoveryPage, SessionGeneration, SessionState, StoreResult, StoreWriteStatus,
 };
 use aster_forge_cloud_files_linux::{
     LINUX_ROOT_INODE, LinuxAttributePolicy, LinuxCreateDirectoryRequest, LinuxCreateFileAcceptance,
@@ -43,6 +43,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, watch};
 
 pub type ExampleResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
+/// The synthetic fixture keeps a small diagnostic tail without turning completed journals into
+/// an unbounded in-memory and on-disk history.
+const TERMINAL_RECORD_LIMIT: usize = 128;
+const RECOVERY_BATCH_LIMIT: usize = 128;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
@@ -67,7 +72,7 @@ fn namespace_store_error(
 
 #[derive(Clone)]
 struct StagedFile {
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     snapshot: Option<LocalContentSnapshot>,
     base_revision: ContentRevision,
 }
@@ -75,7 +80,7 @@ struct StagedFile {
 #[derive(Clone)]
 struct ImmutableSnapshotBytes {
     reference: LocalContentReference,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
 #[derive(Clone)]

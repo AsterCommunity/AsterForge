@@ -1,3 +1,4 @@
+import FileProvider
 import Foundation
 
 final class RustMacosBridgeRequestLease: MacosBridgeRequestLease {
@@ -126,6 +127,39 @@ enum RustMacosIdentifierCodec {
             throw MacosBridgeFailure(code: .internal)
         }
         return identifier
+    }
+}
+
+final class RustMacosIdentifierDecoder: MacosPersistentIdentifierDecoding {
+    func decodeItemIdentifier(_ identifier: String) throws -> MacosScopedItemIdentity? {
+        if [
+            NSFileProviderItemIdentifier.rootContainer.rawValue,
+            NSFileProviderItemIdentifier.workingSet.rawValue,
+            NSFileProviderItemIdentifier.trashContainer.rawValue,
+        ].contains(identifier) {
+            return nil
+        }
+        let bytes = Data(identifier.utf8)
+        let result = bytes.withUnsafeBytes { buffer in
+            aster_forge_cloud_files_macos_identifier_decode(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                buffer.count
+            )
+        }
+        defer { aster_forge_cloud_files_macos_buffer_release(result.buffer) }
+        let code = MacosBridgeErrorCode(rawValue: Int32(result.code.rawValue)) ?? .internal
+        guard code == .success, let pointer = result.buffer.ptr else {
+            throw MacosBridgeFailure(code: code)
+        }
+        let fields = Data(bytes: pointer, count: result.buffer.len).split(separator: 0)
+        guard fields.count == 3,
+              let namespace = String(data: fields[0], encoding: .utf8),
+              let root = String(data: fields[1], encoding: .utf8),
+              let item = String(data: fields[2], encoding: .utf8)
+        else {
+            throw MacosBridgeFailure(code: .internal)
+        }
+        return try MacosScopedItemIdentity(namespace: namespace, root: root, item: item)
     }
 }
 

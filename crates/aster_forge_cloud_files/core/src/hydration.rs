@@ -1,7 +1,7 @@
 //! Runtime-neutral hydration work sharing, revision fencing, and waiter-scoped cancellation.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{
         Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -36,6 +36,29 @@ pub enum HydrationError {
     /// Backend bytes violated the requested revision, range, or size contract.
     #[error(transparent)]
     Contract(#[from] CloudFilesCoreError),
+    /// The coordinator reached its configured global or per-content work limit.
+    #[error("hydration in-flight work limit exceeded ({scope})")]
+    InFlightLimitExceeded {
+        /// Whether the global coordinator or one content key reached its limit.
+        scope: &'static str,
+    },
+}
+
+/// Bounded hydration work limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HydrationLimits {
+    /// Maximum number of backend work items retained by one coordinator.
+    pub max_in_flight_work: usize,
+    /// Maximum number of backend work items retained for one content key.
+    pub max_in_flight_per_content: usize,
+}
+
+impl HydrationLimits {
+    /// Conservative defaults suitable for a provider process.
+    pub const DEFAULT: Self = Self {
+        max_in_flight_work: 1_024,
+        max_in_flight_per_content: 128,
+    };
 }
 
 /// One logical hydration request plus the physical alignment required by its adapter boundary.
@@ -112,6 +135,7 @@ struct HydrationContentKey {
     revision: ContentRevision,
     expected_size: u64,
     session_generation: SessionGeneration,
+    alignment: Alignment,
 }
 
 impl HydrationContentKey {
@@ -121,6 +145,7 @@ impl HydrationContentKey {
             revision: request.read().revision().clone(),
             expected_size: request.read().expected_size(),
             session_generation: request.session_generation(),
+            alignment: request.alignment(),
         }
     }
 }
@@ -148,6 +173,7 @@ struct WorkEntry {
 struct CoordinatorState {
     next_work_id: u64,
     work: HashMap<u64, WorkEntry>,
+    by_content: HashMap<HydrationContentKey, BTreeSet<(u64, u64, u64)>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -167,15 +193,27 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct HydrationCoordinator {
     backend: Arc<dyn CloudContentBackend>,
     state: Arc<Mutex<CoordinatorState>>,
+    limits: HydrationLimits,
 }
 
 impl HydrationCoordinator {
     /// Creates an empty coordinator scoped to one product-owned content backend adapter.
     pub fn new(backend: Arc<dyn CloudContentBackend>) -> Self {
+        Self::with_limits(backend, HydrationLimits::DEFAULT)
+    }
+
+    /// Creates a coordinator with explicit global and per-content backpressure limits.
+    pub fn with_limits(backend: Arc<dyn CloudContentBackend>, limits: HydrationLimits) -> Self {
         Self {
             backend,
             state: Arc::new(Mutex::new(CoordinatorState::default())),
+            limits,
         }
+    }
+
+    /// Returns the configured in-flight work limits.
+    pub const fn limits(&self) -> HydrationLimits {
+        self.limits
     }
 
     /// Registers one waiter and returns immediately without spawning backend work.
@@ -245,6 +283,7 @@ impl HydrationCoordinator {
             }]);
         }
 
+        ensure_capacity(&state, content, 1, self.limits)?;
         let dependency = insert_work(
             &mut state,
             Arc::clone(&self.backend),
@@ -282,6 +321,7 @@ impl HydrationCoordinator {
             }]);
         }
 
+        ensure_capacity(&state, content, 1, self.limits)?;
         let dependency = insert_work(
             &mut state,
             Arc::clone(&self.backend),
@@ -306,24 +346,30 @@ impl HydrationCoordinator {
     ) -> HydrationResult<Vec<WorkDependency>> {
         let mut state = lock(&self.state);
         let mut dependencies = state
-            .work
-            .iter()
-            .filter(|(_, entry)| {
-                entry.content == *content
-                    && (entry.whole
-                        || ranges_overlap(physical_start, physical_end, entry.start, entry.end))
-            })
-            .map(|(id, entry)| WorkDependency {
-                id: *id,
-                start: entry.start,
-                end: entry.end,
-                future: entry.future.clone(),
+            .by_content
+            .get(content)
+            .into_iter()
+            .flat_map(|entries| entries.iter())
+            .take_while(|(start, _, _)| *start < physical_end)
+            .filter_map(|(start, end, id)| {
+                let entry = state.work.get(id)?;
+                if entry.whole || ranges_overlap(physical_start, physical_end, *start, *end) {
+                    Some(WorkDependency {
+                        id: *id,
+                        start: *start,
+                        end: *end,
+                        future: entry.future.clone(),
+                    })
+                } else {
+                    None
+                }
             })
             .collect::<Vec<_>>();
         dependencies.sort_by_key(|dependency| (dependency.start, dependency.end));
 
         let mut cursor = physical_start;
         let existing = dependencies.clone();
+        let mut gaps = Vec::new();
         for dependency in existing {
             if dependency.end <= cursor {
                 continue;
@@ -331,14 +377,7 @@ impl HydrationCoordinator {
             if dependency.start > cursor {
                 let gap_end = dependency.start.min(physical_end);
                 if cursor < gap_end {
-                    dependencies.push(insert_range_work(
-                        &mut state,
-                        Arc::clone(&self.backend),
-                        content.clone(),
-                        original_request,
-                        cursor,
-                        gap_end,
-                    )?);
+                    gaps.push((cursor, gap_end));
                 }
             }
             cursor = cursor.max(dependency.end.min(physical_end));
@@ -347,13 +386,17 @@ impl HydrationCoordinator {
             }
         }
         if cursor < physical_end {
+            gaps.push((cursor, physical_end));
+        }
+        ensure_capacity(&state, content, gaps.len(), self.limits)?;
+        for (start, end) in gaps {
             dependencies.push(insert_range_work(
                 &mut state,
                 Arc::clone(&self.backend),
                 content.clone(),
                 original_request,
-                cursor,
-                physical_end,
+                start,
+                end,
             )?);
         }
 
@@ -406,6 +449,7 @@ fn insert_work(
     }
     .boxed()
     .shared();
+    let index_content = content.clone();
     state.work.insert(
         id,
         WorkEntry {
@@ -417,12 +461,37 @@ fn insert_work(
             waiter_count: 0,
         },
     );
+    state
+        .by_content
+        .entry(index_content)
+        .or_default()
+        .insert((start, end, id));
     Ok(WorkDependency {
         id,
         start,
         end,
         future,
     })
+}
+
+fn ensure_capacity(
+    state: &CoordinatorState,
+    content: &HydrationContentKey,
+    additional: usize,
+    limits: HydrationLimits,
+) -> HydrationResult<()> {
+    if limits.max_in_flight_work == 0
+        || state.work.len().saturating_add(additional) > limits.max_in_flight_work
+    {
+        return Err(HydrationError::InFlightLimitExceeded { scope: "global" });
+    }
+    let per_content = state.by_content.get(content).map_or(0, BTreeSet::len);
+    if limits.max_in_flight_per_content == 0
+        || per_content.saturating_add(additional) > limits.max_in_flight_per_content
+    {
+        return Err(HydrationError::InFlightLimitExceeded { scope: "content" });
+    }
+    Ok(())
 }
 
 fn logical_extent(request: &ContentReadRequest) -> HydrationResult<(u64, u64)> {
@@ -532,8 +601,16 @@ impl WaiterInner {
             } else {
                 false
             };
-            if remove {
-                state.work.remove(id);
+            if remove && let Some(entry) = state.work.remove(id) {
+                let empty = if let Some(index) = state.by_content.get_mut(&entry.content) {
+                    index.remove(&(entry.start, entry.end, *id));
+                    index.is_empty()
+                } else {
+                    false
+                };
+                if empty {
+                    state.by_content.remove(&entry.content);
+                }
             }
         }
     }

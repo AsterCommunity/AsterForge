@@ -114,7 +114,7 @@ impl LinuxWritebackStore for MemoryWritebackStore {
             .files
             .entry(request.key().clone())
             .or_insert_with(|| StagedFile {
-                bytes: base_content.to_vec(),
+                bytes: Arc::from(base_content.as_ref()),
                 snapshot: None,
                 base_revision: request.base_revision().clone(),
             });
@@ -168,9 +168,8 @@ impl LinuxWritebackStore for MemoryWritebackStore {
     ) -> StoreResult<LinuxWriteCommit> {
         let mut state = lock(&self.state);
         Self::require_active_session(&state, session)?;
-        let mut next = state.clone();
-        let key = Self::session_key(&next, session)?;
-        let file = next.files.get_mut(&key).ok_or_else(|| {
+        let key = Self::session_key(&state, session)?;
+        let file = state.files.get(&key).ok_or_else(|| {
             store_error(
                 CloudFilesStoreErrorKind::NotFound,
                 "missing memory staged file",
@@ -188,12 +187,12 @@ impl LinuxWritebackStore for MemoryWritebackStore {
                 "memory write end overflowed usize",
             )
         })?;
-        if file.bytes.len() < end {
-            file.bytes.resize(end, 0);
+        let mut next_bytes = file.bytes.to_vec();
+        if next_bytes.len() < end {
+            next_bytes.resize(end, 0);
         }
-        file.bytes[start..end].copy_from_slice(&bytes);
-        let commit = self.commit(&mut next, session)?;
-        *state = next;
+        next_bytes[start..end].copy_from_slice(&bytes);
+        let commit = self.commit(&mut state, session, next_bytes.into())?;
         self.upload_notify.notify_one();
         Ok(commit)
     }
@@ -205,9 +204,8 @@ impl LinuxWritebackStore for MemoryWritebackStore {
     ) -> StoreResult<LinuxWriteCommit> {
         let mut state = lock(&self.state);
         Self::require_active_session(&state, session)?;
-        let mut next = state.clone();
-        let key = Self::session_key(&next, session)?;
-        let file = next.files.get_mut(&key).ok_or_else(|| {
+        let key = Self::session_key(&state, session)?;
+        let file = state.files.get(&key).ok_or_else(|| {
             store_error(
                 CloudFilesStoreErrorKind::NotFound,
                 "missing memory staged file",
@@ -219,9 +217,9 @@ impl LinuxWritebackStore for MemoryWritebackStore {
                 "memory truncate size exceeded usize",
             )
         })?;
-        file.bytes.resize(size, 0);
-        let commit = self.commit(&mut next, session)?;
-        *state = next;
+        let mut next_bytes = file.bytes.to_vec();
+        next_bytes.resize(size, 0);
+        let commit = self.commit(&mut state, session, next_bytes.into())?;
         self.upload_notify.notify_one();
         Ok(commit)
     }

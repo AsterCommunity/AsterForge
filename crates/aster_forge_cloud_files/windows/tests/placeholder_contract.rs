@@ -145,8 +145,14 @@ fn placeholder_rejects_every_windows_reserved_name_boundary() {
         "AUX",
         "NUL.data",
         "COM1",
+        "COM¹",
+        "com².txt",
+        "COM³",
         "com9.txt",
         "LPT1",
+        "LPT¹",
+        "lpt².log",
+        "LPT³",
         "lpt9.bin",
     ];
 

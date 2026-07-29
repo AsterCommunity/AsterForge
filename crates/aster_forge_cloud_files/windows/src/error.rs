@@ -42,7 +42,7 @@ pub enum WindowsCloudFilesError {
     /// The supplied identity described another item.
     #[error("CFAPI file identity does not match the placeholder item")]
     IdentityItemMismatch,
-    /// The optional root file identity belonged to another namespace/root scope.
+    /// The required root file identity belonged to another namespace/root scope.
     #[error("CFAPI root file identity does not match the sync-root scope")]
     RootFileIdentityScopeMismatch,
     /// A provider-facing registration string violated the CFAPI contract.

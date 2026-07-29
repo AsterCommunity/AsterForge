@@ -4,15 +4,17 @@ use aster_forge_cloud_files_core::{
 };
 use aster_forge_cloud_files_macos_bridge::{
     FILE_PROVIDER_CURRENT_WORKING_SET_IDENTIFIER, FILE_PROVIDER_ROOT_CONTAINER_IDENTIFIER,
-    FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER, MacosBridgeError, MacosEnumerationPage,
-    MacosEnumerationRequest, MacosEnumerationState, MacosFileProviderIdentifier,
+    FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER, MAX_ENUMERATION_PAGE_ITEMS, MacosBridgeError,
+    MacosEnumerationPage, MacosEnumerationRequest, MacosEnumerationState,
+    MacosFileProviderIdentifier,
 };
 
 #[test]
 fn request_resolves_only_item_and_root_containers_and_preserves_cursor() {
     let fixture = Fixture::new();
     let cursor = PageCursor::from_slice(b"opaque-page").expect("cursor should be valid");
-    let item_identifier = MacosFileProviderIdentifier::encode(&fixture.docs_key);
+    let item_identifier = MacosFileProviderIdentifier::encode(&fixture.docs_key)
+        .expect("identifier fixture should fit");
     let request = MacosEnumerationRequest::new(item_identifier.clone(), Some(cursor.clone()));
     assert_eq!(request.container(), &item_identifier);
     assert_eq!(request.page(), Some(&cursor));
@@ -168,6 +170,49 @@ fn failed_page_does_not_pollute_enumerator_state_and_terminal_state_is_final() {
         state.request(),
         Err(MacosBridgeError::InvalidBackendResponse {
             reason: "enumeration requested another page after terminal completion"
+        })
+    ));
+}
+
+#[test]
+fn page_item_limit_accepts_boundary_and_rejects_boundary_plus_one() {
+    let fixture = Fixture::new();
+    let items = (0..MAX_ENUMERATION_PAGE_ITEMS)
+        .map(|index| {
+            CloudItem::directory(
+                key(&fixture.scope, &format!("item-{index}")),
+                Some(fixture.root_key.item_id().clone()),
+                format!("item-{index}"),
+                metadata(),
+            )
+            .expect("boundary item should be valid")
+        })
+        .collect::<Vec<_>>();
+    MacosEnumerationPage::from_backend(
+        &fixture.root_key,
+        &fixture.root_key,
+        CloudItemPage::new(items.clone(), None),
+    )
+    .expect("page at the item limit should convert");
+
+    let mut oversized = items;
+    oversized.push(
+        CloudItem::directory(
+            key(&fixture.scope, "overflow"),
+            Some(fixture.root_key.item_id().clone()),
+            "overflow",
+            metadata(),
+        )
+        .expect("overflow fixture should be valid"),
+    );
+    assert!(matches!(
+        MacosEnumerationPage::from_backend(
+            &fixture.root_key,
+            &fixture.root_key,
+            CloudItemPage::new(oversized, None),
+        ),
+        Err(MacosBridgeError::InvalidBackendResponse {
+            reason: "enumeration page exceeded the item limit"
         })
     ));
 }

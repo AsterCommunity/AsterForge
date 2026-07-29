@@ -10,7 +10,10 @@ async fn run_mutation_worker(
         if *shutdown.borrow() {
             return Ok(());
         }
-        let records = store.recoverable_mutations(&scope).await?;
+        let records = store
+            .recoverable_mutations_page(&scope, None, RECOVERY_BATCH_LIMIT)
+            .await?
+            .into_items();
         if records.is_empty() {
             tokio::select! {
                 _ = store.mutation_notify.notified() => {}
@@ -68,7 +71,10 @@ async fn run_upload_worker(
         if *shutdown.borrow() {
             return Ok(());
         }
-        let records = store.recoverable_content_uploads(&scope).await?;
+        let records = store
+            .recoverable_content_uploads_page(&scope, None, RECOVERY_BATCH_LIMIT)
+            .await?
+            .into_items();
         if records.is_empty() {
             tokio::select! {
                 _ = store.upload_notify.notified() => {}

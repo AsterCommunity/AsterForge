@@ -1,9 +1,9 @@
 //! Runtime-neutral read-only File Provider engine used by Swift bridge implementations.
 
-use std::sync::Arc;
+use std::{num::NonZeroU64, sync::Arc};
 
 use aster_forge_cloud_files_core::{
-    CloudFilesBackend, CloudItemKey, CloudItemKind, ContentReadRequest, ContentRevision,
+    ByteRange, CloudFilesBackend, CloudItemKey, CloudItemKind, ContentReadRequest, ContentRevision,
 };
 use bytes::Bytes;
 
@@ -12,27 +12,52 @@ use crate::{
     MacosFileProviderItem, Result,
 };
 
-/// Revision-bound complete-file content returned to the Swift extension.
+/// Validated metadata required to stream one exact file revision into native staging storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MacosFetchedContent {
+pub struct MacosContentFetchPlan {
+    key: CloudItemKey,
     revision: ContentRevision,
-    bytes: Bytes,
+    size: u64,
 }
 
-impl MacosFetchedContent {
-    /// Returns the exact content revision represented by the bytes.
+impl MacosContentFetchPlan {
+    /// Returns the exact scoped item being fetched.
+    pub const fn key(&self) -> &CloudItemKey {
+        &self.key
+    }
+
+    /// Returns the exact revision being fetched.
     pub const fn revision(&self) -> &ContentRevision {
         &self.revision
     }
 
-    /// Returns the complete content bytes.
+    /// Returns the complete logical file size.
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+/// One validated bounded chunk from a [`MacosContentFetchPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacosFetchedContentChunk {
+    offset: u64,
+    bytes: Bytes,
+}
+
+impl MacosFetchedContentChunk {
+    /// Returns the chunk's logical file offset.
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// Returns the bounded chunk bytes.
     pub const fn bytes(&self) -> &Bytes {
         &self.bytes
     }
 
-    /// Consumes the response into revision and bytes.
-    pub fn into_parts(self) -> (ContentRevision, Bytes) {
-        (self.revision, self.bytes)
+    /// Consumes the chunk into its offset and bytes.
+    pub fn into_parts(self) -> (u64, Bytes) {
+        (self.offset, self.bytes)
     }
 }
 
@@ -118,12 +143,12 @@ where
         MacosEnumerationPage::from_backend(&self.root_key, parent, page)
     }
 
-    /// Fetches complete content for the exact File Provider content version requested by Swift.
-    pub async fn fetch_content(
+    /// Validates metadata and revision before a caller creates native staging storage.
+    pub async fn prepare_content_fetch(
         &self,
         identifier: &MacosFileProviderIdentifier,
         requested_revision: &ContentRevision,
-    ) -> Result<MacosFetchedContent> {
+    ) -> Result<MacosContentFetchPlan> {
         let key = identifier.item_key()?;
         let item = self.backend.get_item(key).await?;
         if item.key() != key {
@@ -148,15 +173,43 @@ where
                 ),
             ));
         }
+        Ok(MacosContentFetchPlan {
+            key: key.clone(),
+            revision: requested_revision.clone(),
+            size: content.size(),
+        })
+    }
+
+    /// Reads one bounded chunk for a validated fetch plan.
+    pub async fn read_content_chunk(
+        &self,
+        plan: &MacosContentFetchPlan,
+        offset: u64,
+        maximum_length: NonZeroU64,
+    ) -> Result<MacosFetchedContentChunk> {
+        if offset >= plan.size {
+            return Err(MacosBridgeError::InvalidBackendResponse {
+                reason: "content chunk offset is outside the planned file",
+            });
+        }
+        let length = maximum_length.get().min(plan.size - offset);
+        let range = ByteRange::new(offset, length).map_err(|_| {
+            MacosBridgeError::InvalidBackendResponse {
+                reason: "content chunk range exceeded the planned file",
+            }
+        })?;
         let request =
-            ContentReadRequest::whole(key.clone(), requested_revision.clone(), content.size());
+            ContentReadRequest::range(plan.key.clone(), plan.revision.clone(), plan.size, range);
         let response = self.backend.read_content(&request).await?;
         request.validate_response(&response).map_err(|_| {
             MacosBridgeError::InvalidBackendResponse {
-                reason: "content response violated the requested revision or whole-file extent",
+                reason: "content response violated the requested revision or chunk extent",
             }
         })?;
-        let (revision, _, bytes, _) = response.into_parts();
-        Ok(MacosFetchedContent { revision, bytes })
+        let (_, response_offset, bytes, _) = response.into_parts();
+        Ok(MacosFetchedContentChunk {
+            offset: response_offset,
+            bytes,
+        })
     }
 }

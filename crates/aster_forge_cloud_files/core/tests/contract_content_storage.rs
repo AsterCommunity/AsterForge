@@ -192,7 +192,7 @@ fn eviction_blockers_are_complete_and_deterministically_ordered() {
         ContentStorageMode::Hybrid,
         16,
     );
-    entry.set_pinned(true);
+    entry.set_pinned(true).expect("pin should succeed");
     entry
         .mark_dirty(local_snapshot(&backend, 1, "dirty-1"))
         .expect("dirty snapshot should be recorded");

@@ -278,18 +278,13 @@ pub fn register_sync_root(
             maximum: crate::CFAPI_SYNC_ROOT_IDENTITY_MAX_BYTES,
         }
     })?;
-    let (root_file_identity, root_file_identity_len) =
-        if let Some(identity) = registration.root_file_identity() {
-            let length = u32::try_from(identity.len()).map_err(|_| {
-                WindowsCloudFilesError::FileIdentityTooLarge {
-                    actual: identity.len(),
-                    maximum: crate::CFAPI_FILE_IDENTITY_MAX_BYTES,
-                }
-            })?;
-            (identity.as_bytes().as_ptr().cast(), length)
-        } else {
-            (std::ptr::null(), 0)
-        };
+    let root_file_identity = registration.root_file_identity();
+    let root_file_identity_len = u32::try_from(root_file_identity.len()).map_err(|_| {
+        WindowsCloudFilesError::FileIdentityTooLarge {
+            actual: root_file_identity.len(),
+            maximum: crate::CFAPI_FILE_IDENTITY_MAX_BYTES,
+        }
+    })?;
 
     let native_registration = CF_SYNC_REGISTRATION {
         StructSize: native_struct_size::<CF_SYNC_REGISTRATION>("CF_SYNC_REGISTRATION")?,
@@ -297,7 +292,7 @@ pub fn register_sync_root(
         ProviderVersion: PCWSTR(provider_version.as_ptr()),
         SyncRootIdentity: sync_root_identity.as_ptr().cast(),
         SyncRootIdentityLength: sync_root_identity_len,
-        FileIdentity: root_file_identity,
+        FileIdentity: root_file_identity.as_bytes().as_ptr().cast(),
         FileIdentityLength: root_file_identity_len,
         ProviderId: GUID::from_u128(registration.provider_id().as_u128()),
     };

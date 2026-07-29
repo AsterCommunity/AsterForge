@@ -70,6 +70,7 @@ impl MemoryWritebackStore {
             MutationRecordTransition::AlreadyApplied => StoreWriteStatus::AlreadyApplied,
         };
         if write_status == StoreWriteStatus::Applied {
+            Self::compact_terminal_records(&mut next);
             self.persist(&next)?;
             *state = next;
         }

@@ -1,8 +1,9 @@
 use std::ptr;
 
 use aster_forge_cloud_files_macos_bridge::{
-    FILE_PROVIDER_ROOT_CONTAINER_IDENTIFIER, MacosErrorCode,
-    aster_forge_cloud_files_macos_buffer_release, aster_forge_cloud_files_macos_identifier_decode,
+    FILE_PROVIDER_ROOT_CONTAINER_IDENTIFIER, MAX_FILE_PROVIDER_IDENTIFIER_BYTES,
+    MAX_IDENTITY_FIELD_BYTES, MacosErrorCode, aster_forge_cloud_files_macos_buffer_release,
+    aster_forge_cloud_files_macos_identifier_decode,
     aster_forge_cloud_files_macos_identifier_encode, aster_forge_cloud_files_macos_request_release,
     aster_forge_cloud_files_macos_session_begin_closing,
     aster_forge_cloud_files_macos_session_begin_request,
@@ -241,10 +242,10 @@ fn ffi_encode_rejects_empty_and_nul_in_every_identity_position() {
 }
 
 #[test]
-fn ffi_large_valid_identity_fields_round_trip_without_truncation() {
-    let namespace = vec![b'n'; 4096];
-    let root = vec![b'r'; 4096];
-    let item = vec![b'i'; 4096];
+fn ffi_identity_limits_accept_the_boundary_and_reject_boundary_plus_one() {
+    let namespace = vec![b'n'; MAX_IDENTITY_FIELD_BYTES];
+    let root = b"root";
+    let item = b"item";
     // SAFETY: all declared vectors remain readable for this call.
     let encoded = unsafe {
         aster_forge_cloud_files_macos_identifier_encode(
@@ -280,6 +281,30 @@ fn ffi_large_valid_identity_fields_round_trip_without_truncation() {
         aster_forge_cloud_files_macos_buffer_release(decoded.buffer);
         aster_forge_cloud_files_macos_buffer_release(encoded.buffer);
     }
+
+    let oversized = vec![b'n'; MAX_IDENTITY_FIELD_BYTES + 1];
+    // SAFETY: every declared slice remains readable; the oversized input is rejected before copy.
+    let rejected = unsafe {
+        aster_forge_cloud_files_macos_identifier_encode(
+            oversized.as_ptr(),
+            oversized.len(),
+            root.as_ptr(),
+            root.len(),
+            item.as_ptr(),
+            item.len(),
+        )
+    };
+    assert_eq!(rejected.code, MacosErrorCode::InvalidArgument);
+
+    let oversized_identifier = vec![b'x'; MAX_FILE_PROVIDER_IDENTIFIER_BYTES + 1];
+    // SAFETY: the declared slice remains readable and is rejected before UTF-8 allocation.
+    let rejected = unsafe {
+        aster_forge_cloud_files_macos_identifier_decode(
+            oversized_identifier.as_ptr(),
+            oversized_identifier.len(),
+        )
+    };
+    assert_eq!(rejected.code, MacosErrorCode::InvalidArgument);
 }
 
 #[test]

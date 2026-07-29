@@ -44,6 +44,7 @@ impl MemoryWritebackStore {
             ContentUploadRecordTransition::Fenced => StoreWriteStatus::Fenced,
         };
         if write_status == StoreWriteStatus::Applied {
+            Self::compact_terminal_records(&mut next);
             self.persist(&next)?;
             *state = next;
         }
@@ -145,28 +146,40 @@ impl ContentUploadStore for MemoryWritebackStore {
         Ok(lock(&self.state).uploads.get(operation_id).cloned())
     }
 
-    async fn recoverable_content_uploads(
+    async fn recoverable_content_uploads_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<ContentUploadRecord>> {
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<ContentUploadRecord>> {
         self.scope_matches(scope)?;
+        if limit == 0 {
+            return Err(store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                "synthetic upload recovery page limit must be non-zero",
+            ));
+        }
         let state = lock(&self.state);
-        let mut records = state
-            .uploads
-            .values()
-            .filter(|record| {
-                record.intent().base_cache_key().item_key().scope() == scope
-                    && record.state() != ContentUploadState::Completed
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| {
-            left.intent()
-                .operation_id()
-                .as_str()
-                .cmp(right.intent().operation_id().as_str())
-        });
-        Ok(records)
+        let mut selected = Vec::with_capacity(limit.saturating_add(1).min(state.uploads.len()));
+        for record in state.uploads.values().filter(|record| {
+            record.intent().base_cache_key().item_key().scope() == scope
+                && record.state() != ContentUploadState::Completed
+                && after_operation_id
+                    .is_none_or(|after| record.intent().operation_id().as_str() > after)
+        }) {
+            let operation_id = record.intent().operation_id().as_str();
+            let index = selected.partition_point(|selected: &&ContentUploadRecord| {
+                selected.intent().operation_id().as_str() < operation_id
+            });
+            selected.insert(index, record);
+            if selected.len() > limit.saturating_add(1) {
+                selected.pop();
+            }
+        }
+        let has_more = selected.len() > limit;
+        selected.truncate(limit);
+        let records = selected.into_iter().cloned().collect();
+        Ok(RecoveryPage::new(records, has_more))
     }
 
     async fn record_content_upload_session(

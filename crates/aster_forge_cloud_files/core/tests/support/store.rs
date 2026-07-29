@@ -5,7 +5,8 @@ use aster_forge_cloud_files_core::{
     CloudFilesCoreError, CloudFilesStoreError, CloudFilesStoreErrorKind, CloudScope,
     IdempotencyKey, MutationIntent, MutationJournalStore, MutationRecord, MutationRecordTransition,
     MutationRemoteOutcome, MutationState, OperationId, PersistedChangeBatch,
-    PersistedChangeBatchState, SessionGeneration, SessionState, StoreResult, StoreWriteStatus,
+    PersistedChangeBatchState, RecoveryPage, SessionGeneration, SessionState, StoreResult,
+    StoreWriteStatus,
 };
 use async_trait::async_trait;
 
@@ -50,6 +51,8 @@ pub struct MemoryCloudFilesStore {
 }
 
 impl MemoryCloudFilesStore {
+    const TEST_RECOVERY_PAGE_SIZE: usize = 64;
+
     pub fn failures(&self) -> &FailureInjector {
         &self.failures
     }
@@ -59,6 +62,34 @@ impl MemoryCloudFilesStore {
             .stall_next_remote_apply
             .lock()
             .expect("mutation stall mutex should not be poisoned") = true;
+    }
+
+    pub async fn collect_mutation_backlog(
+        &self,
+        scope: &CloudScope,
+    ) -> StoreResult<Vec<MutationRecord>> {
+        let mut records = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .recoverable_mutations_page(scope, after.as_deref(), Self::TEST_RECOVERY_PAGE_SIZE)
+                .await?;
+            let has_more = page.has_more();
+            after = page
+                .items()
+                .last()
+                .map(|record| record.intent().operation_id().as_str().to_owned());
+            records.extend(page.into_items());
+            if !has_more {
+                return Ok(records);
+            }
+            if after.is_none() {
+                return Err(Self::store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    "mutation recovery page cannot continue without a cursor",
+                ));
+            }
+        }
     }
 
     fn store_error(
@@ -447,7 +478,12 @@ impl MutationJournalStore for MemoryCloudFilesStore {
         Ok(state.mutations.get(operation_id).cloned())
     }
 
-    async fn recoverable_mutations(&self, scope: &CloudScope) -> StoreResult<Vec<MutationRecord>> {
+    async fn recoverable_mutations_page(
+        &self,
+        scope: &CloudScope,
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<MutationRecord>> {
         let state = self
             .state
             .lock()
@@ -467,7 +503,12 @@ impl MutationJournalStore for MemoryCloudFilesStore {
                 .as_str()
                 .cmp(right.intent().operation_id().as_str())
         });
-        Ok(records)
+        if let Some(after) = after_operation_id {
+            records.retain(|record| record.intent().operation_id().as_str() > after);
+        }
+        let has_more = records.len() > limit;
+        records.truncate(limit);
+        Ok(RecoveryPage::new(records, has_more))
     }
 
     async fn begin_remote_apply(

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{num::NonZeroU64, sync::Arc};
 
 use aster_forge_cloud_files_core::{
     BackendResult, ChangeCursor, ChangePage, CloudBackendError, CloudBackendErrorKind,
@@ -197,6 +197,20 @@ impl CloudContentBackend for Backend {
         } else {
             request.revision().clone()
         };
+        let requested_range = match request.read_range() {
+            aster_forge_cloud_files_core::ContentReadRange::Whole => None,
+            aster_forge_cloud_files_core::ContentReadRange::Range(range) => Some(range),
+        };
+        let normal_offset = requested_range.map_or(0, |range| range.offset());
+        let normal_bytes = requested_range.map_or_else(
+            || self.contents.clone(),
+            |range| {
+                let start = usize::try_from(range.offset()).expect("fixture offset should fit");
+                let length = usize::try_from(range.length()).expect("fixture length should fit");
+                let end = start.saturating_add(length).min(self.contents.len());
+                self.contents.slice(start..end)
+            },
+        );
         let (offset, bytes, total_size) = match self.fault {
             Fault::WrongOffset => (
                 1,
@@ -213,7 +227,7 @@ impl CloudContentBackend for Backend {
                 self.contents.clone(),
                 u64::try_from(self.contents.len() + 1).expect("fixture size should fit u64"),
             ),
-            _ => (0, self.contents.clone(), request.expected_size()),
+            _ => (normal_offset, normal_bytes, request.expected_size()),
         };
         ContentReadResponse::new(revision, offset, bytes, total_size)
             .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))
@@ -275,20 +289,35 @@ async fn root_item_paged_enumeration_and_revision_bound_fetch_work() {
 
     let file = first.items()[0].identifier().clone();
     let requested = first.items()[0].version().content().clone();
-    let content = engine
-        .fetch_content(&file, &requested)
+    let plan = engine
+        .prepare_content_fetch(&file, &requested)
         .await
-        .expect("content should load");
-    assert_eq!(content.revision(), &requested);
+        .expect("content plan should load");
+    assert_eq!(plan.revision(), &requested);
+    let chunk = engine
+        .read_content_chunk(
+            &plan,
+            0,
+            NonZeroU64::new(8).expect("chunk size should be non-zero"),
+        )
+        .await
+        .expect("first chunk should load");
+    assert_eq!(chunk.offset(), 0);
+    assert_eq!(chunk.bytes(), &Bytes::from_static(b"hello fr"));
+    let (offset, bytes) = chunk.into_parts();
+    assert_eq!(offset, 0);
+    assert_eq!(bytes, Bytes::from_static(b"hello fr"));
+    let chunk = engine
+        .read_content_chunk(
+            &plan,
+            8,
+            NonZeroU64::new(64).expect("chunk size should be non-zero"),
+        )
+        .await
+        .expect("tail chunk should load");
     assert_eq!(
-        content.bytes(),
-        &Bytes::from_static(b"hello from macOS File Provider\n")
-    );
-    let (revision, bytes) = content.into_parts();
-    assert_eq!(revision, requested);
-    assert_eq!(
-        bytes,
-        Bytes::from_static(b"hello from macOS File Provider\n")
+        chunk.bytes(),
+        &Bytes::from_static(b"om macOS File Provider\n")
     );
 }
 
@@ -301,8 +330,10 @@ async fn engine_accessors_clone_and_non_root_item_mapping_preserve_scope() {
     assert_eq!(engine.root_key(), &root_key);
     assert_eq!(engine.clone().root_key(), &root_key);
 
+    let identifier =
+        MacosFileProviderIdentifier::encode(&file_key).expect("identifier fixture should fit");
     let item = engine
-        .item(&MacosFileProviderIdentifier::encode(&file_key))
+        .item(&identifier)
         .await
         .expect("non-root item should load");
     assert_eq!(item.identifier().item_key().expect("item key"), &file_key);
@@ -333,7 +364,7 @@ async fn unsupported_system_containers_are_rejected_for_item_enumeration_and_con
         ));
         assert!(matches!(
             engine
-                .fetch_content(&identifier, &content_revision(b"content-v1"))
+                .prepare_content_fetch(&identifier, &content_revision(b"content-v1"))
                 .await,
             Err(MacosBridgeError::SystemContainerIsNotItem)
         ));
@@ -355,7 +386,8 @@ async fn enumeration_validates_parent_identity_kind_and_root_role() {
     ));
 
     let backend = Backend::fixture(Fault::None);
-    let file = MacosFileProviderIdentifier::encode(backend.file.key());
+    let file = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     assert!(matches!(
         backend
             .engine()
@@ -367,7 +399,8 @@ async fn enumeration_validates_parent_identity_kind_and_root_role() {
     ));
 
     let backend = Backend::fixture(Fault::WrongNonRootRootRole);
-    let docs = MacosFileProviderIdentifier::encode(backend.docs.key());
+    let docs = MacosFileProviderIdentifier::encode(backend.docs.key())
+        .expect("identifier fixture should fit");
     assert!(matches!(
         backend
             .engine()
@@ -382,7 +415,8 @@ async fn enumeration_validates_parent_identity_kind_and_root_role() {
 #[tokio::test]
 async fn item_rejects_non_root_backend_identity_and_root_role_drift() {
     let backend = Backend::fixture(Fault::WrongNonRootIdentity);
-    let file = MacosFileProviderIdentifier::encode(backend.file.key());
+    let file = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     assert!(matches!(
         backend.engine().item(&file).await,
         Err(MacosBridgeError::InvalidBackendResponse {
@@ -391,7 +425,8 @@ async fn item_rejects_non_root_backend_identity_and_root_role_drift() {
     ));
 
     let backend = Backend::fixture(Fault::WrongNonRootRootRole);
-    let docs = MacosFileProviderIdentifier::encode(backend.docs.key());
+    let docs = MacosFileProviderIdentifier::encode(backend.docs.key())
+        .expect("identifier fixture should fit");
     assert!(matches!(
         backend.engine().item(&docs).await,
         Err(MacosBridgeError::InvalidBackendResponse {
@@ -403,11 +438,12 @@ async fn item_rejects_non_root_backend_identity_and_root_role_drift() {
 #[tokio::test]
 async fn content_fetch_rejects_directory_stale_metadata_and_identity_drift() {
     let backend = Backend::fixture(Fault::None);
-    let docs = MacosFileProviderIdentifier::encode(backend.docs.key());
+    let docs = MacosFileProviderIdentifier::encode(backend.docs.key())
+        .expect("identifier fixture should fit");
     assert!(matches!(
         backend
             .engine()
-            .fetch_content(&docs, &content_revision(b"content-v1"))
+            .prepare_content_fetch(&docs, &content_revision(b"content-v1"))
             .await,
         Err(MacosBridgeError::InvalidBackendResponse {
             reason: "content fetch target is not a regular file"
@@ -415,10 +451,11 @@ async fn content_fetch_rejects_directory_stale_metadata_and_identity_drift() {
     ));
 
     let backend = Backend::fixture(Fault::None);
-    let file = MacosFileProviderIdentifier::encode(backend.file.key());
+    let file = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     let result = backend
         .engine()
-        .fetch_content(&file, &content_revision(b"stale-content"))
+        .prepare_content_fetch(&file, &content_revision(b"stale-content"))
         .await;
     assert!(matches!(
         result,
@@ -427,11 +464,12 @@ async fn content_fetch_rejects_directory_stale_metadata_and_identity_drift() {
     ));
 
     let backend = Backend::fixture(Fault::WrongNonRootIdentity);
-    let file = MacosFileProviderIdentifier::encode(backend.file.key());
+    let file = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     assert!(matches!(
         backend
             .engine()
-            .fetch_content(&file, &content_revision(b"content-v1"))
+            .prepare_content_fetch(&file, &content_revision(b"content-v1"))
             .await,
         Err(MacosBridgeError::InvalidBackendResponse {
             reason: "content metadata lookup returned a different stable identity"
@@ -440,37 +478,61 @@ async fn content_fetch_rejects_directory_stale_metadata_and_identity_drift() {
 }
 
 #[tokio::test]
-async fn content_fetch_rejects_every_invalid_whole_file_extent_and_propagates_backend_errors() {
+async fn content_fetch_rejects_every_invalid_chunk_extent_and_propagates_backend_errors() {
     for fault in [
         Fault::WrongOffset,
         Fault::ShortContent,
         Fault::WrongTotalSize,
     ] {
         let backend = Backend::fixture(fault);
-        let identifier = MacosFileProviderIdentifier::encode(backend.file.key());
+        let identifier = MacosFileProviderIdentifier::encode(backend.file.key())
+            .expect("identifier fixture should fit");
         let revision = backend
             .file
             .content()
             .expect("file should have content")
             .revision()
             .clone();
+        let engine = backend.engine();
+        let plan = engine
+            .prepare_content_fetch(&identifier, &revision)
+            .await
+            .expect("fault applies only to content bytes");
         assert!(matches!(
-            backend.engine().fetch_content(&identifier, &revision).await,
+            engine
+                .read_content_chunk(
+                    &plan,
+                    0,
+                    NonZeroU64::new(64).expect("chunk size should be non-zero"),
+                )
+                .await,
             Err(MacosBridgeError::InvalidBackendResponse {
-                reason: "content response violated the requested revision or whole-file extent"
+                reason: "content response violated the requested revision or chunk extent"
             })
         ));
     }
 
     let backend = Backend::fixture(Fault::ReadError);
-    let identifier = MacosFileProviderIdentifier::encode(backend.file.key());
+    let identifier = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     let revision = backend
         .file
         .content()
         .expect("file should have content")
         .revision()
         .clone();
-    let result = backend.engine().fetch_content(&identifier, &revision).await;
+    let engine = backend.engine();
+    let plan = engine
+        .prepare_content_fetch(&identifier, &revision)
+        .await
+        .expect("metadata should load before read failure");
+    let result = engine
+        .read_content_chunk(
+            &plan,
+            0,
+            NonZeroU64::new(64).expect("chunk size should be non-zero"),
+        )
+        .await;
     assert!(matches!(
         result,
         Err(MacosBridgeError::Backend(error))
@@ -480,28 +542,42 @@ async fn content_fetch_rejects_every_invalid_whole_file_extent_and_propagates_ba
 }
 
 #[tokio::test]
-async fn empty_file_fetch_is_a_complete_revision_bound_response() {
+async fn empty_file_fetch_is_a_zero_length_plan_without_a_read() {
     let backend = Backend::empty_file_fixture();
-    let identifier = MacosFileProviderIdentifier::encode(backend.file.key());
+    let identifier = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     let revision = backend
         .file
         .content()
         .expect("file should have content")
         .revision()
         .clone();
-    let fetched = backend
-        .engine()
-        .fetch_content(&identifier, &revision)
+    let engine = backend.engine();
+    let fetched = engine
+        .prepare_content_fetch(&identifier, &revision)
         .await
         .expect("empty file should fetch");
     assert_eq!(fetched.revision(), &revision);
-    assert!(fetched.bytes().is_empty());
+    assert_eq!(fetched.size(), 0);
+    assert!(matches!(
+        engine
+            .read_content_chunk(
+                &fetched,
+                0,
+                NonZeroU64::new(1).expect("chunk size should be non-zero"),
+            )
+            .await,
+        Err(MacosBridgeError::InvalidBackendResponse {
+            reason: "content chunk offset is outside the planned file"
+        })
+    ));
 }
 
 #[tokio::test]
 async fn backend_not_found_classification_is_preserved() {
     let backend = Backend::fixture(Fault::None);
-    let unknown = MacosFileProviderIdentifier::encode(&key(backend.root.key().scope(), "missing"));
+    let unknown = MacosFileProviderIdentifier::encode(&key(backend.root.key().scope(), "missing"))
+        .expect("identifier fixture should fit");
     let result = backend.engine().item(&unknown).await;
     assert!(matches!(
         result,
@@ -534,17 +610,29 @@ async fn wrong_identity_parent_and_content_revision_are_rejected() {
     ));
 
     let backend = Backend::fixture(Fault::WrongRevision);
-    let identifier = MacosFileProviderIdentifier::encode(backend.file.key());
+    let identifier = MacosFileProviderIdentifier::encode(backend.file.key())
+        .expect("identifier fixture should fit");
     let revision = backend
         .file
         .content()
         .expect("file should have content")
         .revision()
         .clone();
+    let engine = backend.engine();
+    let plan = engine
+        .prepare_content_fetch(&identifier, &revision)
+        .await
+        .expect("metadata should load before revision drift");
     assert!(matches!(
-        backend.engine().fetch_content(&identifier, &revision).await,
+        engine
+            .read_content_chunk(
+                &plan,
+                0,
+                NonZeroU64::new(64).expect("chunk size should be non-zero"),
+            )
+            .await,
         Err(MacosBridgeError::InvalidBackendResponse {
-            reason: "content response violated the requested revision or whole-file extent"
+            reason: "content response violated the requested revision or chunk extent"
         })
     ));
 }

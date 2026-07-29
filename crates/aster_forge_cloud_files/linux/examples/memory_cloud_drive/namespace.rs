@@ -394,7 +394,7 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
         next.files.insert(
             key.clone(),
             StagedFile {
-                bytes: Vec::new(),
+                bytes: Arc::from([]),
                 snapshot: None,
                 base_revision,
             },

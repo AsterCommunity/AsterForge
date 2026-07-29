@@ -28,7 +28,10 @@ mod item;
 mod session;
 mod version;
 
-pub use engine::{MacosFetchedContent, MacosReadOnlyEngine};
+pub use engine::{MacosContentFetchPlan, MacosFetchedContentChunk, MacosReadOnlyEngine};
+pub use enumeration::{
+    MAX_ENUMERATION_ITEMS, MAX_ENUMERATION_PAGE_ITEMS, MAX_ENUMERATION_STATE_BYTES,
+};
 pub use enumeration::{MacosEnumerationPage, MacosEnumerationRequest, MacosEnumerationState};
 pub use error::{MacosBridgeError, MacosErrorCode, Result, backend_error_code};
 pub use ffi::{
@@ -44,8 +47,8 @@ pub use ffi::{
 };
 pub use identifier::{
     FILE_PROVIDER_CURRENT_WORKING_SET_IDENTIFIER, FILE_PROVIDER_ROOT_CONTAINER_IDENTIFIER,
-    FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER, MacosFileProviderIdentifier,
-    MacosFileProviderSystemContainer,
+    FILE_PROVIDER_TRASH_CONTAINER_IDENTIFIER, MAX_FILE_PROVIDER_IDENTIFIER_BYTES,
+    MAX_IDENTITY_FIELD_BYTES, MacosFileProviderIdentifier, MacosFileProviderSystemContainer,
 };
 pub use item::{MacosFileProviderItem, MacosFileProviderItemKind};
 pub use session::{MacosExtensionRequestLease, MacosExtensionSession};

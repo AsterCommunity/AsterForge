@@ -426,7 +426,7 @@ async fn intent_and_each_durable_transition_are_idempotent_after_lost_returns() 
     );
     assert!(
         store
-            .recoverable_content_evictions(backend.scope())
+            .collect_eviction_backlog(backend.scope())
             .await
             .expect("recovery scan should succeed")
             .is_empty()
@@ -533,7 +533,7 @@ async fn recovery_scan_is_scope_filtered_sorted_and_excludes_completed_records()
         .await
         .expect("other-scope recovery fixture should persist");
     let records = store
-        .recoverable_content_evictions(backend.scope())
+        .collect_eviction_backlog(backend.scope())
         .await
         .expect("recovery scan should succeed");
     assert_eq!(records.len(), 2);
@@ -541,7 +541,7 @@ async fn recovery_scan_is_scope_filtered_sorted_and_excludes_completed_records()
     assert_eq!(records[1].intent().operation_id().as_str(), "recover-z");
     assert_eq!(
         store
-            .recoverable_content_evictions(other_key.item_key().scope())
+            .collect_eviction_backlog(other_key.item_key().scope())
             .await
             .expect("other-scope recovery scan should succeed")
             .iter()
@@ -567,7 +567,7 @@ async fn recovery_scan_is_scope_filtered_sorted_and_excludes_completed_records()
         .await
         .expect("completion should succeed");
     let records = store
-        .recoverable_content_evictions(backend.scope())
+        .collect_eviction_backlog(backend.scope())
         .await
         .expect("recovery scan should succeed");
     assert_eq!(records.len(), 1);

@@ -1,5 +1,11 @@
 import Foundation
 
+public let macosMaximumIdentifierBytes = 4_128
+public let macosMaximumIdentityFieldBytes = 1_024
+public let macosMaximumEnumerationPageItems = 4_096
+public let macosMaximumEnumerationItems = 100_000
+public let macosMaximumEnumerationStateBytes = 16 * 1024 * 1024
+
 public enum MacosBridgeErrorCode: Int32, CaseIterable, Sendable {
     case success = 0
     case notFound = 1
@@ -49,6 +55,30 @@ public enum MacosCloudItemKind: Sendable {
     case directory
 }
 
+public struct MacosScopedItemIdentity: Equatable, Sendable {
+    public let namespace: String
+    public let root: String
+    public let item: String
+
+    public init(namespace: String, root: String, item: String) throws {
+        guard !namespace.isEmpty, !root.isEmpty, !item.isEmpty,
+              namespace.utf8.count <= macosMaximumIdentityFieldBytes,
+              root.utf8.count <= macosMaximumIdentityFieldBytes,
+              item.utf8.count <= macosMaximumIdentityFieldBytes
+        else {
+            throw MacosBridgeFailure(code: .invalidArgument)
+        }
+        self.namespace = namespace
+        self.root = root
+        self.item = item
+    }
+}
+
+public protocol MacosPersistentIdentifierDecoding: AnyObject {
+    /// Decodes a product item through the Rust identifier contract. System containers return nil.
+    func decodeItemIdentifier(_ identifier: String) throws -> MacosScopedItemIdentity?
+}
+
 public struct MacosCloudItemSnapshot: Equatable, Sendable {
     public let identifier: String
     public let parentIdentifier: String
@@ -69,10 +99,15 @@ public struct MacosCloudItemSnapshot: Equatable, Sendable {
         contentVersion: Data,
         contentTypeIdentifier: String
     ) throws {
-        guard !identifier.isEmpty, !parentIdentifier.isEmpty else {
+        guard !identifier.isEmpty, !parentIdentifier.isEmpty,
+              identifier.utf8.count <= macosMaximumIdentifierBytes,
+              parentIdentifier.utf8.count <= macosMaximumIdentifierBytes
+        else {
             throw MacosBridgeFailure(code: .invalidArgument)
         }
-        guard !filename.isEmpty, !filename.contains("/"), !filename.contains("\0") else {
+        guard !filename.isEmpty, filename.utf8.count <= 1_024,
+              !filename.contains("/"), !filename.contains("\0")
+        else {
             throw MacosBridgeFailure(code: .invalidArgument)
         }
         guard (1 ... 128).contains(metadataVersion.count),
@@ -102,7 +137,9 @@ public struct MacosEnumerationPage: Equatable, Sendable {
     public let nextPage: Data?
 
     public init(items: [MacosCloudItemSnapshot], nextPage: Data?) throws {
-        guard nextPage?.count ?? 0 <= 500 else {
+        guard items.count <= macosMaximumEnumerationPageItems,
+              nextPage?.count ?? 0 <= 500
+        else {
             throw MacosBridgeFailure(code: .invalidArgument)
         }
         self.items = items
@@ -161,14 +198,29 @@ public struct MacosChangeBatch: Equatable, Sendable {
 
 public struct MacosFetchedContent: Equatable, Sendable {
     public let item: MacosCloudItemSnapshot
-    public let bytes: Data
+    public let stagingURL: URL
 
-    public init(item: MacosCloudItemSnapshot, bytes: Data) throws {
-        guard item.kind == .file, UInt64(exactly: bytes.count) == item.size else {
+    public init(
+        item: MacosCloudItemSnapshot,
+        stagingURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        guard item.kind == .file, stagingURL.isFileURL else {
+            throw MacosBridgeFailure(code: .internal)
+        }
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try fileManager.attributesOfItem(atPath: stagingURL.path)
+        } catch {
+            throw MacosBridgeFailure(code: .internal)
+        }
+        guard let fileSize = attributes[.size] as? NSNumber,
+              fileSize.uint64Value == item.size
+        else {
             throw MacosBridgeFailure(code: .internal)
         }
         self.item = item
-        self.bytes = bytes
+        self.stagingURL = stagingURL
     }
 }
 
@@ -201,4 +253,13 @@ public protocol MacosCloudFilesDataSource: AnyObject {
         requestedContentVersion: Data?,
         completion: @escaping (Result<MacosFetchedContent, Error>) -> Void
     ) -> any MacosCancellable
+
+    /// Discards a staging file that was produced after its request lost the terminal race.
+    func discardFetchedContents(at stagingURL: URL)
+}
+
+public extension MacosCloudFilesDataSource {
+    func discardFetchedContents(at stagingURL: URL) {
+        try? FileManager.default.removeItem(at: stagingURL)
+    }
 }

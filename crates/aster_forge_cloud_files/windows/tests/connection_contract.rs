@@ -125,6 +125,24 @@ fn fetch_request(file_size: u64, range: WindowsCallbackRange) -> WindowsFetchDat
     request
 }
 
+#[test]
+fn progress_reporter_keeps_only_compact_native_correlation() {
+    let request = fetch_request(
+        4096,
+        WindowsCallbackRange::exact(0, 4096).expect("range should be valid"),
+    );
+    let info = request.snapshot().info();
+    let reporter = request.progress_reporter();
+    let correlation = reporter.correlation();
+
+    assert_eq!(correlation.generation(), info.generation());
+    assert_eq!(correlation.connection_key(), info.connection_key());
+    assert_eq!(correlation.transfer_key(), info.transfer_key());
+    assert_eq!(correlation.request_key(), info.request_key());
+    assert_eq!(correlation.file_id(), info.file_id());
+    assert!(std::mem::size_of_val(&reporter) <= 64);
+}
+
 struct RecordingContentBackend {
     requests: Mutex<Vec<ContentReadRequest>>,
     failure: Option<CloudBackendError>,
@@ -464,6 +482,12 @@ fn transfer_requires_exact_revision_offset_length_and_total_size_without_copying
 
 #[test]
 fn hydration_errors_map_to_specific_cfapi_failure_classes() {
+    assert_eq!(
+        WindowsFetchDataFailure::from_hydration_error(&HydrationError::InFlightLimitExceeded {
+            scope: "global",
+        }),
+        WindowsFetchDataFailure::InsufficientResources
+    );
     assert_eq!(
         WindowsFetchDataFailure::from_hydration_error(&HydrationError::Cancelled),
         WindowsFetchDataFailure::Cancelled

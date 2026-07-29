@@ -8,8 +8,8 @@ use std::sync::{
 use aster_forge_cloud_files_core::{
     Alignment, BackendResult, ByteRange, CloudBackendError, CloudBackendErrorKind,
     CloudContentBackend, ContentReadRange, ContentReadRequest, ContentReadResponse,
-    HydrationCancellationOutcome, HydrationCoordinator, HydrationError, HydrationRequest,
-    SessionGeneration,
+    HydrationCancellationOutcome, HydrationCoordinator, HydrationError, HydrationLimits,
+    HydrationRequest, SessionGeneration,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -903,6 +903,60 @@ async fn same_item_revision_and_session_with_different_expected_sizes_do_not_sha
     assert!(normal.is_ok());
     assert!(matches!(wrong_size, Err(HydrationError::Contract(_))));
     assert_eq!(backend.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn different_physical_alignments_do_not_share_work() {
+    let (fixture, content) = content_fixture();
+    let backend = Arc::new(RecordingContentBackend::new(vec![content.clone()]));
+    let coordinator =
+        HydrationCoordinator::new(Arc::clone(&backend) as Arc<dyn CloudContentBackend>);
+    let first = coordinator
+        .request(request(
+            &fixture,
+            content.revision.clone(),
+            3,
+            3,
+            4,
+            generation(1),
+        ))
+        .expect("first aligned waiter should register");
+    let second = coordinator
+        .request(request(&fixture, content.revision, 3, 3, 8, generation(1)))
+        .expect("second aligned waiter should register");
+    let (first, second) = tokio::join!(first.wait(), second.wait());
+    assert!(first.is_ok());
+    assert!(second.is_ok());
+    assert_eq!(backend.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn coordinator_enforces_global_and_per_content_work_limits() {
+    let (fixture, content) = content_fixture();
+    let revision = content.revision.clone();
+    let backend = Arc::new(RecordingContentBackend::new(vec![content.clone()]));
+    let coordinator = HydrationCoordinator::with_limits(
+        Arc::clone(&backend) as Arc<dyn CloudContentBackend>,
+        HydrationLimits {
+            max_in_flight_work: 1,
+            max_in_flight_per_content: 1,
+        },
+    );
+    let first = coordinator
+        .request(request(&fixture, revision.clone(), 0, 2, 1, generation(1)))
+        .expect("first work should fit the limit");
+    let second = coordinator.request(request(&fixture, revision.clone(), 4, 2, 1, generation(1)));
+    assert!(matches!(
+        second,
+        Err(HydrationError::InFlightLimitExceeded { scope: "global" })
+    ));
+    first
+        .wait()
+        .await
+        .expect("first work should complete and release capacity");
+    coordinator
+        .request(request(&fixture, revision, 4, 2, 1, generation(1)))
+        .expect("capacity should be released after completion");
 }
 
 #[tokio::test]

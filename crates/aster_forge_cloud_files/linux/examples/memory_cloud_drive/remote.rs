@@ -480,6 +480,35 @@ impl CloudContentUploadBackend for MemoryRemoteMutationBackend {
         ))
     }
 
+    async fn reconcile_upload_chunk(
+        &self,
+        intent: &ContentUploadIntent,
+        session: &ContentUploadSession,
+        chunk: &ContentUploadChunk,
+    ) -> BackendResult<ContentUploadChunkAck> {
+        chunk
+            .validate_for(intent, session)
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
+        let state = lock(&self.state);
+        let upload = state.uploads.get(intent.idempotency_key()).ok_or_else(|| {
+            CloudBackendError::new(CloudBackendErrorKind::NotFound)
+        })?;
+        if upload.session_id != *session.id() {
+            return Err(CloudBackendError::new(CloudBackendErrorKind::PreconditionFailed));
+        }
+        let start = usize::try_from(chunk.offset())
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
+        let end = usize::try_from(chunk.end_exclusive())
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
+        if upload.bytes.get(start..end) != Some(chunk.bytes().as_ref()) {
+            return Err(CloudBackendError::new(CloudBackendErrorKind::PreconditionFailed));
+        }
+        Ok(ContentUploadChunkAck::new(
+            chunk.session_id().clone(),
+            chunk.end_exclusive(),
+        ))
+    }
+
     async fn commit_upload(
         &self,
         intent: &ContentUploadIntent,

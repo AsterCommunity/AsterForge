@@ -9,6 +9,13 @@ use crate::{
     MacosFileProviderSystemContainer, Result,
 };
 
+/// Maximum number of items accepted from one backend page.
+pub const MAX_ENUMERATION_PAGE_ITEMS: usize = 4_096;
+/// Maximum number of items retained for cross-page duplicate detection by one enumerator.
+pub const MAX_ENUMERATION_ITEMS: usize = 100_000;
+/// Maximum cumulative UTF-8 bytes retained for identifiers, filenames, and cursors.
+pub const MAX_ENUMERATION_STATE_BYTES: usize = 16 * 1024 * 1024;
+
 /// One File Provider enumeration request with a backend page cursor kept opaque.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacosEnumerationRequest {
@@ -63,6 +70,7 @@ pub struct MacosEnumerationState {
     seen_identifiers: HashSet<String>,
     seen_filenames: HashSet<String>,
     seen_cursors: HashSet<PageCursor>,
+    retained_bytes: usize,
     finished: bool,
 }
 
@@ -75,6 +83,7 @@ impl MacosEnumerationState {
             seen_identifiers: HashSet::new(),
             seen_filenames: HashSet::new(),
             seen_cursors: HashSet::new(),
+            retained_bytes: 0,
             finished: false,
         }
     }
@@ -99,6 +108,19 @@ impl MacosEnumerationState {
                 reason: "enumeration returned a page after terminal completion",
             });
         }
+        let new_item_count = self
+            .seen_identifiers
+            .len()
+            .checked_add(page.items().len())
+            .ok_or(MacosBridgeError::InvalidBackendResponse {
+                reason: "enumeration item count overflowed",
+            })?;
+        if new_item_count > MAX_ENUMERATION_ITEMS {
+            return Err(MacosBridgeError::InvalidBackendResponse {
+                reason: "enumeration exceeded the retained item limit",
+            });
+        }
+        let mut added_bytes = 0usize;
         for item in page.items() {
             if self.seen_identifiers.contains(item.identifier().as_str()) {
                 return Err(MacosBridgeError::InvalidBackendResponse {
@@ -110,6 +132,12 @@ impl MacosEnumerationState {
                     reason: "enumeration repeated a filename across pages",
                 });
             }
+            added_bytes = added_bytes
+                .checked_add(item.identifier().as_str().len())
+                .and_then(|value| value.checked_add(item.filename().len()))
+                .ok_or(MacosBridgeError::InvalidBackendResponse {
+                    reason: "enumeration retained byte count overflowed",
+                })?;
         }
         let next_page = match page.next_page() {
             Some(cursor) => {
@@ -118,10 +146,25 @@ impl MacosEnumerationState {
                         reason: "enumeration repeated a continuation cursor",
                     });
                 }
+                added_bytes = added_bytes.checked_add(cursor.as_bytes().len()).ok_or(
+                    MacosBridgeError::InvalidBackendResponse {
+                        reason: "enumeration retained byte count overflowed",
+                    },
+                )?;
                 Some(cursor.clone())
             }
             None => None,
         };
+        let retained_bytes = self.retained_bytes.checked_add(added_bytes).ok_or(
+            MacosBridgeError::InvalidBackendResponse {
+                reason: "enumeration retained byte count overflowed",
+            },
+        )?;
+        if retained_bytes > MAX_ENUMERATION_STATE_BYTES {
+            return Err(MacosBridgeError::InvalidBackendResponse {
+                reason: "enumeration exceeded the retained byte limit",
+            });
+        }
         self.seen_identifiers.extend(
             page.items()
                 .iter()
@@ -135,6 +178,7 @@ impl MacosEnumerationState {
             self.finished = true;
         }
         self.next_page = next_page;
+        self.retained_bytes = retained_bytes;
         Ok(page)
     }
 
@@ -153,6 +197,11 @@ impl MacosEnumerationPage {
         page: CloudItemPage,
     ) -> Result<Self> {
         let (items, next_page) = page.into_parts();
+        if items.len() > MAX_ENUMERATION_PAGE_ITEMS {
+            return Err(MacosBridgeError::InvalidBackendResponse {
+                reason: "enumeration page exceeded the item limit",
+            });
+        }
         let mut identifiers = HashSet::new();
         let mut filenames = HashSet::new();
         let mut converted = Vec::with_capacity(items.len());

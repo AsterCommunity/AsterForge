@@ -387,7 +387,7 @@ async fn every_cache_write_persisted_transition_survives_lost_return() {
     );
     assert!(
         store
-            .recoverable_content_cache_writes(backend.scope())
+            .collect_cache_write_backlog(backend.scope())
             .await
             .expect("recovery scan should succeed")
             .is_empty()
@@ -604,7 +604,7 @@ async fn cache_write_recovery_is_scope_filtered_sorted_and_excludes_completed_re
         .await
         .expect("other-scope write intent should persist");
     let records = store
-        .recoverable_content_cache_writes(backend.scope())
+        .collect_cache_write_backlog(backend.scope())
         .await
         .expect("recovery scan should succeed");
     assert_eq!(
@@ -630,7 +630,7 @@ async fn cache_write_recovery_is_scope_filtered_sorted_and_excludes_completed_re
         .expect("write should complete");
     assert_eq!(
         store
-            .recoverable_content_cache_writes(backend.scope())
+            .collect_cache_write_backlog(backend.scope())
             .await
             .expect("recovery scan should succeed")
             .iter()
@@ -640,7 +640,7 @@ async fn cache_write_recovery_is_scope_filtered_sorted_and_excludes_completed_re
     );
     assert_eq!(
         store
-            .recoverable_content_cache_writes(other_key.item_key().scope())
+            .collect_cache_write_backlog(other_key.item_key().scope())
             .await
             .expect("other-scope recovery scan should succeed")
             .iter()

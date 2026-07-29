@@ -81,11 +81,11 @@ final class ShellContractTests: XCTestCase {
     func testItemCancellationWinsRaceAndReleasesLeaseExactlyOnce() throws {
         let source = DelayedSource()
         let session = FakeSession()
-        let store = try temporaryStore()
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: store
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         var completions = 0
         var terminalError: NSError?
@@ -115,11 +115,11 @@ final class ShellContractTests: XCTestCase {
             content: try MacosFetchedContent(item: file, bytes: Data("hello".utf8))
         )
         let session = FakeSession()
-        let store = try temporaryStore()
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: store
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         var fetchedURL: URL?
         var fetchedItem: NSFileProviderItem?
@@ -166,7 +166,8 @@ final class ShellContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: try temporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         let enumerator = try XCTUnwrap(
             runtime.enumerator(for: .rootContainer)
@@ -210,7 +211,8 @@ final class ShellContractTests: XCTestCase {
         let runtime = MacosReadOnlyFileProviderRuntime(
             dataSource: source,
             session: session,
-            temporaryContentStore: try temporaryStore()
+            scope: testScope,
+            identifierDecoder: TestIdentifierDecoder()
         )
         let enumerator = try XCTUnwrap(
             runtime.enumerator(for: .workingSet) as? MacosReadOnlyFileProviderEnumerator
@@ -251,12 +253,6 @@ final class ShellContractTests: XCTestCase {
         )
     }
 
-    private func temporaryStore() throws -> MacosDirectoryTemporaryContentStore {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("aster-forge-shell-tests-\(UUID().uuidString)")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return try MacosDirectoryTemporaryContentStore(directory: directory)
-    }
 }
 
 private final class FakeLease: MacosBridgeRequestLease {

@@ -41,9 +41,14 @@ final class MaterializedItemsTests: XCTestCase {
         try Data("not-json".utf8).write(
             to: directory.appendingPathComponent("materialized-set-v1.json")
         )
-        XCTAssertThrowsError(try store.load()) {
-            XCTAssertEqual(($0 as? MacosBridgeFailure)?.code, .internal)
-        }
+        XCTAssertEqual(
+            try store.load(),
+            try MacosMaterializedSetSnapshot(directoryIdentifiers: [], syncAnchor: .initial)
+        )
+        XCTAssertTrue(
+            try Foundation.FileManager().contentsOfDirectory(atPath: directory.path)
+                .contains { $0.contains("corrupt-") }
+        )
     }
 
     func testReaderReconcilesPagesAndChangesThroughFinalAnchor() throws {
@@ -73,8 +78,13 @@ final class MaterializedItemsTests: XCTestCase {
         )
         let reader = MacosFileProviderMaterializedItemsReader { enumerator }
         var result: Result<MacosMaterializedSetSnapshot, Error>?
+        let completed = expectation(description: "materialized reconciliation completes")
 
-        _ = reader.read { result = $0 }
+        _ = reader.read {
+            result = $0
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 5)
 
         let snapshot = try XCTUnwrap(result).get()
         XCTAssertEqual(snapshot.directoryIdentifiers, ["directory-c", "directory-d"])
@@ -239,9 +249,9 @@ final class MaterializedItemsTests: XCTestCase {
     }
 
     private func temporaryDirectory() -> URL {
-        let directory = FileManager.default.temporaryDirectory
+        let directory = Foundation.FileManager().temporaryDirectory
             .appendingPathComponent("aster-forge-materialized-tests-\(UUID().uuidString)")
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? Foundation.FileManager().removeItem(at: directory) }
         return directory
     }
 }

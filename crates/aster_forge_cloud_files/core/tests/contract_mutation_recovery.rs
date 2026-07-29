@@ -501,7 +501,7 @@ async fn completed_mutation_replay_does_not_repeat_remote_effect() {
         .expect("completion should succeed");
 
     let recoverable = store
-        .recoverable_mutations(backend.scope())
+        .collect_mutation_backlog(backend.scope())
         .await
         .expect("recovery scan should succeed");
     assert!(recoverable.is_empty());
@@ -688,7 +688,7 @@ async fn mutation_recovery_is_scope_filtered_sorted_and_excludes_completed_recor
 
     assert_eq!(
         store
-            .recoverable_mutations(&scope_a)
+            .collect_mutation_backlog(&scope_a)
             .await
             .expect("scope A recovery should succeed")
             .iter()
@@ -698,7 +698,7 @@ async fn mutation_recovery_is_scope_filtered_sorted_and_excludes_completed_recor
     );
     assert_eq!(
         store
-            .recoverable_mutations(&scope_b)
+            .collect_mutation_backlog(&scope_b)
             .await
             .expect("scope B recovery should succeed")
             .iter()
@@ -730,7 +730,7 @@ async fn mutation_recovery_is_scope_filtered_sorted_and_excludes_completed_recor
         .expect("mutation should complete");
     assert_eq!(
         store
-            .recoverable_mutations(&scope_a)
+            .collect_mutation_backlog(&scope_a)
             .await
             .expect("scope A recovery should succeed")
             .iter()

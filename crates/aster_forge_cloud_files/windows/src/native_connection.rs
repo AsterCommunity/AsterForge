@@ -7,7 +7,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     ptr,
-    sync::mpsc::{SyncSender, TrySendError},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        mpsc::{SyncSender, TrySendError},
+    },
 };
 
 use aster_forge_cloud_files_core::{SessionGeneration, SessionState};
@@ -60,11 +63,12 @@ use crate::{
     WindowsCallbackInfoSnapshot, WindowsCallbackQueueMetrics, WindowsCallbackRange,
     WindowsCallbackRequest, WindowsCancelFetchDataFlags, WindowsCancelFetchDataSnapshot,
     WindowsCloudFilesError, WindowsConnectionKey, WindowsConnectionSession,
-    WindowsFetchDataFailure, WindowsFetchDataFlags, WindowsFetchDataProgress,
-    WindowsFetchDataSnapshot, WindowsFetchDataTransfer, WindowsFetchDataWaiterRegistry,
-    WindowsFileIdentity, WindowsObservedNotification, WindowsPreflightSnapshot,
-    WindowsProcessInfoSnapshot, WindowsRequestKey, WindowsRestartHydration,
-    WindowsSyncRootConnectOptions, WindowsSyncRootIdentity, WindowsTransferKey,
+    WindowsFetchDataCorrelation, WindowsFetchDataFailure, WindowsFetchDataFlags,
+    WindowsFetchDataProgress, WindowsFetchDataSnapshot, WindowsFetchDataTransfer,
+    WindowsFetchDataWaiterRegistry, WindowsFileIdentity, WindowsObservedNotification,
+    WindowsPreflightSnapshot, WindowsProcessInfoSnapshot, WindowsRequestKey,
+    WindowsRestartHydration, WindowsSyncRootConnectOptions, WindowsSyncRootIdentity,
+    WindowsTransferKey,
 };
 
 const CALLBACK_PARAMETERS_UNION_OFFSET: usize = offset_of!(CF_CALLBACK_PARAMETERS, Anonymous);
@@ -134,8 +138,59 @@ static CALLBACK_TABLE: [CF_CALLBACK_REGISTRATION; 10] = [
 #[derive(Debug, Clone)]
 struct CallbackContext {
     session: WindowsConnectionSession,
-    sender: SyncSender<WindowsCallbackRequest>,
+    ingress: CallbackIngress,
     waiters: WindowsFetchDataWaiterRegistry,
+}
+
+#[derive(Debug, Clone)]
+struct CallbackIngress {
+    sender: Arc<Mutex<Option<SyncSender<WindowsCallbackRequest>>>>,
+}
+
+enum CallbackIngressOutcome {
+    Sent,
+    Full(WindowsCallbackRequest),
+    Disconnected(WindowsCallbackRequest),
+}
+
+impl CallbackIngress {
+    fn new(sender: SyncSender<WindowsCallbackRequest>) -> Self {
+        Self {
+            sender: Arc::new(Mutex::new(Some(sender))),
+        }
+    }
+
+    fn try_send(&self, request: WindowsCallbackRequest) -> CallbackIngressOutcome {
+        let sender = lock_ingress(&self.sender);
+        match sender.as_ref() {
+            Some(sender) => match sender.try_send(request) {
+                Ok(()) => CallbackIngressOutcome::Sent,
+                Err(TrySendError::Full(request)) => CallbackIngressOutcome::Full(request),
+                Err(TrySendError::Disconnected(request)) => {
+                    CallbackIngressOutcome::Disconnected(request)
+                }
+            },
+            None => CallbackIngressOutcome::Disconnected(request),
+        }
+    }
+
+    fn close(&self) {
+        lock_ingress(&self.sender).take();
+    }
+}
+
+fn lock_ingress<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisconnectState {
+    Connected,
+    RetryableFailure,
+    Disconnected,
 }
 
 /// Outcome of an explicit connection disconnect request.
@@ -143,11 +198,11 @@ struct CallbackContext {
 pub enum WindowsDisconnectOutcome {
     /// This call performed the one native disconnect attempt.
     Disconnected,
-    /// This connection had already attempted native disconnect.
+    /// This connection is already disconnected.
     AlreadyDisconnected,
 }
 
-/// Owned active CFAPI connection with exactly-once RAII disconnect.
+/// Owned active CFAPI connection with retryable RAII disconnect.
 ///
 /// Dropping the value starts the closing fence before calling `CfDisconnectSyncRoot`. Accepted
 /// callback snapshots remain alive through their independent session leases and never borrow this
@@ -157,7 +212,7 @@ pub struct WindowsSyncRootConnection {
     session: WindowsConnectionSession,
     waiters: WindowsFetchDataWaiterRegistry,
     context: Option<Box<CallbackContext>>,
-    disconnect_attempted: bool,
+    disconnect_state: DisconnectState,
 }
 
 impl WindowsSyncRootConnection {
@@ -191,37 +246,47 @@ impl WindowsSyncRootConnection {
         self.waiters.clone()
     }
 
-    /// Explicitly disconnects this connection at most once.
+    /// Explicitly disconnects this connection, retrying after a previous native failure.
     pub fn disconnect(&mut self) -> Result<WindowsDisconnectOutcome> {
         self.disconnect_inner()
     }
 
     fn disconnect_inner(&mut self) -> Result<WindowsDisconnectOutcome> {
-        if self.disconnect_attempted {
+        self.disconnect_with(|connection_key| {
+            unsafe {
+                // SAFETY: `connection_key` came directly from a successful `CfConnectSyncRoot`
+                // call owned by this value. A previous failed call leaves the key active and
+                // retryable; only a successful call moves the state to `Disconnected`.
+                CfDisconnectSyncRoot(CF_CONNECTION_KEY(connection_key.get()))
+            }
+            .map_err(Into::into)
+        })
+    }
+
+    fn disconnect_with(
+        &mut self,
+        disconnect: impl FnOnce(WindowsConnectionKey) -> Result<()>,
+    ) -> Result<WindowsDisconnectOutcome> {
+        if self.disconnect_state == DisconnectState::Disconnected {
             return Ok(WindowsDisconnectOutcome::AlreadyDisconnected);
         }
-        self.disconnect_attempted = true;
         self.session.begin_closing();
+        if let Some(context) = self.context.as_ref() {
+            // Closing ingress independently releases the bounded-channel sender even when CFAPI
+            // keeps the callback context alive after a failed disconnect.
+            context.ingress.close();
+        }
 
-        let result = unsafe {
-            // SAFETY: `connection_key` came directly from a successful `CfConnectSyncRoot` call
-            // owned by this value, and `disconnect_attempted` prevents duplicate native calls.
-            CfDisconnectSyncRoot(CF_CONNECTION_KEY(self.connection_key.get()))
-        };
-        match result {
+        match disconnect(self.connection_key) {
             Ok(()) => {
+                self.disconnect_state = DisconnectState::Disconnected;
                 self.session.mark_disconnected()?;
                 self.context.take();
                 Ok(WindowsDisconnectOutcome::Disconnected)
             }
             Err(error) => {
-                if let Some(context) = self.context.take() {
-                    // A failed disconnect may leave the platform callback channel active. Keep the
-                    // stable callback context alive until process exit rather than freeing memory
-                    // that CFAPI could still reference.
-                    let _ = Box::leak(context);
-                }
-                Err(error.into())
+                self.disconnect_state = DisconnectState::RetryableFailure;
+                Err(error)
             }
         }
     }
@@ -234,14 +299,21 @@ impl std::fmt::Debug for WindowsSyncRootConnection {
             .field("connection_key", &self.connection_key)
             .field("generation", &self.session.generation())
             .field("state", &self.session.state())
-            .field("disconnect_attempted", &self.disconnect_attempted)
+            .field("disconnect_state", &self.disconnect_state)
             .finish()
     }
 }
 
 impl Drop for WindowsSyncRootConnection {
     fn drop(&mut self) {
-        let _ = self.disconnect_inner();
+        if self.disconnect_inner().is_err()
+            && let Some(context) = self.context.take()
+        {
+            // A failed final disconnect may leave CFAPI able to invoke the raw context pointer.
+            // Ingress is already closed, so the retained context no longer owns the channel
+            // sender. Keeping the stable allocation is required to avoid native use-after-free.
+            let _ = Box::leak(context);
+        }
     }
 }
 
@@ -261,7 +333,7 @@ pub fn connect_sync_root(
     let waiters = WindowsFetchDataWaiterRegistry::new();
     let context = Box::new(CallbackContext {
         session: session.clone(),
-        sender,
+        ingress: CallbackIngress::new(sender),
         waiters: waiters.clone(),
     });
     let context_pointer = (&raw const *context).cast::<c_void>();
@@ -281,7 +353,7 @@ pub fn connect_sync_root(
         session,
         waiters,
         context: Some(context),
-        disconnect_attempted: false,
+        disconnect_state: DisconnectState::Connected,
     })
 }
 
@@ -434,13 +506,13 @@ fn handle_preflight(
         Ok(request) => request,
         Err(_) => return,
     };
-    match context.sender.try_send(request) {
-        Ok(()) => context.session.record_queued_preflight(),
-        Err(TrySendError::Full(mut request)) => {
+    match context.ingress.try_send(request) {
+        CallbackIngressOutcome::Sent => context.session.record_queued_preflight(),
+        CallbackIngressOutcome::Full(mut request) => {
             context.session.record_preflight_queue_full();
             fail_preflight_request(&mut request, WindowsFetchDataFailure::InsufficientResources);
         }
-        Err(TrySendError::Disconnected(mut request)) => {
+        CallbackIngressOutcome::Disconnected(mut request) => {
             context.session.record_receiver_disconnected();
             fail_preflight_request(&mut request, WindowsFetchDataFailure::ProviderTerminated);
         }
@@ -468,10 +540,10 @@ fn handle_observation(
     let Ok(request) = WindowsCallbackRequest::observation(notification, lease) else {
         return;
     };
-    match context.sender.try_send(request) {
-        Ok(()) => context.session.record_queued_observation(),
-        Err(TrySendError::Full(_)) => context.session.record_observation_queue_full(),
-        Err(TrySendError::Disconnected(_)) => context.session.record_receiver_disconnected(),
+    match context.ingress.try_send(request) {
+        CallbackIngressOutcome::Sent => context.session.record_queued_observation(),
+        CallbackIngressOutcome::Full(_) => context.session.record_observation_queue_full(),
+        CallbackIngressOutcome::Disconnected(_) => context.session.record_receiver_disconnected(),
     }
 }
 
@@ -523,13 +595,13 @@ fn handle_fetch_data(
         Ok(request) => request,
         Err(_) => return,
     };
-    match context.sender.try_send(request) {
-        Ok(()) => context.session.record_queued_fetch(),
-        Err(TrySendError::Full(mut request)) => {
+    match context.ingress.try_send(request) {
+        CallbackIngressOutcome::Sent => context.session.record_queued_fetch(),
+        CallbackIngressOutcome::Full(mut request) => {
             context.session.record_fetch_queue_full();
             fail_fetch_request(&mut request, WindowsFetchDataFailure::InsufficientResources);
         }
-        Err(TrySendError::Disconnected(mut request)) => {
+        CallbackIngressOutcome::Disconnected(mut request) => {
             context.session.record_receiver_disconnected();
             fail_fetch_request(&mut request, WindowsFetchDataFailure::ProviderTerminated);
         }
@@ -559,10 +631,10 @@ fn handle_cancel_fetch_data(
     let Ok(request) = WindowsCallbackRequest::cancel_fetch_data(snapshot, lease) else {
         return;
     };
-    match context.sender.try_send(request) {
-        Ok(()) => context.session.record_queued_cancel(),
-        Err(TrySendError::Full(_)) => context.session.record_cancel_queue_full(),
-        Err(TrySendError::Disconnected(_)) => context.session.record_receiver_disconnected(),
+    match context.ingress.try_send(request) {
+        CallbackIngressOutcome::Sent => context.session.record_queued_cancel(),
+        CallbackIngressOutcome::Full(_) => context.session.record_cancel_queue_full(),
+        CallbackIngressOutcome::Disconnected(_) => context.session.record_receiver_disconnected(),
     }
 }
 
@@ -1084,7 +1156,7 @@ pub(crate) fn complete_fetch_success(
 }
 
 pub(crate) fn report_fetch_progress(
-    info: &WindowsCallbackInfoSnapshot,
+    correlation: WindowsFetchDataCorrelation,
     progress: WindowsFetchDataProgress,
 ) -> Result<()> {
     let (total, completed) = progress.as_cfapi();
@@ -1092,8 +1164,8 @@ pub(crate) fn report_fetch_progress(
     // snapshot; this call retains no Rust pointer or reference.
     unsafe {
         CfReportProviderProgress(
-            CF_CONNECTION_KEY(info.connection_key().get()),
-            info.transfer_key().get(),
+            CF_CONNECTION_KEY(correlation.connection_key().get()),
+            correlation.transfer_key().get(),
             total,
             completed,
         )
@@ -1490,6 +1562,63 @@ mod tests {
     }
 
     #[test]
+    fn failed_disconnect_closes_ingress_and_remains_retryable() {
+        let (sender, receiver) = sync_channel(1);
+        let session = WindowsConnectionSession::new(generation(1));
+        let waiters = WindowsFetchDataWaiterRegistry::new();
+        let context = Box::new(CallbackContext {
+            session: session.clone(),
+            ingress: CallbackIngress::new(sender),
+            waiters: waiters.clone(),
+        });
+        let mut connection = WindowsSyncRootConnection {
+            connection_key: WindowsConnectionKey::new(7),
+            session,
+            waiters,
+            context: Some(context),
+            disconnect_state: DisconnectState::Connected,
+        };
+
+        let error = connection
+            .disconnect_with(|_| {
+                Err(WindowsCloudFilesError::InvalidSyncRootPath {
+                    reason: "synthetic disconnect failure",
+                })
+            })
+            .expect_err("first synthetic disconnect should fail");
+        assert!(matches!(
+            error,
+            WindowsCloudFilesError::InvalidSyncRootPath {
+                reason: "synthetic disconnect failure"
+            }
+        ));
+        assert_eq!(
+            connection.disconnect_state,
+            DisconnectState::RetryableFailure
+        );
+        assert!(connection.context.is_some());
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+
+        assert_eq!(
+            connection
+                .disconnect_with(|_| Ok(()))
+                .expect("retry should succeed"),
+            WindowsDisconnectOutcome::Disconnected
+        );
+        assert_eq!(connection.disconnect_state, DisconnectState::Disconnected);
+        assert!(connection.context.is_none());
+        assert_eq!(
+            connection
+                .disconnect_with(|_| unreachable!("disconnected state must skip native retry"))
+                .expect("repeated disconnect should be idempotent"),
+            WindowsDisconnectOutcome::AlreadyDisconnected
+        );
+    }
+
+    #[test]
     fn callback_parameter_sizes_include_real_union_padding() {
         assert_eq!(
             FETCH_PARAMETERS_SIZE,
@@ -1807,7 +1936,7 @@ mod tests {
         let (sender, _receiver) = sync_channel(1);
         let mut context = Box::new(CallbackContext {
             session: WindowsConnectionSession::new(generation(7)),
-            sender,
+            ingress: CallbackIngress::new(sender),
             waiters: WindowsFetchDataWaiterRegistry::new(),
         });
         let mut sync_root_identity = WindowsSyncRootIdentity::encode(&scope())

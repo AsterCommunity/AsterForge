@@ -322,7 +322,7 @@ pub struct WindowsSyncRootRegistration {
     provider_version: String,
     provider_id: WindowsProviderId,
     sync_root_identity: WindowsSyncRootIdentity,
-    root_file_identity: Option<WindowsFileIdentity>,
+    root_file_identity: WindowsFileIdentity,
     policies: WindowsSyncRootPolicies,
     options: WindowsSyncRootRegistrationOptions,
 }
@@ -334,7 +334,7 @@ impl WindowsSyncRootRegistration {
         provider_version: impl Into<String>,
         provider_id: WindowsProviderId,
         sync_root_identity: WindowsSyncRootIdentity,
-        root_file_identity: Option<WindowsFileIdentity>,
+        root_file_identity: WindowsFileIdentity,
         policies: WindowsSyncRootPolicies,
         options: WindowsSyncRootRegistrationOptions,
     ) -> Result<Self> {
@@ -342,9 +342,7 @@ impl WindowsSyncRootRegistration {
         let provider_version = provider_version.into();
         validate_registration_text("provider name", &provider_name)?;
         validate_registration_text("provider version", &provider_version)?;
-        if let Some(file_identity) = root_file_identity.as_ref()
-            && file_identity.decode()?.scope() != &sync_root_identity.decode()?
-        {
+        if root_file_identity.decode()?.scope() != &sync_root_identity.decode()? {
             return Err(WindowsCloudFilesError::RootFileIdentityScopeMismatch);
         }
         Ok(Self {
@@ -383,9 +381,9 @@ impl WindowsSyncRootRegistration {
         &self.sync_root_identity
     }
 
-    /// Returns the optional file identity used when callbacks target the root itself.
-    pub const fn root_file_identity(&self) -> Option<&WindowsFileIdentity> {
-        self.root_file_identity.as_ref()
+    /// Returns the required file identity used when callbacks target the root itself.
+    pub const fn root_file_identity(&self) -> &WindowsFileIdentity {
+        &self.root_file_identity
     }
 
     /// Returns the requested sync-root policies.
@@ -406,7 +404,7 @@ impl WindowsSyncRootRegistration {
         String,
         WindowsProviderId,
         WindowsSyncRootIdentity,
-        Option<WindowsFileIdentity>,
+        WindowsFileIdentity,
         WindowsSyncRootPolicies,
         WindowsSyncRootRegistrationOptions,
     ) {

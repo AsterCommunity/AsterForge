@@ -144,28 +144,40 @@ impl MutationJournalStore for MemoryWritebackStore {
         Ok(lock(&self.state).mutations.get(operation_id).cloned())
     }
 
-    async fn recoverable_mutations(
+    async fn recoverable_mutations_page(
         &self,
         scope: &CloudScope,
-    ) -> StoreResult<Vec<MutationRecord>> {
+        after_operation_id: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<RecoveryPage<MutationRecord>> {
         self.scope_matches(scope)?;
+        if limit == 0 {
+            return Err(store_error(
+                CloudFilesStoreErrorKind::InvalidTransition,
+                "synthetic mutation recovery page limit must be non-zero",
+            ));
+        }
         let state = lock(&self.state);
-        let mut records = state
-            .mutations
-            .values()
-            .filter(|record| {
-                record.intent().desired().scope() == scope
-                    && record.state() != MutationState::Completed
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| {
-            left.intent()
-                .operation_id()
-                .as_str()
-                .cmp(right.intent().operation_id().as_str())
-        });
-        Ok(records)
+        let mut selected = Vec::with_capacity(limit.saturating_add(1).min(state.mutations.len()));
+        for record in state.mutations.values().filter(|record| {
+            record.intent().desired().scope() == scope
+                && record.state() != MutationState::Completed
+                && after_operation_id
+                    .is_none_or(|after| record.intent().operation_id().as_str() > after)
+        }) {
+            let operation_id = record.intent().operation_id().as_str();
+            let index = selected.partition_point(|selected: &&MutationRecord| {
+                selected.intent().operation_id().as_str() < operation_id
+            });
+            selected.insert(index, record);
+            if selected.len() > limit.saturating_add(1) {
+                selected.pop();
+            }
+        }
+        let has_more = selected.len() > limit;
+        selected.truncate(limit);
+        let records = selected.into_iter().cloned().collect();
+        Ok(RecoveryPage::new(records, has_more))
     }
 
     async fn begin_remote_apply(

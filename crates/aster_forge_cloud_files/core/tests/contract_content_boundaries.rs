@@ -254,9 +254,13 @@ fn owned_range_and_platform_observation_paths_are_idempotent_and_mode_checked() 
 fn pin_and_dirty_transitions_are_idempotent_monotonic_and_item_scoped() {
     let mut entry =
         ContentStorageEntry::new(cache_key("file"), ContentStorageMode::ProviderManaged, 16);
-    assert!(entry.set_pinned(true));
-    assert!(!entry.set_pinned(true));
-    assert!(entry.set_pinned(false));
+    assert!(entry.set_pinned(true).expect("pin should succeed"));
+    assert!(
+        !entry
+            .set_pinned(true)
+            .expect("duplicate pin should succeed")
+    );
+    assert!(entry.set_pinned(false).expect("unpin should succeed"));
 
     assert_eq!(
         entry.mark_dirty(snapshot("other", 1, "local://other/1")),
@@ -403,6 +407,50 @@ fn every_lease_kind_increments_and_decrements_its_exact_counter() {
 }
 
 #[test]
+fn eviction_reservation_fences_new_pin_and_dirty_blockers() {
+    let mut entry =
+        ContentStorageEntry::new(cache_key("fenced"), ContentStorageMode::ProviderManaged, 16);
+    assert!(matches!(
+        entry
+            .reserve_eviction(ContentEvictionTarget::ProviderCache)
+            .expect("clean entry should reserve"),
+        ContentEvictionDecision::Reserved { .. }
+    ));
+
+    assert_eq!(
+        entry.set_pinned(true),
+        Err(CloudFilesCoreError::InvalidContentStorageState {
+            reason: "content cannot become pinned during eviction",
+        })
+    );
+    assert!(!entry.is_pinned());
+    assert_eq!(
+        entry.mark_dirty(snapshot("fenced", 1, "local://fenced/1")),
+        Err(CloudFilesCoreError::InvalidContentStorageState {
+            reason: "dirty content cannot start during eviction",
+        })
+    );
+}
+
+#[test]
+fn sparse_range_set_rejects_unbounded_fragmentation_without_mutating_state() {
+    let mut ranges = ContentRangeSet::new();
+    for index in 0..ContentRangeSet::MAX_RANGES {
+        ranges
+            .insert(range(index as u64 * 2, 1), u64::MAX)
+            .expect("range should fit fragmentation budget");
+    }
+    let before = ranges.ranges().to_vec();
+    assert_eq!(
+        ranges.insert(range(ContentRangeSet::MAX_RANGES as u64 * 2, 1), u64::MAX),
+        Err(CloudFilesCoreError::InvalidContentStorageState {
+            reason: "provider cache range fragmentation exceeds the supported limit",
+        })
+    );
+    assert_eq!(ranges.ranges(), before.as_slice());
+}
+
+#[test]
 fn cache_write_reservations_count_independently_and_block_eviction_until_all_complete() {
     let mut entry =
         ContentStorageEntry::new(cache_key("file"), ContentStorageMode::ProviderManaged, 16);
@@ -452,7 +500,7 @@ fn cache_write_reservations_count_independently_and_block_eviction_until_all_com
 #[test]
 fn all_blockers_are_reported_once_in_stable_order_and_reservation_fences_new_work() {
     let mut entry = ContentStorageEntry::new(cache_key("file"), ContentStorageMode::Hybrid, 16);
-    entry.set_pinned(true);
+    entry.set_pinned(true).expect("pin should succeed");
     entry
         .mark_dirty(snapshot("file", 1, "local://file/1"))
         .expect("dirty snapshot should persist");
