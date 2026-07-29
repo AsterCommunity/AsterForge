@@ -690,10 +690,8 @@ fn plan_multi_range(
     }
     let mut selected_length = 0u64;
     for range in &ranges {
-        let Some(next) = selected_length.checked_add(range.length()) else {
-            return Ok(range_limit_selection(policy.limit_behavior));
-        };
-        selected_length = next;
+        // Coalesced ranges are non-overlapping intervals in one u64-sized representation.
+        selected_length += range.length();
     }
     if selected_length > policy.limits.maximum_aggregate_bytes {
         return Ok(range_limit_selection(policy.limit_behavior));
@@ -737,7 +735,7 @@ fn coalesce_ranges(
         }
         let merged = HttpByteRange::new(start, end, range.total_size())
             .map_err(|_| DavDownloadPlanError::InvalidRepresentation)?;
-        if insertion >= coalesced.len() {
+        if insertion == coalesced.len() {
             coalesced.push(merged);
         } else {
             coalesced.insert(insertion, merged);
@@ -923,26 +921,17 @@ impl Stream for DavMultipartStream {
                     return Poll::Ready(Some(Ok(frame)));
                 }
                 DavMultipartStreamPhase::Body => {
-                    let Some(part) = this.parts.get_mut(this.part_index) else {
-                        this.phase = DavMultipartStreamPhase::Done;
-                        return Poll::Ready(Some(Err(multipart_stream_error())));
-                    };
+                    // Frame enters Body only after it confirmed this index exists.
+                    let part = &mut this.parts[this.part_index];
                     match part.stream.as_mut().poll_next(context) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Some(Ok(chunk))) => {
-                            let Ok(chunk_length) = u64::try_from(chunk.len()) else {
-                                this.phase = DavMultipartStreamPhase::Done;
-                                return Poll::Ready(Some(Err(multipart_stream_error())));
-                            };
-                            let Some(seen) = part.seen.checked_add(chunk_length) else {
-                                this.phase = DavMultipartStreamPhase::Done;
-                                return Poll::Ready(Some(Err(multipart_stream_error())));
-                            };
-                            if seen > part.expected_length {
+                            let chunk_length = chunk.len() as u64;
+                            if chunk_length > part.expected_length - part.seen {
                                 this.phase = DavMultipartStreamPhase::Done;
                                 return Poll::Ready(Some(Err(multipart_stream_error())));
                             }
-                            part.seen = seen;
+                            part.seen += chunk_length;
                             return Poll::Ready(Some(Ok(chunk)));
                         }
                         Poll::Ready(Some(Err(error))) => {
@@ -1056,4 +1045,34 @@ fn range_not_satisfiable_plan(
 
 fn header_value(value: &str) -> Result<HeaderValue, DavDownloadPlanError> {
     HeaderValue::from_str(value).map_err(|_| DavDownloadPlanError::InvalidRepresentation)
+}
+
+#[cfg(test)]
+mod tests {
+    use http::HeaderValue;
+    use http::StatusCode;
+    use http::header::{CACHE_CONTROL, CONTENT_TYPE};
+
+    use super::{DavResponseBody, text_document_response};
+
+    #[test]
+    fn text_document_response_has_explicit_success_and_server_error_cache_policy() {
+        let response = text_document_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal error");
+
+        assert_eq!(
+            response.headers.get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        assert_eq!(
+            response.headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/plain; charset=utf-8"))
+        );
+        assert!(matches!(
+            response.body,
+            DavResponseBody::Bytes(ref body) if body == "Internal error"
+        ));
+
+        let success = text_document_response(StatusCode::OK, "OK");
+        assert!(success.headers.get(CACHE_CONTROL).is_none());
+    }
 }

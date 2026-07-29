@@ -62,6 +62,7 @@ struct TestDownloadMetadata;
 struct MultipartStreamSpec {
     declared_length: u64,
     chunks: VecDeque<Result<Bytes, DavBackendErrorKind>>,
+    pending_polls: usize,
 }
 
 impl MultipartStreamSpec {
@@ -72,6 +73,7 @@ impl MultipartStreamSpec {
                 .iter()
                 .map(|chunk| Ok(Bytes::from_static(chunk)))
                 .collect(),
+            pending_polls: 0,
         }
     }
 
@@ -79,6 +81,18 @@ impl MultipartStreamSpec {
         Self {
             declared_length,
             chunks: chunks.into(),
+            pending_polls: 0,
+        }
+    }
+
+    fn pending_then_bytes(declared_length: u64, chunks: &[&'static [u8]]) -> Self {
+        Self {
+            declared_length,
+            chunks: chunks
+                .iter()
+                .map(|chunk| Ok(Bytes::from_static(chunk)))
+                .collect(),
+            pending_polls: 1,
         }
     }
 }
@@ -106,15 +120,21 @@ impl MultipartDownloadSource {
 struct DropTrackedStream {
     chunks: VecDeque<Result<Bytes, DavBackendErrorKind>>,
     dropped_streams: Arc<AtomicUsize>,
+    pending_polls: usize,
 }
 
 impl Stream for DropTrackedStream {
     type Item = Result<Bytes, DavBackendError>;
 
-    fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.pending_polls != 0 {
+            this.pending_polls -= 1;
+            context.waker().wake_by_ref();
+            return Poll::Pending;
+        }
         Poll::Ready(
-            self.get_mut()
-                .chunks
+            this.chunks
                 .pop_front()
                 .map(|item| item.map_err(DavBackendError::new)),
         )
@@ -210,6 +230,7 @@ impl DavDownloadSource for MultipartDownloadSource {
         let stream = DropTrackedStream {
             chunks: open.chunks,
             dropped_streams: Arc::clone(&self.dropped_streams),
+            pending_polls: open.pending_polls,
         };
         Ok(DavOpenedDownload::new(
             Box::pin(stream),
@@ -454,6 +475,7 @@ fn multi_range_coalescing_handles_overlap_adjacency_nearby_gaps_and_request_orde
             2,
             vec![(0, 109), (200, 214)],
         ),
+        ("bytes=10-19,100-109,0-11", 0, vec![(0, 19), (100, 109)]),
     ];
     for (raw, gap, expected) in cases {
         let mut headers = HeaderMap::new();
@@ -550,6 +572,19 @@ fn multi_range_limits_are_exact_and_select_typed_ignore_or_reject_behavior() {
 
 #[test]
 fn multi_range_rejects_duplicate_or_malformed_fields_and_ignores_unknown_units() {
+    let full = plan_download_response_with_multi_range(
+        &HeaderMap::new(),
+        false,
+        20,
+        "text/plain",
+        None,
+        representation_time(),
+        generous_multi_range_policy(),
+    )
+    .expect("absent Range should plan the complete representation");
+    assert_eq!(full.response.status, StatusCode::OK);
+    assert_eq!(full.body, full_download_body(20));
+
     let mut duplicate = HeaderMap::new();
     duplicate.append(RANGE, HeaderValue::from_static("bytes=0-1"));
     duplicate.append(RANGE, HeaderValue::from_static("bytes=10-11"));
@@ -863,6 +898,18 @@ fn non_utf8_range_fields_and_strong_if_range_boundaries_are_explicit() {
     .expect("opaque Range produces a 416 plan");
     assert_eq!(plan.response.status, StatusCode::RANGE_NOT_SATISFIABLE);
 
+    let plan = plan_download_response_with_multi_range(
+        &non_utf8_range,
+        false,
+        20,
+        "text/plain",
+        Some("etag-1"),
+        representation_time(),
+        generous_multi_range_policy(),
+    )
+    .expect("opaque multi-range produces a 416 plan");
+    assert_eq!(plan.response.status, StatusCode::RANGE_NOT_SATISFIABLE);
+
     let mut non_utf8_if_range = HeaderMap::new();
     non_utf8_if_range.insert(RANGE, HeaderValue::from_static("bytes=0-1"));
     non_utf8_if_range.insert(
@@ -1083,7 +1130,7 @@ fn multipart_download_opens_each_final_segment_once_and_streams_only_framing_and
         assert!(!boundary.is_empty());
 
         let source = MultipartDownloadSource::new(vec![
-            Ok(MultipartStreamSpec::bytes(3, &[b"a", b"bc"])),
+            Ok(MultipartStreamSpec::pending_then_bytes(3, &[b"a", b"bc"])),
             Ok(MultipartStreamSpec::bytes(2, &[b"de"])),
         ]);
         let path = DavPath::new("/video.mp4").expect("path");
