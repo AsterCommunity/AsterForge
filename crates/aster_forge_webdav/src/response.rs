@@ -18,6 +18,7 @@ use http::header::{
 };
 use http::{HeaderMap, HeaderValue, StatusCode};
 
+use crate::DavMultiStatusStream;
 use crate::{
     DavBackendError, DavBackendErrorKind, DavCapabilityEvaluationError, DavCapabilitySnapshot,
     DavConditionalOutcome, DavConditionalPlan, DavConditionalPlanError, DavConditionalResource,
@@ -189,6 +190,7 @@ pub enum DavResponseBody {
     Empty,
     Bytes(Bytes),
     Stream(DavContentStream),
+    MultiStatus(DavMultiStatusStream),
 }
 
 /// Status, headers, and body produced by the protocol layer.

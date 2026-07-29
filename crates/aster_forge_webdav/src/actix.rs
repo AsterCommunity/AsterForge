@@ -112,6 +112,12 @@ pub fn into_response(response: DavResponse) -> HttpResponse {
             });
             builder.streaming(stream)
         }
+        DavResponseBody::MultiStatus(stream) => {
+            let stream = stream.map(|item| {
+                item.map_err(|error| actix_web::error::ErrorInternalServerError(error.to_string()))
+            });
+            builder.streaming(stream)
+        }
     }
 }
 

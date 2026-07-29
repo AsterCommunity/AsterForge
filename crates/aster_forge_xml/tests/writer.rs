@@ -46,6 +46,17 @@ fn writes_namespace_aware_webdav_multistatus_and_reparses() {
 }
 
 #[test]
+fn exposes_the_live_sink_without_finishing_document_state() {
+    let mut writer = XmlStreamWriter::new(Vec::new()).expect("writer");
+    writer.start("root").expect("root");
+    assert_eq!(writer.get_ref(), b"<root>");
+    assert_eq!(writer.get_mut().len(), b"<root>".len());
+    writer.text("value").expect("text");
+    writer.end_element().expect("root end");
+    assert_eq!(finish(writer), b"<root>value</root>");
+}
+
+#[test]
 fn supports_inherited_prefix_default_namespace_and_undeclaration() {
     let mut writer = XmlStreamWriter::new(Vec::new()).expect("writer");
     writer

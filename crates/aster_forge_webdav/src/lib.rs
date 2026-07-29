@@ -26,6 +26,7 @@ pub mod conditional;
 pub mod deltav;
 pub mod event;
 pub mod lock;
+pub mod multistatus;
 pub mod patch;
 pub mod path;
 pub mod property;
@@ -34,15 +35,17 @@ pub mod put;
 pub mod request;
 pub mod resource;
 pub mod response;
+pub mod traversal;
 pub mod xml;
 pub mod xml_response;
 
 pub use backend::{
-    DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavDownloadOpenError,
+    DavBackendError, DavBackendErrorKind, DavContentStream, DavDirectoryEntry,
+    DavDirectoryEnumerator, DavDirectoryPage, DavDirectoryPageRequest, DavDownloadOpenError,
     DavDownloadSource, DavFileSystem, DavIfResourceState, DavIfStateResolver, DavLock,
     DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavOpenedDownload, DavProp,
     DavRandomWriteHandle, DavRandomWriteSystem, DavResourceKind, DavWriteHandle, DavWriteOptions,
-    DavWriteSystem, FsError, FsFuture, FsResult, FsStream, LsFuture, ReadDirMeta,
+    DavWriteSystem, FsError, FsFuture, FsResult, LsFuture,
 };
 pub use capability::{
     DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityEvaluationError,
@@ -65,6 +68,7 @@ pub use deltav::{
     DavVersionTreeReportError, validate_version_control_request, validate_version_tree_report,
     version_control_request_error_response, version_control_response,
     version_tree_non_file_response, version_tree_report_error_response, version_tree_response,
+    version_tree_response_with_limits,
 };
 pub use event::{
     DavEvent, DavEventOutcome, DavEventSink, DavObservationError, DavOperation,
@@ -78,6 +82,11 @@ pub use lock::{
     lock_xml_error_response, plan_lock_request, unlock_success_response,
     unlock_token_mismatch_response, unsubmitted_lock_conflicts,
 };
+pub use multistatus::{
+    DavMultiStatusError, DavMultiStatusErrorKind, DavMultiStatusLimits, DavMultiStatusProgress,
+    DavMultiStatusSourceError, DavMultiStatusStream, DavMultiStatusWriter, dav_multistatus_bytes,
+    multistatus_stream_response,
+};
 pub use patch::{DavPatchPlan, DavPatchPlanError, patch_plan_error_response, plan_patch_request};
 pub use path::{
     DavPath, DavPathError, child_relative_path, decode_relative_path, display_name, encode_href,
@@ -85,7 +94,8 @@ pub use path::{
 };
 pub use property::{
     DavProppatchAtomicPlan, build_propfind_item, build_proppatch_item, format_creation_date,
-    plan_atomic_proppatch, property_multistatus_response, propfind_finite_depth_response,
+    plan_atomic_proppatch, property_multistatus_response,
+    property_multistatus_response_with_limits, propfind_finite_depth_response,
     propfind_request_label, propfind_xml_error_response, proppatch_xml_error_response,
 };
 pub use protocol::{
@@ -104,9 +114,10 @@ pub use resource::{
     DavCopyMoveMethod, DavCopyMovePlan, DavMutationFailure, DavMutationPlanError,
     DavMutationResponseError, collection_created_response, delete_success_response,
     enforce_parent_collection, is_descendant_path, mutation_multistatus_response,
-    mutation_plan_error_response, mutation_success_response, plan_copy_move_request,
-    replace_relative_prefix, resource_identity_path, same_resource_path,
-    validate_collection_create_target, validate_delete_target,
+    mutation_multistatus_response_with_limits, mutation_plan_error_response,
+    mutation_success_response, plan_copy_move_request, replace_relative_prefix,
+    resource_identity_path, same_resource_path, validate_collection_create_target,
+    validate_delete_target,
 };
 pub use response::{
     DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavMultiRangeLimits,
@@ -117,6 +128,12 @@ pub use response::{
     plan_download_response_with_multi_range, protocol_error_response,
     range_not_satisfiable_response,
 };
+pub use traversal::{
+    DavCancellation, DavDirectoryPageLimits, DavDirectoryPageState,
+    DavDirectoryPageValidationError, DavDirectoryReadError, DavNeverCancelled, DavTraversalBudget,
+    DavTraversalError, DavTraversalErrorKind, DavTraversalLimits, DavTraversalProgress,
+    DavValidatedDirectoryPage, read_next_directory_page, validate_directory_page,
+};
 pub use xml::{
     DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,
     DavRequestedProperty, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
@@ -125,8 +142,7 @@ pub use xml::{
 pub use xml_response::{
     DavErrorCondition, DavLockXml, DavMultiStatusItem, DavPropStat, DavVersionXml,
     dav_dead_property_element, dav_element, dav_error_element, dav_lock_discovery_element,
-    dav_lock_response_element, dav_multistatus_element, dav_property_child_element,
-    dav_property_name_element, dav_property_text_element, dav_propstat_element,
-    dav_response_element, dav_status_element, dav_supported_lock_element, dav_text_element,
-    dav_version_multistatus_element,
+    dav_lock_response_element, dav_property_child_element, dav_property_name_element,
+    dav_property_text_element, dav_supported_lock_element, dav_text_element,
+    dav_version_multistatus_bytes,
 };

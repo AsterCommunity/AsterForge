@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::hash::Hash;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
@@ -107,7 +108,6 @@ impl From<FsError> for DavBackendError {
 
 pub type FsResult<T> = Result<T, FsError>;
 pub type FsFuture<'a, T> = Pin<Box<dyn Future<Output = FsResult<T>> + Send + 'a>>;
-pub type FsStream<T> = Pin<Box<dyn Stream<Item = FsResult<T>> + Send>>;
 
 /// WebDAV resource type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,12 +128,6 @@ pub struct DavIfResourceState {
 pub trait DavIfStateResolver: Send + Sync {
     async fn resolve_if_state(&self, path: &DavPath)
     -> Result<DavIfResourceState, DavBackendError>;
-}
-
-/// Metadata loading mode for directory entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadDirMeta {
-    Data,
 }
 
 /// Sequential write contract selected by the protocol planner.
@@ -165,10 +159,46 @@ pub trait DavMetaData: Send + Sync {
     }
 }
 
-/// One directory entry returned by a product adapter.
-pub trait DavDirEntry: Send {
-    fn name(&self) -> Vec<u8>;
-    fn metadata<'a>(&'a self) -> FsFuture<'a, Box<dyn DavMetaData>>;
+/// One entry returned by a bounded directory page.
+///
+/// Metadata is part of the page so product adapters can batch it with enumeration instead of
+/// creating an N+1 lookup contract. `stable_key` must be strictly ordered within and across pages.
+pub trait DavDirectoryEntry: Send {
+    type Metadata: DavMetaData;
+
+    fn name(&self) -> &[u8];
+    fn metadata(&self) -> &Self::Metadata;
+    fn stable_key(&self) -> &[u8] {
+        self.name()
+    }
+}
+
+/// One bounded directory-page request with an opaque product-owned continuation cursor.
+#[derive(Debug, Clone, Copy)]
+pub struct DavDirectoryPageRequest<'a, C> {
+    pub path: &'a DavPath,
+    pub cursor: Option<&'a C>,
+    pub maximum_entries: usize,
+}
+
+/// One product-owned directory page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DavDirectoryPage<E, C> {
+    pub entries: Vec<E>,
+    pub next_cursor: Option<C>,
+}
+
+/// Product adapter for stable, bounded directory enumeration.
+pub trait DavDirectoryEnumerator: Send + Sync {
+    type Cursor: Eq + Hash + Send + Sync;
+    type Entry: DavDirectoryEntry;
+
+    fn read_directory_page<'a>(
+        &'a self,
+        request: DavDirectoryPageRequest<'a, Self::Cursor>,
+    ) -> impl Future<Output = Result<DavDirectoryPage<Self::Entry, Self::Cursor>, DavBackendError>>
+    + Send
+    + 'a;
 }
 
 /// Product adapter used by GET/HEAD after the protocol layer selects a representation.
@@ -252,11 +282,6 @@ pub struct DavProp {
 
 /// Canonical resource and dead-property backend port.
 pub trait DavFileSystem: Send + Sync {
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a DavPath,
-        meta: ReadDirMeta,
-    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>>;
     fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>>;
     fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
     fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;

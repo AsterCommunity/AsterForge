@@ -288,6 +288,15 @@ impl<W: Write> XmlStreamWriter<W> {
         &self.writer.get_ref().inner
     }
 
+    /// Returns a mutable reference to the output sink without ending the XML document.
+    ///
+    /// This is intended for sinks that expose already-written bounded chunks while the writer
+    /// retains ownership of XML namespace and document state. Mutating the sink must not change
+    /// or discard bytes that it has previously reported as successfully written.
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.writer.get_mut().inner
+    }
+
     pub fn finish(mut self) -> Result<W, Error> {
         if self.depth != 0 {
             return Err(Error::InvalidData(

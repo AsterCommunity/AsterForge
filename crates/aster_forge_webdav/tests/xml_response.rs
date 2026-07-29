@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use aster_forge_webdav::{
-    DavErrorCondition, DavLockXml, DavMultiStatusItem, DavPropStat, DavVersionXml, DavXmlElement,
-    DavXmlNode, dav_dead_property_element, dav_element, dav_error_element,
-    dav_lock_discovery_element, dav_lock_response_element, dav_multistatus_element,
-    dav_property_child_element, dav_property_name_element, dav_property_text_element,
-    dav_supported_lock_element, dav_version_multistatus_element,
+    DavErrorCondition, DavLockXml, DavMultiStatusItem, DavMultiStatusLimits, DavPropStat,
+    DavVersionXml, DavXmlElement, DavXmlNode, dav_dead_property_element, dav_element,
+    dav_error_element, dav_lock_discovery_element, dav_lock_response_element,
+    dav_multistatus_bytes, dav_property_child_element, dav_property_name_element,
+    dav_property_text_element, dav_supported_lock_element, dav_version_multistatus_bytes,
 };
 use http::StatusCode;
 
@@ -15,27 +15,32 @@ fn xml(element: &DavXmlElement) -> String {
 
 #[test]
 fn multistatus_preserves_response_propstat_and_property_order() {
-    let root = dav_multistatus_element(vec![
-        DavMultiStatusItem::properties(
-            "/webdav/a%20b.txt",
+    let output = String::from_utf8(
+        dav_multistatus_bytes(
             vec![
-                DavPropStat {
-                    status: StatusCode::OK.as_u16(),
-                    properties: vec![dav_element("displayname"), dav_element("getetag")],
-                },
-                DavPropStat {
-                    status: StatusCode::NOT_FOUND.as_u16(),
-                    properties: vec![dav_element("quota-used-bytes")],
-                },
+                DavMultiStatusItem::properties(
+                    "/webdav/a%20b.txt",
+                    vec![
+                        DavPropStat {
+                            status: StatusCode::OK.as_u16(),
+                            properties: vec![dav_element("displayname"), dav_element("getetag")],
+                        },
+                        DavPropStat {
+                            status: StatusCode::NOT_FOUND.as_u16(),
+                            properties: vec![dav_element("quota-used-bytes")],
+                        },
+                    ],
+                ),
+                DavMultiStatusItem::status("/webdav/locked", StatusCode::LOCKED.as_u16())
+                    .with_error(DavErrorCondition::LockTokenSubmitted {
+                        href: "/webdav/locked".to_owned(),
+                    }),
             ],
-        ),
-        DavMultiStatusItem::status("/webdav/locked", StatusCode::LOCKED.as_u16()).with_error(
-            DavErrorCondition::LockTokenSubmitted {
-                href: "/webdav/locked".to_owned(),
-            },
-        ),
-    ]);
-    let output = xml(&root);
+            DavMultiStatusLimits::default(),
+        )
+        .expect("Multi-Status bytes"),
+    )
+    .expect("UTF-8 XML");
     assert!(output.contains("xmlns:D=\"DAV:\""), "{output}");
     assert!(output.contains("HTTP/1.1 200 OK"), "{output}");
     assert!(output.contains("HTTP/1.1 404 Not Found"), "{output}");
@@ -166,14 +171,20 @@ fn lockdiscovery_covers_owner_timeout_scope_depth_token_and_root() {
 
 #[test]
 fn deltav_multistatus_escapes_values_and_keeps_protocol_property_order() {
-    let root = dav_version_multistatus_element(vec![DavVersionXml {
-        href: "/webdav/a?v=1&kind=<old>".to_owned(),
-        version_name: "V1".to_owned(),
-        creator: "猫 & owner".to_owned(),
-        content_length: 42,
-        last_modified: "Thu, 01 Jan 1970 00:00:00 GMT".to_owned(),
-    }]);
-    let output = xml(&root);
+    let output = String::from_utf8(
+        dav_version_multistatus_bytes(
+            vec![DavVersionXml {
+                href: "/webdav/a?v=1&kind=<old>".to_owned(),
+                version_name: "V1".to_owned(),
+                creator: "猫 & owner".to_owned(),
+                content_length: 42,
+                last_modified: "Thu, 01 Jan 1970 00:00:00 GMT".to_owned(),
+            }],
+            DavMultiStatusLimits::default(),
+        )
+        .expect("DeltaV Multi-Status bytes"),
+    )
+    .expect("UTF-8 XML");
     assert!(output.contains("?v=1&amp;kind=&lt;old&gt;"), "{output}");
     assert!(output.contains("猫 &amp; owner"), "{output}");
     let names = [

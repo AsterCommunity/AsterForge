@@ -8,8 +8,9 @@ use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityContext,
     DavCapabilityDeclaration, DavCapabilityProvider, DavCapabilityTarget,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
-    DavConditionalResource, DavLockingCapability, DavMethod, DavMethodSet, DavNonDavProfile,
-    DavPath, DavResourceState, DavVersioningCapability, DavWriteCapabilities, plan_capabilities,
+    DavConditionalResource, DavLockingCapability, DavMethod, DavMethodSet, DavMultiStatusItem,
+    DavMultiStatusLimits, DavMultiStatusSourceError, DavNonDavProfile, DavPath, DavResourceState,
+    DavVersioningCapability, DavWriteCapabilities, multistatus_stream_response, plan_capabilities,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -155,6 +156,43 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
         .await,
         Err(DavBodyError::BodyTooLarge)
     ));
+}
+
+#[actix_web::test]
+async fn actix_adapter_streams_multistatus_and_propagates_typed_stream_failures() {
+    let response = multistatus_stream_response(
+        futures::stream::iter([Ok(DavMultiStatusItem::status("/dav/a", 404))]),
+        DavMultiStatusLimits::new(4096, 2, 2, 8),
+    )
+    .expect("stream response");
+    let response = aster_forge_webdav::actix::into_response(response);
+    assert_eq!(response.status(), StatusCode::MULTI_STATUS);
+    assert_eq!(
+        response
+            .headers()
+            .get("Content-Type")
+            .expect("content type"),
+        "application/xml; charset=utf-8"
+    );
+    let body = actix_web::body::to_bytes(response.into_body())
+        .await
+        .expect("streamed body");
+    let body = String::from_utf8(body.to_vec()).expect("UTF-8 XML");
+    assert!(body.contains("/dav/a"), "{body}");
+    assert!(body.ends_with("</D:multistatus>"), "{body}");
+
+    let response = multistatus_stream_response(
+        futures::stream::iter([Err(DavMultiStatusSourceError::Cancelled)]),
+        DavMultiStatusLimits::default(),
+    )
+    .expect("failure response shell");
+    let response = aster_forge_webdav::actix::into_response(response);
+    assert!(
+        actix_web::body::to_bytes(response.into_body())
+            .await
+            .is_err(),
+        "typed stream failure should terminate the Actix body"
+    );
 }
 
 #[test]

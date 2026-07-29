@@ -4,7 +4,7 @@
 //! WebDAV-specific request models and [`DavXmlElement`] instead of depending on an XML crate.
 
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 
 use aster_forge_xml::{
     BorrowedDocument, ElementRef, Error as ForgeXmlError, NodeRef, OwnedDocument, ParseOptions,
@@ -128,7 +128,7 @@ impl DavXmlElement {
     /// Serializes the element as UTF-8 XML bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, DavXmlError> {
         let mut writer = XmlStreamWriter::new(Vec::new()).map_err(map_forge_xml_error)?;
-        write_element(&mut writer, self, &BTreeMap::new())?;
+        write_element(&mut writer, self, &BTreeMap::new()).map_err(map_forge_xml_error)?;
         writer.finish().map_err(map_forge_xml_error)
     }
 
@@ -552,11 +552,11 @@ fn element_from_forge<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavXmlEleme
     }
 }
 
-fn write_element(
-    writer: &mut XmlStreamWriter<Vec<u8>>,
+pub(crate) fn write_element<W: Write>(
+    writer: &mut XmlStreamWriter<W>,
     element: &DavXmlElement,
     inherited_namespaces: &BTreeMap<String, String>,
-) -> Result<(), DavXmlError> {
+) -> Result<(), ForgeXmlError> {
     let qualified_name = element.prefix.as_ref().map_or_else(
         || element.name.clone(),
         |prefix| format!("{prefix}:{}", element.name),
@@ -590,7 +590,11 @@ fn write_element(
                 format!("xmlns:{prefix}")
             };
             match attributes.get(&binding_name) {
-                Some(binding) if binding != namespace => return Err(DavXmlError::Malformed),
+                Some(binding) if binding != namespace => {
+                    return Err(ForgeXmlError::InvalidData(
+                        "conflicting XML namespace binding".to_owned(),
+                    ));
+                }
                 Some(_) => {}
                 None => {
                     attributes.insert(binding_name, namespace.clone());
@@ -604,7 +608,11 @@ fn write_element(
             .is_some_and(|namespace| !namespace.is_empty())
     {
         match attributes.get("xmlns") {
-            Some(namespace) if !namespace.is_empty() => return Err(DavXmlError::Malformed),
+            Some(namespace) if !namespace.is_empty() => {
+                return Err(ForgeXmlError::InvalidData(
+                    "conflicting XML default namespace binding".to_owned(),
+                ));
+            }
             Some(_) => {}
             None => {
                 attributes.insert("xmlns".to_owned(), String::new());
@@ -617,28 +625,22 @@ fn write_element(
         .iter()
         .map(|(name, value)| XmlWriteAttribute::new(name, value));
     if element.children.is_empty() {
-        writer
-            .empty_element(&qualified_name, write_attributes)
-            .map_err(map_forge_xml_error)?;
+        writer.empty_element(&qualified_name, write_attributes)?;
         return Ok(());
     }
-    writer
-        .start_element(&qualified_name, write_attributes)
-        .map_err(map_forge_xml_error)?;
+    writer.start_element(&qualified_name, write_attributes)?;
     for child in &element.children {
         match child {
             DavXmlNode::Element(element) => write_element(writer, element, &namespaces)?,
-            DavXmlNode::Text(text) => writer.text(text).map_err(map_forge_xml_error)?,
-            DavXmlNode::CData(text) => writer.cdata(text).map_err(map_forge_xml_error)?,
-            DavXmlNode::Comment(text) => writer.comment(text).map_err(map_forge_xml_error)?,
+            DavXmlNode::Text(text) => writer.text(text)?,
+            DavXmlNode::CData(text) => writer.cdata(text)?,
+            DavXmlNode::Comment(text) => writer.comment(text)?,
             DavXmlNode::ProcessingInstruction(target, content) => {
-                writer
-                    .processing_instruction(target, content.as_deref())
-                    .map_err(map_forge_xml_error)?;
+                writer.processing_instruction(target, content.as_deref())?;
             }
         }
     }
-    writer.end_element().map_err(map_forge_xml_error)
+    writer.end_element()
 }
 
 fn namespace_declaration_prefix(name: &str) -> Option<&str> {

@@ -196,7 +196,7 @@ Forge 负责：
 - 已知 request grammar 直接遍历 `aster_forge_xml` 的 source-backed arena，不先重复 validation，也不复制整棵通用 DOM；只有需要持久化或回显的 owner/property 子树才物化为 `DavXmlElement`。
 - `DavXmlElement` 只承担 DAV 持久化子树与 response composition；通用解析、安全限制、namespace 和 reader/writer 由 `aster_forge_xml` 承担。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
-- 产品中立 backend contracts：`DavFileSystem` / `DavMetaData` / `DavDirEntry` 负责资源机械层，`DavDownloadSource` 负责 full/range stream，`DavWriteSystem` 负责顺序提交，`DavRandomWriteSystem` 只负责显式随机写，`DavLockSystem` 负责锁持久化与冲突查询。
+- 产品中立 backend contracts：`DavFileSystem` / `DavMetaData` 负责单资源机械层，`DavDirectoryEnumerator` 负责 bounded page/cursor 枚举，`DavDownloadSource` 负责 full/range stream，`DavWriteSystem` 负责顺序提交，`DavRandomWriteSystem` 只负责显式随机写，`DavLockSystem` 负责锁持久化与冲突查询。
 - 批量 dead-property 读取只向 backend 传递 `DavPath`；产品 adapter 自行解析数据库身份并执行批量查询。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。Actix 仍使用 `http 0.2` 而 Forge 公共模型使用 `http 1.x`，URI/header 跨版本转换保持显式边界。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
@@ -258,6 +258,74 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 `If-None-Match` 不会被扩展成 Destination-specific header；COPY/MOVE destination 或其他
 资源的 ETag/lock token 条件继续由 tagged WebDAV `If` 表达。
 
+## 增量 Multi-Status
+
+`DavMultiStatusWriter<W>` 是 PROPFIND、PROPPATCH、递归 mutation failure 和已支持 REPORT
+共用的唯一 `<D:multistatus>` grammar。`dav_multistatus_bytes`、
+`property_multistatus_response`、`mutation_multistatus_response` 和 `version_tree_response`
+都是该 writer 的完整文档 convenience API，不维护第二套 element/order/namespace 逻辑。
+
+大结果使用 `multistatus_stream_response`，把产品生成的
+`Stream<Item = Result<DavMultiStatusItem, DavMultiStatusSourceError>>` 转为
+`DavResponseBody::MultiStatus`。writer 逐 item 校验并输出，不要求 `Vec<DavMultiStatusItem>`
+或完整 XML `Vec<u8>`；内存只保留当前 typed item、有界 XML writer 状态和有限 chunk 队列。
+Actix feature 只把该 typed stream 转为 response body，不把 Actix 类型放进 core。
+
+```rust
+let limits = aster_forge_webdav::DavMultiStatusLimits::new(
+    16 * 1024 * 1024, // maximum output bytes
+    50_000,           // maximum response items
+    512,              // maximum properties in one response item
+    16 * 1024,        // maximum body chunk bytes
+);
+let response = aster_forge_webdav::multistatus_stream_response(items, limits)?;
+```
+
+`DavMultiStatusError` 保留 item/property/output limit、source backend failure、取消、XML 和
+sink write failure 分类，并携带 `DavMultiStatusProgress`。stream 在取得第一个有效 item 前先
+轮询 source，因此首项前的 backend failure 或 cancellation 明确标记为
+`response_started = false`；一旦 body chunk 已交给 transport，后续错误标记为部分响应，只能
+终止 stream。完整文档 helper 尚未交给 transport，调用方仍可在自己的 response boundary 映射
+完整错误响应。
+
+## 分页枚举与递归预算
+
+目录遍历使用独立的 `DavDirectoryEnumerator`，不再通过 `DavFileSystem::read_dir` 返回一个可能
+在创建 stream 前已经全量收集的伪流。产品 adapter 定义自己的 opaque associated cursor 和
+page entry 类型；metadata 随 page entry 一起返回，允许产品批量查询，避免协议 contract 强制
+逐 entry metadata N+1。
+
+```rust
+let mut state = aster_forge_webdav::DavDirectoryPageState::new();
+let page = aster_forge_webdav::read_next_directory_page(
+    &enumerator,
+    &directory,
+    &mut state,
+    256,
+    aster_forge_webdav::DavDirectoryPageLimits::new(256, 10_000),
+    &cancellation,
+)
+.await?;
+```
+
+pager 在每次 backend call 前检查 `DavCancellation`，并强制：
+
+- requested/page hard limit 和 maximum page count。
+- 非空 continuation page。
+- cursor 不得在任意后续 page 回环。
+- `stable_key` 在页内和跨页严格递增，重复或倒序 page 不进入协议处理。
+- invalid page、backend failure 或 cancellation 不推进已验证 cursor state。
+
+pager 为终止性保留至多 `maximum_pages` 个 opaque cursor，并只复制每页最后一个 stable key；
+它不会保存全部目录 entry。产品负责数据库 keyset/order contract 和 cursor 编码，Forge 不解析
+cursor 内容。
+
+递归 COPY、MOVE、DELETE 或深度 PROPFIND 使用 `DavTraversalBudget` 记录 visited resources、
+queued work、failures、maximum depth 和 completed mutations。budget 自身不分配工作队列，也不
+执行 mutation；产品持有实际 queue、事务、cleanup 和 side effect。超限或取消返回
+`DavTraversalError`，其 progress 和 `partial_execution()` 让调用方区分“尚未修改”与“已部分
+执行，需要通过 207/终止语义报告”的结果。
+
 ## Backend 与事件
 
 产品应把已认证、已限定 workspace 的 adapter 交给协议层。backend 调用必须同步完成影响协议正确性的操作；quota、blob 引用、lock 持久化和必要的缓存失效不能依赖事件补写。
@@ -291,6 +359,13 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
   长度由产品提交边界核验。
 - backend port 测试必须覆盖 full/range exact length、open failure、length drift、empty body 不打开 stream、顺序 finish/abort 和显式 random write。
 - observation 测试必须覆盖所有可选计数、未采集与零的区别、cancellation、response-started failure，以及 observer 缺失/失败不影响完成结果。
+- Multi-Status 测试必须覆盖 property/status grammar、item/property/byte/chunk 精确边界、空文档、
+  source backend failure、首项前后 cancellation、sink 在首字节前后失败，以及 Actix stream
+  conversion。
+- directory pager 测试必须覆盖空 final page、非空 continuation、cursor cycle、页内与跨页重复/
+  倒序、page hard limit、backend failure，以及取消后不再请求下一页。
+- traversal budget 测试必须覆盖 visited/work/failure/depth 的精确上限和超限、取消、partial
+  execution progress 与无额外 work storage 的值语义。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 
 ## 参考项目

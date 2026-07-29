@@ -5,8 +5,8 @@ use http::{HeaderValue, StatusCode};
 
 use crate::xml::{parse_report_request, parse_version_control_request};
 use crate::{
-    DavErrorCondition, DavResourceKind, DavResponse, DavVersionXml, DavXmlError, dav_error_element,
-    dav_version_multistatus_element,
+    DavErrorCondition, DavMultiStatusError, DavMultiStatusLimits, DavResourceKind, DavResponse,
+    DavVersionXml, DavXmlError, dav_error_element, dav_version_multistatus_bytes,
 };
 
 /// Failure while selecting the supported DeltaV REPORT grammar.
@@ -65,11 +65,26 @@ pub fn version_tree_non_file_response() -> DavResponse {
 }
 
 /// Builds a complete 207 DeltaV version-tree response.
-pub fn version_tree_response(versions: Vec<DavVersionXml>) -> Result<DavResponse, DavXmlError> {
-    xml_response(
+pub fn version_tree_response(
+    versions: Vec<DavVersionXml>,
+) -> Result<DavResponse, DavMultiStatusError> {
+    version_tree_response_with_limits(versions, DavMultiStatusLimits::default())
+}
+
+/// Builds a bounded complete 207 DeltaV version-tree response.
+pub fn version_tree_response_with_limits(
+    versions: Vec<DavVersionXml>,
+    limits: DavMultiStatusLimits,
+) -> Result<DavResponse, DavMultiStatusError> {
+    let mut response = DavResponse::bytes(
         StatusCode::MULTI_STATUS,
-        dav_version_multistatus_element(versions),
-    )
+        dav_version_multistatus_bytes(versions, limits)?,
+    );
+    response.headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    Ok(response)
 }
 
 /// Selects the VERSION-CONTROL response for the resolved resource kind.

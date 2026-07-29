@@ -5,12 +5,12 @@ use std::time::{Duration, SystemTime};
 
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavConditionalEvaluationError, DavConditionalOutcome,
-    DavConditionalResource, DavDirEntry, DavFileSystem, DavIfEvaluationError, DavLock,
-    DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavMethod, DavPath,
-    DavResponseBody, DavWriteHandle, DavWriteOptions, DavWriteSystem, FsError, FsFuture, FsStream,
-    LsFuture, ReadDirMeta, enforce_if_header_with_backends, enforce_parent_collection,
-    enforce_parent_unlocked, enforce_unlocked, ensure_lock_target_exists, parse_if_header,
-    plan_conditionals_with_backends, unsubmitted_lock_conflicts,
+    DavConditionalResource, DavFileSystem, DavIfEvaluationError, DavLock, DavLockError,
+    DavLockPreflightError, DavLockSystem, DavMetaData, DavMethod, DavPath, DavResponseBody,
+    DavWriteHandle, DavWriteOptions, DavWriteSystem, FsError, FsFuture, LsFuture,
+    enforce_if_header_with_backends, enforce_parent_collection, enforce_parent_unlocked,
+    enforce_unlocked, ensure_lock_target_exists, parse_if_header, plan_conditionals_with_backends,
+    unsubmitted_lock_conflicts,
 };
 use bytes::Bytes;
 use http::StatusCode;
@@ -127,14 +127,6 @@ impl DavWriteSystem for TestFileSystem {
 }
 
 impl DavFileSystem for TestFileSystem {
-    fn read_dir<'a>(
-        &'a self,
-        _path: &'a DavPath,
-        _meta: ReadDirMeta,
-    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
-        Box::pin(async { Err(FsError::GeneralFailure) })
-    }
-
     fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
         Box::pin(async move {
             if let Some(error) = self.failures.get(path.as_str()) {

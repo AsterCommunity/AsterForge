@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use http::StatusCode;
 
-use crate::{DavRequestedProperty, DavXmlElement, DavXmlNode, encode_href};
+use crate::{
+    DavMultiStatusError, DavMultiStatusLimits, DavRequestedProperty, DavXmlElement, DavXmlNode,
+    dav_multistatus_bytes, encode_href,
+};
 
 /// One `<D:propstat>` group in a multistatus response.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,20 +183,6 @@ pub fn dav_dead_property_element(
     output
 }
 
-/// Creates a WebDAV HTTP status-line element.
-#[must_use]
-pub fn dav_status_element(status: u16) -> DavXmlElement {
-    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    dav_text_element(
-        "status",
-        format!(
-            "HTTP/1.1 {} {}",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or("Unknown"),
-        ),
-    )
-}
-
 /// Creates a complete `<D:error>` document.
 #[must_use]
 pub fn dav_error_element(condition: &DavErrorCondition) -> DavXmlElement {
@@ -203,63 +192,6 @@ pub fn dav_error_element(condition: &DavErrorCondition) -> DavXmlElement {
         .children
         .push(DavXmlNode::Element(error_condition_element(condition)));
     error
-}
-
-/// Creates one `<D:propstat>` element.
-#[must_use]
-pub fn dav_propstat_element(propstat: DavPropStat) -> DavXmlElement {
-    let mut element = dav_element("propstat");
-    let mut properties = dav_element("prop");
-    properties
-        .children
-        .extend(propstat.properties.into_iter().map(DavXmlNode::Element));
-    element.children.push(DavXmlNode::Element(properties));
-    element
-        .children
-        .push(DavXmlNode::Element(dav_status_element(propstat.status)));
-    element
-}
-
-/// Creates one `<D:response>` element.
-#[must_use]
-pub fn dav_response_element(item: DavMultiStatusItem) -> DavXmlElement {
-    let mut response = dav_element("response");
-    response
-        .children
-        .push(DavXmlNode::Element(dav_text_element("href", item.href)));
-    response.children.extend(
-        item.propstats
-            .into_iter()
-            .map(dav_propstat_element)
-            .map(DavXmlNode::Element),
-    );
-    if let Some(status) = item.status {
-        response
-            .children
-            .push(DavXmlNode::Element(dav_status_element(status)));
-    }
-    if let Some(error) = item.error {
-        let mut error_element = dav_element("error");
-        error_element
-            .children
-            .push(DavXmlNode::Element(error_condition_element(&error)));
-        response.children.push(DavXmlNode::Element(error_element));
-    }
-    response
-}
-
-/// Creates a complete `<D:multistatus>` document.
-#[must_use]
-pub fn dav_multistatus_element(items: Vec<DavMultiStatusItem>) -> DavXmlElement {
-    let mut multistatus = dav_element("multistatus");
-    declare_dav_namespace(&mut multistatus);
-    multistatus.children.extend(
-        items
-            .into_iter()
-            .map(dav_response_element)
-            .map(DavXmlNode::Element),
-    );
-    multistatus
 }
 
 /// Creates the RFC 4918 `supportedlock` property value.
@@ -306,12 +238,13 @@ pub fn dav_lock_response_element(locks: &[DavLockXml]) -> DavXmlElement {
     prop
 }
 
-/// Creates a complete DeltaV version-tree multistatus document.
-#[must_use]
-pub fn dav_version_multistatus_element(versions: Vec<DavVersionXml>) -> DavXmlElement {
-    let items = versions
-        .into_iter()
-        .map(|version| {
+/// Creates a complete bounded DeltaV version-tree Multi-Status document.
+pub fn dav_version_multistatus_bytes(
+    versions: Vec<DavVersionXml>,
+    limits: DavMultiStatusLimits,
+) -> Result<Vec<u8>, DavMultiStatusError> {
+    dav_multistatus_bytes(
+        versions.into_iter().map(|version| {
             DavMultiStatusItem::properties(
                 version.href,
                 vec![DavPropStat {
@@ -324,9 +257,9 @@ pub fn dav_version_multistatus_element(versions: Vec<DavVersionXml>) -> DavXmlEl
                     ],
                 }],
             )
-        })
-        .collect();
-    dav_multistatus_element(items)
+        }),
+        limits,
+    )
 }
 
 fn active_lock_element(lock: &DavLockXml) -> DavXmlElement {
@@ -378,19 +311,24 @@ fn active_lock_element(lock: &DavLockXml) -> DavXmlElement {
 }
 
 fn error_condition_element(condition: &DavErrorCondition) -> DavXmlElement {
+    let (name, href) = error_condition_parts(condition);
+    let mut element = dav_element(name);
+    if let Some(href) = href {
+        element
+            .children
+            .push(DavXmlNode::Element(dav_text_element("href", href)));
+    }
+    element
+}
+
+pub(crate) fn error_condition_parts(condition: &DavErrorCondition) -> (&'static str, Option<&str>) {
     match condition {
-        DavErrorCondition::NoExternalEntities => dav_element("no-external-entities"),
+        DavErrorCondition::NoExternalEntities => ("no-external-entities", None),
         DavErrorCondition::LockTokenSubmitted { href } => {
-            let mut condition = dav_element("lock-token-submitted");
-            condition
-                .children
-                .push(DavXmlNode::Element(dav_text_element("href", href.clone())));
-            condition
+            ("lock-token-submitted", Some(href.as_str()))
         }
-        DavErrorCondition::LockTokenMatchesRequestUri => {
-            dav_element("lock-token-matches-request-uri")
-        }
-        DavErrorCondition::PropfindFiniteDepth => dav_element("propfind-finite-depth"),
+        DavErrorCondition::LockTokenMatchesRequestUri => ("lock-token-matches-request-uri", None),
+        DavErrorCondition::PropfindFiniteDepth => ("propfind-finite-depth", None),
     }
 }
 

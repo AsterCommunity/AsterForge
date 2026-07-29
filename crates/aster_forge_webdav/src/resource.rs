@@ -5,9 +5,9 @@ use http::{HeaderValue, StatusCode};
 
 use crate::response::no_store_empty_response;
 use crate::{
-    DavErrorCondition, DavFileSystem, DavMultiStatusItem, DavPath, DavResourceKind, DavResponse,
-    DavXmlError, Depth, FsError, backend_error_response, dav_multistatus_element,
-    href_for_dav_path, parent_relative_path,
+    DavErrorCondition, DavFileSystem, DavMultiStatusError, DavMultiStatusItem,
+    DavMultiStatusLimits, DavPath, DavResourceKind, DavResponse, Depth, FsError,
+    backend_error_response, dav_multistatus_bytes, href_for_dav_path, parent_relative_path,
 };
 
 /// COPY or MOVE operation selected by the request method.
@@ -112,6 +112,20 @@ impl DavMutationFailure {
             path,
             status,
             lock_path: None,
+        }
+    }
+
+    /// Converts this typed failure into the shared Multi-Status response grammar.
+    #[must_use]
+    pub fn into_multistatus_item(&self, prefix: &str) -> DavMultiStatusItem {
+        let item = DavMultiStatusItem::status(href_for_dav_path(prefix, &self.path), self.status);
+        if self.status == StatusCode::LOCKED.as_u16() {
+            let lock_path = self.lock_path.as_ref().unwrap_or(&self.path);
+            item.with_error(DavErrorCondition::LockTokenSubmitted {
+                href: href_for_dav_path(prefix, lock_path),
+            })
+        } else {
+            item
         }
     }
 }
@@ -255,25 +269,20 @@ pub fn mutation_success_response(destination_existed: bool) -> DavResponse {
 pub fn mutation_multistatus_response(
     prefix: &str,
     failures: &[DavMutationFailure],
-) -> Result<DavResponse, DavXmlError> {
+) -> Result<DavResponse, DavMultiStatusError> {
+    mutation_multistatus_response_with_limits(prefix, failures, DavMultiStatusLimits::default())
+}
+
+/// Builds a bounded 207 response for typed recursive mutation failures.
+pub fn mutation_multistatus_response_with_limits(
+    prefix: &str,
+    failures: &[DavMutationFailure],
+    limits: DavMultiStatusLimits,
+) -> Result<DavResponse, DavMultiStatusError> {
     let items = failures
         .iter()
-        .map(|failure| {
-            let item = DavMultiStatusItem::status(
-                href_for_dav_path(prefix, &failure.path),
-                failure.status,
-            );
-            if failure.status == StatusCode::LOCKED.as_u16() {
-                let lock_path = failure.lock_path.as_ref().unwrap_or(&failure.path);
-                item.with_error(DavErrorCondition::LockTokenSubmitted {
-                    href: href_for_dav_path(prefix, lock_path),
-                })
-            } else {
-                item
-            }
-        })
-        .collect();
-    let body = dav_multistatus_element(items).to_bytes()?;
+        .map(|failure| failure.into_multistatus_item(prefix));
+    let body = dav_multistatus_bytes(items, limits)?;
     let mut response = DavResponse::bytes(StatusCode::MULTI_STATUS, body);
     response.headers.insert(
         CONTENT_TYPE,

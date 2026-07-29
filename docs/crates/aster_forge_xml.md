@@ -113,6 +113,11 @@ assert_eq!(output, br#"<D:multistatus xmlns:D="DAV:"><D:response><D:href>/files/
 
 `XmlStreamWriter<W: Write>` 直接把事件写到 socket、file、buffer 或 compression stream。`XmlWriteOptions` 控制 XML declaration、最大输出字节、最大深度和单元素最大属性数；writer 会检查 root lifecycle、prefix binding、namespace-expanded duplicate attribute、XML name/control character、CDATA/comment/PI 约束和 I/O failure。`validated_subtree` 可以嵌入一个自包含的 `ValidatedXml` root，并继续执行 writer depth、attribute 和 byte limit。
 
+需要在 document 尚未结束时从自定义 bounded sink 取出已经完成的 chunk，可以使用
+`get_mut()` 访问 sink；XML writer 仍保留 document、namespace 和 byte-limit state。sink 不得修改、
+丢弃或重新解释此前已经报告为成功写入的字节。普通完整输出继续使用 `finish()`，不要用
+`get_mut()` 绕过 document lifecycle。
+
 ## 查询 API
 
 - `root` / `node`：取得 root 或按稳定 `NodeId` 查询。
@@ -177,7 +182,7 @@ let method = xml_root_local_name(body, XmlSafetyPolicy::untrusted())?;
 - WebDAV dead property / LOCK owner subtree exact bytes。
 - 20,000 层 parse、traversal 和 drop 不依赖递归 destructor。
 - 100,000 response streaming walk 和 selective capture 不构造整棵 DOM。
-- streaming writer 覆盖 namespace、escaping、所有 node kind、document lifecycle、limit 精确边界、I/O failure、subtree embedding 和 25,000-response direct generation。
+- streaming writer 覆盖 namespace、escaping、所有 node kind、document lifecycle、live sink access、limit 精确边界、I/O failure、subtree embedding 和 25,000-response direct generation。
 - 与 `xmltree` 对照 supported parse contract 和 round-trip。
 - 与 `roxmltree` 对照 source-backed tree、namespace、attribute、text、child query 和 exact source range，并明确 CDATA/default namespace empty-URI 的 node model 差异。
 - `proptest` 每次生成 256 组有界随机树，执行 writer → validator → Forge DOM → `roxmltree` round-trip；随机 byte input 同时喂给 validator、arena parser 和 stream reader，检查资源边界内不 panic。

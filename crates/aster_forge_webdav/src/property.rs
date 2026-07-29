@@ -3,13 +3,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
-use http::StatusCode;
+use http::header::CONTENT_TYPE;
+use http::{HeaderValue, StatusCode};
 
 use crate::response::{xml_document_response, xml_request_error_response};
 use crate::{
-    DavErrorCondition, DavMultiStatusItem, DavPropStat, DavPropfindRequest, DavRequestedProperty,
-    DavResponse, DavXmlElement, DavXmlError, dav_error_element, dav_multistatus_element,
-    dav_property_name_element,
+    DavErrorCondition, DavMultiStatusError, DavMultiStatusItem, DavMultiStatusLimits, DavPropStat,
+    DavPropfindRequest, DavRequestedProperty, DavResponse, DavXmlElement, DavXmlError,
+    dav_error_element, dav_multistatus_bytes, dav_property_name_element,
 };
 
 type PropertyKey = (String, Option<String>);
@@ -116,8 +117,24 @@ pub fn build_proppatch_item(
 /// Builds the 207 XML response for PROPFIND or PROPPATCH items.
 pub fn property_multistatus_response(
     items: Vec<DavMultiStatusItem>,
-) -> Result<DavResponse, DavXmlError> {
-    xml_document_response(StatusCode::MULTI_STATUS, dav_multistatus_element(items))
+) -> Result<DavResponse, DavMultiStatusError> {
+    property_multistatus_response_with_limits(items, DavMultiStatusLimits::default())
+}
+
+/// Builds a bounded 207 XML response with product-configured Multi-Status limits.
+pub fn property_multistatus_response_with_limits(
+    items: Vec<DavMultiStatusItem>,
+    limits: DavMultiStatusLimits,
+) -> Result<DavResponse, DavMultiStatusError> {
+    let mut response = DavResponse::bytes(
+        StatusCode::MULTI_STATUS,
+        dav_multistatus_bytes(items, limits)?,
+    );
+    response.headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    Ok(response)
 }
 
 /// Maps PROPFIND XML failures to their protocol response.
