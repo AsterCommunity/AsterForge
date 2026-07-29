@@ -4,14 +4,14 @@ mod namespace_tests {
     use aster_forge_cloud_files_linux::{
         LinuxInvalidation, LinuxRemoteChange, LinuxRemoteDelete, LinuxRemoteEntry,
     };
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     type MemoryEngine = LinuxWritableEngine<MemoryCloud, MemoryWritebackStore>;
 
     fn test_directory(name: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
+        let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("aster-forge-cloud-namespace-{name}-{suffix}"))
     }
 

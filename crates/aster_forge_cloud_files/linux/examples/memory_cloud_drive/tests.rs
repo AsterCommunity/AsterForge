@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     fn test_directory(name: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
+        let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("aster-forge-cloud-files-{name}-{suffix}"))
     }
 
@@ -211,7 +211,7 @@ mod tests {
         let generation = SessionGeneration::new(1).unwrap();
         let store = Arc::new(MemoryWritebackStore::new(scope.clone(), None).unwrap());
         let acceptance = accepted_create(&store, &scope, generation).await;
-        for value in [b'a', b'b', b'c'] {
+        for value in *b"abc" {
             store
                 .write(acceptance.session().id(), 0, Bytes::from(vec![value; 4]))
                 .await
