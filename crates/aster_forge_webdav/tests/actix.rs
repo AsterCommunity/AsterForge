@@ -55,10 +55,10 @@ async fn empty_body_policy_accepts_empty_and_rejects_the_first_nonempty_chunk() 
 }
 
 #[actix_web::test]
-async fn bounded_xml_body_accepts_the_exact_limit_and_rejects_one_byte_over() {
+async fn bounded_body_accepts_the_exact_limit_and_rejects_one_byte_over() {
     let mut exact = payload_from_bytes(Bytes::from_static(b"1234")).await;
     assert_eq!(
-        aster_forge_webdav::actix::collect_bounded_xml_body(&mut exact, 4)
+        aster_forge_webdav::actix::collect_bounded_body(&mut exact, 4)
             .await
             .expect("exact body limit should be accepted"),
         b"1234"
@@ -66,25 +66,25 @@ async fn bounded_xml_body_accepts_the_exact_limit_and_rejects_one_byte_over() {
 
     let mut over = payload_from_bytes(Bytes::from_static(b"12345")).await;
     assert_eq!(
-        aster_forge_webdav::actix::collect_bounded_xml_body(&mut over, 4).await,
-        Err(DavBodyError::XmlTooLarge)
+        aster_forge_webdav::actix::collect_bounded_body(&mut over, 4).await,
+        Err(DavBodyError::BodyTooLarge)
     );
 
     let mut cumulative = payload_from_chunks(&[b"12", b"34", b"5"]).await;
     assert_eq!(
-        aster_forge_webdav::actix::collect_bounded_xml_body(&mut cumulative, 4).await,
-        Err(DavBodyError::XmlTooLarge)
+        aster_forge_webdav::actix::collect_bounded_body(&mut cumulative, 4).await,
+        Err(DavBodyError::BodyTooLarge)
     );
 
     let mut zero_empty = payload_from_bytes(Bytes::new()).await;
     assert_eq!(
-        aster_forge_webdav::actix::collect_bounded_xml_body(&mut zero_empty, 0).await,
+        aster_forge_webdav::actix::collect_bounded_body(&mut zero_empty, 0).await,
         Ok(Vec::new())
     );
     let mut zero_nonempty = payload_from_bytes(Bytes::from_static(b"x")).await;
     assert_eq!(
-        aster_forge_webdav::actix::collect_bounded_xml_body(&mut zero_nonempty, 0).await,
-        Err(DavBodyError::XmlTooLarge)
+        aster_forge_webdav::actix::collect_bounded_body(&mut zero_nonempty, 0).await,
+        Err(DavBodyError::BodyTooLarge)
     );
 }
 
@@ -145,6 +145,16 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
     .expect("bounded patch body");
     assert_eq!(prepared.bytes(), b"patch");
     assert!(prepared.xml().is_empty());
+
+    let mut oversized = payload_from_bytes(Bytes::from_static(b"patch!")).await;
+    assert!(matches!(
+        aster_forge_webdav::actix::prepare_request_body(
+            aster_forge_webdav::DavBodyPolicy::Bounded { maximum: 5 },
+            &mut oversized,
+        )
+        .await,
+        Err(DavBodyError::BodyTooLarge)
+    ));
 }
 
 #[test]

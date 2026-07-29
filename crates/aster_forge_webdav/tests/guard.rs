@@ -645,6 +645,7 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
                 "/new.txt".to_owned(),
                 DavWriteOptions {
                     create: true,
+                    create_new: true,
                     truncate: true,
                     expected_length: Some(0),
                     ..DavWriteOptions::default()

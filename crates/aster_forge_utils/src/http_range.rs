@@ -287,6 +287,24 @@ mod tests {
     }
 
     #[test]
+    fn multi_range_parser_clamps_mixed_ranges_at_u64_max() {
+        let set = parse_byte_ranges(
+            "bytes=-2,18446744073709551613-18446744073709551615",
+            u64::MAX,
+            2,
+        )
+        .expect("maximum-sized representation ranges should clamp without overflow");
+        assert_eq!(set.requested_count(), 2);
+        assert_eq!(
+            set.ranges(),
+            [
+                HttpByteRange::new(u64::MAX - 2, u64::MAX - 1, u64::MAX).expect("suffix range"),
+                HttpByteRange::new(u64::MAX - 2, u64::MAX - 1, u64::MAX).expect("closed range"),
+            ]
+        );
+    }
+
+    #[test]
     fn multi_range_parser_enforces_spec_limit_before_normalization() {
         assert_eq!(
             parse_byte_ranges("bytes=0-1,100-200", 20, 1),

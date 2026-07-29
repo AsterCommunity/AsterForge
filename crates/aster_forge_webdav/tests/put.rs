@@ -305,10 +305,12 @@ fn put_plan_enforces_etag_preconditions_and_collection_target() {
     .expect_err("If-None-Match star rejects an existing resource");
     assert!(matches!(error, DavPutPlanError::PreconditionFailed(_)));
 
+    let mut collection_headers = HeaderMap::new();
+    collection_headers.insert(CONTENT_RANGE, HeaderValue::from_static("invalid"));
     assert!(matches!(
         plan_put_request(
             &snapshot,
-            &HeaderMap::new(),
+            &collection_headers,
             DavPutResourceState::Collection
         ),
         Err(DavPutPlanError::CollectionTarget)

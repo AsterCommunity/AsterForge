@@ -91,6 +91,9 @@ pub enum DavPatchBodyPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavPatchFormat {
     /// Media type advertised through `Accept-Patch` and matched against `Content-Type`.
+    ///
+    /// Matching and duplicate detection use equality of the complete parsed [`Mime`], including
+    /// every declared parameter. Missing, additional, or different parameter values do not match.
     pub media_type: &'static str,
     /// Transport body contract for this patch document format.
     pub body_policy: DavPatchBodyPolicy,

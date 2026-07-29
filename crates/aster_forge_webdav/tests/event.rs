@@ -181,6 +181,14 @@ impl DavEventSink for FailingSink {
     }
 }
 
+struct PanickingSink;
+
+impl DavEventSink for PanickingSink {
+    fn publish(&self, _event: &DavEvent) -> Result<(), DavObservationError> {
+        panic!("observation panic must not cross the non-authoritative boundary");
+    }
+}
+
 #[test]
 fn absent_and_failing_observers_do_not_change_authoritative_completion() {
     let request_head = DavRequestHead {
@@ -203,6 +211,7 @@ fn absent_and_failing_observers_do_not_change_authoritative_completion() {
     };
     publish_non_authoritative(Some(&sink), &event);
     assert_eq!(sink.calls.load(Ordering::SeqCst), 1);
+    publish_non_authoritative(Some(&PanickingSink), &event);
     assert_eq!(event.outcome, DavEventOutcome::Succeeded { status: 204 });
     assert_eq!(NoopDavEventSink.publish(&event), Ok(()));
 }

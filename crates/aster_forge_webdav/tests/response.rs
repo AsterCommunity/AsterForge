@@ -298,7 +298,7 @@ fn body_policy_errors_preserve_status_body_and_cache_contracts() {
     );
     assert!(matches!(read.body, DavResponseBody::Bytes(_)));
 
-    let too_large = body_error_response(DavBodyError::XmlTooLarge);
+    let too_large = body_error_response(DavBodyError::BodyTooLarge);
     assert_eq!(too_large.status, StatusCode::PAYLOAD_TOO_LARGE);
     assert!(matches!(too_large.body, DavResponseBody::Bytes(_)));
 
@@ -1130,7 +1130,10 @@ fn multipart_download_opens_each_final_segment_once_and_streams_only_framing_and
         assert!(!boundary.is_empty());
 
         let source = MultipartDownloadSource::new(vec![
-            Ok(MultipartStreamSpec::pending_then_bytes(3, &[b"a", b"bc"])),
+            Ok(MultipartStreamSpec::pending_then_bytes(
+                3,
+                &[b"", b"a", b"", b"bc"],
+            )),
             Ok(MultipartStreamSpec::bytes(2, &[b"de"])),
         ]);
         let path = DavPath::new("/video.mp4").expect("path");
@@ -1162,6 +1165,7 @@ fn multipart_download_opens_each_final_segment_once_and_streams_only_framing_and
             .map(|item| item.expect("multipart stream should complete"))
             .collect::<Vec<_>>()
             .await;
+        assert!(body.iter().all(|chunk| !chunk.is_empty()));
         let mut expected = Vec::new();
         expected.extend_from_slice(
             format!(

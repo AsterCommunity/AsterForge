@@ -69,6 +69,7 @@ fn patch_rejects_missing_malformed_repeated_and_unsupported_content_type() {
     for value in [
         HeaderValue::from_static("not a media type"),
         HeaderValue::from_static("application/json"),
+        // Complete MIME equality is intentional: an undeclared charset is a different format.
         HeaderValue::from_static("application/merge-patch+json; charset=utf-8"),
         HeaderValue::from_bytes(b"application/\xff").expect("opaque header bytes"),
     ] {

@@ -266,7 +266,9 @@ WebDAV `If` 仍是独立的 RFC 4918 Section 10.4 条件。使用 `plan_conditio
 
 `DavOperationObservations` 中的 `None` 表示未采集，`Some(0)` 表示已采集且计数为零。`DavStreamOutcome` 区分 completed、cancelled、response start 前失败和 response start 后部分传输失败；默认接口不会为每个 chunk 发布事件。
 
-sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_non_authoritative`。observer 缺失或失败都会被吞掉，不能改变协议响应、quota、transaction、blob refcount、lock persistence、必要 audit 或缓存正确性。
+sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_non_authoritative`。observer 缺失、返回错误或 panic 都会被吞掉，不能改变协议响应、quota、transaction、blob refcount、lock persistence、必要 audit 或缓存正确性。
+
+`DavEventSink::publish` 是同步的快速提交边界，不执行阻塞 I/O。需要异步处理时，产品 sink 必须使用 `try_send` 一类非阻塞操作把事件提交到产品拥有的有界队列，并自行决定队列满时丢弃、合并或计数；Forge 不为每个请求创建线程，也不隐式复制事件。违反该契约的阻塞 sink 会占用当前调用线程。
 
 ## 错误边界
 

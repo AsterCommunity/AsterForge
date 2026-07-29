@@ -133,6 +133,7 @@ pub async fn ensure_lock_target_exists<WriteSystem: DavWriteSystem>(
                     path,
                     DavWriteOptions {
                         create: true,
+                        create_new: true,
                         truncate: true,
                         expected_length: Some(0),
                         ..DavWriteOptions::default()

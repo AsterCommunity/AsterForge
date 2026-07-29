@@ -92,14 +92,27 @@ impl DavWriteSystem for RecordingWriteSystem {
 #[derive(Default)]
 struct RecordingRandomSystem {
     writes: Arc<Mutex<Vec<(u64, Bytes)>>>,
+    failures: RandomWriteFailures,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RandomWriteFailures {
+    open: Option<DavBackendErrorKind>,
+    write_at: Option<DavBackendErrorKind>,
+    finish: Option<DavBackendErrorKind>,
+    abort: Option<DavBackendErrorKind>,
 }
 
 struct RecordingRandomHandle {
     writes: Arc<Mutex<Vec<(u64, Bytes)>>>,
+    failures: RandomWriteFailures,
 }
 
 impl DavRandomWriteHandle for RecordingRandomHandle {
     async fn write_at(&mut self, offset: u64, buf: Bytes) -> Result<(), DavBackendError> {
+        if let Some(kind) = self.failures.write_at {
+            return Err(DavBackendError::new(kind));
+        }
         let writes = Arc::clone(&self.writes);
         writes
             .lock()
@@ -109,11 +122,15 @@ impl DavRandomWriteHandle for RecordingRandomHandle {
     }
 
     async fn finish(self) -> Result<(), DavBackendError> {
-        Ok(())
+        self.failures
+            .finish
+            .map_or(Ok(()), |kind| Err(DavBackendError::new(kind)))
     }
 
     async fn abort(self) -> Result<(), DavBackendError> {
-        Ok(())
+        self.failures
+            .abort
+            .map_or(Ok(()), |kind| Err(DavBackendError::new(kind)))
     }
 }
 
@@ -125,8 +142,14 @@ impl DavRandomWriteSystem for RecordingRandomSystem {
         _path: &'a aster_forge_webdav::DavPath,
         _options: DavWriteOptions,
     ) -> Result<Self::Handle, DavBackendError> {
+        if let Some(kind) = self.failures.open {
+            return Err(DavBackendError::new(kind));
+        }
         let writes = Arc::clone(&self.writes);
-        Ok(RecordingRandomHandle { writes })
+        Ok(RecordingRandomHandle {
+            writes,
+            failures: self.failures,
+        })
     }
 }
 
@@ -181,5 +204,83 @@ fn sequential_and_random_write_ports_have_distinct_operations() {
             random.writes.lock().expect("writes").as_slice(),
             &[(4096, Bytes::from_static(b"range"))]
         );
+    });
+}
+
+#[test]
+fn random_write_port_propagates_open_write_finish_and_abort_failures() {
+    futures::executor::block_on(async {
+        let path = aster_forge_webdav::DavPath::new("/file").expect("path");
+
+        let open_failure = RecordingRandomSystem {
+            failures: RandomWriteFailures {
+                open: Some(DavBackendErrorKind::Forbidden),
+                ..RandomWriteFailures::default()
+            },
+            ..RecordingRandomSystem::default()
+        };
+        assert!(matches!(
+            open_failure
+                .open_random_write(&path, DavWriteOptions::default())
+                .await,
+            Err(DavBackendError {
+                kind: DavBackendErrorKind::Forbidden
+            })
+        ));
+
+        let write_failure = RecordingRandomSystem {
+            failures: RandomWriteFailures {
+                write_at: Some(DavBackendErrorKind::InsufficientStorage),
+                ..RandomWriteFailures::default()
+            },
+            ..RecordingRandomSystem::default()
+        };
+        let mut writer = write_failure
+            .open_random_write(&path, DavWriteOptions::default())
+            .await
+            .expect("writer should open before write failure");
+        assert!(matches!(
+            writer.write_at(5, Bytes::from_static(b"x")).await,
+            Err(DavBackendError {
+                kind: DavBackendErrorKind::InsufficientStorage
+            })
+        ));
+        assert!(write_failure.writes.lock().expect("writes").is_empty());
+
+        let finish_failure = RecordingRandomSystem {
+            failures: RandomWriteFailures {
+                finish: Some(DavBackendErrorKind::Conflict),
+                ..RandomWriteFailures::default()
+            },
+            ..RecordingRandomSystem::default()
+        };
+        let writer = finish_failure
+            .open_random_write(&path, DavWriteOptions::default())
+            .await
+            .expect("writer should open before finish failure");
+        assert!(matches!(
+            writer.finish().await,
+            Err(DavBackendError {
+                kind: DavBackendErrorKind::Conflict
+            })
+        ));
+
+        let abort_failure = RecordingRandomSystem {
+            failures: RandomWriteFailures {
+                abort: Some(DavBackendErrorKind::Internal),
+                ..RandomWriteFailures::default()
+            },
+            ..RecordingRandomSystem::default()
+        };
+        let writer = abort_failure
+            .open_random_write(&path, DavWriteOptions::default())
+            .await
+            .expect("writer should open before abort failure");
+        assert!(matches!(
+            writer.abort().await,
+            Err(DavBackendError {
+                kind: DavBackendErrorKind::Internal
+            })
+        ));
     });
 }

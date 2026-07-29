@@ -141,6 +141,7 @@ pub enum ReadDirMeta {
 pub struct DavWriteOptions {
     pub truncate: bool,
     pub create: bool,
+    /// Atomically fail if the target already exists; product adapters must enforce this at open.
     pub create_new: bool,
     pub expected_length: Option<u64>,
     pub checksum: Option<String>,
@@ -190,6 +191,10 @@ pub trait DavDownloadSource: Send + Sync {
 }
 
 /// Sequential write handle. A successful `finish` is the product adapter's commit boundary.
+///
+/// Dropping a handle before `finish` or `abort` must roll back or clean up the uncommitted write.
+/// It must never commit implicitly or leak staging resources. `abort` is the explicit abandonment
+/// path and must perform the same cleanup before it returns.
 pub trait DavWriteHandle: Send {
     fn write_bytes(
         &mut self,
@@ -211,6 +216,10 @@ pub trait DavWriteSystem: Send + Sync {
 }
 
 /// Explicit random-write handle used only by negotiated partial-write capabilities.
+///
+/// Dropping a handle before `finish` or `abort` must roll back or clean up the uncommitted write.
+/// It must never commit implicitly or leak staging resources. `finish` remains the sole commit
+/// boundary, while `abort` is the explicit abandonment and cleanup path.
 pub trait DavRandomWriteHandle: Send {
     fn write_at(
         &mut self,

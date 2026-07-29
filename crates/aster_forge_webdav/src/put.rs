@@ -90,7 +90,6 @@ pub fn plan_put_request(
     if !snapshot.allows(DavMethod::Put) {
         return Err(DavPutPlanError::MethodNotAllowed);
     }
-    let (write, precondition) = plan_put_write(snapshot, headers)?;
     let resource = match state {
         DavPutResourceState::Missing => DavConditionalResource::missing(),
         DavPutResourceState::File {
@@ -103,6 +102,7 @@ pub fn plan_put_request(
         },
         DavPutResourceState::Collection => return Err(DavPutPlanError::CollectionTarget),
     };
+    let (write, precondition) = plan_put_write(snapshot, headers)?;
     if matches!(write, DavPutWritePlan::Partial(_)) && !resource.exists {
         return Err(DavPutPlanError::PartialTargetMissing);
     }

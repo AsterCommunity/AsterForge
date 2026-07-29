@@ -31,8 +31,8 @@ use crate::{
 pub enum DavBodyError {
     #[error("failed to read WebDAV request body")]
     ReadFailed,
-    #[error("WebDAV XML body is too large")]
-    XmlTooLarge,
+    #[error("WebDAV request body is too large")]
+    BodyTooLarge,
     #[error("WebDAV method does not accept a request body")]
     BodyNotAllowed,
 }
@@ -54,6 +54,11 @@ pub enum DavDownloadBody {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavMultiRangeLimits {
     pub maximum_header_bytes: usize,
+    /// Maximum raw range specs accepted before coalescing allocates its result.
+    ///
+    /// Coalescing preserves request order and has superlinear worst-case CPU cost. Products must
+    /// choose this bound explicitly; raising it can significantly increase per-request work and
+    /// there is no implicit fallback limit.
     pub maximum_raw_ranges: usize,
     pub maximum_segments: usize,
     pub maximum_aggregate_bytes: u64,
@@ -378,9 +383,9 @@ pub fn gate_method(
 pub fn body_error_response(error: DavBodyError) -> DavResponse {
     let (status, body) = match error {
         DavBodyError::ReadFailed => (StatusCode::BAD_REQUEST, Some("Failed to read request body")),
-        DavBodyError::XmlTooLarge => (
+        DavBodyError::BodyTooLarge => (
             StatusCode::PAYLOAD_TOO_LARGE,
-            Some("WebDAV XML body too large"),
+            Some("WebDAV request body too large"),
         ),
         DavBodyError::BodyNotAllowed => (StatusCode::UNSUPPORTED_MEDIA_TYPE, None),
     };
@@ -926,6 +931,9 @@ impl Stream for DavMultipartStream {
                     match part.stream.as_mut().poll_next(context) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Some(Ok(chunk))) => {
+                            if chunk.is_empty() {
+                                continue;
+                            }
                             let chunk_length = chunk.len() as u64;
                             if chunk_length > part.expected_length - part.seen {
                                 this.phase = DavMultipartStreamPhase::Done;

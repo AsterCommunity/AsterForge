@@ -1,6 +1,7 @@
 //! Observable WebDAV operation events.
 
 use std::time::Duration;
+use std::{panic::AssertUnwindSafe, panic::catch_unwind};
 
 use crate::{DavBackendErrorKind, DavPath, DavRequestHead};
 
@@ -163,7 +164,9 @@ impl DavEvent {
 /// Non-authoritative observer for audit adapters, metrics, tracing, and notifications.
 ///
 /// Required mutations, quota updates, lock persistence, and cache correctness must complete in
-/// the synchronous backend operation before this observer is called.
+/// the synchronous backend operation before this observer is called. `publish` must return
+/// promptly without blocking on I/O; products that need asynchronous work must use a bounded,
+/// non-blocking enqueue into a product-owned worker.
 pub trait DavEventSink: Send + Sync {
     fn publish(&self, event: &DavEvent) -> Result<(), DavObservationError>;
 }
@@ -171,9 +174,7 @@ pub trait DavEventSink: Send + Sync {
 /// Publishes a non-authoritative event without allowing observer failure to affect the operation.
 pub fn publish_non_authoritative(sink: Option<&dyn DavEventSink>, event: &DavEvent) {
     if let Some(sink) = sink {
-        match sink.publish(event) {
-            Ok(()) | Err(DavObservationError) => {}
-        }
+        let _ = catch_unwind(AssertUnwindSafe(|| sink.publish(event)));
     }
 }
 

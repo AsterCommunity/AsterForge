@@ -234,8 +234,8 @@ pub async fn ensure_empty_body(payload: &mut actix_web::web::Payload) -> Result<
     Ok(())
 }
 
-/// Collects a bounded XML request body for grammar parsing by the protocol layer.
-pub async fn collect_bounded_xml_body(
+/// Collects a bounded request body for parsing by the protocol or product layer.
+pub async fn collect_bounded_body(
     payload: &mut actix_web::web::Payload,
     maximum: usize,
 ) -> Result<Vec<u8>, DavBodyError> {
@@ -245,9 +245,9 @@ pub async fn collect_bounded_xml_body(
         let next_len = body
             .len()
             .checked_add(chunk.len())
-            .ok_or(DavBodyError::XmlTooLarge)?;
+            .ok_or(DavBodyError::BodyTooLarge)?;
         if next_len > maximum {
-            return Err(DavBodyError::XmlTooLarge);
+            return Err(DavBodyError::BodyTooLarge);
         }
         body.extend_from_slice(&chunk);
     }
@@ -263,10 +263,10 @@ pub async fn prepare_request_body(
         DavBodyPolicy::Empty => ensure_empty_body(payload)
             .await
             .map(|()| DavPreparedBody::None),
-        DavBodyPolicy::BoundedXml { maximum } => collect_bounded_xml_body(payload, maximum)
+        DavBodyPolicy::BoundedXml { maximum } => collect_bounded_body(payload, maximum)
             .await
             .map(DavPreparedBody::Xml),
-        DavBodyPolicy::Bounded { maximum } => collect_bounded_xml_body(payload, maximum)
+        DavBodyPolicy::Bounded { maximum } => collect_bounded_body(payload, maximum)
             .await
             .map(DavPreparedBody::Bytes),
         DavBodyPolicy::Stream | DavBodyPolicy::Unused => Ok(DavPreparedBody::None),
