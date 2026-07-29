@@ -1,19 +1,18 @@
 use std::collections::{HashMap, HashSet};
-use std::io::SeekFrom;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use aster_forge_webdav::{
-    DavBackendErrorKind, DavConditionalEvaluationError, DavConditionalOutcome,
-    DavConditionalResource, DavDirEntry, DavFile, DavFileSystem, DavIfEvaluationError, DavLock,
+    DavBackendError, DavBackendErrorKind, DavConditionalEvaluationError, DavConditionalOutcome,
+    DavConditionalResource, DavDirEntry, DavFileSystem, DavIfEvaluationError, DavLock,
     DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavMethod, DavPath,
-    DavResponseBody, FsError, FsFuture, FsStream, LsFuture, OpenOptions, ReadDirMeta,
-    enforce_if_header_with_backends, enforce_parent_collection, enforce_parent_unlocked,
-    enforce_unlocked, ensure_lock_target_exists, parse_if_header, plan_conditionals_with_backends,
-    unsubmitted_lock_conflicts,
+    DavResponseBody, DavWriteHandle, DavWriteOptions, DavWriteSystem, FsError, FsFuture, FsStream,
+    LsFuture, ReadDirMeta, enforce_if_header_with_backends, enforce_parent_collection,
+    enforce_parent_unlocked, enforce_unlocked, ensure_lock_target_exists, parse_if_header,
+    plan_conditionals_with_backends, unsubmitted_lock_conflicts,
 };
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use http::StatusCode;
 use http::header::{HeaderMap, HeaderValue};
 
@@ -49,69 +48,85 @@ impl DavMetaData for TestMeta {
 struct TestFileSystem {
     etags: HashMap<String, String>,
     directories: HashSet<String>,
+    files: Mutex<HashMap<String, Bytes>>,
+    concurrent_creations: Mutex<HashMap<String, Bytes>>,
     failures: HashMap<String, FsError>,
     open_failure: Option<FsError>,
-    flush_failure: Option<FsError>,
-    open_calls: Mutex<Vec<(String, OpenOptions)>>,
-    flush_calls: Arc<AtomicUsize>,
+    finish_failure: Option<FsError>,
+    open_calls: Mutex<Vec<(String, DavWriteOptions)>>,
+    finish_calls: Arc<AtomicUsize>,
 }
 
-struct TestFile {
-    flush_failure: Option<FsError>,
-    flush_calls: Arc<AtomicUsize>,
+struct TestWriteHandle {
+    finish_failure: Option<FsError>,
+    finish_calls: Arc<AtomicUsize>,
 }
 
-impl DavFile for TestFile {
-    fn metadata<'a>(&'a mut self) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        Box::pin(async { Err(FsError::GeneralFailure) })
+impl DavWriteHandle for TestWriteHandle {
+    async fn write_bytes(&mut self, _buf: Bytes) -> Result<(), DavBackendError> {
+        Err(DavBackendError::from(FsError::GeneralFailure))
     }
 
-    fn read_bytes(&mut self, _count: usize) -> FsFuture<'_, Bytes> {
-        Box::pin(async { Err(FsError::GeneralFailure) })
+    async fn finish(self) -> Result<(), DavBackendError> {
+        self.finish_calls.fetch_add(1, Ordering::SeqCst);
+        self.finish_failure
+            .map_or(Ok(()), |error| Err(DavBackendError::from(error)))
     }
 
-    fn write_bytes(&mut self, _buf: Bytes) -> FsFuture<'_, ()> {
-        Box::pin(async { Err(FsError::GeneralFailure) })
-    }
-
-    fn write_buf(&mut self, _buf: Box<dyn Buf + Send>) -> FsFuture<'_, ()> {
-        Box::pin(async { Err(FsError::GeneralFailure) })
-    }
-
-    fn seek(&mut self, _pos: SeekFrom) -> FsFuture<'_, u64> {
-        Box::pin(async { Err(FsError::GeneralFailure) })
-    }
-
-    fn flush(&mut self) -> FsFuture<'_, ()> {
-        self.flush_calls.fetch_add(1, Ordering::SeqCst);
-        let failure = self.flush_failure;
-        Box::pin(async move { failure.map_or(Ok(()), Err) })
+    async fn abort(self) -> Result<(), DavBackendError> {
+        Ok(())
     }
 }
 
-impl DavFileSystem for TestFileSystem {
-    fn open<'a>(
+impl DavWriteSystem for TestFileSystem {
+    type Handle = TestWriteHandle;
+
+    async fn open_write<'a>(
         &'a self,
         path: &'a DavPath,
-        options: OpenOptions,
-    ) -> FsFuture<'a, Box<dyn DavFile>> {
+        options: DavWriteOptions,
+    ) -> Result<Self::Handle, DavBackendError> {
+        let create_new = options.create_new;
+        let truncate = options.truncate;
+        let create = options.create;
         self.open_calls
             .lock()
             .expect("open call log should not be poisoned")
             .push((path.as_str().to_owned(), options));
-        let failure = self.open_failure;
-        let file = TestFile {
-            flush_failure: self.flush_failure,
-            flush_calls: Arc::clone(&self.flush_calls),
+        if let Some(error) = self.open_failure {
+            return Err(DavBackendError::from(error));
+        }
+        let concurrent_creation = self
+            .concurrent_creations
+            .lock()
+            .expect("concurrent creation state should not be poisoned")
+            .remove(path.as_str());
+        let mut files = self
+            .files
+            .lock()
+            .expect("file state should not be poisoned");
+        if let Some(contents) = concurrent_creation {
+            files.insert(path.as_str().to_owned(), contents);
+        }
+        if create_new
+            && (self.etags.contains_key(path.as_str()) || files.contains_key(path.as_str()))
+        {
+            return Err(DavBackendError::from(FsError::Exists));
+        }
+        if truncate {
+            files.insert(path.as_str().to_owned(), Bytes::new());
+        } else if create {
+            files.entry(path.as_str().to_owned()).or_default();
+        }
+        let file = TestWriteHandle {
+            finish_failure: self.finish_failure,
+            finish_calls: Arc::clone(&self.finish_calls),
         };
-        Box::pin(async move {
-            match failure {
-                Some(error) => Err(error),
-                None => Ok(Box::new(file) as Box<dyn DavFile>),
-            }
-        })
+        Ok(file)
     }
+}
 
+impl DavFileSystem for TestFileSystem {
     fn read_dir<'a>(
         &'a self,
         _path: &'a DavPath,
@@ -127,7 +142,13 @@ impl DavFileSystem for TestFileSystem {
             }
             let is_dir = self.directories.contains(path.as_str());
             let etag = self.etags.get(path.as_str()).cloned();
-            if !is_dir && etag.is_none() {
+            let exists = etag.is_some()
+                || self
+                    .files
+                    .lock()
+                    .expect("file state should not be poisoned")
+                    .contains_key(path.as_str());
+            if !is_dir && !exists {
                 return Err(FsError::NotFound);
             }
             Ok(Box::new(TestMeta { etag, is_dir }) as Box<dyn DavMetaData>)
@@ -621,6 +642,7 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
         assert!(
             ensure_lock_target_exists(
                 &existing,
+                &existing,
                 &DavPath::new("/existing.txt").expect("existing file"),
             )
             .await
@@ -636,11 +658,15 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
 
         let missing = TestFileSystem::default();
         assert!(
-            !ensure_lock_target_exists(&missing, &DavPath::new("/new.txt").expect("missing file"),)
-                .await
-                .expect("a missing file should become a lock-null resource")
+            !ensure_lock_target_exists(
+                &missing,
+                &missing,
+                &DavPath::new("/new.txt").expect("missing file"),
+            )
+            .await
+            .expect("a missing file should become a lock-null resource")
         );
-        assert_eq!(missing.flush_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(missing.finish_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             missing
                 .open_calls
@@ -649,12 +675,12 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
                 .as_slice(),
             [(
                 "/new.txt".to_owned(),
-                OpenOptions {
-                    write: true,
+                DavWriteOptions {
                     create: true,
+                    create_new: true,
                     truncate: true,
-                    size: Some(0),
-                    ..OpenOptions::default()
+                    expected_length: Some(0),
+                    ..DavWriteOptions::default()
                 }
             )]
         );
@@ -663,10 +689,11 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
         assert_eq!(
             ensure_lock_target_exists(
                 &missing_collection,
+                &missing_collection,
                 &DavPath::new("/new/").expect("missing collection"),
             )
             .await,
-            Err(FsError::NotFound)
+            Err(DavBackendError::from(FsError::NotFound))
         );
         assert!(
             missing_collection
@@ -693,7 +720,7 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
             ),
             (
                 TestFileSystem {
-                    flush_failure: Some(FsError::GeneralFailure),
+                    finish_failure: Some(FsError::GeneralFailure),
                     ..TestFileSystem::default()
                 },
                 FsError::GeneralFailure,
@@ -701,10 +728,48 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
         ] {
             let result = ensure_lock_target_exists(
                 &filesystem,
+                &filesystem,
                 &DavPath::new("/failed.txt").expect("failed target"),
             )
             .await;
-            assert_eq!(result, Err(expected));
+            assert_eq!(
+                result.expect_err("lock target failure"),
+                DavBackendError::from(expected)
+            );
         }
+    });
+}
+
+#[test]
+fn lock_target_guard_does_not_truncate_a_concurrent_put_creation() {
+    futures::executor::block_on(async {
+        let filesystem = TestFileSystem::default();
+        let path = DavPath::new("/raced.txt").expect("race target path");
+        filesystem
+            .concurrent_creations
+            .lock()
+            .expect("concurrent creation state should not be poisoned")
+            .insert(
+                path.as_str().to_owned(),
+                Bytes::from_static(b"concurrent PUT"),
+            );
+
+        assert!(matches!(
+            filesystem.metadata(&path).await,
+            Err(FsError::NotFound)
+        ));
+        let error = ensure_lock_target_exists(&filesystem, &filesystem, &path)
+            .await
+            .expect_err("create_new must reject a target created after metadata");
+        assert_eq!(error.kind, DavBackendErrorKind::AlreadyExists);
+        assert_eq!(filesystem.finish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            filesystem
+                .files
+                .lock()
+                .expect("file state should not be poisoned")
+                .get(path.as_str()),
+            Some(&Bytes::from_static(b"concurrent PUT"))
+        );
     });
 }

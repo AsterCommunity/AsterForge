@@ -3,8 +3,11 @@ use aster_forge_webdav::{
     DavCapabilityPlanError, DavCapabilityProvider, DavCapabilityTarget, DavClass1Profile,
     DavClass1Support, DavClass2Profile, DavClass2Support, DavCompatibilityCapabilities,
     DavComplianceClasses, DavLockingCapability, DavMethod, DavMethodGateError, DavMethodSet,
-    DavNonDavProfile, DavPath, DavResourceState, DavVersioningCapability, gate_method,
-    method_not_allowed_response, options_response, plan_capabilities,
+    DavNonDavProfile, DavPartialPutCapability, DavPartialPutSupport, DavPatchBodyPolicy,
+    DavPatchCapability, DavPatchFormat, DavPatchSupport, DavPath, DavPrivateUpdateRangeCapability,
+    DavPrivateUpdateRangeSupport, DavResourceState, DavVersioningCapability, DavWithPartialPut,
+    DavWithPatch, DavWithPrivateUpdateRange, DavWriteCapabilities, DavWritePrecondition,
+    gate_method, method_not_allowed_response, options_response, plan_capabilities,
     plan_capabilities_with_provider,
 };
 use http::StatusCode;
@@ -17,6 +20,7 @@ fn declaration(resource: DavResourceState, methods: &[DavMethod]) -> DavCapabili
         locking: DavLockingCapability::Disabled,
         versioning: DavVersioningCapability::Disabled,
         compatibility: DavCompatibilityCapabilities::default(),
+        writes: DavWriteCapabilities::default(),
         compliance: DavComplianceClasses { class1: true },
     }
 }
@@ -278,6 +282,7 @@ impl DavCapabilityProvider for ContextAwareProvider {
             locking: DavLockingCapability::Disabled,
             versioning: DavVersioningCapability::Disabled,
             compatibility: DavCompatibilityCapabilities::default(),
+            writes: DavWriteCapabilities::default(),
             compliance: DavComplianceClasses { class1: true },
         };
         if context.principal.as_deref() == Some("lock-writer") {
@@ -475,4 +480,240 @@ fn provider_backend_failures_remain_distinct_from_plan_failures() {
             kind: DavBackendErrorKind::Internal
         })
     ));
+}
+
+static PATCH_FORMATS: [DavPatchFormat; 2] = [
+    DavPatchFormat {
+        media_type: "application/merge-patch+json",
+        body_policy: DavPatchBodyPolicy::Bounded { maximum: 4096 },
+        precondition: DavWritePrecondition::RequireStrongIfMatch,
+    },
+    DavPatchFormat {
+        media_type: "application/example-patch; version=1",
+        body_policy: DavPatchBodyPolicy::Stream,
+        precondition: DavWritePrecondition::Optional,
+    },
+];
+
+#[test]
+fn write_capabilities_validate_independent_method_dependencies() {
+    assert_eq!(
+        DavPrivateUpdateRangeCapability::default(),
+        DavPrivateUpdateRangeCapability::Disabled
+    );
+    let mut partial = declaration(DavResourceState::File, &[DavMethod::Options]);
+    partial.writes.partial_put = DavPartialPutCapability::ContentRangeBytes {
+        precondition: DavWritePrecondition::Optional,
+    };
+    assert_eq!(
+        plan_capabilities(partial),
+        Err(DavCapabilityPlanError::PartialPutWithoutPut)
+    );
+
+    let mut private = declaration(DavResourceState::File, &[DavMethod::Options]);
+    private.writes.private_update_range = DavPrivateUpdateRangeCapability::XUpdateRange {
+        precondition: DavWritePrecondition::Optional,
+    };
+    assert_eq!(
+        plan_capabilities(private),
+        Err(DavCapabilityPlanError::PrivateUpdateRangeWithoutPut)
+    );
+
+    assert_eq!(
+        plan_capabilities(declaration(
+            DavResourceState::File,
+            &[DavMethod::Options, DavMethod::Patch],
+        )),
+        Err(DavCapabilityPlanError::PatchWithoutFormats)
+    );
+
+    let mut formats_without_method = declaration(DavResourceState::File, &[DavMethod::Options]);
+    formats_without_method.writes.patch = DavPatchCapability::Formats(&PATCH_FORMATS);
+    assert_eq!(
+        plan_capabilities(formats_without_method),
+        Err(DavCapabilityPlanError::PatchFormatsWithoutMethod)
+    );
+
+    let mut empty = declaration(
+        DavResourceState::File,
+        &[DavMethod::Options, DavMethod::Patch],
+    );
+    empty.writes.patch = DavPatchCapability::Formats(&[]);
+    assert_eq!(
+        plan_capabilities(empty),
+        Err(DavCapabilityPlanError::PatchWithoutFormats)
+    );
+}
+
+#[test]
+fn patch_format_validation_uses_structured_mime_semantics() {
+    static INVALID: [DavPatchFormat; 1] = [DavPatchFormat {
+        media_type: "not a media type",
+        body_policy: DavPatchBodyPolicy::Stream,
+        precondition: DavWritePrecondition::Optional,
+    }];
+    static DUPLICATE: [DavPatchFormat; 2] = [
+        DavPatchFormat {
+            media_type: "application/merge-patch+json",
+            body_policy: DavPatchBodyPolicy::Stream,
+            precondition: DavWritePrecondition::Optional,
+        },
+        DavPatchFormat {
+            media_type: "APPLICATION/MERGE-PATCH+JSON",
+            body_policy: DavPatchBodyPolicy::Bounded { maximum: 0 },
+            precondition: DavWritePrecondition::RequireStrongIfMatch,
+        },
+    ];
+
+    for (formats, expected) in [
+        (&INVALID[..], DavCapabilityPlanError::InvalidPatchMediaType),
+        (
+            &DUPLICATE[..],
+            DavCapabilityPlanError::DuplicatePatchMediaType,
+        ),
+    ] {
+        let mut declaration = declaration(
+            DavResourceState::File,
+            &[DavMethod::Options, DavMethod::Patch],
+        );
+        declaration.writes.patch = DavPatchCapability::Formats(formats);
+        assert_eq!(plan_capabilities(declaration), Err(expected));
+    }
+}
+
+#[test]
+fn patch_discovery_and_partial_put_do_not_add_dav_tokens() {
+    let mut declaration = declaration(
+        DavResourceState::File,
+        &[DavMethod::Options, DavMethod::Put, DavMethod::Patch],
+    );
+    declaration.writes = DavWriteCapabilities {
+        partial_put: DavPartialPutCapability::ContentRangeBytes {
+            precondition: DavWritePrecondition::RequireStrongIfMatch,
+        },
+        patch: DavPatchCapability::Formats(&PATCH_FORMATS),
+        private_update_range: DavPrivateUpdateRangeCapability::Disabled,
+    };
+    let snapshot = plan_capabilities(declaration).expect("valid write capabilities");
+    assert_eq!(snapshot.allow_header(), "OPTIONS, PUT, PATCH");
+    assert_eq!(snapshot.dav_header().expect("class 1 only"), "1");
+    assert_eq!(
+        snapshot.accept_patch_header().expect("Accept-Patch"),
+        "application/merge-patch+json, application/example-patch; version=1"
+    );
+    let options = options_response(&snapshot);
+    assert_eq!(
+        options
+            .headers
+            .get("Accept-Patch")
+            .expect("discovery header"),
+        snapshot.accept_patch_header().expect("snapshot header")
+    );
+}
+
+struct CompleteWriteProvider;
+
+impl DavPartialPutSupport for CompleteWriteProvider {}
+impl DavPatchSupport for CompleteWriteProvider {}
+impl DavPrivateUpdateRangeSupport for CompleteWriteProvider {}
+
+impl DavCapabilityProvider for CompleteWriteProvider {
+    type Profile = DavWithPrivateUpdateRange<DavWithPatch<DavWithPartialPut<DavNonDavProfile>>>;
+
+    async fn capabilities(
+        &self,
+        _target: &DavCapabilityTarget,
+        _context: &DavCapabilityContext,
+    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+        let mut declaration = DavCapabilityDeclaration::new(
+            DavResourceState::File,
+            DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Put, DavMethod::Patch]),
+        );
+        declaration.writes = DavWriteCapabilities {
+            partial_put: DavPartialPutCapability::ContentRangeBytes {
+                precondition: DavWritePrecondition::RequireStrongIfMatch,
+            },
+            patch: DavPatchCapability::Formats(&PATCH_FORMATS),
+            private_update_range: DavPrivateUpdateRangeCapability::XUpdateRange {
+                precondition: DavWritePrecondition::RequireStrongIfMatch,
+            },
+        };
+        Ok(declaration)
+    }
+}
+
+#[test]
+fn composable_profiles_compile_for_complete_product_write_impls() {
+    let snapshot = futures::executor::block_on(plan_capabilities_with_provider(
+        &CompleteWriteProvider,
+        &DavCapabilityTarget::new(DavPath::new("/file").expect("path"), false),
+        &DavCapabilityContext::default(),
+    ))
+    .expect("composed write profile should compile and plan");
+    assert!(snapshot.allows(DavMethod::Put));
+    assert!(snapshot.allows(DavMethod::Patch));
+}
+
+struct RuntimeWriteAboveProfile(DavWriteCapabilities);
+
+impl DavCapabilityProvider for RuntimeWriteAboveProfile {
+    type Profile = DavNonDavProfile;
+
+    async fn capabilities(
+        &self,
+        _target: &DavCapabilityTarget,
+        _context: &DavCapabilityContext,
+    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+        let mut methods = DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Put]);
+        if self.0.patch != DavPatchCapability::Disabled {
+            methods = methods.with(DavMethod::Patch);
+        }
+        let mut declaration = DavCapabilityDeclaration::new(DavResourceState::File, methods);
+        declaration.writes = self.0;
+        Ok(declaration)
+    }
+}
+
+#[test]
+fn provider_profile_rejects_each_runtime_write_capability_above_static_support() {
+    let cases = [
+        (
+            DavWriteCapabilities {
+                partial_put: DavPartialPutCapability::ContentRangeBytes {
+                    precondition: DavWritePrecondition::Optional,
+                },
+                ..DavWriteCapabilities::default()
+            },
+            DavCapabilityPlanError::PartialPutExceedsProfile,
+        ),
+        (
+            DavWriteCapabilities {
+                patch: DavPatchCapability::Formats(&PATCH_FORMATS),
+                ..DavWriteCapabilities::default()
+            },
+            DavCapabilityPlanError::PatchExceedsProfile,
+        ),
+        (
+            DavWriteCapabilities {
+                private_update_range: DavPrivateUpdateRangeCapability::XUpdateRange {
+                    precondition: DavWritePrecondition::Optional,
+                },
+                ..DavWriteCapabilities::default()
+            },
+            DavCapabilityPlanError::PrivateUpdateRangeExceedsProfile,
+        ),
+    ];
+    for (writes, expected) in cases {
+        let error = futures::executor::block_on(plan_capabilities_with_provider(
+            &RuntimeWriteAboveProfile(writes),
+            &DavCapabilityTarget::new(DavPath::new("/file").expect("path"), false),
+            &DavCapabilityContext::default(),
+        ))
+        .expect_err("runtime capability must stay below its static profile");
+        assert!(matches!(
+            error,
+            aster_forge_webdav::DavCapabilityEvaluationError::Plan(actual)
+                if actual == expected
+        ));
+    }
 }

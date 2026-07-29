@@ -26,6 +26,7 @@ pub mod conditional;
 pub mod deltav;
 pub mod event;
 pub mod lock;
+pub mod patch;
 pub mod path;
 pub mod property;
 pub mod protocol;
@@ -37,10 +38,11 @@ pub mod xml;
 pub mod xml_response;
 
 pub use backend::{
-    DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavFile, DavFileSystem,
-    DavIfResourceState, DavIfStateResolver, DavLock, DavLockError, DavLockPreflightError,
-    DavLockSystem, DavMetaData, DavProp, DavResourceKind, FsError, FsFuture, FsResult, FsStream,
-    LsFuture, OpenOptions, ReadDirMeta,
+    DavBackendError, DavBackendErrorKind, DavContentStream, DavDirEntry, DavDownloadOpenError,
+    DavDownloadSource, DavFileSystem, DavIfResourceState, DavIfStateResolver, DavLock,
+    DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavOpenedDownload, DavProp,
+    DavRandomWriteHandle, DavRandomWriteSystem, DavResourceKind, DavWriteHandle, DavWriteOptions,
+    DavWriteSystem, FsError, FsFuture, FsResult, FsStream, LsFuture, ReadDirMeta,
 };
 pub use capability::{
     DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityEvaluationError,
@@ -48,8 +50,11 @@ pub use capability::{
     DavCapabilityTarget, DavClass1Profile, DavClass1Support, DavClass1VersioningProfile,
     DavClass2Profile, DavClass2Support, DavClass2VersioningProfile, DavCompatibilityCapabilities,
     DavComplianceClasses, DavCoreVersioningSupport, DavLockingCapability, DavMethodGateError,
-    DavMethodSet, DavNonDavProfile, DavResourceState, DavVersioningCapability, plan_capabilities,
-    plan_capabilities_with_provider,
+    DavMethodSet, DavNonDavProfile, DavPartialPutCapability, DavPartialPutSupport,
+    DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat, DavPatchSupport,
+    DavPrivateUpdateRangeCapability, DavPrivateUpdateRangeSupport, DavResourceState,
+    DavVersioningCapability, DavWithPartialPut, DavWithPatch, DavWithPrivateUpdateRange,
+    DavWriteCapabilities, DavWritePrecondition, plan_capabilities, plan_capabilities_with_provider,
 };
 pub use conditional::{
     DavConditionalEvaluationError, DavConditionalOutcome, DavConditionalPlan,
@@ -61,7 +66,11 @@ pub use deltav::{
     version_control_request_error_response, version_control_response,
     version_tree_non_file_response, version_tree_report_error_response, version_tree_response,
 };
-pub use event::{DavEvent, DavEventOutcome, DavEventSink, DavOperation, NoopDavEventSink};
+pub use event::{
+    DavEvent, DavEventOutcome, DavEventSink, DavObservationError, DavOperation,
+    DavOperationObservations, DavProtocolFailureClass, DavStreamOutcome, NoopDavEventSink,
+    publish_non_authoritative,
+};
 pub use lock::{
     DavLockPlan, DavLockPlanError, enforce_parent_unlocked, enforce_unlocked,
     ensure_lock_target_exists, lock_acquire_success_response, lock_conflict_response,
@@ -69,6 +78,7 @@ pub use lock::{
     lock_xml_error_response, plan_lock_request, unlock_success_response,
     unlock_token_mismatch_response, unsubmitted_lock_conflicts,
 };
+pub use patch::{DavPatchPlan, DavPatchPlanError, patch_plan_error_response, plan_patch_request};
 pub use path::{
     DavPath, DavPathError, child_relative_path, decode_relative_path, display_name, encode_href,
     href_for_dav_path, href_for_relative, parent_relative_path,
@@ -86,8 +96,8 @@ pub use protocol::{
     parse_overwrite, parse_propfind_depth, submitted_lock_tokens, submitted_lock_tokens_for_path,
 };
 pub use put::{
-    DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError, plan_put_request,
-    put_plan_error_response, put_success_response,
+    DavPartialPutPlan, DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError,
+    DavPutWritePlan, plan_put_request, put_plan_error_response, put_success_response,
 };
 pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin, DavRequestTarget};
 pub use resource::{
@@ -99,10 +109,12 @@ pub use resource::{
     validate_collection_create_target, validate_delete_target,
 };
 pub use response::{
-    DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavResponse,
-    DavResponseBody, backend_error_response, body_error_response,
+    DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavMultiRangeLimits,
+    DavMultiRangePolicy, DavMultipartDownloadPlan, DavMultipartSegmentPlan, DavRangeLimitBehavior,
+    DavResponse, DavResponseBody, backend_error_response, body_error_response,
     capability_evaluation_error_response, conditional_plan_error_response, gate_method,
-    method_not_allowed_response, options_response, plan_download_response, protocol_error_response,
+    method_not_allowed_response, open_download, options_response, plan_download_response,
+    plan_download_response_with_multi_range, protocol_error_response,
     range_not_satisfiable_response,
 };
 pub use xml::{

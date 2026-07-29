@@ -1,6 +1,7 @@
 //! Observable WebDAV operation events.
 
 use std::time::Duration;
+use std::{panic::AssertUnwindSafe, panic::catch_unwind};
 
 use crate::{DavBackendErrorKind, DavPath, DavRequestHead};
 
@@ -13,6 +14,7 @@ pub enum DavOperation {
     Get,
     Head,
     Put,
+    Patch,
     Mkcol,
     Delete,
     Copy,
@@ -36,6 +38,47 @@ pub enum DavEventOutcome {
         backend_error: Option<DavBackendErrorKind>,
     },
 }
+
+/// Product-neutral class for a protocol-side failure observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DavProtocolFailureClass {
+    Request,
+    Precondition,
+    Capability,
+    Backend,
+    Response,
+    Transport,
+}
+
+/// Outcome of a response stream after the operation has been planned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DavStreamOutcome {
+    Completed,
+    Cancelled { response_started: bool },
+    Failed { response_started: bool },
+}
+
+/// Low-frequency scalar observations attached to a completed operation.
+///
+/// `None` means that a product did not collect that fact; zero is a collected zero. The type
+/// intentionally contains no request body, credential, lock token, object key, or label string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DavOperationObservations {
+    pub bytes_received: Option<u64>,
+    pub bytes_sent: Option<u64>,
+    pub requested_ranges: Option<u64>,
+    pub served_ranges: Option<u64>,
+    pub resources: Option<u64>,
+    pub backend_open_count: Option<u64>,
+    pub backend_call_count: Option<u64>,
+    pub protocol_failure: Option<DavProtocolFailureClass>,
+    pub stream: Option<DavStreamOutcome>,
+}
+
+/// Failure reported by a non-authoritative observation sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("WebDAV observation sink failed")]
+pub struct DavObservationError;
 
 impl DavEventOutcome {
     /// Classifies a completed response. Informational, success, and redirection statuses are
@@ -70,6 +113,7 @@ pub struct DavEvent {
     pub destination: Option<DavPath>,
     pub outcome: DavEventOutcome,
     pub elapsed: Duration,
+    pub observations: DavOperationObservations,
 }
 
 impl DavEvent {
@@ -84,6 +128,24 @@ impl DavEvent {
         elapsed: Duration,
         backend_error: Option<DavBackendErrorKind>,
     ) -> Self {
+        Self::completed_with_observations(
+            request_head,
+            status,
+            elapsed,
+            backend_error,
+            DavOperationObservations::default(),
+        )
+    }
+
+    /// Builds a completed event with optional low-frequency observations.
+    #[must_use]
+    pub fn completed_with_observations(
+        request_head: &DavRequestHead,
+        status: u16,
+        elapsed: Duration,
+        backend_error: Option<DavBackendErrorKind>,
+        observations: DavOperationObservations,
+    ) -> Self {
         Self {
             request_id: None,
             operation: request_head.method.operation(),
@@ -94,6 +156,7 @@ impl DavEvent {
                 .map(|destination| destination.path.clone()),
             outcome: DavEventOutcome::from_status(status, backend_error),
             elapsed,
+            observations,
         }
     }
 }
@@ -101,9 +164,18 @@ impl DavEvent {
 /// Non-authoritative observer for audit adapters, metrics, tracing, and notifications.
 ///
 /// Required mutations, quota updates, lock persistence, and cache correctness must complete in
-/// the synchronous backend operation before this observer is called.
+/// the synchronous backend operation before this observer is called. `publish` must return
+/// promptly without blocking on I/O; products that need asynchronous work must use a bounded,
+/// non-blocking enqueue into a product-owned worker.
 pub trait DavEventSink: Send + Sync {
-    fn publish(&self, event: &DavEvent);
+    fn publish(&self, event: &DavEvent) -> Result<(), DavObservationError>;
+}
+
+/// Publishes a non-authoritative event without allowing observer failure to affect the operation.
+pub fn publish_non_authoritative(sink: Option<&dyn DavEventSink>, event: &DavEvent) {
+    if let Some(sink) = sink {
+        let _ = catch_unwind(AssertUnwindSafe(|| sink.publish(event)));
+    }
 }
 
 /// Event sink used when a product does not need protocol-level observation.
@@ -111,5 +183,7 @@ pub trait DavEventSink: Send + Sync {
 pub struct NoopDavEventSink;
 
 impl DavEventSink for NoopDavEventSink {
-    fn publish(&self, _event: &DavEvent) {}
+    fn publish(&self, _event: &DavEvent) -> Result<(), DavObservationError> {
+        Ok(())
+    }
 }
