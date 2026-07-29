@@ -87,6 +87,8 @@ pub enum HttpRangeError {
     UnsupportedUnit,
     #[error("multiple range requests are not supported")]
     MultipleRangesUnsupported,
+    #[error("range header exceeds the configured byte length")]
+    HeaderTooLong,
     #[error("range request exceeds the configured number of range specs")]
     TooManyRanges,
     #[error("range header is malformed")]
@@ -108,7 +110,7 @@ pub fn parse_single_byte_range(
     raw: &str,
     total_size: u64,
 ) -> Result<HttpByteRange, HttpRangeError> {
-    let set = parse_byte_ranges(raw, total_size, 1).map_err(|error| match error {
+    let set = parse_byte_ranges(raw, total_size, raw.len(), 1).map_err(|error| match error {
         HttpRangeError::TooManyRanges => HttpRangeError::MultipleRangesUnsupported,
         other => other,
     })?;
@@ -118,17 +120,22 @@ pub fn parse_single_byte_range(
         .ok_or(HttpRangeError::Unsatisfiable)
 }
 
-/// Parses an RFC 9110 `bytes` range-set with an allocation and work bound.
+/// Parses an RFC 9110 `bytes` range-set with allocation, work, and raw-input bounds.
 ///
-/// Empty list members are tolerated as required by the HTTP `#rule` recipient grammar. Every
-/// non-empty spec must be syntactically valid, while individually unsatisfiable specs are removed
-/// as long as at least one requested range remains satisfiable. End bounds beyond the current
-/// representation are clamped and suffix ranges larger than the representation select it all.
+/// `maximum_raw_bytes` is checked before inspecting or allocating for the range-set. Empty list
+/// members are tolerated as required by the HTTP `#rule` recipient grammar. Every non-empty spec
+/// must be syntactically valid, while individually unsatisfiable specs are removed as long as at
+/// least one requested range remains satisfiable. End bounds beyond the current representation are
+/// clamped and suffix ranges larger than the representation select it all.
 pub fn parse_byte_ranges(
     raw: &str,
     total_size: u64,
+    maximum_raw_bytes: usize,
     maximum_specs: usize,
 ) -> Result<HttpByteRangeSet, HttpRangeError> {
+    if raw.len() > maximum_raw_bytes {
+        return Err(HttpRangeError::HeaderTooLong);
+    }
     let raw = raw.trim_start();
     let (unit, range_set) = raw.split_once('=').ok_or(HttpRangeError::UnsupportedUnit)?;
     if !unit.eq_ignore_ascii_case("bytes") {
@@ -259,7 +266,7 @@ mod tests {
 
     #[test]
     fn multi_range_parser_preserves_order_and_removes_only_unsatisfiable_specs() {
-        let set = parse_byte_ranges("bytes=10-12, 50-, -5, 0-4", 20, 4)
+        let set = parse_byte_ranges("bytes=10-12, 50-, -5, 0-4", 20, 32, 4)
             .expect("mixed range-set should keep satisfiable specs");
         assert_eq!(set.requested_count(), 4);
         assert_eq!(
@@ -274,7 +281,7 @@ mod tests {
 
     #[test]
     fn multi_range_parser_tolerates_empty_list_members_and_clamps_suffixes() {
-        let set = parse_byte_ranges("bytes=, 0-99, , -100,", 20, 2)
+        let set = parse_byte_ranges("bytes=, 0-99, , -100,", 20, 24, 2)
             .expect("empty list members are recipient-tolerated");
         assert_eq!(set.requested_count(), 2);
         assert_eq!(
@@ -291,6 +298,7 @@ mod tests {
         let set = parse_byte_ranges(
             "bytes=-2,18446744073709551613-18446744073709551615",
             u64::MAX,
+            58,
             2,
         )
         .expect("maximum-sized representation ranges should clamp without overflow");
@@ -307,15 +315,15 @@ mod tests {
     #[test]
     fn multi_range_parser_enforces_spec_limit_before_normalization() {
         assert_eq!(
-            parse_byte_ranges("bytes=0-1,100-200", 20, 1),
+            parse_byte_ranges("bytes=0-1,100-200", 20, 19, 1),
             Err(HttpRangeError::TooManyRanges)
         );
         assert_eq!(
-            parse_byte_ranges("bytes=100-200,300-400", 20, 2),
+            parse_byte_ranges("bytes=100-200,300-400", 20, 25, 2),
             Err(HttpRangeError::Unsatisfiable)
         );
         assert_eq!(
-            parse_byte_ranges("bytes=-0,20-", 20, 2),
+            parse_byte_ranges("bytes=-0,20-", 20, 13, 2),
             Err(HttpRangeError::Unsatisfiable)
         );
     }
@@ -330,11 +338,36 @@ mod tests {
             ("bytes=0-1,2-x", HttpRangeError::InvalidNumber),
             ("items=0-1", HttpRangeError::UnsupportedUnit),
         ] {
-            assert_eq!(parse_byte_ranges(raw, 20, 8), Err(expected), "{raw}");
+            assert_eq!(
+                parse_byte_ranges(raw, 20, raw.len(), 8),
+                Err(expected),
+                "{raw}"
+            );
         }
         assert_eq!(
-            parse_byte_ranges("bytes=-1,0-", 0, 2),
+            parse_byte_ranges("bytes=-1,0-", 0, 12, 2),
             Err(HttpRangeError::EmptyRepresentation)
+        );
+    }
+
+    #[test]
+    fn multi_range_parser_separates_raw_byte_and_spec_limits() {
+        let exact = "bytes=0-1";
+        assert!(parse_byte_ranges(exact, 20, exact.len(), 1).is_ok());
+        assert_eq!(
+            parse_byte_ranges(exact, 20, exact.len() - 1, 1),
+            Err(HttpRangeError::HeaderTooLong)
+        );
+
+        let comma_padded = "bytes=,,,,,,,,0-1,,,,,,,,";
+        assert_eq!(
+            parse_byte_ranges(comma_padded, 20, 16, 1),
+            Err(HttpRangeError::HeaderTooLong)
+        );
+        let too_many_specs = "bytes=0-1,2-3";
+        assert_eq!(
+            parse_byte_ranges(too_many_specs, 20, too_many_specs.len(), 1),
+            Err(HttpRangeError::TooManyRanges)
         );
     }
 

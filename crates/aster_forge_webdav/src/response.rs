@@ -632,6 +632,7 @@ fn plan_requested_range(
                 Err(
                     HttpRangeError::UnsupportedUnit
                     | HttpRangeError::MultipleRangesUnsupported
+                    | HttpRangeError::HeaderTooLong
                     | HttpRangeError::TooManyRanges,
                 ) => DavRangeSelection::Full,
                 Err(
@@ -664,10 +665,15 @@ fn plan_multi_range(
     let Ok(raw) = value.to_str() else {
         return Ok(DavRangeSelection::NotSatisfiable);
     };
-    let set = match parse_byte_ranges(raw, content_length, policy.limits.maximum_raw_ranges) {
+    let set = match parse_byte_ranges(
+        raw,
+        content_length,
+        policy.limits.maximum_header_bytes,
+        policy.limits.maximum_raw_ranges,
+    ) {
         Ok(set) => set,
         Err(HttpRangeError::UnsupportedUnit) => return Ok(DavRangeSelection::Full),
-        Err(HttpRangeError::TooManyRanges) => {
+        Err(HttpRangeError::HeaderTooLong | HttpRangeError::TooManyRanges) => {
             return Ok(range_limit_selection(policy.limit_behavior));
         }
         Err(

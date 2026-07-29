@@ -48,6 +48,8 @@ impl DavMetaData for TestMeta {
 struct TestFileSystem {
     etags: HashMap<String, String>,
     directories: HashSet<String>,
+    files: Mutex<HashMap<String, Bytes>>,
+    concurrent_creations: Mutex<HashMap<String, Bytes>>,
     failures: HashMap<String, FsError>,
     open_failure: Option<FsError>,
     finish_failure: Option<FsError>,
@@ -84,19 +86,43 @@ impl DavWriteSystem for TestFileSystem {
         path: &'a DavPath,
         options: DavWriteOptions,
     ) -> Result<Self::Handle, DavBackendError> {
+        let create_new = options.create_new;
+        let truncate = options.truncate;
+        let create = options.create;
         self.open_calls
             .lock()
             .expect("open call log should not be poisoned")
             .push((path.as_str().to_owned(), options));
-        let failure = self.open_failure;
+        if let Some(error) = self.open_failure {
+            return Err(DavBackendError::from(error));
+        }
+        let concurrent_creation = self
+            .concurrent_creations
+            .lock()
+            .expect("concurrent creation state should not be poisoned")
+            .remove(path.as_str());
+        let mut files = self
+            .files
+            .lock()
+            .expect("file state should not be poisoned");
+        if let Some(contents) = concurrent_creation {
+            files.insert(path.as_str().to_owned(), contents);
+        }
+        if create_new
+            && (self.etags.contains_key(path.as_str()) || files.contains_key(path.as_str()))
+        {
+            return Err(DavBackendError::from(FsError::Exists));
+        }
+        if truncate {
+            files.insert(path.as_str().to_owned(), Bytes::new());
+        } else if create {
+            files.entry(path.as_str().to_owned()).or_default();
+        }
         let file = TestWriteHandle {
             finish_failure: self.finish_failure,
             finish_calls: Arc::clone(&self.finish_calls),
         };
-        match failure {
-            Some(error) => Err(DavBackendError::from(error)),
-            None => Ok(file),
-        }
+        Ok(file)
     }
 }
 
@@ -116,7 +142,13 @@ impl DavFileSystem for TestFileSystem {
             }
             let is_dir = self.directories.contains(path.as_str());
             let etag = self.etags.get(path.as_str()).cloned();
-            if !is_dir && etag.is_none() {
+            let exists = etag.is_some()
+                || self
+                    .files
+                    .lock()
+                    .expect("file state should not be poisoned")
+                    .contains_key(path.as_str());
+            if !is_dir && !exists {
                 return Err(FsError::NotFound);
             }
             Ok(Box::new(TestMeta { etag, is_dir }) as Box<dyn DavMetaData>)
@@ -705,5 +737,39 @@ fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
                 DavBackendError::from(expected)
             );
         }
+    });
+}
+
+#[test]
+fn lock_target_guard_does_not_truncate_a_concurrent_put_creation() {
+    futures::executor::block_on(async {
+        let filesystem = TestFileSystem::default();
+        let path = DavPath::new("/raced.txt").expect("race target path");
+        filesystem
+            .concurrent_creations
+            .lock()
+            .expect("concurrent creation state should not be poisoned")
+            .insert(
+                path.as_str().to_owned(),
+                Bytes::from_static(b"concurrent PUT"),
+            );
+
+        assert!(matches!(
+            filesystem.metadata(&path).await,
+            Err(FsError::NotFound)
+        ));
+        let error = ensure_lock_target_exists(&filesystem, &filesystem, &path)
+            .await
+            .expect_err("create_new must reject a target created after metadata");
+        assert_eq!(error.kind, DavBackendErrorKind::AlreadyExists);
+        assert_eq!(filesystem.finish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            filesystem
+                .files
+                .lock()
+                .expect("file state should not be poisoned")
+                .get(path.as_str()),
+            Some(&Bytes::from_static(b"concurrent PUT"))
+        );
     });
 }
