@@ -340,6 +340,8 @@ Windows adapter 会把 callback item key、file size、required range、session 
 
 `WindowsSyncRootConnection::fetch_data_waiters` 返回当前 connection 使用的 shareable registry。worker 必须把同一个 registry 传给 `WindowsFetchDataRequest::hydrate`；native `CANCEL_FETCH_DATA` callback 会在 callback thread 内只做 bounded HashMap matching 和 core cancellation-handle 调用，不执行 network I/O、数据库事务或阻塞 channel send。实际取消不依赖观察 queue 是否有容量；随后进入 `WindowsCallbackRequest::CancelFetchData` 的 snapshot 只用于日志、metrics 或诊断观察。
 
+真实 CFAPI callback 产生的 fetch/preflight request 才持有 native completion authority。`WindowsCallbackRequest::detached_fetch_data` 与 `detached_preflight` 只用于 portable orchestration 和合同测试；它们的 progress、success/failure acknowledgement 与 `Drop` 都不会调用 CFAPI。这样由测试或产品夹具构造的 synthetic correlation 不会被误当成有效 `ConnectionKey`/`TransferKey` 送入 `CfExecute`。
+
 registry correlation 同时包含：
 
 ```text

@@ -59,9 +59,7 @@ impl MemoryWritebackStore {
                     CloudRootId::new(persisted.root_id)?,
                 );
                 if persisted_scope != scope {
-                    return Err(
-                        "synthetic writeback state belonged to another cloud scope".into()
-                    );
+                    return Err("synthetic writeback state belonged to another cloud scope".into());
                 }
                 let key = CloudItemKey::new(
                     persisted_scope.clone(),
@@ -123,9 +121,7 @@ impl MemoryWritebackStore {
                 let key = item.item().key().clone();
                 let name = item.item().name().to_owned();
                 state.next_inode = state.next_inode.max(item.inode_record().inode().get());
-                state.next_item = state
-                    .next_item
-                    .max(item.inode_record().generation().get());
+                state.next_item = state.next_item.max(item.inode_record().generation().get());
                 Self::register_mutation_intent(
                     &mut state,
                     &mut intents,
@@ -168,20 +164,14 @@ impl MemoryWritebackStore {
                         .retain(|_, created_key| created_key != tombstone.key());
                 }
                 if state.tombstones.insert(name_key, tombstone).is_some() {
-                    return Err(
-                        "synthetic namespace state contained duplicate tombstones".into(),
-                    );
+                    return Err("synthetic namespace state contained duplicate tombstones".into());
                 }
             }
             for persisted in document.mutations {
                 let legacy_operation_id = OperationId::new(persisted.operation_id.clone())?;
-                let record = persisted
-                    .into_record(&scope, intents.get(&legacy_operation_id).cloned())?;
-                Self::register_mutation_intent(
-                    &mut state,
-                    &mut intents,
-                    record.intent().clone(),
-                )?;
+                let record =
+                    persisted.into_record(&scope, intents.get(&legacy_operation_id).cloned())?;
+                Self::register_mutation_intent(&mut state, &mut intents, record.intent().clone())?;
                 let operation_id = record.intent().operation_id().clone();
                 if state.mutations.insert(operation_id, record).is_some() {
                     return Err(
@@ -201,12 +191,9 @@ impl MemoryWritebackStore {
                     CloudRootId::new(persisted.root_id)?,
                 );
                 if persisted_scope != scope {
-                    return Err(
-                        "synthetic staging state belonged to another cloud scope".into()
-                    );
+                    return Err("synthetic staging state belonged to another cloud scope".into());
                 }
-                let key =
-                    CloudItemKey::new(persisted_scope, CloudItemId::new(persisted.item_id)?);
+                let key = CloudItemKey::new(persisted_scope, CloudItemId::new(persisted.item_id)?);
                 let base_revision = match persisted.base_revision {
                     Some(revision) => ContentRevision::from_slice(&revision)?,
                     None => state
@@ -234,8 +221,7 @@ impl MemoryWritebackStore {
                     (None, None) => None,
                     _ => {
                         return Err(
-                            "synthetic staging state split snapshot generation/reference"
-                                .into(),
+                            "synthetic staging state split snapshot generation/reference".into(),
                         );
                     }
                 };
@@ -251,9 +237,7 @@ impl MemoryWritebackStore {
                     )
                     .is_some()
                 {
-                    return Err(
-                        "synthetic writeback state contained duplicate item keys".into()
-                    );
+                    return Err("synthetic writeback state contained duplicate item keys".into());
                 }
             }
             for persisted in document.immutable_snapshots {
@@ -266,8 +250,7 @@ impl MemoryWritebackStore {
                         "synthetic immutable snapshot belonged to another cloud scope".into(),
                     );
                 }
-                let key =
-                    CloudItemKey::new(persisted_scope, CloudItemId::new(persisted.item_id)?);
+                let key = CloudItemKey::new(persisted_scope, CloudItemId::new(persisted.item_id)?);
                 let generation = LocalContentGeneration::new(persisted.generation)?;
                 state.next_generation = state.next_generation.max(generation.get());
                 let reference = LocalContentReference::new(persisted.local_reference)?;
@@ -301,7 +284,7 @@ impl MemoryWritebackStore {
                         || immutable.bytes.len() != file.bytes.len()
                     {
                         return Err(
-                            "synthetic immutable snapshot did not match staged metadata".into(),
+                            "synthetic immutable snapshot did not match staged metadata".into()
                         );
                     }
                 }
@@ -327,8 +310,7 @@ impl MemoryWritebackStore {
                     || state.uploads.insert(operation_id, record).is_some()
                 {
                     return Err(
-                        "synthetic upload state contained duplicate operation identities"
-                            .into(),
+                        "synthetic upload state contained duplicate operation identities".into(),
                     );
                 }
             }
@@ -338,7 +320,9 @@ impl MemoryWritebackStore {
             let dirty_without_upload = state
                 .files
                 .iter()
-                .filter_map(|(key, file)| file.snapshot.as_ref().map(|snapshot| (key, file, snapshot)))
+                .filter_map(|(key, file)| {
+                    file.snapshot.as_ref().map(|snapshot| (key, file, snapshot))
+                })
                 .filter(|(_, _, snapshot)| {
                     !state.uploads.values().any(|record| {
                         record.intent().snapshot().item_key() == snapshot.item_key()
@@ -350,11 +334,7 @@ impl MemoryWritebackStore {
                 })
                 .collect::<Vec<_>>();
             for (key, base_revision, snapshot) in dirty_without_upload {
-                let suffix = format!(
-                    "{}-{}",
-                    key.item_id().as_str(),
-                    snapshot.generation().get()
-                );
+                let suffix = format!("{}-{}", key.item_id().as_str(), snapshot.generation().get());
                 let intent = ContentUploadIntent::new(
                     OperationId::new(format!("legacy-upload-op-{suffix}"))?,
                     IdempotencyKey::new(format!("legacy-upload-key-{suffix}"))?,
@@ -411,10 +391,7 @@ impl MemoryWritebackStore {
         }
     }
 
-    fn persist_blocking(
-        state_file: &Path,
-        state: &MemoryWritebackState,
-    ) -> StoreResult<()> {
+    fn persist_blocking(state_file: &Path, state: &MemoryWritebackState) -> StoreResult<()> {
         let mut files = state
             .files
             .iter()
@@ -503,12 +480,18 @@ impl MemoryWritebackStore {
             .map(DurableNamespaceTombstone::from_tombstone)
             .collect::<StoreResult<Vec<_>>>()?;
         tombstones.sort_by(|left, right| {
-            (&left.namespace_id, &left.root_id, &left.parent_id, &left.name).cmp(&(
-                &right.namespace_id,
-                &right.root_id,
-                &right.parent_id,
-                &right.name,
-            ))
+            (
+                &left.namespace_id,
+                &left.root_id,
+                &left.parent_id,
+                &left.name,
+            )
+                .cmp(&(
+                    &right.namespace_id,
+                    &right.root_id,
+                    &right.parent_id,
+                    &right.name,
+                ))
         });
         let mut immutable_snapshots = state
             .immutable_snapshots
@@ -619,7 +602,9 @@ impl MemoryWritebackStore {
             .saturating_sub(TERMINAL_RECORD_LIMIT);
         for operation_id in completed_mutations.into_iter().take(remove_mutations) {
             if let Some(record) = state.mutations.remove(&operation_id) {
-                state.idempotency_keys.remove(record.intent().idempotency_key());
+                state
+                    .idempotency_keys
+                    .remove(record.intent().idempotency_key());
             }
         }
 
@@ -724,41 +709,35 @@ impl MemoryWritebackStore {
                 "memory immutable generation already existed",
             ));
         }
-        let operation_id = OperationId::new(format!(
-            "content-upload-op-{:020}",
-            generation.get()
-        ))
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                error.to_string(),
-            )
-        })?;
-        let idempotency_key = IdempotencyKey::new(format!(
-            "content-upload-key-{:020}",
-            generation.get()
-        ))
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::InvalidTransition,
-                error.to_string(),
-            )
-        })?;
-        let intent = ContentUploadIntent::new(
-            operation_id.clone(),
-            idempotency_key.clone(),
-            ContentCacheKey::new(key.clone(), base_revision.clone()),
-            snapshot.clone(),
-            ContentLeaseId::new(format!(
-                "content-upload-lease-{:020}",
-                generation.get()
-            ))
+        let operation_id = OperationId::new(format!("content-upload-op-{:020}", generation.get()))
             .map_err(|error| {
                 store_error(
                     CloudFilesStoreErrorKind::InvalidTransition,
                     error.to_string(),
                 )
-            })?,
+            })?;
+        let idempotency_key =
+            IdempotencyKey::new(format!("content-upload-key-{:020}", generation.get())).map_err(
+                |error| {
+                    store_error(
+                        CloudFilesStoreErrorKind::InvalidTransition,
+                        error.to_string(),
+                    )
+                },
+            )?;
+        let intent = ContentUploadIntent::new(
+            operation_id.clone(),
+            idempotency_key.clone(),
+            ContentCacheKey::new(key.clone(), base_revision.clone()),
+            snapshot.clone(),
+            ContentLeaseId::new(format!("content-upload-lease-{:020}", generation.get())).map_err(
+                |error| {
+                    store_error(
+                        CloudFilesStoreErrorKind::InvalidTransition,
+                        error.to_string(),
+                    )
+                },
+            )?,
             binding.generation,
         )
         .map_err(|error| {
@@ -799,10 +778,9 @@ impl MemoryWritebackStore {
         state
             .upload_idempotency_keys
             .insert(idempotency_key.clone(), operation_id.clone());
-        state.uploads.insert(
-            operation_id.clone(),
-            ContentUploadRecord::persist(intent),
-        );
+        state
+            .uploads
+            .insert(operation_id.clone(), ContentUploadRecord::persist(intent));
         if let Err(error) = self.persist(state) {
             state.next_generation = old_generation;
             state.files.insert(key.clone(), old_file);
@@ -819,62 +797,62 @@ fn write_durable_document(
     state_file: &Path,
     document: &DurableWritebackDocument,
 ) -> StoreResult<()> {
-        let bytes = serde_json::to_vec(document).map_err(|error| {
+    let bytes = serde_json::to_vec(document).map_err(|error| {
+        store_error(
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            format!("serialize synthetic writeback state: {error}"),
+        )
+    })?;
+    let parent = state_file.parent().ok_or_else(|| {
+        store_error(
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            "synthetic writeback state path omitted its parent",
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        store_error(
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            format!("create synthetic writeback directory: {error}"),
+        )
+    })?;
+    let temporary = state_file.with_extension("json.tmp");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| {
             store_error(
                 CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("serialize synthetic writeback state: {error}"),
+                format!("open synthetic writeback temporary file: {error}"),
             )
         })?;
-        let parent = state_file.parent().ok_or_else(|| {
+    file.write_all(&bytes).map_err(|error| {
+        store_error(
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            format!("write synthetic writeback state: {error}"),
+        )
+    })?;
+    file.sync_all().map_err(|error| {
+        store_error(
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            format!("sync synthetic writeback state: {error}"),
+        )
+    })?;
+    fs::rename(&temporary, state_file).map_err(|error| {
+        store_error(
+            CloudFilesStoreErrorKind::PersistenceFailure,
+            format!("replace synthetic writeback state: {error}"),
+        )
+    })?;
+    OpenOptions::new()
+        .read(true)
+        .open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
             store_error(
                 CloudFilesStoreErrorKind::PersistenceFailure,
-                "synthetic writeback state path omitted its parent",
+                format!("sync synthetic writeback directory: {error}"),
             )
-        })?;
-        fs::create_dir_all(parent).map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("create synthetic writeback directory: {error}"),
-            )
-        })?;
-        let temporary = state_file.with_extension("json.tmp");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|error| {
-                store_error(
-                    CloudFilesStoreErrorKind::PersistenceFailure,
-                    format!("open synthetic writeback temporary file: {error}"),
-                )
-            })?;
-        file.write_all(&bytes).map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("write synthetic writeback state: {error}"),
-            )
-        })?;
-        file.sync_all().map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("sync synthetic writeback state: {error}"),
-            )
-        })?;
-        fs::rename(&temporary, state_file).map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("replace synthetic writeback state: {error}"),
-            )
-        })?;
-        OpenOptions::new()
-            .read(true)
-            .open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| {
-                store_error(
-                    CloudFilesStoreErrorKind::PersistenceFailure,
-                    format!("sync synthetic writeback directory: {error}"),
-                )
-            })
+        })
 }

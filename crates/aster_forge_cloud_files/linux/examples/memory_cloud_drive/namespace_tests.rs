@@ -22,9 +22,7 @@ mod namespace_tests {
         let (backend, mut records) = MemoryCloud::fixture().unwrap();
         let scope = backend.scope.clone();
         let root = records.remove(0);
-        let store = Arc::new(
-            MemoryWritebackStore::new(scope.clone(), state_directory).unwrap(),
-        );
+        let store = Arc::new(MemoryWritebackStore::new(scope.clone(), state_directory).unwrap());
         store.reserve_fixture_inodes_through(6);
         store.activate_session(&scope, generation).await.unwrap();
         let readonly = LinuxReadOnlyEngine::new(
@@ -43,7 +41,11 @@ mod namespace_tests {
         (engine, store, scope)
     }
 
-    fn snapshot_names(engine: &MemoryEngine, directory: LinuxInode, handle: aster_forge_cloud_files_linux::LinuxDirectoryHandle) -> Vec<String> {
+    fn snapshot_names(
+        engine: &MemoryEngine,
+        directory: LinuxInode,
+        handle: aster_forge_cloud_files_linux::LinuxDirectoryHandle,
+    ) -> Vec<String> {
         engine
             .directory_snapshot(directory, handle)
             .unwrap()
@@ -87,11 +89,20 @@ mod namespace_tests {
             alpha_inode
         );
         assert_eq!(
-            engine.lookup(LINUX_ROOT_INODE, "alpha").await.unwrap_err().error_code(),
+            engine
+                .lookup(LINUX_ROOT_INODE, "alpha")
+                .await
+                .unwrap_err()
+                .error_code(),
             aster_forge_cloud_files_linux::LinuxErrorCode::NotFound
         );
         assert_eq!(
-            engine.lookup(alpha_inode, "child").await.unwrap().attributes().inode(),
+            engine
+                .lookup(alpha_inode, "child")
+                .await
+                .unwrap()
+                .attributes()
+                .inode(),
             child_inode
         );
         engine
@@ -113,9 +124,11 @@ mod namespace_tests {
                 .inode(),
             child_inode
         );
-        assert!(!snapshot_names(&engine, LINUX_ROOT_INODE, before)
-            .iter()
-            .any(|name| name == "alpha" || name == "beta" || name == "target"));
+        assert!(
+            !snapshot_names(&engine, LINUX_ROOT_INODE, before)
+                .iter()
+                .any(|name| name == "alpha" || name == "beta" || name == "target")
+        );
         let after = engine.open_directory(LINUX_ROOT_INODE).await.unwrap();
         let after_names = snapshot_names(&engine, LINUX_ROOT_INODE, after);
         assert!(after_names.iter().any(|name| name == "beta"));
@@ -252,7 +265,11 @@ mod namespace_tests {
             aster_forge_cloud_files_linux::LinuxErrorCode::NotFound
         );
         assert_eq!(
-            engine.lookup(LINUX_ROOT_INODE, "empty").await.unwrap_err().error_code(),
+            engine
+                .lookup(LINUX_ROOT_INODE, "empty")
+                .await
+                .unwrap_err()
+                .error_code(),
             aster_forge_cloud_files_linux::LinuxErrorCode::NotFound
         );
         assert_eq!(file.attributes().kind(), LinuxNodeKind::File);
@@ -520,11 +537,11 @@ mod namespace_tests {
         drop(reloaded);
         let (restarted, _, _) =
             activate(Some(&directory), SessionGeneration::new(2).unwrap()).await;
-        let restored_parent = restarted
-            .lookup(LINUX_ROOT_INODE, "parent")
-            .await
-            .unwrap();
-        assert_eq!(restored_parent.attributes().inode(), parent.attributes().inode());
+        let restored_parent = restarted.lookup(LINUX_ROOT_INODE, "parent").await.unwrap();
+        assert_eq!(
+            restored_parent.attributes().inode(),
+            parent.attributes().inode()
+        );
         assert_eq!(
             restarted
                 .lookup(restored_parent.attributes().inode(), "renamed.txt")
@@ -607,7 +624,11 @@ mod namespace_tests {
             MutationRunOutcome::Completed
         );
         assert_eq!(
-            lock(&backend.state).items.get(created.key()).unwrap().name(),
+            lock(&backend.state)
+                .items
+                .get(created.key())
+                .unwrap()
+                .name(),
             "renamed-remote-dir"
         );
 
@@ -621,7 +642,10 @@ mod namespace_tests {
             .unwrap();
         let delete_operation = lock(&store.state)
             .tombstones
-            .get(&(CloudItemId::new("root").unwrap(), "renamed-remote-dir".to_owned()))
+            .get(&(
+                CloudItemId::new("root").unwrap(),
+                "renamed-remote-dir".to_owned(),
+            ))
             .unwrap()
             .mutation_intent()
             .operation_id()
@@ -635,9 +659,12 @@ mod namespace_tests {
         );
         assert!(!lock(&backend.state).items.contains_key(created.key()));
         drop(backend);
-        let restarted_backend =
-            MemoryRemoteMutationBackend::new(store, Some(&directory)).unwrap();
-        assert!(!lock(&restarted_backend.state).items.contains_key(created.key()));
+        let restarted_backend = MemoryRemoteMutationBackend::new(store, Some(&directory)).unwrap();
+        assert!(
+            !lock(&restarted_backend.state)
+                .items
+                .contains_key(created.key())
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -671,7 +698,11 @@ mod namespace_tests {
             aster_forge_cloud_files_linux::LinuxErrorCode::Io
         );
         assert_eq!(
-            engine.lookup(LINUX_ROOT_INODE, "failed").await.unwrap_err().error_code(),
+            engine
+                .lookup(LINUX_ROOT_INODE, "failed")
+                .await
+                .unwrap_err()
+                .error_code(),
             aster_forge_cloud_files_linux::LinuxErrorCode::NotFound
         );
         assert!(lock(&store.state).namespace_items.is_empty());
@@ -726,9 +757,11 @@ mod namespace_tests {
                 .inode(),
             remote_record.inode()
         );
-        assert!(!snapshot_names(&engine, LINUX_ROOT_INODE, before)
-            .iter()
-            .any(|name| name == "remote-new"));
+        assert!(
+            !snapshot_names(&engine, LINUX_ROOT_INODE, before)
+                .iter()
+                .any(|name| name == "remote-new")
+        );
 
         let docs = engine.lookup(LINUX_ROOT_INODE, "docs").await.unwrap();
         let moved_item = CloudItem::directory(
@@ -965,11 +998,7 @@ mod namespace_tests {
                 .is_err()
         );
         assert_eq!(
-            engine
-                .lookup(LINUX_ROOT_INODE, "docs")
-                .await
-                .unwrap()
-                .key(),
+            engine.lookup(LINUX_ROOT_INODE, "docs").await.unwrap().key(),
             docs.key()
         );
     }

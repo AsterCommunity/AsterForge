@@ -535,6 +535,8 @@ pub struct WindowsFetchDataRequest {
     snapshot: WindowsFetchDataSnapshot,
     lease: WindowsCallbackLease,
     terminal: FetchTerminalGate,
+    #[cfg(windows)]
+    completion_authority: NativeCompletionAuthority,
 }
 
 /// Product-neutral metadata replacement for one CFAPI `RESTART_HYDRATION` operation.
@@ -608,6 +610,8 @@ impl WindowsRestartHydration {
 #[derive(Debug, Clone)]
 pub struct WindowsFetchDataProgressReporter {
     correlation: WindowsFetchDataCorrelation,
+    #[cfg(windows)]
+    completion_authority: NativeCompletionAuthority,
 }
 
 impl WindowsFetchDataProgressReporter {
@@ -624,6 +628,7 @@ impl WindowsFetchDataProgressReporter {
         progress: crate::WindowsFetchDataProgress,
         now: std::time::Instant,
     ) -> Result<usize> {
+        self.completion_authority.require_native()?;
         let updated = registry.report_progress_correlation(self.correlation, progress, now)?;
         if updated != 0 {
             crate::native_connection::report_fetch_progress(self.correlation, progress)?;
@@ -703,6 +708,23 @@ enum FetchTerminalState {
     NativeAttempted,
     PlatformCancelled,
     WatchdogTimedOut,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeCompletionAuthority {
+    Detached,
+    Native,
+}
+
+#[cfg(windows)]
+impl NativeCompletionAuthority {
+    fn require_native(self) -> Result<()> {
+        match self {
+            Self::Native => Ok(()),
+            Self::Detached => Err(WindowsCloudFilesError::MissingNativeCompletionAuthority),
+        }
+    }
 }
 
 impl FetchTerminalGate {
@@ -789,6 +811,8 @@ impl WindowsFetchDataRequest {
     pub fn progress_reporter(&self) -> WindowsFetchDataProgressReporter {
         WindowsFetchDataProgressReporter {
             correlation: WindowsFetchDataCorrelation::from_info(self.snapshot.info()),
+            #[cfg(windows)]
+            completion_authority: self.completion_authority,
         }
     }
 
@@ -797,6 +821,7 @@ impl WindowsFetchDataRequest {
     /// attempt for the old callback; CFAPI will issue a subsequent callback for the restart.
     #[cfg(windows)]
     pub fn restart_hydration(self, replacement: WindowsRestartHydration) -> Result<()> {
+        self.completion_authority.require_native()?;
         replacement.validate_for(self.snapshot.info())?;
         if !self.terminal.begin_native() {
             return Ok(());
@@ -945,6 +970,7 @@ impl WindowsFetchDataRequest {
 
     #[cfg(windows)]
     pub(crate) fn fail_inner(&mut self, failure: WindowsFetchDataFailure) -> Result<()> {
+        self.completion_authority.require_native()?;
         if !self.terminal.begin_native() {
             return Ok(());
         }
@@ -970,6 +996,7 @@ impl WindowsFetchDataRequest {
 
     #[cfg(windows)]
     fn complete_transfer_inner(&mut self, transfer: &WindowsFetchDataTransfer) -> Result<()> {
+        self.completion_authority.require_native()?;
         if !self.terminal.begin_native() {
             return Ok(());
         }
@@ -1066,7 +1093,9 @@ impl Drop for WindowsFetchDataRequest {
     fn drop(&mut self) {
         #[cfg(windows)]
         {
-            let _ = self.fail_inner(WindowsFetchDataFailure::ProviderTerminated);
+            if self.completion_authority == NativeCompletionAuthority::Native {
+                let _ = self.fail_inner(WindowsFetchDataFailure::ProviderTerminated);
+            }
         }
     }
 }
@@ -1194,6 +1223,8 @@ pub struct WindowsPreflightRequest {
     snapshot: WindowsPreflightSnapshot,
     lease: WindowsCallbackLease,
     acknowledged: bool,
+    #[cfg(windows)]
+    completion_authority: NativeCompletionAuthority,
 }
 
 impl WindowsPreflightRequest {
@@ -1230,6 +1261,7 @@ impl WindowsPreflightRequest {
         failure: WindowsFetchDataFailure,
         approved: bool,
     ) -> Result<()> {
+        self.completion_authority.require_native()?;
         if self.acknowledged {
             return Ok(());
         }
@@ -1242,7 +1274,9 @@ impl Drop for WindowsPreflightRequest {
     fn drop(&mut self) {
         #[cfg(windows)]
         {
-            let _ = self.acknowledge_inner(WindowsFetchDataFailure::ProviderTerminated, false);
+            if self.completion_authority == NativeCompletionAuthority::Native {
+                let _ = self.acknowledge_inner(WindowsFetchDataFailure::ProviderTerminated, false);
+            }
         }
     }
 }
@@ -1389,8 +1423,9 @@ impl WindowsCallbackRequest {
         self.info().generation()
     }
 
-    /// Binds a fetch snapshot to the exact generation lease that accepted it.
-    pub fn fetch_data(
+    /// Binds a detached fetch snapshot to an exact generation lease for portable orchestration
+    /// and contract tests. Detached requests never call CFAPI, including from `Drop`.
+    pub fn detached_fetch_data(
         snapshot: WindowsFetchDataSnapshot,
         lease: WindowsCallbackLease,
     ) -> Result<Self> {
@@ -1399,6 +1434,22 @@ impl WindowsCallbackRequest {
             snapshot,
             lease,
             terminal: FetchTerminalGate::default(),
+            #[cfg(windows)]
+            completion_authority: NativeCompletionAuthority::Detached,
+        }))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn native_fetch_data(
+        snapshot: WindowsFetchDataSnapshot,
+        lease: WindowsCallbackLease,
+    ) -> Result<Self> {
+        validate_request_generation(snapshot.info().generation(), lease.generation())?;
+        Ok(Self::FetchData(WindowsFetchDataRequest {
+            snapshot,
+            lease,
+            terminal: FetchTerminalGate::default(),
+            completion_authority: NativeCompletionAuthority::Native,
         }))
     }
 
@@ -1414,8 +1465,9 @@ impl WindowsCallbackRequest {
         }))
     }
 
-    /// Binds a blocking preflight snapshot to the generation that accepted it.
-    pub fn preflight(
+    /// Binds a detached preflight snapshot to the generation that accepted it for portable
+    /// orchestration and contract tests. Detached requests never acknowledge through CFAPI.
+    pub fn detached_preflight(
         snapshot: WindowsPreflightSnapshot,
         lease: WindowsCallbackLease,
     ) -> Result<Self> {
@@ -1424,6 +1476,22 @@ impl WindowsCallbackRequest {
             snapshot,
             lease,
             acknowledged: false,
+            #[cfg(windows)]
+            completion_authority: NativeCompletionAuthority::Detached,
+        }))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn native_preflight(
+        snapshot: WindowsPreflightSnapshot,
+        lease: WindowsCallbackLease,
+    ) -> Result<Self> {
+        validate_request_generation(snapshot.info().generation(), lease.generation())?;
+        Ok(Self::Preflight(WindowsPreflightRequest {
+            snapshot,
+            lease,
+            acknowledged: false,
+            completion_authority: NativeCompletionAuthority::Native,
         }))
     }
 

@@ -46,23 +46,20 @@ impl LinuxWritebackStore for MemoryWritebackStore {
                 "memory write session exhausted",
             )
         })?;
-        let session =
-            LinuxWriteSessionId::new(format!("memory-session-{}", state.next_session))
-                .map_err(|_| {
-                    store_error(
-                        CloudFilesStoreErrorKind::InvalidTransition,
-                        "memory write session id was invalid",
-                    )
-                })?;
-        state
-            .sessions
-            .insert(
-                session.clone(),
-                WriteSessionBinding {
-                    key: key.clone(),
-                    generation: session_generation,
-                },
-            );
+        let session = LinuxWriteSessionId::new(format!("memory-session-{}", state.next_session))
+            .map_err(|_| {
+                store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    "memory write session id was invalid",
+                )
+            })?;
+        state.sessions.insert(
+            session.clone(),
+            WriteSessionBinding {
+                key: key.clone(),
+                generation: session_generation,
+            },
+        );
         Ok(Some(LinuxWriteSession::from_recovered(
             session,
             snapshot,
@@ -102,14 +99,13 @@ impl LinuxWritebackStore for MemoryWritebackStore {
                 "memory write session exhausted",
             )
         })?;
-        let session =
-            LinuxWriteSessionId::new(format!("memory-session-{}", state.next_session))
-                .map_err(|_| {
-                    store_error(
-                        CloudFilesStoreErrorKind::InvalidTransition,
-                        "memory write session id was invalid",
-                    )
-                })?;
+        let session = LinuxWriteSessionId::new(format!("memory-session-{}", state.next_session))
+            .map_err(|_| {
+                store_error(
+                    CloudFilesStoreErrorKind::InvalidTransition,
+                    "memory write session id was invalid",
+                )
+            })?;
         let file = state
             .files
             .entry(request.key().clone())

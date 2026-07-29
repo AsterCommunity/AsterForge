@@ -107,7 +107,7 @@ fn fetch_request(file_size: u64, range: WindowsCallbackRange) -> WindowsFetchDat
     let lease = session
         .begin_callback(generation(7))
         .expect("fetch fixture should acquire a callback lease");
-    let request = WindowsCallbackRequest::fetch_data(
+    let request = WindowsCallbackRequest::detached_fetch_data(
         WindowsFetchDataSnapshot::new(
             info_snapshot_with_size(file_size),
             WindowsFetchDataFlags::default(),
@@ -141,6 +141,46 @@ fn progress_reporter_keeps_only_compact_native_correlation() {
     assert_eq!(correlation.request_key(), info.request_key());
     assert_eq!(correlation.file_id(), info.file_id());
     assert!(std::mem::size_of_val(&reporter) <= 64);
+}
+
+#[cfg(windows)]
+#[test]
+fn detached_requests_reject_every_native_completion_path_without_calling_cfapi() {
+    let request = fetch_request(
+        4096,
+        WindowsCallbackRange::exact(0, 4096).expect("range should be valid"),
+    );
+    assert!(matches!(
+        request.progress_reporter().report(
+            &WindowsFetchDataWaiterRegistry::new(),
+            WindowsFetchDataProgress::new(4096, 0).expect("progress should be valid"),
+            Instant::now(),
+        ),
+        Err(WindowsCloudFilesError::MissingNativeCompletionAuthority)
+    ));
+    assert!(matches!(
+        request.fail(WindowsFetchDataFailure::ProviderTerminated),
+        Err(WindowsCloudFilesError::MissingNativeCompletionAuthority)
+    ));
+
+    let session = WindowsConnectionSession::new(generation(7));
+    let request = WindowsCallbackRequest::detached_preflight(
+        WindowsPreflightSnapshot::Delete {
+            info: info_snapshot(),
+            flags: 0,
+        },
+        session
+            .begin_callback(generation(7))
+            .expect("preflight fixture should acquire a lease"),
+    )
+    .expect("detached preflight should construct");
+    let WindowsCallbackRequest::Preflight(request) = request else {
+        panic!("fixture should create a preflight request");
+    };
+    assert!(matches!(
+        request.approve(),
+        Err(WindowsCloudFilesError::MissingNativeCompletionAuthority)
+    ));
 }
 
 struct RecordingContentBackend {
@@ -997,7 +1037,7 @@ fn cancel_request_snapshot_can_be_inspected_without_reapplying_native_cancellati
 #[test]
 fn preflight_and_completed_notifications_keep_owned_paths_and_generation_leases() {
     let session = WindowsConnectionSession::new(generation(7));
-    let preflight = WindowsCallbackRequest::preflight(
+    let preflight = WindowsCallbackRequest::detached_preflight(
         WindowsPreflightSnapshot::Rename {
             info: info_snapshot(),
             flags: u32::MAX,
@@ -1375,7 +1415,7 @@ fn request_owns_the_lease_until_worker_releases_or_drops_it() {
     let lease = session
         .begin_callback(generation(7))
         .expect("callback should be accepted");
-    let request = WindowsCallbackRequest::fetch_data(
+    let request = WindowsCallbackRequest::detached_fetch_data(
         WindowsFetchDataSnapshot::new(
             info_snapshot(),
             WindowsFetchDataFlags::default(),
@@ -1410,7 +1450,7 @@ fn request_constructor_rejects_snapshot_and_lease_generation_mismatch() {
     let lease = session
         .begin_callback(generation(8))
         .expect("generation eight should accept its callback");
-    let result = WindowsCallbackRequest::fetch_data(
+    let result = WindowsCallbackRequest::detached_fetch_data(
         WindowsFetchDataSnapshot::new(
             info_snapshot(),
             WindowsFetchDataFlags::default(),

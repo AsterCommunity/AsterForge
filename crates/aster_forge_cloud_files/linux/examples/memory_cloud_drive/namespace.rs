@@ -109,9 +109,7 @@ impl MemoryWritebackStore {
         Ok(!fixture_has_child && !local_has_child)
     }
 
-    fn next_namespace_identity(
-        state: &mut MemoryWritebackState,
-    ) -> LinuxNamespaceStoreResult<u64> {
+    fn next_namespace_identity(state: &mut MemoryWritebackState) -> LinuxNamespaceStoreResult<u64> {
         state.next_item = state.next_item.checked_add(1).ok_or_else(|| {
             namespace_store_error(
                 LinuxNamespaceMutationStoreErrorKind::Conflict,
@@ -228,8 +226,7 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
             request.parent_key().item_id().clone(),
             request.name().to_owned(),
         );
-        if Self::current_name_key(&state, request.parent_key().item_id(), request.name())?
-            .is_some()
+        if Self::current_name_key(&state, request.parent_key().item_id(), request.name())?.is_some()
         {
             return Err(namespace_store_error(
                 LinuxNamespaceMutationStoreErrorKind::AlreadyExists,
@@ -269,25 +266,21 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
             key.clone(),
             request.parent_key().item_id().clone(),
             request.name(),
-            MetadataRevision::from_slice(
-                format!("local-create-m{}", next.next_item).as_bytes(),
-            )
-            .map_err(|_| {
-                namespace_store_error(
-                    LinuxNamespaceMutationStoreErrorKind::Conflict,
-                    "synthetic metadata revision was invalid",
-                )
-            })?,
-            CloudContentMetadata::new(
-                ContentRevision::from_slice(
-                    format!("local-create-c{}", next.next_item).as_bytes(),
-                )
+            MetadataRevision::from_slice(format!("local-create-m{}", next.next_item).as_bytes())
                 .map_err(|_| {
                     namespace_store_error(
                         LinuxNamespaceMutationStoreErrorKind::Conflict,
-                        "synthetic content revision was invalid",
+                        "synthetic metadata revision was invalid",
                     )
                 })?,
+            CloudContentMetadata::new(
+                ContentRevision::from_slice(format!("local-create-c{}", next.next_item).as_bytes())
+                    .map_err(|_| {
+                        namespace_store_error(
+                            LinuxNamespaceMutationStoreErrorKind::Conflict,
+                            "synthetic content revision was invalid",
+                        )
+                    })?,
                 None,
                 0,
             ),
@@ -329,14 +322,12 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
                     "synthetic operation identity was invalid",
                 )
             })?,
-            IdempotencyKey::new(format!("local-create-key-{}", next.next_item)).map_err(
-                |_| {
-                    namespace_store_error(
-                        LinuxNamespaceMutationStoreErrorKind::Conflict,
-                        "synthetic idempotency key was invalid",
-                    )
-                },
-            )?,
+            IdempotencyKey::new(format!("local-create-key-{}", next.next_item)).map_err(|_| {
+                namespace_store_error(
+                    LinuxNamespaceMutationStoreErrorKind::Conflict,
+                    "synthetic idempotency key was invalid",
+                )
+            })?,
             MutationOrigin::PlatformCommand,
             request.session_generation(),
             DesiredMutation::create(
@@ -382,15 +373,13 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
             ));
         }
         let created = LinuxCreatedFile::new(item, record, intent);
-        let session_id =
-            LinuxWriteSessionId::new(format!("memory-session-{}", next.next_session)).map_err(
-                |_| {
-                    namespace_store_error(
-                        LinuxNamespaceMutationStoreErrorKind::Conflict,
-                        "synthetic write session identity was invalid",
-                    )
-                },
-            )?;
+        let session_id = LinuxWriteSessionId::new(format!("memory-session-{}", next.next_session))
+            .map_err(|_| {
+                namespace_store_error(
+                    LinuxNamespaceMutationStoreErrorKind::Conflict,
+                    "synthetic write session identity was invalid",
+                )
+            })?;
         next.files.insert(
             key.clone(),
             StagedFile {
@@ -469,15 +458,13 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
                 "synthetic staging size exceeded u64",
             )
         })?;
-        state
-            .sessions
-            .insert(
-                id.clone(),
-                WriteSessionBinding {
-                    key: key.clone(),
-                    generation: session_generation,
-                },
-            );
+        state.sessions.insert(
+            id.clone(),
+            WriteSessionBinding {
+                key: key.clone(),
+                generation: session_generation,
+            },
+        );
         Ok(LinuxWriteSession::new(
             id,
             key.clone(),
@@ -520,12 +507,7 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
     ) -> LinuxNamespaceStoreResult<LinuxNamespaceItem> {
         let mut state = lock(&self.state);
         Self::namespace_accepting(&state, request.session_generation())?;
-        if Self::current_name_key(
-            &state,
-            request.parent_key().item_id(),
-            request.name(),
-        )?
-        .is_some()
+        if Self::current_name_key(&state, request.parent_key().item_id(), request.name())?.is_some()
         {
             return Err(namespace_store_error(
                 LinuxNamespaceMutationStoreErrorKind::AlreadyExists,
@@ -627,8 +609,8 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
     ) -> LinuxNamespaceStoreResult<LinuxRenameAcceptance> {
         let mut state = lock(&self.state);
         Self::namespace_accepting(&state, request.session_generation())?;
-        let (current, record) = Self::current_namespace_item(&state, request.key())?
-            .ok_or_else(|| {
+        let (current, record) =
+            Self::current_namespace_item(&state, request.key())?.ok_or_else(|| {
                 namespace_store_error(
                     LinuxNamespaceMutationStoreErrorKind::NotFound,
                     "synthetic rename source was not found",
@@ -660,7 +642,9 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
             ));
         }
         if destination_key.as_ref().map(CloudItemKey::item_id)
-            != request.destination().map(|destination| destination.key().item_id())
+            != request
+                .destination()
+                .map(|destination| destination.key().item_id())
         {
             return Err(namespace_store_error(
                 LinuxNamespaceMutationStoreErrorKind::Conflict,
@@ -830,11 +814,7 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
         *state = next;
         drop(state);
         self.mutation_notify.notify_one();
-        Ok(LinuxRenameAcceptance::new(
-            namespace_item,
-            source,
-            replaced,
-        ))
+        Ok(LinuxRenameAcceptance::new(namespace_item, source, replaced))
     }
 
     async fn remove(
@@ -843,8 +823,8 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
     ) -> LinuxNamespaceStoreResult<LinuxNamespaceTombstone> {
         let mut state = lock(&self.state);
         Self::namespace_accepting(&state, request.session_generation())?;
-        let (current, record) = Self::current_namespace_item(&state, request.key())?
-            .ok_or_else(|| {
+        let (current, record) =
+            Self::current_namespace_item(&state, request.key())?.ok_or_else(|| {
                 namespace_store_error(
                     LinuxNamespaceMutationStoreErrorKind::NotFound,
                     "synthetic remove target was not found",
@@ -867,9 +847,7 @@ impl LinuxNamespaceMutationStore for MemoryWritebackStore {
             return Err(namespace_store_error(
                 match request.kind() {
                     LinuxNodeKind::File => LinuxNamespaceMutationStoreErrorKind::IsDirectory,
-                    LinuxNodeKind::Directory => {
-                        LinuxNamespaceMutationStoreErrorKind::NotDirectory
-                    }
+                    LinuxNodeKind::Directory => LinuxNamespaceMutationStoreErrorKind::NotDirectory,
                 },
                 "synthetic remove target kind mismatch",
             ));

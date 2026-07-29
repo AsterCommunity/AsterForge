@@ -269,9 +269,9 @@ impl MutationJournalStore for MemoryWritebackStore {
                 }
                 | DesiredMutation::ModifyMetadata { .. } => {
                     let current = next.namespace_items.get(item.key()).cloned();
-                    if let Some(current) = current.filter(|current| {
-                        current.mutation_intent().operation_id() == operation_id
-                    }) {
+                    if let Some(current) = current
+                        .filter(|current| current.mutation_intent().operation_id() == operation_id)
+                    {
                         if current.item().kind() != item.kind() {
                             return Err(store_error(
                                 CloudFilesStoreErrorKind::InvalidTransition,

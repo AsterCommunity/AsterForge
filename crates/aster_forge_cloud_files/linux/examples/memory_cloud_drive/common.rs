@@ -10,22 +10,22 @@ use std::{
 };
 
 use aster_forge_cloud_files_core::{
-    Alignment, BackendResult, ChangeCursor, ChangePage, CloudBackendError,
-    CloudBackendErrorKind, CloudContentBackend, CloudContentMetadata, CloudFilesBackend,
-    CloudFilesCapabilities, CloudFilesStoreError, CloudFilesStoreErrorKind, CloudItem,
-    CloudItemId, CloudItemKey, CloudItemKind, CloudItemPage, CloudMetadataBackend,
-    CloudContentUploadBackend, CloudMutationBackend, CloudNamespaceId, CloudRootId, CloudScope,
-    ContentCacheKey, ContentLeaseId, ContentReadRange, ContentReadRequest, ContentReadResponse,
-    ContentRevision, ContentUploadChunk, ContentUploadChunkAck, ContentUploadIntent,
-    ContentUploadRecord, ContentUploadRecordTransition, ContentUploadRunOutcome,
-    ContentUploadRunner, ContentUploadSession, ContentUploadSessionId, ContentUploadState,
-    ContentUploadStore, DesiredMutation, EnumerationCapabilities, HydrationCapabilities,
-    IdempotencyKey, IdentityCapabilities, LocalContentGeneration, LocalContentReference,
-    LocalContentSnapshot, LocalContentSnapshotReader, MetadataRevision, MutationCapabilities,
-    MutationIntent, MutationJournalStore, MutationOrigin, MutationPreconditions, MutationRecord,
-    MutationRecordTransition, MutationRemoteOutcome, MutationRunOutcome, MutationRunner,
-    MutationState, OperationId, PageCursor, RangeHydrationCapabilities, RevisionCapabilities,
-    RecoveryPage, SessionGeneration, SessionState, StoreResult, StoreWriteStatus,
+    Alignment, BackendResult, ChangeCursor, ChangePage, CloudBackendError, CloudBackendErrorKind,
+    CloudContentBackend, CloudContentMetadata, CloudContentUploadBackend, CloudFilesBackend,
+    CloudFilesCapabilities, CloudFilesStoreError, CloudFilesStoreErrorKind, CloudItem, CloudItemId,
+    CloudItemKey, CloudItemKind, CloudItemPage, CloudMetadataBackend, CloudMutationBackend,
+    CloudNamespaceId, CloudRootId, CloudScope, ContentCacheKey, ContentLeaseId, ContentReadRange,
+    ContentReadRequest, ContentReadResponse, ContentRevision, ContentUploadChunk,
+    ContentUploadChunkAck, ContentUploadIntent, ContentUploadRecord, ContentUploadRecordTransition,
+    ContentUploadRunOutcome, ContentUploadRunner, ContentUploadSession, ContentUploadSessionId,
+    ContentUploadState, ContentUploadStore, DesiredMutation, EnumerationCapabilities,
+    HydrationCapabilities, IdempotencyKey, IdentityCapabilities, LocalContentGeneration,
+    LocalContentReference, LocalContentSnapshot, LocalContentSnapshotReader, MetadataRevision,
+    MutationCapabilities, MutationIntent, MutationJournalStore, MutationOrigin,
+    MutationPreconditions, MutationRecord, MutationRecordTransition, MutationRemoteOutcome,
+    MutationRunOutcome, MutationRunner, MutationState, OperationId, PageCursor,
+    RangeHydrationCapabilities, RecoveryPage, RevisionCapabilities, SessionGeneration,
+    SessionState, StoreResult, StoreWriteStatus,
 };
 use aster_forge_cloud_files_linux::{
     LINUX_ROOT_INODE, LinuxAttributePolicy, LinuxCreateDirectoryRequest, LinuxCreateFileAcceptance,
@@ -56,10 +56,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
-fn store_error(
-    kind: CloudFilesStoreErrorKind,
-    context: impl Into<String>,
-) -> CloudFilesStoreError {
+fn store_error(kind: CloudFilesStoreErrorKind, context: impl Into<String>) -> CloudFilesStoreError {
     CloudFilesStoreError::new(kind, context)
 }
 
@@ -98,8 +95,7 @@ struct MemoryWritebackState {
     next_item: u64,
     next_inode: u64,
     files: HashMap<CloudItemKey, StagedFile>,
-    immutable_snapshots:
-        HashMap<(CloudItemKey, LocalContentGeneration), ImmutableSnapshotBytes>,
+    immutable_snapshots: HashMap<(CloudItemKey, LocalContentGeneration), ImmutableSnapshotBytes>,
     sessions: HashMap<LinuxWriteSessionId, WriteSessionBinding>,
     created: HashMap<CloudItemKey, LinuxCreatedFile>,
     created_names: HashMap<(CloudItemId, String), CloudItemKey>,
@@ -374,18 +370,8 @@ impl DurableNamespaceItem {
             )
         })?;
         Ok(Self {
-            namespace_id: cloud_item
-                .key()
-                .scope()
-                .namespace_id()
-                .as_str()
-                .to_owned(),
-            root_id: cloud_item
-                .key()
-                .scope()
-                .root_id()
-                .as_str()
-                .to_owned(),
+            namespace_id: cloud_item.key().scope().namespace_id().as_str().to_owned(),
+            root_id: cloud_item.key().scope().root_id().as_str().to_owned(),
             item_id: cloud_item.key().item_id().as_str().to_owned(),
             parent_id: parent_id.as_str().to_owned(),
             name: cloud_item.name().to_owned(),
@@ -450,18 +436,8 @@ impl DurableNamespaceItem {
 impl DurableNamespaceTombstone {
     fn from_tombstone(tombstone: &LinuxNamespaceTombstone) -> StoreResult<Self> {
         Ok(Self {
-            namespace_id: tombstone
-                .key()
-                .scope()
-                .namespace_id()
-                .as_str()
-                .to_owned(),
-            root_id: tombstone
-                .key()
-                .scope()
-                .root_id()
-                .as_str()
-                .to_owned(),
+            namespace_id: tombstone.key().scope().namespace_id().as_str().to_owned(),
+            root_id: tombstone.key().scope().root_id().as_str().to_owned(),
             item_id: tombstone.key().item_id().as_str().to_owned(),
             inode_generation: tombstone.inode_generation().get(),
             parent_id: tombstone.parent_key().item_id().as_str().to_owned(),
@@ -579,12 +555,12 @@ impl DurableMutationFile {
 
     fn into_item(self) -> aster_forge_cloud_files_core::Result<CloudItem> {
         let key = CloudItemKey::new(
-                CloudScope::new(
-                    CloudNamespaceId::new(self.namespace_id)?,
-                    CloudRootId::new(self.root_id)?,
-                ),
-                CloudItemId::new(self.item_id)?,
-            );
+            CloudScope::new(
+                CloudNamespaceId::new(self.namespace_id)?,
+                CloudRootId::new(self.root_id)?,
+            ),
+            CloudItemId::new(self.item_id)?,
+        );
         let parent = self.parent_id.map(CloudItemId::new).transpose()?;
         let metadata = MetadataRevision::from_slice(&self.metadata_revision)?;
         match self.item_kind.unwrap_or(DurableItemKind::File) {
@@ -598,20 +574,16 @@ impl DurableMutationFile {
                 self.name,
                 metadata,
                 CloudContentMetadata::new(
-                    ContentRevision::from_slice(
-                        self.content_revision
-                            .as_deref()
-                            .ok_or(aster_forge_cloud_files_core::CloudFilesCoreError::InvalidContentResponse {
-                                reason: "durable remote file omitted content revision",
-                            })?,
-                    )?,
+                    ContentRevision::from_slice(self.content_revision.as_deref().ok_or(
+                        aster_forge_cloud_files_core::CloudFilesCoreError::InvalidContentResponse {
+                            reason: "durable remote file omitted content revision",
+                        },
+                    )?)?,
                     None,
                     self.size,
                 ),
             ),
-            DurableItemKind::Directory => {
-                CloudItem::directory(key, parent, self.name, metadata)
-            }
+            DurableItemKind::Directory => CloudItem::directory(key, parent, self.name, metadata),
         }
     }
 }
@@ -762,9 +734,7 @@ impl DurableMutationRecord {
             != match self.state {
                 DurableMutationState::IntentPersisted => MutationState::IntentPersisted,
                 DurableMutationState::RemoteApplying => MutationState::RemoteApplying,
-                DurableMutationState::RemoteOutcomeUnknown => {
-                    MutationState::RemoteOutcomeUnknown
-                }
+                DurableMutationState::RemoteOutcomeUnknown => MutationState::RemoteOutcomeUnknown,
                 DurableMutationState::RemoteOutcomeKnown => MutationState::RemoteOutcomeKnown,
                 DurableMutationState::PlatformReconciled => MutationState::PlatformReconciled,
                 DurableMutationState::Completed => MutationState::Completed,
@@ -889,10 +859,7 @@ impl DurableUploadRecord {
         let intent = ContentUploadIntent::new(
             OperationId::new(self.operation_id)?,
             IdempotencyKey::new(self.idempotency_key)?,
-            ContentCacheKey::new(
-                item_key,
-                ContentRevision::from_slice(&self.base_revision)?,
-            ),
+            ContentCacheKey::new(item_key, ContentRevision::from_slice(&self.base_revision)?),
             snapshot,
             ContentLeaseId::new(self.upload_lease_id)?,
             SessionGeneration::new(self.accepted_generation)?,
@@ -930,8 +897,7 @@ impl DurableUploadRecord {
             .into_outcome()?;
         record.record_remote_outcome(outcome)?;
         match self.state {
-            DurableUploadState::RemoteOutcomeUnknown
-            | DurableUploadState::RemoteOutcomeKnown => {}
+            DurableUploadState::RemoteOutcomeUnknown | DurableUploadState::RemoteOutcomeKnown => {}
             DurableUploadState::MetadataReconciled => {
                 record.mark_metadata_reconciled()?;
             }

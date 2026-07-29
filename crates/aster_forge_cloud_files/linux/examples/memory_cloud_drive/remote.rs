@@ -67,7 +67,10 @@ impl MemoryRemoteMutationBackend {
                 let key = IdempotencyKey::new(entry.idempotency_key)?;
                 if state
                     .committed
-                    .insert(key, entry.item.map(DurableMutationFile::into_item).transpose()?)
+                    .insert(
+                        key,
+                        entry.item.map(DurableMutationFile::into_item).transpose()?,
+                    )
                     .is_some()
                 {
                     return Err(
@@ -81,10 +84,7 @@ impl MemoryRemoteMutationBackend {
                 let committed = entry
                     .committed
                     .map(|content| -> ExampleResult<(CloudItem, Bytes)> {
-                        Ok((
-                            content.item.into_item()?,
-                            Bytes::from(content.bytes),
-                        ))
+                        Ok((content.item.into_item()?, Bytes::from(content.bytes)))
                     })
                     .transpose()?;
                 if state
@@ -107,7 +107,9 @@ impl MemoryRemoteMutationBackend {
                     for item in items {
                         let item = item.into_item()?;
                         if state.items.insert(item.key().clone(), item).is_some() {
-                            return Err("synthetic remote namespace contained duplicate items".into());
+                            return Err(
+                                "synthetic remote namespace contained duplicate items".into()
+                            );
                         }
                     }
                 }
@@ -129,13 +131,12 @@ impl MemoryRemoteMutationBackend {
             .map(|value| value.parse::<u64>())
             .transpose()?
             .unwrap_or_default();
-        let upload_pause_ms = std::env::var(
-            "ASTER_FORGE_CLOUD_FILES_EXAMPLE_UPLOAD_COMMIT_PAUSE_MS",
-        )
-        .ok()
-        .map(|value| value.parse::<u64>())
-        .transpose()?
-        .unwrap_or_default();
+        let upload_pause_ms =
+            std::env::var("ASTER_FORGE_CLOUD_FILES_EXAMPLE_UPLOAD_COMMIT_PAUSE_MS")
+                .ok()
+                .map(|value| value.parse::<u64>())
+                .transpose()?
+                .unwrap_or_default();
         Ok(Self {
             namespace_store,
             state: Mutex::new(state),
@@ -283,14 +284,18 @@ impl MemoryRemoteMutationBackend {
                 parent_id,
                 name,
             } => {
-                let current = state.items.get(key).cloned().ok_or_else(|| {
-                    CloudBackendError::new(CloudBackendErrorKind::NotFound)
-                })?;
+                let current = state
+                    .items
+                    .get(key)
+                    .cloned()
+                    .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::NotFound))?;
                 let parent_id = parent_id
                     .as_ref()
                     .or_else(|| current.parent_id())
                     .cloned()
-                    .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
+                    .ok_or_else(|| {
+                        CloudBackendError::new(CloudBackendErrorKind::InvalidResponse)
+                    })?;
                 let name = name.as_deref().unwrap_or_else(|| current.name());
                 let metadata = MetadataRevision::from_slice(
                     format!("remote-rename-m-{}", intent.operation_id().as_str()).as_bytes(),
@@ -331,10 +336,7 @@ impl MemoryRemoteMutationBackend {
         }
     }
 
-    fn upload_item(
-        &self,
-        intent: &ContentUploadIntent,
-    ) -> BackendResult<CloudItem> {
+    fn upload_item(&self, intent: &ContentUploadIntent) -> BackendResult<CloudItem> {
         let key = intent.base_cache_key().item_key();
         let (parent_id, name) = {
             let state = lock(&self.namespace_store.state);
@@ -378,9 +380,7 @@ impl CloudMutationBackend for MemoryRemoteMutationBackend {
         let item = {
             let mut state = lock(&self.state);
             if let Some(existing) = state.committed.get(&key).cloned() {
-                return Ok(MutationRemoteOutcome::AlreadyCommitted {
-                    item: existing,
-                });
+                return Ok(MutationRemoteOutcome::AlreadyCommitted { item: existing });
             }
             let mut next = state.clone();
             let item = self.mutation_outcome(intent, &mut next)?;
@@ -439,9 +439,8 @@ impl CloudContentUploadBackend for MemoryRemoteMutationBackend {
                 committed: None,
             },
         );
-        self.persist(&next).map_err(|_| {
-            CloudBackendError::new(CloudBackendErrorKind::TemporarilyUnavailable)
-        })?;
+        self.persist(&next)
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::TemporarilyUnavailable))?;
         *state = next;
         Ok(ContentUploadSession::new(session_id, 0))
     }
@@ -453,26 +452,29 @@ impl CloudContentUploadBackend for MemoryRemoteMutationBackend {
     ) -> BackendResult<ContentUploadChunkAck> {
         let key = intent.idempotency_key().clone();
         let mut state = lock(&self.state);
-        let upload = state.uploads.get(&key).ok_or_else(|| {
-            CloudBackendError::new(CloudBackendErrorKind::NotFound)
-        })?;
+        let upload = state
+            .uploads
+            .get(&key)
+            .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::NotFound))?;
         if upload.session_id != *chunk.session_id()
             || u64::try_from(upload.bytes.len())
                 .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?
                 != chunk.offset()
         {
-            return Err(CloudBackendError::new(CloudBackendErrorKind::PreconditionFailed));
+            return Err(CloudBackendError::new(
+                CloudBackendErrorKind::PreconditionFailed,
+            ));
         }
         let mut next = state.clone();
-        let upload = next.uploads.get_mut(&key).ok_or_else(|| {
-            CloudBackendError::new(CloudBackendErrorKind::NotFound)
-        })?;
+        let upload = next
+            .uploads
+            .get_mut(&key)
+            .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::NotFound))?;
         upload.bytes.extend_from_slice(chunk.bytes());
         let accepted_offset = u64::try_from(upload.bytes.len())
             .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
-        self.persist(&next).map_err(|_| {
-            CloudBackendError::new(CloudBackendErrorKind::TemporarilyUnavailable)
-        })?;
+        self.persist(&next)
+            .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::TemporarilyUnavailable))?;
         *state = next;
         Ok(ContentUploadChunkAck::new(
             chunk.session_id().clone(),
@@ -490,18 +492,23 @@ impl CloudContentUploadBackend for MemoryRemoteMutationBackend {
             .validate_for(intent, session)
             .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
         let state = lock(&self.state);
-        let upload = state.uploads.get(intent.idempotency_key()).ok_or_else(|| {
-            CloudBackendError::new(CloudBackendErrorKind::NotFound)
-        })?;
+        let upload = state
+            .uploads
+            .get(intent.idempotency_key())
+            .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::NotFound))?;
         if upload.session_id != *session.id() {
-            return Err(CloudBackendError::new(CloudBackendErrorKind::PreconditionFailed));
+            return Err(CloudBackendError::new(
+                CloudBackendErrorKind::PreconditionFailed,
+            ));
         }
         let start = usize::try_from(chunk.offset())
             .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
         let end = usize::try_from(chunk.end_exclusive())
             .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
         if upload.bytes.get(start..end) != Some(chunk.bytes().as_ref()) {
-            return Err(CloudBackendError::new(CloudBackendErrorKind::PreconditionFailed));
+            return Err(CloudBackendError::new(
+                CloudBackendErrorKind::PreconditionFailed,
+            ));
         }
         Ok(ContentUploadChunkAck::new(
             chunk.session_id().clone(),
@@ -518,24 +525,28 @@ impl CloudContentUploadBackend for MemoryRemoteMutationBackend {
         let item;
         {
             let mut state = lock(&self.state);
-            let current = state.uploads.get(&key).ok_or_else(|| {
-                CloudBackendError::new(CloudBackendErrorKind::NotFound)
-            })?;
+            let current = state
+                .uploads
+                .get(&key)
+                .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::NotFound))?;
             if current.session_id != *session.id()
                 || u64::try_from(current.bytes.len())
                     .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?
                     != intent.snapshot().size()
             {
-                return Err(CloudBackendError::new(CloudBackendErrorKind::PreconditionFailed));
+                return Err(CloudBackendError::new(
+                    CloudBackendErrorKind::PreconditionFailed,
+                ));
             }
             if let Some((item, _)) = current.committed.clone() {
                 return Ok(MutationRemoteOutcome::AlreadyCommitted { item: Some(item) });
             }
             item = self.upload_item(intent)?;
             let mut next = state.clone();
-            let upload = next.uploads.get_mut(&key).ok_or_else(|| {
-                CloudBackendError::new(CloudBackendErrorKind::NotFound)
-            })?;
+            let upload = next
+                .uploads
+                .get_mut(&key)
+                .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::NotFound))?;
             upload.committed = Some((item.clone(), Bytes::from(upload.bytes.clone())));
             self.persist(&next).map_err(|_| {
                 CloudBackendError::new(CloudBackendErrorKind::TemporarilyUnavailable)

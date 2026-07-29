@@ -96,9 +96,7 @@ impl MemoryCloud {
             (&numbers, Bytes::from(numbers_bytes)),
             (
                 &guide,
-                Bytes::from_static(
-                    b"Nested directory enumeration and content fetch are active.\n",
-                ),
+                Bytes::from_static(b"Nested directory enumeration and content fetch are active.\n"),
             ),
         ]
         .into_iter()
@@ -106,9 +104,7 @@ impl MemoryCloud {
             let revision = item
                 .content()
                 .map(|content| content.revision().clone())
-                .ok_or_else(|| {
-                    CloudBackendError::new(CloudBackendErrorKind::InvalidResponse)
-                })?;
+                .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))?;
             Ok((item.key().clone(), (revision, bytes)))
         })
         .collect::<BackendResult<HashMap<_, _>>>()?;
@@ -223,9 +219,10 @@ impl CloudMetadataBackend for MemoryCloud {
         let items = keys[offset..end]
             .iter()
             .map(|key| {
-                self.items.get(key).cloned().ok_or_else(|| {
-                    CloudBackendError::new(CloudBackendErrorKind::InvalidResponse)
-                })
+                self.items
+                    .get(key)
+                    .cloned()
+                    .ok_or_else(|| CloudBackendError::new(CloudBackendErrorKind::InvalidResponse))
             })
             .collect::<BackendResult<Vec<_>>>()?;
         let next = if end < keys.len() {
@@ -272,13 +269,10 @@ impl CloudContentBackend for MemoryCloud {
                         CloudBackendErrorKind::InvalidRequest,
                     ));
                 }
-                let start = usize::try_from(range.offset()).map_err(|_| {
-                    CloudBackendError::new(CloudBackendErrorKind::InvalidRequest)
-                })?;
-                let end =
-                    usize::try_from(range.end_exclusive().min(total_size)).map_err(|_| {
-                        CloudBackendError::new(CloudBackendErrorKind::InvalidRequest)
-                    })?;
+                let start = usize::try_from(range.offset())
+                    .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidRequest))?;
+                let end = usize::try_from(range.end_exclusive().min(total_size))
+                    .map_err(|_| CloudBackendError::new(CloudBackendErrorKind::InvalidRequest))?;
                 (range.offset(), content.slice(start..end))
             }
         };

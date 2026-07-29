@@ -502,7 +502,7 @@ fn handle_preflight(
         }
     };
     context.session.record_accepted_callback();
-    let request = match WindowsCallbackRequest::preflight(snapshot, lease) {
+    let request = match WindowsCallbackRequest::native_preflight(snapshot, lease) {
         Ok(request) => request,
         Err(_) => return,
     };
@@ -591,7 +591,7 @@ fn handle_fetch_data(
         }
     };
     context.session.record_accepted_callback();
-    let request = match WindowsCallbackRequest::fetch_data(snapshot, lease) {
+    let request = match WindowsCallbackRequest::native_fetch_data(snapshot, lease) {
         Ok(request) => request,
         Err(_) => return,
     };

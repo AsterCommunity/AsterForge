@@ -5,7 +5,8 @@ impl MemoryWritebackStore {
         execution_generation: SessionGeneration,
         transition: impl FnOnce(
             &mut ContentUploadRecord,
-        ) -> aster_forge_cloud_files_core::Result<ContentUploadRecordTransition>,
+        )
+            -> aster_forge_cloud_files_core::Result<ContentUploadRecordTransition>,
     ) -> StoreResult<StoreWriteStatus> {
         let mut state = lock(&self.state);
         let scope = state
@@ -228,11 +229,7 @@ impl ContentUploadStore for MemoryWritebackStore {
                 "synthetic content upload was not found",
             )
         })?;
-        let scope = record
-            .intent()
-            .base_cache_key()
-            .item_key()
-            .scope();
+        let scope = record.intent().base_cache_key().item_key().scope();
         if !self.active_for_generation(&state, scope, execution_generation)? {
             return Ok(StoreWriteStatus::Fenced);
         }

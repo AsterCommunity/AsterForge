@@ -171,19 +171,19 @@ pub fn run() -> ExampleResult<()> {
         session_generation,
     ))?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let mutation_worker = runtime.spawn(run_mutation_worker(
-            store.clone(),
-            mutation_backend.clone(),
-            scope.clone(),
-            session_generation,
-            shutdown_rx.clone(),
-        ));
-        let upload_worker = runtime.spawn(run_upload_worker(
-            store.clone(),
-            mutation_backend,
-            scope.clone(),
-            session_generation,
-            shutdown_rx,
+    let mutation_worker = runtime.spawn(run_mutation_worker(
+        store.clone(),
+        mutation_backend.clone(),
+        scope.clone(),
+        session_generation,
+        shutdown_rx.clone(),
+    ));
+    let upload_worker = runtime.spawn(run_upload_worker(
+        store.clone(),
+        mutation_backend,
+        scope.clone(),
+        session_generation,
+        shutdown_rx,
     ));
     let filesystem = LinuxWritableFilesystem::new(engine, runtime.handle().clone(), 64)?;
     let config = LinuxMountConfig::new("aster-forge-memory-cloud")?
@@ -205,12 +205,8 @@ pub fn run() -> ExampleResult<()> {
         "active synthetic mount generation: {}",
         session_generation.get()
     );
-    println!(
-        "existing and newly created files support write, truncate, flush, fsync, and reopen"
-    );
-    println!(
-        "create, mkdir, rename, unlink, and rmdir use the durable synthetic mutation ledger"
-    );
+    println!("existing and newly created files support write, truncate, flush, fsync, and reopen");
+    println!("create, mkdir, rename, unlink, and rmdir use the durable synthetic mutation ledger");
     println!(
         "external remote changes are integrated by product code through the Linux remote overlay and notifier APIs"
     );
@@ -232,13 +228,9 @@ pub fn run() -> ExampleResult<()> {
         session_generation,
         SessionState::Draining,
     ))?;
-        runtime.block_on(mutation_worker)??;
-        runtime.block_on(upload_worker)??;
-    runtime.block_on(store.transition_session(
-        &scope,
-        session_generation,
-        SessionState::Closed,
-    ))?;
+    runtime.block_on(mutation_worker)??;
+    runtime.block_on(upload_worker)??;
+    runtime.block_on(store.transition_session(&scope, session_generation, SessionState::Closed))?;
     mount_result?;
     Ok(())
 }

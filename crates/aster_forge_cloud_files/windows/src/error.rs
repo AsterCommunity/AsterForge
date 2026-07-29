@@ -116,6 +116,9 @@ pub enum WindowsCloudFilesError {
         /// Stable adapter-level reason suitable for logs and tests.
         reason: &'static str,
     },
+    /// A detached callback request was asked to perform a native CFAPI terminal operation.
+    #[error("detached CFAPI callback request has no native completion authority")]
+    MissingNativeCompletionAuthority,
     /// Hydrated bytes could not be represented as one valid CFAPI transfer operation.
     #[error("invalid CFAPI fetch-data transfer: {reason}")]
     InvalidFetchTransfer {
