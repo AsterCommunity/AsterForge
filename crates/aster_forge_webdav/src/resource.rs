@@ -117,7 +117,7 @@ impl DavMutationFailure {
 
     /// Converts this typed failure into the shared Multi-Status response grammar.
     #[must_use]
-    pub fn into_multistatus_item(&self, prefix: &str) -> DavMultiStatusItem {
+    pub fn to_multistatus_item(&self, prefix: &str) -> DavMultiStatusItem {
         let item = DavMultiStatusItem::status(href_for_dav_path(prefix, &self.path), self.status);
         if self.status == StatusCode::LOCKED.as_u16() {
             let lock_path = self.lock_path.as_ref().unwrap_or(&self.path);
@@ -281,7 +281,7 @@ pub fn mutation_multistatus_response_with_limits(
 ) -> Result<DavResponse, DavMultiStatusError> {
     let items = failures
         .iter()
-        .map(|failure| failure.into_multistatus_item(prefix));
+        .map(|failure| failure.to_multistatus_item(prefix));
     let body = dav_multistatus_bytes(items, limits)?;
     let mut response = DavResponse::bytes(StatusCode::MULTI_STATUS, body);
     response.headers.insert(

@@ -78,8 +78,47 @@ impl DavDirectoryEntry for TestEntry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NameKeyEntry {
+    name: Vec<u8>,
+    metadata: TestMeta,
+}
+
+impl NameKeyEntry {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.as_bytes().to_vec(),
+            metadata: TestMeta,
+        }
+    }
+}
+
+impl DavDirectoryEntry for NameKeyEntry {
+    type Metadata = TestMeta;
+
+    fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    fn metadata(&self) -> &Self::Metadata {
+        &self.metadata
+    }
+}
+
+fn page_limits(maximum_entries: usize, maximum_pages: usize) -> DavDirectoryPageLimits {
+    DavDirectoryPageLimits::new(maximum_entries, maximum_pages).expect("valid page limits")
+}
+
 #[test]
 fn page_validation_covers_exact_limit_cursor_and_order_boundaries() {
+    assert_eq!(
+        DavDirectoryPageLimits::new(0, 1),
+        Err(DavDirectoryReadError::InvalidLimit)
+    );
+    assert_eq!(
+        DavDirectoryPageLimits::new(1, 0),
+        Err(DavDirectoryReadError::InvalidLimit)
+    );
     let valid = DavDirectoryPage {
         entries: vec![TestEntry::new("a"), TestEntry::new("b")],
         next_cursor: Some(1_u64),
@@ -170,6 +209,41 @@ fn page_validation_covers_exact_limit_cursor_and_order_boundaries() {
     .expect("empty final page is valid");
 }
 
+#[test]
+fn default_stable_key_uses_name_for_duplicate_and_order_validation() {
+    let valid = DavDirectoryPage::<NameKeyEntry, u64> {
+        entries: vec![NameKeyEntry::new("a"), NameKeyEntry::new("b")],
+        next_cursor: None,
+    };
+    validate_directory_page(None, &HashSet::new(), None, 2, &valid)
+        .expect("names should provide stable ascending keys");
+
+    for (entries, expected) in [
+        (
+            vec![NameKeyEntry::new("a"), NameKeyEntry::new("a")],
+            DavDirectoryPageValidationError::DuplicateEntry,
+        ),
+        (
+            vec![NameKeyEntry::new("b"), NameKeyEntry::new("a")],
+            DavDirectoryPageValidationError::OutOfOrderEntry,
+        ),
+    ] {
+        assert_eq!(
+            validate_directory_page(
+                None,
+                &HashSet::new(),
+                None,
+                2,
+                &DavDirectoryPage::<NameKeyEntry, u64> {
+                    entries,
+                    next_cursor: None,
+                },
+            ),
+            Err(expected)
+        );
+    }
+}
+
 struct RecordingEnumerator {
     pages: Mutex<VecDeque<Result<DavDirectoryPage<TestEntry, u64>, DavBackendError>>>,
     calls: Mutex<Vec<(Option<u64>, usize)>>,
@@ -241,7 +315,7 @@ fn pager_applies_product_limit_preserves_cursor_and_stops_after_completion() {
         let path = DavPath::new("/docs/").expect("path");
         let mut state = DavDirectoryPageState::default();
         assert_eq!(state, DavDirectoryPageState::new());
-        let limits = DavDirectoryPageLimits::new(2, 2);
+        let limits = page_limits(2, 2);
 
         let first = read_next_directory_page(
             &enumerator,
@@ -314,7 +388,7 @@ fn pager_checks_cancellation_before_requesting_the_next_page() {
             &path,
             &mut state,
             1,
-            DavDirectoryPageLimits::new(1, 2),
+            page_limits(1, 2),
             &cancellation,
         )
         .await
@@ -326,7 +400,7 @@ fn pager_checks_cancellation_before_requesting_the_next_page() {
                 &path,
                 &mut state,
                 1,
-                DavDirectoryPageLimits::new(1, 2),
+                page_limits(1, 2),
                 &cancellation,
             )
             .await,
@@ -353,7 +427,7 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
                 &path,
                 &mut state,
                 0,
-                DavDirectoryPageLimits::new(1, 1),
+                page_limits(1, 1),
                 &DavNeverCancelled,
             )
             .await,
@@ -367,7 +441,7 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
                 &path,
                 &mut state,
                 2,
-                DavDirectoryPageLimits::new(2, 1),
+                page_limits(2, 1),
                 &DavNeverCancelled,
             )
             .await,
@@ -375,7 +449,24 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
                 DavDirectoryPageValidationError::OutOfOrderEntry
             ))
         );
-        assert_eq!(state, DavDirectoryPageState::new());
+        assert_eq!(enumerator.calls.lock().expect("calls").len(), 1);
+        assert_eq!(state.cursor(), None);
+        assert_eq!(state.pages_read(), 0);
+        assert_eq!(
+            read_next_directory_page(
+                &enumerator,
+                &path,
+                &mut state,
+                2,
+                page_limits(2, 1),
+                &DavNeverCancelled,
+            )
+            .await,
+            Err(DavDirectoryReadError::InvalidPage(
+                DavDirectoryPageValidationError::OutOfOrderEntry
+            ))
+        );
+        assert_eq!(enumerator.calls.lock().expect("calls").len(), 1);
 
         let backend = RecordingEnumerator {
             pages: Mutex::new(VecDeque::from([Err(DavBackendError::new(
@@ -383,13 +474,14 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
             ))])),
             calls: Mutex::new(Vec::new()),
         };
+        let mut backend_state = DavDirectoryPageState::new();
         assert_eq!(
             read_next_directory_page(
                 &backend,
                 &path,
-                &mut state,
+                &mut backend_state,
                 1,
-                DavDirectoryPageLimits::new(1, 1),
+                page_limits(1, 1),
                 &DavNeverCancelled,
             )
             .await,
@@ -397,7 +489,7 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
                 DavBackendErrorKind::Forbidden
             )))
         );
-        assert_eq!(state, DavDirectoryPageState::new());
+        assert_eq!(backend_state, DavDirectoryPageState::new());
     });
 }
 
@@ -416,7 +508,7 @@ fn pager_rejects_cross_page_order_regressions_cursor_cycles_and_page_exhaustion(
             },
         ]);
         let mut state = DavDirectoryPageState::new();
-        let limits = DavDirectoryPageLimits::new(1, 2);
+        let limits = page_limits(1, 2);
         read_next_directory_page(
             &cross_page,
             &path,
@@ -459,7 +551,7 @@ fn pager_rejects_cross_page_order_regressions_cursor_cycles_and_page_exhaustion(
             },
         ]);
         let mut state = DavDirectoryPageState::new();
-        let limits = DavDirectoryPageLimits::new(1, 3);
+        let limits = page_limits(1, 3);
         for _ in 0..2 {
             read_next_directory_page(
                 &cursor_cycle,
@@ -494,16 +586,14 @@ fn pager_rejects_cross_page_order_regressions_cursor_cycles_and_page_exhaustion(
             next_cursor: Some(1),
         }]);
         let mut state = DavDirectoryPageState::new();
-        let limits = DavDirectoryPageLimits::new(1, 1);
+        let limits = page_limits(1, 1);
         read_next_directory_page(&exhausted, &path, &mut state, 1, limits, &DavNeverCancelled)
             .await
             .expect("first page");
         assert_eq!(
             read_next_directory_page(&exhausted, &path, &mut state, 1, limits, &DavNeverCancelled,)
                 .await,
-            Err(DavDirectoryReadError::InvalidPage(
-                DavDirectoryPageValidationError::PageLimitExceeded
-            ))
+            Err(DavDirectoryReadError::PageLimitExceeded)
         );
         assert_eq!(exhausted.calls.lock().expect("calls").len(), 1);
     });

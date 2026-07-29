@@ -2,7 +2,8 @@
 
 use actix_web::http::{StatusCode as ActixStatusCode, header as actix_header};
 use actix_web::{HttpRequest, HttpResponse};
-use futures::StreamExt;
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
 use http::{HeaderMap, HeaderName, HeaderValue, Uri};
 
 use crate::protocol::DavProtocolError;
@@ -106,19 +107,22 @@ pub fn into_response(response: DavResponse) -> HttpResponse {
     match response.body {
         DavResponseBody::Empty => builder.finish(),
         DavResponseBody::Bytes(body) => builder.body(body),
-        DavResponseBody::Stream(stream) => {
-            let stream = stream.map(|item| {
-                item.map_err(|error| actix_web::error::ErrorInternalServerError(error.to_string()))
-            });
-            builder.streaming(stream)
-        }
-        DavResponseBody::MultiStatus(stream) => {
-            let stream = stream.map(|item| {
-                item.map_err(|error| actix_web::error::ErrorInternalServerError(error.to_string()))
-            });
-            builder.streaming(stream)
-        }
+        DavResponseBody::Stream(stream) => streaming_response(&mut builder, stream),
+        DavResponseBody::MultiStatus(stream) => streaming_response(&mut builder, stream),
     }
+}
+
+fn streaming_response<S, E>(builder: &mut actix_web::HttpResponseBuilder, stream: S) -> HttpResponse
+where
+    S: Stream<Item = Result<Bytes, E>> + 'static,
+    E: 'static,
+{
+    let stream = stream.map(|item| {
+        item.map_err(|_| {
+            actix_web::error::ErrorInternalServerError("WebDAV response stream failed")
+        })
+    });
+    builder.streaming(stream)
 }
 
 /// Maps a transport-neutral protocol error into its Actix response.

@@ -10,7 +10,8 @@ use aster_forge_webdav::{
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
     DavConditionalResource, DavLockingCapability, DavMethod, DavMethodSet, DavMultiStatusItem,
     DavMultiStatusLimits, DavMultiStatusSourceError, DavNonDavProfile, DavPath, DavResourceState,
-    DavVersioningCapability, DavWriteCapabilities, multistatus_stream_response, plan_capabilities,
+    DavResponse, DavResponseBody, DavVersioningCapability, DavWriteCapabilities,
+    multistatus_stream_response, plan_capabilities,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -187,12 +188,20 @@ async fn actix_adapter_streams_multistatus_and_propagates_typed_stream_failures(
     )
     .expect("failure response shell");
     let response = aster_forge_webdav::actix::into_response(response);
-    assert!(
-        actix_web::body::to_bytes(response.into_body())
-            .await
-            .is_err(),
-        "typed stream failure should terminate the Actix body"
-    );
+    let error = actix_web::body::to_bytes(response.into_body())
+        .await
+        .expect_err("typed stream failure should terminate the Actix body");
+    assert_eq!(error.to_string(), "WebDAV response stream failed");
+
+    let mut response = DavResponse::empty(http::StatusCode::OK);
+    response.body = DavResponseBody::Stream(Box::pin(futures::stream::iter([Err(
+        DavBackendError::new(DavBackendErrorKind::Forbidden),
+    )])));
+    let response = aster_forge_webdav::actix::into_response(response);
+    let error = actix_web::body::to_bytes(response.into_body())
+        .await
+        .expect_err("backend stream failure should terminate the Actix body");
+    assert_eq!(error.to_string(), "WebDAV response stream failed");
 }
 
 #[test]

@@ -181,10 +181,16 @@ impl<W: Write> DavMultiStatusWriter<W> {
         Ok(())
     }
 
+    /// Returns the number of bytes successfully written to the underlying sink.
+    #[must_use]
     pub fn written_bytes(&self) -> usize {
         self.writer.get_ref().written
     }
 
+    /// Returns a mutable reference to the underlying sink without finishing the document.
+    ///
+    /// Writing to the sink directly bypasses XML state and byte accounting and can corrupt the
+    /// document. This access is intended only for draining sink-managed completed chunks.
     pub fn get_mut(&mut self) -> &mut W {
         &mut self.writer.get_mut().inner
     }
@@ -386,6 +392,16 @@ fn validate_item(
     if property_count.is_none_or(|count| count > maximum_properties) {
         return Err(DavMultiStatusErrorKind::PropertyLimitExceeded);
     }
+    if item
+        .status
+        .is_some_and(|status| StatusCode::from_u16(status).is_err())
+        || item
+            .propstats
+            .iter()
+            .any(|propstat| StatusCode::from_u16(propstat.status).is_err())
+    {
+        return Err(DavMultiStatusErrorKind::InvalidItem);
+    }
     let property_form = item.status.is_none() && !item.propstats.is_empty();
     let status_form = item.status.is_some() && item.propstats.is_empty();
     if item.href.is_empty() || !(property_form || status_form) {
@@ -432,7 +448,8 @@ fn write_status<W: Write>(
     writer: &mut XmlStreamWriter<TrackingWriter<W>>,
     status: u16,
 ) -> Result<(), ForgeXmlError> {
-    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(status)
+        .map_err(|_| ForgeXmlError::InvalidData("invalid HTTP status code".to_owned()))?;
     let line = format!(
         "HTTP/1.1 {} {}",
         status.as_u16(),
@@ -529,7 +546,7 @@ impl ChunkBuffer {
     fn new(chunk_bytes: usize) -> Self {
         Self {
             chunk_bytes,
-            current: BytesMut::with_capacity(chunk_bytes),
+            current: BytesMut::with_capacity(chunk_bytes.min(DEFAULT_CHUNK_BYTES)),
             ready: VecDeque::new(),
         }
     }
@@ -559,5 +576,21 @@ impl Write for ChunkBuffer {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_writer_rejects_an_unvalidated_invalid_code() {
+        let tracking = TrackingWriter::new(Vec::new());
+        let mut writer = XmlStreamWriter::new(tracking).expect("writer");
+        writer.start("root").expect("root");
+        assert!(matches!(
+            write_status(&mut writer, 99),
+            Err(ForgeXmlError::InvalidData(_))
+        ));
     }
 }

@@ -297,12 +297,13 @@ page entry 类型；metadata 随 page entry 一起返回，允许产品批量查
 
 ```rust
 let mut state = aster_forge_webdav::DavDirectoryPageState::new();
+let limits = aster_forge_webdav::DavDirectoryPageLimits::new(256, 10_000)?;
 let page = aster_forge_webdav::read_next_directory_page(
     &enumerator,
     &directory,
     &mut state,
     256,
-    aster_forge_webdav::DavDirectoryPageLimits::new(256, 10_000),
+    limits,
     &cancellation,
 )
 .await?;
@@ -314,7 +315,8 @@ pager 在每次 backend call 前检查 `DavCancellation`，并强制：
 - 非空 continuation page。
 - cursor 不得在任意后续 page 回环。
 - `stable_key` 在页内和跨页严格递增，重复或倒序 page 不进入协议处理。
-- invalid page、backend failure 或 cancellation 不推进已验证 cursor state。
+- invalid page、backend failure 或 cancellation 不推进已验证 cursor state；invalid page 会将
+  pager 标记为终态，后续调用复用同一错误，不再重复请求相同 cursor。
 
 pager 为终止性保留至多 `maximum_pages` 个 opaque cursor，并只复制每页最后一个 stable key；
 它不会保存全部目录 entry。产品负责数据库 keyset/order contract 和 cursor 编码，Forge 不解析

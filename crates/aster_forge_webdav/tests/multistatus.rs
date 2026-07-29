@@ -141,6 +141,14 @@ fn complete_writer_rejects_zero_limits_and_invalid_response_forms() {
             }],
             error: None,
         },
+        status_item("/dav/invalid-status", 99),
+        DavMultiStatusItem::properties(
+            "/dav/invalid-propstat-status",
+            vec![DavPropStat {
+                status: 1_000,
+                properties: vec![dav_element("displayname")],
+            }],
+        ),
     ];
     for item in invalid_items {
         assert_eq!(
@@ -335,6 +343,26 @@ fn stream_preserves_pending_and_output_limit_boundaries() {
                 .expect_err("root should exceed output limit")
                 .kind,
             DavMultiStatusErrorKind::OutputLimitExceeded
+        );
+
+        let response = multistatus_stream_response(
+            stream::empty::<Result<DavMultiStatusItem, DavMultiStatusSourceError>>(),
+            DavMultiStatusLimits::new(usize::MAX, 1, 1, usize::MAX),
+        )
+        .expect("response shell");
+        let DavResponseBody::MultiStatus(mut body) = response.body else {
+            panic!("expected Multi-Status stream");
+        };
+        let chunks = body
+            .by_ref()
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("empty document stream");
+        assert_eq!(
+            chunks.concat(),
+            b"<D:multistatus xmlns:D=\"DAV:\"></D:multistatus>"
         );
 
         let response = multistatus_stream_response(

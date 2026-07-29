@@ -32,11 +32,18 @@ pub struct DavDirectoryPageLimits {
 }
 
 impl DavDirectoryPageLimits {
-    #[must_use]
-    pub const fn new(maximum_entries: usize, maximum_pages: usize) -> Self {
-        Self {
-            maximum_entries,
-            maximum_pages,
+    /// Creates non-zero directory page limits.
+    pub const fn new(
+        maximum_entries: usize,
+        maximum_pages: usize,
+    ) -> Result<Self, DavDirectoryReadError> {
+        if maximum_entries == 0 || maximum_pages == 0 {
+            Err(DavDirectoryReadError::InvalidLimit)
+        } else {
+            Ok(Self {
+                maximum_entries,
+                maximum_pages,
+            })
         }
     }
 }
@@ -52,8 +59,6 @@ pub enum DavDirectoryPageValidationError {
     EmptyContinuation,
     #[error("directory continuation cursor did not advance")]
     CursorLoop,
-    #[error("directory page limit exceeded")]
-    PageLimitExceeded,
     #[error("directory page contains an empty stable key")]
     EmptyStableKey,
     #[error("directory page contains a duplicate entry key")]
@@ -96,7 +101,9 @@ where
         if key.is_empty() {
             return Err(DavDirectoryPageValidationError::EmptyStableKey);
         }
-        if let Some(previous_page_key) = previous_stable_key {
+        if previous.is_none()
+            && let Some(previous_page_key) = previous_stable_key
+        {
             match previous_page_key.cmp(key) {
                 std::cmp::Ordering::Equal => {
                     return Err(DavDirectoryPageValidationError::DuplicateEntry);
@@ -129,6 +136,7 @@ pub struct DavDirectoryPageState<C: Eq + Hash> {
     current_cursor: Option<C>,
     seen_cursors: HashSet<C>,
     last_stable_key: Option<Bytes>,
+    poisoned: Option<DavDirectoryPageValidationError>,
     finished: bool,
     pages_read: usize,
 }
@@ -140,6 +148,7 @@ impl<C: Eq + Hash> DavDirectoryPageState<C> {
             current_cursor: None,
             seen_cursors: HashSet::new(),
             last_stable_key: None,
+            poisoned: None,
             finished: false,
             pages_read: 0,
         }
@@ -181,6 +190,8 @@ pub enum DavDirectoryReadError {
     InvalidLimit,
     #[error("directory enumeration was cancelled")]
     Cancelled,
+    #[error("directory page limit exceeded")]
+    PageLimitExceeded,
     #[error(transparent)]
     Backend(#[from] DavBackendError),
     #[error(transparent)]
@@ -190,7 +201,9 @@ pub enum DavDirectoryReadError {
 /// Requests and validates the next directory page.
 ///
 /// Cancellation is checked before every backend call. The product cursor remains opaque and is
-/// moved into the state only after the page passes all validation.
+/// moved into the state only after the page passes all validation. An invalid product page poisons
+/// the state so subsequent calls return the same validation error without repeating the backend
+/// request.
 pub async fn read_next_directory_page<E, C>(
     enumerator: &E,
     path: &DavPath,
@@ -203,6 +216,9 @@ where
     E: DavDirectoryEnumerator,
     C: DavCancellation,
 {
+    if let Some(error) = state.poisoned {
+        return Err(DavDirectoryReadError::InvalidPage(error));
+    }
     if state.finished {
         return Ok(None);
     }
@@ -213,9 +229,7 @@ where
         return Err(DavDirectoryReadError::Cancelled);
     }
     if state.pages_read >= limits.maximum_pages {
-        return Err(DavDirectoryReadError::InvalidPage(
-            DavDirectoryPageValidationError::PageLimitExceeded,
-        ));
+        return Err(DavDirectoryReadError::PageLimitExceeded);
     }
     let maximum_entries = requested_entries.min(limits.maximum_entries);
     let page = enumerator
@@ -225,13 +239,16 @@ where
             maximum_entries,
         })
         .await?;
-    validate_directory_page(
+    if let Err(error) = validate_directory_page(
         state.current_cursor.as_ref(),
         &state.seen_cursors,
         state.last_stable_key.as_deref(),
         maximum_entries,
         &page,
-    )?;
+    ) {
+        state.poisoned = Some(error);
+        return Err(DavDirectoryReadError::InvalidPage(error));
+    }
 
     let has_more = page.next_cursor.is_some();
     if let Some(last) = page.entries.last() {

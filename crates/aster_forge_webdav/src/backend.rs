@@ -174,6 +174,9 @@ pub trait DavDirectoryEntry: Send {
 }
 
 /// One bounded directory-page request with an opaque product-owned continuation cursor.
+///
+/// [`DavDirectoryEnumerator::read_directory_page`] receives a non-zero `maximum_entries` value.
+/// The backend must return no more than that number of entries.
 #[derive(Debug, Clone, Copy)]
 pub struct DavDirectoryPageRequest<'a, C> {
     pub path: &'a DavPath,
@@ -182,6 +185,10 @@ pub struct DavDirectoryPageRequest<'a, C> {
 }
 
 /// One product-owned directory page.
+///
+/// Entries must be in strictly ascending [`DavDirectoryEntry::stable_key`] order and must not
+/// exceed the request's `maximum_entries`. An empty `entries` collection must use `None` for
+/// `next_cursor` rather than returning an empty continuation page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavDirectoryPage<E, C> {
     pub entries: Vec<E>,
@@ -193,6 +200,8 @@ pub trait DavDirectoryEnumerator: Send + Sync {
     type Cursor: Eq + Hash + Send + Sync;
     type Entry: DavDirectoryEntry;
 
+    /// Returns one page satisfying the bounds and ordering contract on
+    /// [`DavDirectoryPageRequest`] and [`DavDirectoryPage`].
     fn read_directory_page<'a>(
         &'a self,
         request: DavDirectoryPageRequest<'a, Self::Cursor>,
