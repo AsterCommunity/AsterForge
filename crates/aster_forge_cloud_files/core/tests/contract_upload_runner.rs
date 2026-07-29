@@ -652,6 +652,42 @@ async fn unknown_commit_stops_then_reconciles_without_reupload_or_recommit() {
 }
 
 #[tokio::test]
+async fn unknown_recovery_rejects_a_store_status_without_durable_progress() {
+    let fixture = SyntheticBackend::full();
+    let bytes = Bytes::from_static(b"unknown-store-progress");
+    let intent = intent(&fixture, &bytes);
+    let store = MemoryContentStorageStore::default();
+    prepare_store(&store, &intent).await;
+    let source = MemorySnapshotReader::new(bytes);
+    let backend = ScriptedUploadBackend::default();
+    backend.set_commit_plans([CommitPlan::Unknown]);
+    backend.set_reconcile_plans([CommitPlan::Unknown]);
+    let runner = ContentUploadRunner::new(64).expect("runner config should be valid");
+
+    assert_eq!(
+        runner
+            .submit(intent.clone(), generation(1), &store, &backend, &source,)
+            .await
+            .expect("unknown commit should be durable"),
+        ContentUploadRunOutcome::RemoteOutcomePending
+    );
+    store.stall_next_content_upload_remote_outcome();
+
+    assert!(matches!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &store,
+                &backend,
+                &source,
+            )
+            .await,
+        Err(ContentUploadRunError::Contract(_))
+    ));
+}
+
+#[tokio::test]
 async fn precondition_failure_completes_but_preserves_dirty_snapshot() {
     let fixture = SyntheticBackend::full();
     let bytes = Bytes::from_static(b"conflict");

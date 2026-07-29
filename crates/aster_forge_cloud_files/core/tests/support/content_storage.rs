@@ -25,6 +25,7 @@ struct ContentStorageState {
     uploads: HashMap<OperationId, ContentUploadRecord>,
     active_upload_generations: HashMap<CloudScope, SessionGeneration>,
     stall_next_upload_session: bool,
+    stall_next_upload_remote_outcome: bool,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +65,13 @@ impl MemoryContentStorageStore {
             .lock()
             .expect("memory content store mutex should not be poisoned")
             .stall_next_upload_session = true;
+    }
+
+    pub fn stall_next_content_upload_remote_outcome(&self) {
+        self.state
+            .lock()
+            .expect("memory content store mutex should not be poisoned")
+            .stall_next_upload_remote_outcome = true;
     }
 
     pub async fn collect_upload_backlog(
@@ -452,6 +460,9 @@ impl ContentUploadStore for MemoryContentStorageStore {
             execution_generation,
         ) {
             return Ok(StoreWriteStatus::Fenced);
+        }
+        if std::mem::take(&mut state.stall_next_upload_remote_outcome) {
+            return Ok(StoreWriteStatus::Applied);
         }
         let record = state
             .uploads

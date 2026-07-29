@@ -600,10 +600,29 @@ impl ContentUploadRunner {
                             execution_generation,
                         )
                         .await?;
-                    if pending && status != StoreWriteStatus::Fenced {
+                    let current = store
+                        .load_content_upload(operation_id)
+                        .await?
+                        .ok_or(ContentUploadRunError::RecordNotFound)?;
+                    if current == record {
+                        if status == StoreWriteStatus::Fenced {
+                            return Ok(ContentUploadRunOutcome::Fenced);
+                        }
+                        if pending
+                            && status == StoreWriteStatus::AlreadyApplied
+                            && current.state() == ContentUploadState::RemoteOutcomeUnknown
+                        {
+                            return Ok(ContentUploadRunOutcome::RemoteOutcomePending);
+                        }
+                        return Err(CloudFilesCoreError::invalid_content_upload(
+                            "upload store reported a transition without durable progress",
+                        )
+                        .into());
+                    }
+                    if pending && current.state() == ContentUploadState::RemoteOutcomeUnknown {
                         return Ok(ContentUploadRunOutcome::RemoteOutcomePending);
                     }
-                    if observe_transition(status, &record, operation_id, store).await? {
+                    if status == StoreWriteStatus::Fenced {
                         return Ok(ContentUploadRunOutcome::Fenced);
                     }
                 }
