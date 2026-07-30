@@ -5,29 +5,59 @@ use http::{HeaderValue, StatusCode};
 
 use crate::xml::{parse_report_request, parse_version_control_request};
 use crate::{
-    DavErrorCondition, DavMultiStatusError, DavMultiStatusLimits, DavResourceKind, DavResponse,
-    DavVersionXml, DavXmlError, dav_error_element, dav_version_multistatus_bytes,
+    DavCapabilitySnapshot, DavErrorCondition, DavMultiStatusError, DavMultiStatusLimits,
+    DavReportType, DavResourceKind, DavResponse, DavVersionXml, DavXmlError, dav_error_element,
+    dav_version_multistatus_bytes,
 };
 
-/// Failure while selecting the supported DeltaV REPORT grammar.
+/// Failure while selecting a REPORT type through a capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DavVersionTreeReportError {
+pub enum DavReportPlanError {
     /// The REPORT body is not safe, well-formed WebDAV XML.
     #[error(transparent)]
     Xml(#[from] DavXmlError),
-    /// The REPORT root is not the supported `DAV:version-tree` report.
-    #[error("unsupported DeltaV REPORT type: {name}")]
-    Unsupported { name: String },
+    /// The REPORT root is not a standard type known to Forge.
+    #[error("unknown WebDAV REPORT type {name:?} in namespace {namespace:?}")]
+    UnknownType {
+        namespace: Option<String>,
+        name: String,
+    },
+    /// The type is known but absent from this target's validated package set.
+    #[error("WebDAV REPORT type is not supported by this resource: {report:?}")]
+    NotAvailable { report: DavReportType },
 }
 
-/// Validates that a REPORT request selects `DAV:version-tree`.
-pub fn validate_version_tree_report(body: &[u8]) -> Result<(), DavVersionTreeReportError> {
+/// Product-owned mapping for REPORT selection errors that are not XML syntax failures.
+pub trait DavReportErrorResponsePolicy {
+    /// Maps an unknown REPORT QName; `None` means the request root had no namespace.
+    ///
+    /// Both values come from the request, so the product decides whether to echo them to clients.
+    fn unknown_type(&self, namespace: Option<&str>, name: &str) -> DavResponse;
+
+    /// Maps a known REPORT type that is unavailable for the target resource's capabilities.
+    fn not_available(&self, report: DavReportType) -> DavResponse;
+}
+
+/// Parses and gates a REPORT body through the same snapshot used for discovery and dispatch.
+pub fn plan_report_request(
+    snapshot: &DavCapabilitySnapshot,
+    body: &[u8],
+) -> Result<DavReportType, DavReportPlanError> {
     let root = parse_report_request(body)?;
-    if root.name == "version-tree" && root.namespace.as_deref() == Some("DAV:") {
-        Ok(())
-    } else {
-        Err(DavVersionTreeReportError::Unsupported { name: root.name })
+    if root.namespace.as_deref() != Some("DAV:") {
+        return Err(DavReportPlanError::UnknownType {
+            namespace: root.namespace,
+            name: root.name,
+        });
     }
+    let report = report_type(&root.name).ok_or(DavReportPlanError::UnknownType {
+        namespace: root.namespace,
+        name: root.name,
+    })?;
+    if !snapshot.supports_report(report) {
+        return Err(DavReportPlanError::NotAvailable { report });
+    }
+    Ok(report)
 }
 
 /// Validates the optional RFC 3253 `DAV:version-control` request body.
@@ -36,15 +66,16 @@ pub fn validate_version_control_request(body: &[u8]) -> Result<(), DavXmlError> 
 }
 
 /// Builds the protocol response for a REPORT grammar selection failure.
-pub fn version_tree_report_error_response(
-    error: &DavVersionTreeReportError,
+pub fn report_plan_error_response<P: DavReportErrorResponsePolicy>(
+    error: &DavReportPlanError,
+    policy: &P,
 ) -> Result<DavResponse, DavXmlError> {
     match error {
-        DavVersionTreeReportError::Xml(error) => xml_request_error_response(*error),
-        DavVersionTreeReportError::Unsupported { name } => Ok(text_response(
-            StatusCode::NOT_IMPLEMENTED,
-            format!("Unsupported REPORT type: {name}"),
-        )),
+        DavReportPlanError::Xml(error) => xml_request_error_response(*error),
+        DavReportPlanError::UnknownType { namespace, name } => {
+            Ok(policy.unknown_type(namespace.as_deref(), name))
+        }
+        DavReportPlanError::NotAvailable { report } => Ok(policy.not_available(*report)),
     }
 }
 
@@ -144,4 +175,10 @@ fn xml_response(
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     Ok(response)
+}
+
+fn report_type(name: &str) -> Option<DavReportType> {
+    DavReportType::ALL
+        .into_iter()
+        .find(|report| report.local_name() == name)
 }

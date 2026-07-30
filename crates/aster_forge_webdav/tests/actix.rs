@@ -8,10 +8,10 @@ use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityContext,
     DavCapabilityDeclaration, DavCapabilityProvider, DavCapabilityTarget,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
-    DavConditionalResource, DavLockingCapability, DavMethod, DavMethodSet, DavMultiStatusItem,
-    DavMultiStatusLimits, DavMultiStatusSourceError, DavNonDavProfile, DavPath, DavResourceState,
-    DavResponse, DavResponseBody, DavVersioningCapability, DavWriteCapabilities,
-    multistatus_stream_response, plan_capabilities,
+    DavConditionalResource, DavExtensionPackage, DavExtensionSet, DavLockingCapability, DavMethod,
+    DavMethodSet, DavMultiStatusItem, DavMultiStatusLimits, DavMultiStatusSourceError,
+    DavNonDavProfile, DavPath, DavResourceState, DavResponse, DavResponseBody,
+    DavSearchCapabilities, DavWriteCapabilities, multistatus_stream_response, plan_capabilities,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -92,6 +92,7 @@ async fn bounded_body_accepts_the_exact_limit_and_rejects_one_byte_over() {
 
 #[actix_web::test]
 async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves_streams() {
+    let snapshot = body_snapshot();
     for (method, body) in [
         (DavMethod::Propfind, b"<D:propfind/>".as_slice()),
         (
@@ -100,8 +101,9 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
         ),
     ] {
         let mut xml = payload_from_bytes(Bytes::copy_from_slice(body)).await;
-        let policy = method
-            .standard_body_policy(64)
+        let policy = snapshot
+            .body_policy(method, 64)
+            .expect("allowed method")
             .expect("standard method body policy");
         let prepared = aster_forge_webdav::actix::prepare_request_body(policy, &mut xml)
             .await
@@ -113,8 +115,9 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
     let mut forbidden = payload_from_bytes(Bytes::from_static(b"x")).await;
     assert!(matches!(
         aster_forge_webdav::actix::prepare_request_body(
-            DavMethod::Options
-                .standard_body_policy(64)
+            snapshot
+                .body_policy(DavMethod::Options, 64)
+                .expect("allowed method")
                 .expect("OPTIONS body policy"),
             &mut forbidden,
         )
@@ -124,8 +127,9 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
 
     let mut stream = payload_from_bytes(Bytes::from_static(b"payload")).await;
     let prepared = aster_forge_webdav::actix::prepare_request_body(
-        DavMethod::Put
-            .standard_body_policy(64)
+        snapshot
+            .body_policy(DavMethod::Put, 64)
+            .expect("allowed method")
             .expect("PUT body policy"),
         &mut stream,
     )
@@ -265,7 +269,7 @@ fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
 #[test]
 fn unknown_methods_still_parse_and_validate_the_request_target_first() {
     let unknown = actix_web::test::TestRequest::default()
-        .method(Method::from_bytes(b"SEARCH").expect("extension method"))
+        .method(Method::from_bytes(b"TARGET-METHOD").expect("unknown method"))
         .uri("/webdav/folder/file.txt")
         .to_http_request();
     let target = aster_forge_webdav::actix::request_target(&unknown, "/webdav")
@@ -278,7 +282,7 @@ fn unknown_methods_still_parse_and_validate_the_request_target_first() {
     );
 
     let outside = actix_web::test::TestRequest::default()
-        .method(Method::from_bytes(b"SEARCH").expect("extension method"))
+        .method(Method::from_bytes(b"TARGET-METHOD").expect("unknown method"))
         .uri("/outside/file.txt")
         .to_http_request();
     assert!(aster_forge_webdav::actix::request_head(&outside, "/webdav").is_err());
@@ -289,12 +293,32 @@ fn actix_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
         resource: DavResourceState::File,
         methods: DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Get]),
         locking: DavLockingCapability::Disabled,
-        versioning: DavVersioningCapability::Disabled,
+        extensions: aster_forge_webdav::DavExtensionSet::empty(),
+        search: DavSearchCapabilities::default(),
         compatibility: DavCompatibilityCapabilities::default(),
         writes: DavWriteCapabilities::default(),
-        compliance: DavComplianceClasses { class1: true },
+        compliance: DavComplianceClasses {
+            class1: true,
+            class3: false,
+        },
     })
     .expect("valid Actix capability snapshot")
+}
+
+fn body_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
+    let mut declaration = DavCapabilityDeclaration::new(
+        DavResourceState::File,
+        DavMethodSet::from_methods(&[
+            DavMethod::Options,
+            DavMethod::Propfind,
+            DavMethod::Put,
+            DavMethod::Report,
+            DavMethod::VersionControl,
+        ]),
+    );
+    declaration.compliance.class1 = true;
+    declaration.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    plan_capabilities(declaration).expect("body capability snapshot")
 }
 
 #[test]

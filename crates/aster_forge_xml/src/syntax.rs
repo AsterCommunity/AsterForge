@@ -27,10 +27,17 @@ pub(crate) fn split_qualified_name(name: &str) -> (Option<&str>, &str) {
     }
 }
 
-pub(crate) fn valid_name(name: &str) -> bool {
+/// Returns whether `name` is one XML Namespaces `NCName` local name.
+///
+/// This validates the XML 1.0 name character ranges while excluding `:`, which separates a
+/// lexical prefix from its local name.
+#[must_use]
+pub fn is_valid_xml_local_name(name: &str) -> bool {
     let mut characters = name.chars();
     characters.next().is_some_and(is_name_start) && characters.all(is_name_char)
 }
+
+pub(crate) use is_valid_xml_local_name as valid_name;
 
 fn is_name_start(character: char) -> bool {
     matches!(

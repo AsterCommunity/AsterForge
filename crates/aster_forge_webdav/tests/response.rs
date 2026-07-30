@@ -12,7 +12,7 @@ use aster_forge_webdav::{
     DavMetaData, DavMethod, DavMethodSet, DavMultiRangeLimits, DavMultiRangePolicy,
     DavOpenedDownload, DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat, DavPath,
     DavRangeLimitBehavior, DavRequestHead, DavRequestOrigin, DavResourceState, DavResponseBody,
-    DavVersioningCapability, DavWriteCapabilities, DavWritePrecondition, DavXmlError,
+    DavSearchCapabilities, DavWriteCapabilities, DavWritePrecondition, DavXmlError,
     backend_error_response, body_error_response, conditional_plan_error_response,
     method_not_allowed_response, open_download, options_response, plan_capabilities,
     plan_download_response, plan_download_response_with_multi_range, propfind_xml_error_response,
@@ -247,9 +247,27 @@ fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
     }];
     plan_capabilities(DavCapabilityDeclaration {
         resource: DavResourceState::File,
-        methods: DavMethodSet::from_methods(&DavMethod::ALL),
+        methods: DavMethodSet::from_methods(&[
+            DavMethod::Options,
+            DavMethod::Get,
+            DavMethod::Put,
+            DavMethod::Patch,
+            DavMethod::Delete,
+            DavMethod::Mkcol,
+            DavMethod::Copy,
+            DavMethod::Move,
+            DavMethod::Propfind,
+            DavMethod::Proppatch,
+            DavMethod::Lock,
+            DavMethod::Unlock,
+            DavMethod::Report,
+            DavMethod::VersionControl,
+        ]),
         locking: DavLockingCapability::Class2,
-        versioning: DavVersioningCapability::Core,
+        extensions: aster_forge_webdav::DavExtensionSet::from_packages(&[
+            aster_forge_webdav::DavExtensionPackage::VersionControl,
+        ]),
+        search: DavSearchCapabilities::default(),
         compatibility: DavCompatibilityCapabilities {
             ms_author_via: true,
         },
@@ -257,7 +275,10 @@ fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
             patch: DavPatchCapability::Formats(&PATCH_FORMATS),
             ..DavWriteCapabilities::default()
         },
-        compliance: DavComplianceClasses { class1: true },
+        compliance: DavComplianceClasses {
+            class1: true,
+            class3: false,
+        },
     })
     .expect("valid complete capability declaration")
 }

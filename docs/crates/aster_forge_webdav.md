@@ -15,7 +15,43 @@ aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", fea
 
 ## 能力声明与响应快照
 
-产品通过 `DavCapabilityProvider` 提供类型化能力声明。产品可以在自己的类型上组合读取、写入、属性、锁和版本能力 impl，最终由一个 provider 根据 `DavCapabilityTarget` 和 `DavCapabilityContext` 投影当前请求的资源能力：
+产品通过 `DavCapabilityProvider` 提供类型化能力声明，并由 associated profile 声明编译期能力上限。每个 RFC 扩展都有独立 support trait 和 marker；选择 marker 但遗漏对应 impl 会直接编译失败：
+
+```rust
+use aster_forge_webdav::{
+    DavClass3Profile, DavCollectionSyncExtension, DavQuotaExtension,
+    dav_capability_profile,
+};
+
+type ProductWebDavProfile = dav_capability_profile!(
+    DavClass3Profile;
+    DavQuotaExtension,
+    DavCollectionSyncExtension,
+);
+```
+
+DeltaV 不再压缩成一个 `versioning` 布尔值。`version-control`、`checkout-in-place`、
+`version-history`、`workspace`、`update`、`label`、`working-resource`、`merge`、`baseline`、
+`activity` 和 `version-controlled-collection` 是独立 package。marker 会把 RFC prerequisite
+加入静态 profile；例如 `DavWorkspaceExtension` 同时要求并包含 version-control、
+checkout-in-place 和 version-history。运行时 declaration 仍必须显式投影当前目标真正启用的完整
+package 集，且不能超过静态上限。
+
+typed catalog 还包含 WebDAV ACL（[RFC 3744](https://www.rfc-editor.org/rfc/rfc3744.html)）、
+SEARCH（[RFC 5323](https://www.rfc-editor.org/rfc/rfc5323.html)）、Quota（[RFC 4331](https://www.rfc-editor.org/rfc/rfc4331.html)）、
+Collection Sync（[RFC 6578](https://www.rfc-editor.org/rfc/rfc6578.html)）、Extended MKCOL（[RFC 5689](https://www.rfc-editor.org/rfc/rfc5689.html)）、
+Current Principal（[RFC 5397](https://www.rfc-editor.org/rfc/rfc5397.html)）、Ordered Collections（[RFC 3648](https://www.rfc-editor.org/rfc/rfc3648.html)）、
+Redirect References（[RFC 4437](https://www.rfc-editor.org/rfc/rfc4437.html)）、Bindings（[RFC 5842](https://www.rfc-editor.org/rfc/rfc5842.html)）、
+POST Add Member（[RFC 5995](https://www.rfc-editor.org/rfc/rfc5995.html)）和 Prefer（[RFC 8144](https://www.rfc-editor.org/rfc/rfc8144.html)）。Forge 只为标准规定的 package 输出 DAV
+token；SEARCH 使用 `DASL`，Quota、Sync、Current Principal、Add Member 和 Prefer 不发明 token。
+
+根据 [RFC 4918 Section 18.3](https://www.rfc-editor.org/rfc/rfc4918.html#section-18.3)，
+Class 3 表示新版基础语义，只要求 Class 1，**不蕴含 Class 2 锁**。因此使用
+`DavClass3Profile` 得到 `DAV: 1, 3`；同时实现独立锁能力并选用
+`DavClass2And3Profile` 才得到 `DAV: 1, 2, 3`。
+
+provider 根据 `DavCapabilityTarget` 和 `DavCapabilityContext` 投影当前请求的资源、principal、
+权限和运行时开关：
 
 ```rust
 let snapshot = aster_forge_webdav::plan_capabilities_with_provider(
@@ -29,15 +65,44 @@ let options = aster_forge_webdav::options_response(&snapshot);
 let rejected = aster_forge_webdav::method_not_allowed_response(&snapshot);
 ```
 
-Rust 没有运行时 trait 反射，Forge 通过显式的 `DavCapabilityProvider` 聚合产品 impl；Forge 不扫描 handler，也不从字符串推测能力。provider 可以把资源类型、mount root、principal、权限、锁配置和 DeltaV 开关合并成 `DavCapabilityDeclaration`。`plan_capabilities` 校验声明并生成不可变的 `DavCapabilitySnapshot`。
+Rust 没有运行时 trait 反射，Forge 通过显式的 `DavCapabilityProvider` 聚合产品 impl；Forge 不扫描 handler，也不从字符串推测能力。provider 可以把资源类型、mount root、principal、权限、锁配置和扩展状态合并成 `DavCapabilityDeclaration`。`plan_capabilities` 校验声明并生成不可变的 `DavCapabilitySnapshot`。
 
-静态能力通过 associated profile 进一步约束：`DavClass2Profile` 要求 provider 实现 `DavClass2Support`，而该 trait 继承 `DavClass1Support`；版本能力使用对应的 `DavClass1VersioningProfile` / `DavClass2VersioningProfile`。因此 class 2 缺少 class 1、版本 profile 缺少基础 profile 等结构性错误会在编译期报错。请求目标的存在性、file/collection 类型、principal 权限和运行时开关仍属于动态投影，由 planner 在请求时验证。
+同一个 snapshot 是 `Allow`、`DAV`、`DASL`、`Accept-Patch`、OPTIONS、405、dispatch、body
+policy、REPORT gate、live-property catalog 和 RFC 8144 preference 的唯一事实源。
+`gate_method` 把已知和未知方法接入同一 405 gate，产品不直接拼协议 discovery header。
+SEARCH grammar 使用 `DavSearchGrammar` 分别声明 DASL coded-URL 与 XML namespace/local-name，
+不会错误地从 URI 猜 QName。
 
-provider trait 使用原生 `async fn` 和泛型静态分发，不为 capability lookup 引入 `Pin<Box<dyn Future>>` 堆分配。405 gate 只返回零大小的 typed error，实际响应由同一个 snapshot 构造。
+provider trait 使用原生 `async fn` 和泛型静态分发，不为 capability lookup 引入
+`Pin<Box<dyn Future>>`。package、method 和 resource set 使用定宽 bitset；descriptor 和 grammar
+使用静态 slice，不建立运行时字符串 registry。RFC 8144 的 `Preference-Applied` 从固定规范值中
+选择，不为每个请求拼接 `String`；request plan 只给出 eligibility，response composer 必须把实际
+执行的 preference set 传给 `preference_applied_header`，失败响应不会误报已应用的行为。
 
-同一个 snapshot 必须被 OPTIONS、405、实际 method dispatch、body policy 和扩展 discovery 共用。`gate_method` 负责把已知或未知 method 统一接入 405 gate。产品不直接拼接 `Allow`、`DAV` 或 `version-control` header。
+## Live property catalog 与 quota
 
-`DavLockingCapability::Class2` 只有在 class 1、LOCK 和 UNLOCK 同时成立时才会通过规划；`DavVersioningCapability::Core` 只有在 class 1、REPORT 和 VERSION-CONTROL 同时成立时才会生成 `version-control` token。`MS-Author-Via` 作为独立兼容性 flag，不进入 DAV compliance token。
+Forge 维护标准 live property 的静态 catalog，并从 capability snapshot 投影
+`supported-method-set`、`supported-live-property-set`、`supported-report-set` 和
+`supported-query-grammar-set`。package descriptor 负责 discovery 与 dispatch gate；每个高级
+REPORT 的具体请求 grammar 和执行 handler 仍由对应协议模块或产品 adapter 实现，声明 package
+不等于伪装成所有操作已经落地。
+
+PROPFIND 先通过 `live_property_requirements` 汇总本次真正需要的 metadata、lock、dead property、
+quota、principal、sync token、add-member 和扩展值。`DavLivePropertyProvider` 每个资源只取得一次
+batch snapshot，再由 `build_live_propfind_item_with_provider` 生成 propstat；不会按属性触发异步
+N+1，也不会为 catalog 建立请求期集合。
+
+RFC 4331 quota 语义固定为：
+
+- `quota-used-bytes` 与 `quota-available-bytes` 默认不进入 `allprop`，显式 `include` 或 `prop` 才取值；
+  ACL、DeltaV、Ordered Collections、Redirect References、Bindings、Sync 和 Add Member 中标准原文
+  明确要求省略的扩展属性也遵循同一规则。
+- `propname` 只列出当前有定义的 quota 属性；无限额度用 `available_bytes: None` 表示，此时省略
+  `quota-available-bytes`，显式请求得到 404 propstat。
+- collection/mount root 启用 quota 后必须提供 `quota-used-bytes` 快照；缺失返回 typed
+  representation error，而不是猜零。file 上未定义的 quota 值按 404 property 处理。
+
+产品仍拥有 quota 计算、权限、事务和持久化；Forge 只拥有 RFC 属性选择、发现、值形状和错误分类。
 
 ## PUT、partial PUT 与 PATCH
 
@@ -192,7 +257,7 @@ Forge 负责：
 - PROPFIND、PROPPATCH、LOCK、REPORT、VERSION-CONTROL 的 XML 安全校验、QName 语法和未知扩展处理。
 - PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
 - PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
-- DeltaV `DAV:version-tree` REPORT 选择、file-only/unsupported mapping、version multistatus 和 VERSION-CONTROL response selection。
+- REPORT 根 QName 解析与 snapshot gate；已实现的 `DAV:version-tree` grammar、file-only mapping、version multistatus 和 VERSION-CONTROL response selection。
 - 已知 request grammar 直接遍历 `aster_forge_xml` 的 source-backed arena，不先重复 validation，也不复制整棵通用 DOM；只有需要持久化或回显的 owner/property 子树才物化为 `DavXmlElement`。
 - `DavXmlElement` 只承担 DAV 持久化子树与 response composition；通用解析、安全限制、namespace 和 reader/writer 由 `aster_forge_xml` 承担。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
@@ -201,8 +266,11 @@ Forge 负责：
 - Actix transport 与 transport-neutral `http` 类型的显式转换。Actix 仍使用 `http 0.2` 而 Forge 公共模型使用 `http 1.x`，URI/header 跨版本转换保持显式边界。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
-- resource-aware capability declaration/snapshot、RFC 4918 class dependency validation、
-  canonical `Allow`/`DAV`/`Accept-Patch` rendering 和未知 method 的 target-first parsing。
+- resource-aware capability declaration/snapshot、RFC class 与扩展 prerequisite 校验、静态
+  package/property/report descriptor、canonical `Allow`/`DAV`/`DASL`/`Accept-Patch` rendering
+  和未知 method 的 target-first parsing。
+- capability-driven live-property catalog、一次 batch value snapshot、RFC 4331 quota
+  allprop/propname/explicit selection，以及 RFC 8144 preference planning。
 - RFC 9110 partial PUT 默认拒绝与 typed range plan、RFC 5789 PATCH media-type dispatch，
   以及与二者分离的私有 `X-Update-Range` capability。
 
@@ -233,8 +301,11 @@ DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.h
 - 在 mutation 前提供 writer-authoritative 的 request-target `exists`、`ETag` 和
   `Last-Modified`。Forge 不替产品选择 reader/writer 一致性来源，也不把旧 metadata
   snapshot 当成事务保障。
-- 实现 `DavCapabilityProvider`，提供资源类型、权限投影、locking 事实、DeltaV 状态和
-  独立兼容性开关；产品 handler 与响应层只消费 Forge snapshot。
+- 实现 `DavCapabilityProvider` 和所选 package support traits，提供资源类型、权限投影、locking
+  事实、当前目标的扩展 package 子集和独立兼容性开关；产品 handler 与响应层只消费 Forge
+  snapshot。
+- 实现 `DavLivePropertyProvider` 的 batch snapshot，提供请求真正需要的权威值；Forge 不接管
+  quota、principal、sync token、dead property 或扩展属性的持久化。
 
 ## HTTP 与 WebDAV 条件请求
 
@@ -344,6 +415,9 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
 
 - 协议输入错误使用 `DavProtocolError`，由 transport adapter 映射为 WebDAV 状态码和响应。
 - 产品 adapter 把业务错误压缩为 `DavBackendErrorKind`；详细错误和产品文案留在产品日志与 API 边界。
+- `DavReportPlanError` 区分未知 REPORT QName 与已知但当前资源未开放的 REPORT；产品通过
+  `DavReportErrorResponsePolicy` 选择这两类错误的状态码、文案和响应 envelope，XML 错误仍由
+  Forge 按协议分类生成响应。
 - Forge 不直接返回产品 API envelope，也不依赖产品错误类型。
 
 ## 测试要求
@@ -353,9 +427,11 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
 - XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、reader I/O、输入大小与深度精确临界、非法 UTF-8、转义和大属性值。
 - XML response 矩阵覆盖状态行、元素顺序、QName、namespace shadowing/undeclaration、锁字段、死属性重建、异常旧值转义，以及非法 writer model 与深度临界。
 - 产品仓库保留真实认证、数据库、存储、quota、audit、能力 provider 和客户端集成测试。
-- capability 测试必须覆盖 unmapped、file、collection、mount root、GET/HEAD 规范化、
-  class 1/2、locking on/off、DeltaV on/off、兼容性 headers、未知 method，以及
-  OPTIONS/405/dispatch 使用同一 snapshot 的一致性。
+- capability 测试必须覆盖全部 resource state、GET/HEAD 规范化、Class 1/2/3 独立关系、locking、
+  22 个 RFC package、DeltaV prerequisite、SEARCH/DASL、兼容性 headers、未知 method，以及
+  OPTIONS/405/dispatch/body/property/report 使用同一 snapshot 的一致性。
+- live-property 测试必须覆盖 allprop/include/propname/explicit prop、200/404 分组、prefix 保留、
+  provider 每资源只调用一次、quota 无限与 collection required value、发现属性生成和畸形产品值。
 - 写入能力测试必须覆盖 partial PUT 默认拒绝、Content-Range 全部边界、强 If-Match、
   PATCH media-type 与 body policy dispatch、Accept-Patch、私有 header 冲突及实际 stream
   长度由产品提交边界核验。

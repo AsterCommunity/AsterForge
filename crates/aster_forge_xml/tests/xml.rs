@@ -2,8 +2,21 @@ use std::io::{self, Cursor, Write};
 
 use aster_forge_xml::{
     BorrowedDocument, Error, NodeRef, OwnedDocument, ParseOptions, XmlSafetyError, XmlSafetyPolicy,
-    validate_xml_input, xml_root_local_name,
+    is_valid_xml_local_name, validate_xml_input, xml_root_local_name,
 };
+
+#[test]
+fn xml_local_name_validation_covers_ascii_unicode_and_namespace_boundaries() {
+    for valid in ["basicsearch", "_private", "名", "a-b.c", "a\u{0301}"] {
+        assert!(is_valid_xml_local_name(valid), "valid local name: {valid}");
+    }
+    for invalid in ["", "1name", "has:prefix", "space name", "-leading"] {
+        assert!(
+            !is_valid_xml_local_name(invalid),
+            "invalid local name: {invalid}"
+        );
+    }
+}
 
 #[test]
 fn preserves_every_node_type_and_mixed_content_in_order() {

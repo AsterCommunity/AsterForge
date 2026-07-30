@@ -372,12 +372,6 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
     }
 }
 
-/// Returns the QName of a bounded REPORT root.
-pub fn parse_report_root(body: &[u8]) -> Result<DavRequestedProperty, DavXmlError> {
-    let document = parse_document(body)?;
-    Ok(requested_property(document.root()))
-}
-
 pub(crate) fn parse_report_request(body: &[u8]) -> Result<DavRequestedProperty, DavXmlError> {
     let document = parse_document(body)?;
     let root = document.root();

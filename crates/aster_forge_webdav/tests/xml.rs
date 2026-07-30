@@ -1,9 +1,11 @@
 use std::io::{self, Cursor, Read};
 
 use aster_forge_webdav::{
-    DavPropfindRequest, DavVersionTreeReportError, DavXmlElement, DavXmlError, DavXmlNode,
-    parse_lock_request, parse_propfind_request, parse_proppatch_request, parse_report_root,
-    validate_version_control_request, validate_version_tree_report,
+    DavCapabilityDeclaration, DavCapabilitySnapshot, DavExtensionPackage, DavExtensionSet,
+    DavMethod, DavMethodSet, DavPropfindRequest, DavReportPlanError, DavReportType,
+    DavResourceState, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
+    parse_propfind_request, parse_proppatch_request, plan_capabilities, plan_report_request,
+    validate_version_control_request,
 };
 use aster_forge_xml::{DEFAULT_XML_MAX_DEPTH, XmlSafetyPolicy};
 
@@ -29,11 +31,24 @@ fn lock_parser(body: &[u8]) -> Result<(), DavXmlError> {
     parse_lock_request(body).map(|_| ())
 }
 
+fn report_snapshot() -> DavCapabilitySnapshot {
+    let mut declaration = DavCapabilityDeclaration::new(
+        DavResourceState::Collection,
+        DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Report]),
+    );
+    declaration.compliance.class1 = true;
+    declaration.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    plan_capabilities(declaration).expect("REPORT snapshot fixture")
+}
+
 fn report_parser(body: &[u8]) -> Result<(), DavXmlError> {
-    validate_version_tree_report(body).map_err(|error| match error {
-        DavVersionTreeReportError::Xml(error) => error,
-        DavVersionTreeReportError::Unsupported { .. } => DavXmlError::InvalidGrammar,
-    })
+    match plan_report_request(&report_snapshot(), body) {
+        Ok(_) => Ok(()),
+        Err(DavReportPlanError::Xml(error)) => Err(error),
+        Err(DavReportPlanError::UnknownType { .. } | DavReportPlanError::NotAvailable { .. }) => {
+            Err(DavXmlError::InvalidGrammar)
+        }
+    }
 }
 
 fn version_control_parser(body: &[u8]) -> Result<(), DavXmlError> {
@@ -315,7 +330,7 @@ fn all_xml_parsers_reject_empty_whitespace_declaration_and_multiple_roots() {
     ] {
         assert!(parse_proppatch_request(xml).is_err());
         assert!(parse_lock_request(xml).is_err());
-        assert!(parse_report_root(xml).is_err());
+        assert!(report_parser(xml).is_err());
     }
 }
 
@@ -524,15 +539,27 @@ fn lock_known_control_order_is_irrelevant_but_nested_controls_stay_inactive() {
 }
 
 #[test]
-fn report_root_is_qname_aware() {
-    let root = parse_report_root(br#"<D:version-tree xmlns:D="DAV:" X:flag="1" xmlns:X="urn:x"/>"#)
-        .unwrap();
-    assert_eq!(root.name, "version-tree");
-    assert_eq!(root.namespace.as_deref(), Some("DAV:"));
-    assert_eq!(root.prefix.as_deref(), Some("D"));
-
-    let collision = parse_report_root(br#"<X:version-tree xmlns:X="urn:x"/>"#).unwrap();
-    assert_eq!(collision.namespace.as_deref(), Some("urn:x"));
+fn report_planner_is_qname_aware() {
+    let snapshot = report_snapshot();
+    assert_eq!(
+        plan_report_request(
+            &snapshot,
+            br#"<D:version-tree xmlns:D="DAV:" X:flag="1" xmlns:X="urn:x"/>"#,
+        ),
+        Ok(DavReportType::VersionTree)
+    );
+    assert_eq!(
+        plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="DAV:"/>"#),
+        Ok(DavReportType::VersionTree),
+        "the prefix is lexical; the expanded QName selects the REPORT"
+    );
+    assert_eq!(
+        plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="urn:x"/>"#),
+        Err(DavReportPlanError::UnknownType {
+            namespace: Some("urn:x".to_owned()),
+            name: "version-tree".to_owned(),
+        })
+    );
 }
 
 #[test]

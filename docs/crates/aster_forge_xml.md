@@ -15,6 +15,8 @@ Forge XML 负责：
 - 默认拒绝 DTD、自定义 entity、多个 root、尾部垃圾和非法编码。
 - 对任意 `BufRead` 做有界流式读取，并允许直接跳过或只保留选中的 subtree。
 - 对任意 `Write` 直接生成 XML，并检查 document state、namespace binding、名称、字符、深度、属性数和输出字节上限。
+- 通过 `is_valid_xml_local_name` 复用同一 XML 1.0 `NCName` 字符规则，供静态协议 descriptor
+  在生成文档前校验 local name，避免各 crate 重写名称解析。
 
 产品侧仍负责 XML schema、协议字段、HTTP body 聚合上限、错误映射、权限和存储语义。已知 schema 的 WOPI/COS/WebDAV request 应优先使用 `XmlStreamReader` 做 typed/event parsing；需要随机查询时使用 `BorrowedDocument` 或 `OwnedDocument`；只需保留未知扩展节点时使用 `capture_current`；生成中大型 response 时使用 `XmlStreamWriter`。
 
