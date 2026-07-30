@@ -1011,8 +1011,11 @@ unsafe fn copy_optional_wide(value: PCWSTR) -> Result<Option<OsString>> {
     let pointer = value.as_ptr();
     for length in 0..=MAX_CALLBACK_WIDE_UNITS {
         // SAFETY: the caller's CFAPI ABI precondition guarantees the string remains readable
-        // through its terminating NUL. This block reads exactly one UTF-16 unit within the cap.
-        let unit = unsafe { pointer.add(length).read() };
+        // through its terminating NUL, so this offset stays within that allocation.
+        let unit_pointer = unsafe { pointer.add(length) };
+        // SAFETY: `unit_pointer` was derived from the still-live callback string allocation at the
+        // current in-bounds code-unit offset and is properly aligned for `u16`.
+        let unit = unsafe { unit_pointer.read() };
         if unit == 0 {
             // SAFETY: every unit in this range was read successfully while searching for the NUL,
             // and the callback still owns the unchanged string allocation.
