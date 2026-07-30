@@ -605,14 +605,14 @@ impl ContentUploadRunner {
                             execution_generation,
                         )
                         .await?;
+                    if status == StoreWriteStatus::Fenced {
+                        return Ok(ContentUploadRunOutcome::Fenced);
+                    }
                     let current = store
                         .load_content_upload(operation_id)
                         .await?
                         .ok_or(ContentUploadRunError::RecordNotFound)?;
                     if current == record {
-                        if status == StoreWriteStatus::Fenced {
-                            return Ok(ContentUploadRunOutcome::Fenced);
-                        }
                         if pending
                             && status == StoreWriteStatus::AlreadyApplied
                             && current.state() == ContentUploadState::RemoteOutcomeUnknown
@@ -623,12 +623,6 @@ impl ContentUploadRunner {
                             "upload store reported a transition without durable progress",
                         )
                         .into());
-                    }
-                    if pending && current.state() == ContentUploadState::RemoteOutcomeUnknown {
-                        return Ok(ContentUploadRunOutcome::RemoteOutcomePending);
-                    }
-                    if status == StoreWriteStatus::Fenced {
-                        return Ok(ContentUploadRunOutcome::Fenced);
                     }
                 }
                 ContentUploadState::RemoteOutcomeKnown => {
@@ -1013,3 +1007,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "upload_runner_tests.rs"]
+mod runner_tests;

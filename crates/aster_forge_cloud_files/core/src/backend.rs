@@ -51,6 +51,20 @@ impl ByteRange {
     pub const fn end_exclusive(self) -> u64 {
         self.offset + self.length.get()
     }
+
+    /// Returns the smallest range covering two already validated ranges.
+    pub(crate) fn covering(self, other: Self) -> Self {
+        let (first, end) = if self.offset <= other.offset {
+            (self, self.end_exclusive().max(other.end_exclusive()))
+        } else {
+            (other, self.end_exclusive().max(other.end_exclusive()))
+        };
+        let extension = end - first.end_exclusive();
+        Self {
+            offset: first.offset,
+            length: first.length.saturating_add(extension),
+        }
+    }
 }
 
 /// Requested content extent.

@@ -73,27 +73,19 @@ impl ContentRangeSet {
             return Ok(false);
         }
 
-        let mut start = range.offset();
-        let mut end = range.end_exclusive();
+        let first_merged = self
+            .ranges
+            .partition_point(|existing| existing.end_exclusive() < range.offset());
+        let next_unmerged = first_merged
+            + self.ranges[first_merged..]
+                .partition_point(|existing| existing.offset() <= range.end_exclusive());
+        let merged_ranges = &self.ranges[first_merged..next_unmerged];
+        let merged_ranges = merged_ranges.iter().copied();
+        let combined = merged_ranges.fold(range, ByteRange::covering);
         let mut merged = Vec::with_capacity(self.ranges.len().saturating_add(1));
-        let mut inserted = false;
-        for existing in &self.ranges {
-            if existing.end_exclusive() < start {
-                merged.push(*existing);
-            } else if end < existing.offset() {
-                if !inserted {
-                    merged.push(ByteRange::new(start, end.saturating_sub(start))?);
-                }
-                inserted = true;
-                merged.push(*existing);
-            } else {
-                start = start.min(existing.offset());
-                end = end.max(existing.end_exclusive());
-            }
-        }
-        if !inserted {
-            merged.push(ByteRange::new(start, end.saturating_sub(start))?);
-        }
+        merged.extend_from_slice(&self.ranges[..first_merged]);
+        merged.push(combined);
+        merged.extend_from_slice(&self.ranges[next_unmerged..]);
         if merged.len() > Self::MAX_RANGES {
             return Err(CloudFilesCoreError::invalid_content_storage(
                 "provider cache range fragmentation exceeds the supported limit",

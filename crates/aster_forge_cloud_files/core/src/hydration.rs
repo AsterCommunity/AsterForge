@@ -371,18 +371,11 @@ impl HydrationCoordinator {
         let existing = dependencies.clone();
         let mut gaps = Vec::new();
         for dependency in existing {
-            if dependency.end > cursor {
-                if dependency.start > cursor {
-                    let gap_end = dependency.start.min(physical_end);
-                    if cursor < gap_end {
-                        gaps.push((cursor, gap_end));
-                    }
-                }
-                cursor = cursor.max(dependency.end.min(physical_end));
-                if cursor >= physical_end {
-                    break;
-                }
+            let gap_end = dependency.start.min(physical_end);
+            if cursor < gap_end {
+                gaps.push((cursor, gap_end));
             }
+            cursor = cursor.max(dependency.end.min(physical_end));
         }
         if cursor < physical_end {
             gaps.push((cursor, physical_end));
@@ -747,12 +740,10 @@ impl HydrationWaiter {
         }
 
         let bytes = combine_slices(slices)?;
-        let response = ContentReadResponse::new(
-            self.request.read().revision().clone(),
-            self.target_start,
-            bytes,
-            self.request.read().expected_size(),
-        )?;
+        let revision = self.request.read().revision().clone();
+        let offset = self.target_start;
+        let total_size = self.request.read().expected_size();
+        let response = ContentReadResponse::new(revision, offset, bytes, total_size)?;
         self.request.read().validate_response(&response)?;
         Ok(response)
     }
