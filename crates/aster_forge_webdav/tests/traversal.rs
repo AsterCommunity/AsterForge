@@ -469,9 +469,13 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
         assert_eq!(enumerator.calls.lock().expect("calls").len(), 1);
 
         let backend = RecordingEnumerator {
-            pages: Mutex::new(VecDeque::from([Err(DavBackendError::new(
-                DavBackendErrorKind::Forbidden,
-            ))])),
+            pages: Mutex::new(VecDeque::from([
+                Err(DavBackendError::new(DavBackendErrorKind::Forbidden)),
+                Ok(DavDirectoryPage {
+                    entries: vec![TestEntry::new("recovered")],
+                    next_cursor: None,
+                }),
+            ])),
             calls: Mutex::new(Vec::new()),
         };
         let mut backend_state = DavDirectoryPageState::new();
@@ -490,6 +494,26 @@ fn pager_preserves_state_on_invalid_limit_page_or_backend_failure() {
             )))
         );
         assert_eq!(backend_state, DavDirectoryPageState::new());
+
+        let recovered = read_next_directory_page(
+            &backend,
+            &path,
+            &mut backend_state,
+            1,
+            page_limits(1, 1),
+            &DavNeverCancelled,
+        )
+        .await
+        .expect("backend retry")
+        .expect("recovered page");
+        assert_eq!(recovered.entries[0].name(), b"recovered");
+        assert!(!recovered.has_more);
+        assert_eq!(
+            backend.calls.lock().expect("calls").as_slice(),
+            &[(None, 1), (None, 1)]
+        );
+        assert_eq!(backend_state.pages_read(), 1);
+        assert!(backend_state.is_finished());
     });
 }
 
