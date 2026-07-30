@@ -18,10 +18,20 @@ pub enum DavReportPlanError {
     Xml(#[from] DavXmlError),
     /// The REPORT root is not a standard type known to Forge.
     #[error("unknown WebDAV REPORT type: {name}")]
-    Unsupported { name: String },
+    UnknownType {
+        namespace: Option<String>,
+        name: String,
+    },
     /// The type is known but absent from this target's validated package set.
     #[error("WebDAV REPORT type is not supported by this resource: {report:?}")]
-    NotSupported { report: DavReportType },
+    NotAvailable { report: DavReportType },
+}
+
+/// Product-owned mapping for REPORT selection errors that are not XML syntax failures.
+pub trait DavReportErrorResponsePolicy {
+    fn unknown_type(&self, namespace: Option<&str>, name: &str) -> DavResponse;
+
+    fn not_available(&self, report: DavReportType) -> DavResponse;
 }
 
 /// Parses and gates a REPORT body through the same snapshot used for discovery and dispatch.
@@ -31,12 +41,17 @@ pub fn plan_report_request(
 ) -> Result<DavReportType, DavReportPlanError> {
     let root = parse_report_request(body)?;
     if root.namespace.as_deref() != Some("DAV:") {
-        return Err(DavReportPlanError::Unsupported { name: root.name });
+        return Err(DavReportPlanError::UnknownType {
+            namespace: root.namespace,
+            name: root.name,
+        });
     }
-    let report =
-        report_type(&root.name).ok_or(DavReportPlanError::Unsupported { name: root.name })?;
+    let report = report_type(&root.name).ok_or(DavReportPlanError::UnknownType {
+        namespace: root.namespace,
+        name: root.name,
+    })?;
     if !snapshot.supports_report(report) {
-        return Err(DavReportPlanError::NotSupported { report });
+        return Err(DavReportPlanError::NotAvailable { report });
     }
     Ok(report)
 }
@@ -47,17 +62,16 @@ pub fn validate_version_control_request(body: &[u8]) -> Result<(), DavXmlError> 
 }
 
 /// Builds the protocol response for a REPORT grammar selection failure.
-pub fn report_plan_error_response(error: &DavReportPlanError) -> Result<DavResponse, DavXmlError> {
+pub fn report_plan_error_response<P: DavReportErrorResponsePolicy>(
+    error: &DavReportPlanError,
+    policy: &P,
+) -> Result<DavResponse, DavXmlError> {
     match error {
         DavReportPlanError::Xml(error) => xml_request_error_response(*error),
-        DavReportPlanError::Unsupported { name } => Ok(text_response(
-            StatusCode::NOT_IMPLEMENTED,
-            format!("Unsupported REPORT type: {name}"),
-        )),
-        DavReportPlanError::NotSupported { report } => Ok(text_response(
-            StatusCode::NOT_IMPLEMENTED,
-            format!("Unsupported REPORT type: {}", report.local_name()),
-        )),
+        DavReportPlanError::UnknownType { namespace, name } => {
+            Ok(policy.unknown_type(namespace.as_deref(), name))
+        }
+        DavReportPlanError::NotAvailable { report } => Ok(policy.not_available(*report)),
     }
 }
 
@@ -160,19 +174,7 @@ fn xml_response(
 }
 
 fn report_type(name: &str) -> Option<DavReportType> {
-    [
-        DavReportType::VersionTree,
-        DavReportType::ExpandProperty,
-        DavReportType::LocateByHistory,
-        DavReportType::MergePreview,
-        DavReportType::CompareBaseline,
-        DavReportType::LatestActivityVersion,
-        DavReportType::AclPrincipalPropSet,
-        DavReportType::PrincipalMatch,
-        DavReportType::PrincipalPropertySearch,
-        DavReportType::PrincipalSearchPropertySet,
-        DavReportType::SyncCollection,
-    ]
-    .into_iter()
-    .find(|report| report.local_name() == name)
+    DavReportType::ALL
+        .into_iter()
+        .find(|report| report.local_name() == name)
 }

@@ -415,6 +415,9 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
 
 - 协议输入错误使用 `DavProtocolError`，由 transport adapter 映射为 WebDAV 状态码和响应。
 - 产品 adapter 把业务错误压缩为 `DavBackendErrorKind`；详细错误和产品文案留在产品日志与 API 边界。
+- `DavReportPlanError` 区分未知 REPORT QName 与已知但当前资源未开放的 REPORT；产品通过
+  `DavReportErrorResponsePolicy` 选择这两类错误的状态码、文案和响应 envelope，XML 错误仍由
+  Forge 按协议分类生成响应。
 - Forge 不直接返回产品 API envelope，也不依赖产品错误类型。
 
 ## 测试要求

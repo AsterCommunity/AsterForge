@@ -193,6 +193,11 @@ impl DavResourceStateSet {
     pub const fn contains(self, state: DavResourceState) -> bool {
         self.0 & (1u16 << resource_index(state)) != 0
     }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
 }
 
 const fn resource_index(state: DavResourceState) -> u32 {
@@ -394,6 +399,37 @@ pub enum DavReportType {
 }
 
 impl DavReportType {
+    /// REPORT types in canonical discovery and parsing order.
+    pub const ALL: [Self; 11] = [
+        Self::VersionTree,
+        Self::ExpandProperty,
+        Self::LocateByHistory,
+        Self::MergePreview,
+        Self::CompareBaseline,
+        Self::LatestActivityVersion,
+        Self::AclPrincipalPropSet,
+        Self::PrincipalMatch,
+        Self::PrincipalPropertySearch,
+        Self::PrincipalSearchPropertySet,
+        Self::SyncCollection,
+    ];
+
+    pub(crate) const fn index(self) -> u32 {
+        match self {
+            Self::VersionTree => 0,
+            Self::ExpandProperty => 1,
+            Self::LocateByHistory => 2,
+            Self::MergePreview => 3,
+            Self::CompareBaseline => 4,
+            Self::LatestActivityVersion => 5,
+            Self::AclPrincipalPropSet => 6,
+            Self::PrincipalMatch => 7,
+            Self::PrincipalPropertySearch => 8,
+            Self::PrincipalSearchPropertySet => 9,
+            Self::SyncCollection => 10,
+        }
+    }
+
     #[must_use]
     pub const fn local_name(self) -> &'static str {
         match self {
@@ -472,7 +508,7 @@ const MAPPED_RESOURCES: DavResourceStateSet = DavResourceStateSet::from_states(&
     DavResourceState::Principal,
     DavResourceState::RedirectReference,
 ]);
-const FILE_OR_COLLECTION: DavResourceStateSet = DavResourceStateSet::from_states(&[
+const CONTENT_RESOURCES: DavResourceStateSet = DavResourceStateSet::from_states(&[
     DavResourceState::File,
     DavResourceState::Collection,
     DavResourceState::MountRoot,
@@ -517,34 +553,29 @@ const ACL_METHODS: &[DavExtensionMethod] = &[
 const VERSION_CONTROL_METHODS: &[DavExtensionMethod] = &[
     DavExtensionMethod {
         method: DavMethod::VersionControl,
-        resources: DavResourceStateSet::from_states(&[
-            DavResourceState::Unmapped,
-            DavResourceState::File,
-            DavResourceState::Collection,
-            DavResourceState::MountRoot,
-        ]),
+        resources: CONTENT_RESOURCES.union(UNMAPPED),
         body: XML,
     },
     DavExtensionMethod {
         method: DavMethod::Report,
-        resources: FILE_OR_COLLECTION,
+        resources: CONTENT_RESOURCES,
         body: XML,
     },
 ];
 const CHECKOUT_METHODS: &[DavExtensionMethod] = &[
     DavExtensionMethod {
         method: DavMethod::Checkout,
-        resources: FILE_OR_COLLECTION,
+        resources: CONTENT_RESOURCES,
         body: XML,
     },
     DavExtensionMethod {
         method: DavMethod::Checkin,
-        resources: FILE_OR_COLLECTION,
+        resources: CONTENT_RESOURCES,
         body: XML,
     },
     DavExtensionMethod {
         method: DavMethod::Uncheckout,
-        resources: FILE_OR_COLLECTION,
+        resources: CONTENT_RESOURCES,
         body: XML,
     },
 ];
@@ -555,18 +586,18 @@ const WORKSPACE_METHODS: &[DavExtensionMethod] = &[DavExtensionMethod {
 }];
 const UPDATE_METHODS: &[DavExtensionMethod] = &[DavExtensionMethod {
     method: DavMethod::Update,
-    resources: FILE_OR_COLLECTION,
+    resources: CONTENT_RESOURCES,
     body: XML,
 }];
 const LABEL_METHODS: &[DavExtensionMethod] = &[DavExtensionMethod {
     method: DavMethod::Label,
-    resources: FILE_OR_COLLECTION,
+    resources: CONTENT_RESOURCES,
     body: XML,
 }];
 const WORKING_RESOURCE_METHODS: &[DavExtensionMethod] = CHECKOUT_METHODS;
 const MERGE_METHODS: &[DavExtensionMethod] = &[DavExtensionMethod {
     method: DavMethod::Merge,
-    resources: FILE_OR_COLLECTION,
+    resources: CONTENT_RESOURCES,
     body: XML,
 }];
 const BASELINE_METHODS: &[DavExtensionMethod] = &[DavExtensionMethod {
@@ -899,7 +930,7 @@ const DESCRIPTORS: [DavExtensionDescriptor; 22] = [
         "RFC 4331",
         None,
         DavExtensionSet::empty(),
-        FILE_OR_COLLECTION,
+        CONTENT_RESOURCES,
         EMPTY_METHODS,
         QUOTA_PROPERTIES,
         EMPTY_REPORTS,

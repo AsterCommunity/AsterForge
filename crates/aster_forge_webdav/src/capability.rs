@@ -620,8 +620,29 @@ pub enum DavCapabilityPlanError {
     SearchWithoutBasicSearch,
     #[error("SEARCH grammars require the SEARCH extension package")]
     SearchGrammarsWithoutPackage,
-    #[error("a SEARCH grammar coded URL is invalid")]
-    InvalidSearchGrammar,
+    #[error("SEARCH grammar {index} has invalid coded URL {coded_url:?}")]
+    InvalidSearchGrammarCodedUrl {
+        index: usize,
+        coded_url: &'static str,
+    },
+    #[error("SEARCH grammar {index} has invalid XML local name {xml_local_name:?}")]
+    InvalidSearchGrammarXmlLocalName {
+        index: usize,
+        xml_local_name: &'static str,
+    },
+    #[error("SEARCH grammar {index} has invalid XML namespace {xml_namespace:?}")]
+    InvalidSearchGrammarXmlNamespace {
+        index: usize,
+        xml_namespace: &'static str,
+    },
+    #[error("SEARCH grammar {index} duplicates grammar {previous_index}")]
+    DuplicateSearchGrammar {
+        index: usize,
+        previous_index: usize,
+        coded_url: &'static str,
+        xml_namespace: &'static str,
+        xml_local_name: &'static str,
+    },
     #[error("partial PUT requires the PUT method")]
     PartialPutWithoutPut,
     #[error("PATCH requires at least one declared patch document format")]
@@ -671,6 +692,8 @@ pub enum DavMethodGateError {
 pub struct DavCapabilitySnapshot {
     declaration: DavCapabilityDeclaration,
     supported_methods: DavMethodSet,
+    live_properties: DavLivePropertySet,
+    reports: DavReportSet,
     preferences: DavPreferenceSet,
     allow: HeaderValue,
     dav: Option<HeaderValue>,
@@ -716,17 +739,13 @@ impl DavCapabilitySnapshot {
     }
 
     #[must_use]
-    pub fn supports_live_property(&self, property: DavLiveProperty) -> bool {
-        self.extensions()
-            .iter()
-            .any(|package| package.descriptor().live_properties.contains(&property))
+    pub const fn supports_live_property(&self, property: DavLiveProperty) -> bool {
+        self.live_properties.contains(property)
     }
 
     #[must_use]
-    pub fn supports_report(&self, report: DavReportType) -> bool {
-        self.extensions()
-            .iter()
-            .any(|package| package.descriptor().reports.contains(&report))
+    pub const fn supports_report(&self, report: DavReportType) -> bool {
+        self.reports.contains(report)
     }
 
     #[must_use]
@@ -849,14 +868,25 @@ pub fn plan_capabilities(
         DavPatchCapability::Disabled => None,
         DavPatchCapability::Formats(formats) => Some(header_value(&render_patch_formats(formats))?),
     };
+    let mut live_properties = DavLivePropertySet::empty();
+    let mut reports = DavReportSet::empty();
     let mut preferences = DavPreferenceSet::empty();
     for package in declaration.extensions.iter() {
-        preferences = preferences.union(package.descriptor().preferences);
+        let descriptor = package.descriptor();
+        for property in descriptor.live_properties {
+            live_properties.insert(*property);
+        }
+        for report in descriptor.reports {
+            reports.insert(*report);
+        }
+        preferences = preferences.union(descriptor.preferences);
     }
     let ms_author_via = declaration.compatibility.ms_author_via;
     Ok(DavCapabilitySnapshot {
         declaration,
         supported_methods,
+        live_properties,
+        reports,
         preferences,
         allow,
         dav,
@@ -960,11 +990,13 @@ fn validate_compliance(
 fn validate_extensions(
     declaration: &DavCapabilityDeclaration,
 ) -> Result<(), DavCapabilityPlanError> {
+    if !declaration.compliance.class1
+        && let Some(package) = declaration.extensions.iter().next()
+    {
+        return Err(DavCapabilityPlanError::ExtensionWithoutClass1 { package });
+    }
     for package in declaration.extensions.iter() {
         let descriptor = package.descriptor();
-        if !declaration.compliance.class1 {
-            return Err(DavCapabilityPlanError::ExtensionWithoutClass1 { package });
-        }
         for required in descriptor.prerequisites.iter() {
             if !declaration.extensions.contains(required) {
                 return Err(DavCapabilityPlanError::ExtensionMissingPrerequisite {
@@ -1107,23 +1139,78 @@ fn validate_search_grammars(grammars: &[DavSearchGrammar]) -> Result<(), DavCapa
                 byte <= b' ' || byte == b'<' || byte == b'>' || byte == b',' || byte == 0x7f
             })
             || parse_absolute_url(grammar.coded_url, "SEARCH grammar coded-URL").is_err()
-            || !is_valid_xml_local_name(grammar.xml_local_name)
-            || (!grammar.xml_namespace.is_empty()
-                && (grammar.xml_namespace.trim() != grammar.xml_namespace
-                    || parse_absolute_url(grammar.xml_namespace, "SEARCH grammar namespace")
-                        .is_err()))
         {
-            return Err(DavCapabilityPlanError::InvalidSearchGrammar);
+            return Err(DavCapabilityPlanError::InvalidSearchGrammarCodedUrl {
+                index,
+                coded_url: grammar.coded_url,
+            });
         }
-        if grammars[..index].iter().any(|previous| {
+        if !is_valid_xml_local_name(grammar.xml_local_name) {
+            return Err(DavCapabilityPlanError::InvalidSearchGrammarXmlLocalName {
+                index,
+                xml_local_name: grammar.xml_local_name,
+            });
+        }
+        if !grammar.xml_namespace.is_empty()
+            && (grammar.xml_namespace.trim() != grammar.xml_namespace
+                || parse_absolute_url(grammar.xml_namespace, "SEARCH grammar namespace").is_err())
+        {
+            return Err(DavCapabilityPlanError::InvalidSearchGrammarXmlNamespace {
+                index,
+                xml_namespace: grammar.xml_namespace,
+            });
+        }
+        if let Some(previous_index) = grammars[..index].iter().position(|previous| {
             previous.coded_url == grammar.coded_url
                 || (previous.xml_namespace == grammar.xml_namespace
                     && previous.xml_local_name == grammar.xml_local_name)
         }) {
-            return Err(DavCapabilityPlanError::InvalidSearchGrammar);
+            return Err(DavCapabilityPlanError::DuplicateSearchGrammar {
+                index,
+                previous_index,
+                coded_url: grammar.coded_url,
+                xml_namespace: grammar.xml_namespace,
+                xml_local_name: grammar.xml_local_name,
+            });
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct DavLivePropertySet([u64; 2]);
+
+impl DavLivePropertySet {
+    const fn empty() -> Self {
+        Self([0; 2])
+    }
+
+    fn insert(&mut self, property: DavLiveProperty) {
+        let index = property as usize;
+        self.0[index / 64] |= 1u64 << (index % 64);
+    }
+
+    const fn contains(self, property: DavLiveProperty) -> bool {
+        let index = property as usize;
+        self.0[index / 64] & (1u64 << (index % 64)) != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct DavReportSet(u16);
+
+impl DavReportSet {
+    const fn empty() -> Self {
+        Self(0)
+    }
+
+    fn insert(&mut self, report: DavReportType) {
+        self.0 |= 1u16 << report.index();
+    }
+
+    const fn contains(self, report: DavReportType) -> bool {
+        self.0 & (1u16 << report.index()) != 0
+    }
 }
 
 fn validate_patch_formats(formats: &[DavPatchFormat]) -> Result<(), DavCapabilityPlanError> {

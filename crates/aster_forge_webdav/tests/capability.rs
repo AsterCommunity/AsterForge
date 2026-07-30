@@ -119,6 +119,17 @@ fn method_set_covers_every_extension_without_duplicates_or_heap_backing() {
 }
 
 #[test]
+fn descriptor_table_matches_every_package_index() {
+    for package in DavExtensionPackage::ALL {
+        assert_eq!(
+            package.descriptor().package,
+            package,
+            "descriptor index mismatch for {package:?}"
+        );
+    }
+}
+
+#[test]
 fn compact_extension_and_resource_sets_cover_set_algebra_boundaries() {
     let versioning = DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
     let quota = DavExtensionSet::from_packages(&[DavExtensionPackage::Quota]);
@@ -148,6 +159,17 @@ fn compact_extension_and_resource_sets_cover_set_algebra_boundaries() {
     ] {
         assert!(resources.contains(resource));
     }
+    let content = DavResourceStateSet::from_states(&[
+        DavResourceState::File,
+        DavResourceState::Collection,
+        DavResourceState::MountRoot,
+    ]);
+    let content_or_unmapped = content.union(DavResourceStateSet::from_states(&[
+        DavResourceState::Unmapped,
+    ]));
+    assert!(content_or_unmapped.contains(DavResourceState::Unmapped));
+    assert!(content_or_unmapped.contains(DavResourceState::File));
+    assert!(!content_or_unmapped.contains(DavResourceState::Principal));
 }
 
 #[test]
@@ -192,6 +214,14 @@ fn planner_preserves_all_target_kinds_and_normalizes_head_from_get() {
 
 #[test]
 fn class_three_requires_only_class_one_and_remains_independent_from_locking() {
+    let ordinary = plan_capabilities(DavCapabilityDeclaration::new(
+        DavResourceState::File,
+        DavMethodSet::from_methods(&[DavMethod::Options]),
+    ))
+    .expect("ordinary HTTP capability declaration");
+    assert!(ordinary.dav_header().is_none());
+    assert!(ordinary.dasl_header().is_none());
+
     let mut class3_without_class1 = DavCapabilityDeclaration::new(
         DavResourceState::File,
         DavMethodSet::from_methods(&[DavMethod::Options]),
@@ -546,21 +576,63 @@ fn search_generates_dasl_without_inventing_a_dav_token() {
             .supports_live_property(aster_forge_webdav::DavLiveProperty::SupportedQueryGrammarSet)
     );
 
-    let invalid_grammars: [&'static [DavSearchGrammar]; 6] = [
-        &INVALID_SEARCH_CODED_URL,
-        &INVALID_SEARCH_CODED_URL_DELIMITER,
-        &INVALID_SEARCH_NAMESPACE,
-        &INVALID_SEARCH_LOCAL_NAME,
-        &DUPLICATE_SEARCH_CODED_URL,
-        &DUPLICATE_SEARCH_XML_NAME,
+    let invalid_grammars: [(&'static [DavSearchGrammar], DavCapabilityPlanError); 6] = [
+        (
+            &INVALID_SEARCH_CODED_URL,
+            DavCapabilityPlanError::InvalidSearchGrammarCodedUrl {
+                index: 1,
+                coded_url: "bad grammar",
+            },
+        ),
+        (
+            &INVALID_SEARCH_CODED_URL_DELIMITER,
+            DavCapabilityPlanError::InvalidSearchGrammarCodedUrl {
+                index: 1,
+                coded_url: "urn:valid,urn:other",
+            },
+        ),
+        (
+            &INVALID_SEARCH_NAMESPACE,
+            DavCapabilityPlanError::InvalidSearchGrammarXmlNamespace {
+                index: 1,
+                xml_namespace: "bad namespace",
+            },
+        ),
+        (
+            &INVALID_SEARCH_LOCAL_NAME,
+            DavCapabilityPlanError::InvalidSearchGrammarXmlLocalName {
+                index: 1,
+                xml_local_name: "has:prefix",
+            },
+        ),
+        (
+            &DUPLICATE_SEARCH_CODED_URL,
+            DavCapabilityPlanError::DuplicateSearchGrammar {
+                index: 1,
+                previous_index: 0,
+                coded_url: "DAV:basicsearch",
+                xml_namespace: "DAV:",
+                xml_local_name: "basicsearch",
+            },
+        ),
+        (
+            &DUPLICATE_SEARCH_XML_NAME,
+            DavCapabilityPlanError::DuplicateSearchGrammar {
+                index: 1,
+                previous_index: 0,
+                coded_url: "urn:other",
+                xml_namespace: "DAV:",
+                xml_local_name: "basicsearch",
+            },
+        ),
     ];
-    for grammars in invalid_grammars {
+    for (grammars, expected) in invalid_grammars {
         let mut invalid = declaration(DavResourceState::Collection, &[DavMethod::Options]);
         invalid.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::Search]);
         invalid.search = DavSearchCapabilities { grammars };
         assert_eq!(
             plan_capabilities(invalid),
-            Err(DavCapabilityPlanError::InvalidSearchGrammar),
+            Err(expected),
             "invalid grammar descriptors: {grammars:?}"
         );
     }

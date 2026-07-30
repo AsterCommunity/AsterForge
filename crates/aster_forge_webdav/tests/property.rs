@@ -1,4 +1,5 @@
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aster_forge_webdav::{
@@ -302,7 +303,7 @@ fn requirements_select_value_groups_without_per_property_backend_calls() {
 }
 
 #[test]
-fn value_snapshot_defaults_are_empty_and_request_labels_cover_all_selectors() {
+fn value_snapshot_defaults_are_empty() {
     let values = DefaultValues;
     let metadata = values.metadata();
     assert!(metadata.creation_date.is_none());
@@ -319,7 +320,10 @@ fn value_snapshot_defaults_are_empty_and_request_labels_cover_all_selectors() {
     assert!(values.sync_token().is_none());
     assert!(values.add_member_href().is_none());
     assert!(values.extension_value(DavLiveProperty::Acl).is_none());
+}
 
+#[test]
+fn propfind_request_labels_cover_all_selectors() {
     assert_eq!(
         propfind_request_label(&DavPropfindRequest::AllProp { include: vec![] }),
         "allprop"
@@ -475,11 +479,22 @@ fn propname_uses_dynamic_quota_and_metadata_definition_rules() {
 #[test]
 fn explicit_properties_group_success_and_missing_with_requested_qnames() {
     let snapshot = live_snapshot();
+    let mut extension = dav_property_text_element(&dav_property("comment"), "project files");
+    extension
+        .namespaces
+        .insert("stale".to_owned(), "urn:stale".to_owned());
+    extension
+        .namespaces
+        .insert("keep".to_owned(), "urn:attribute".to_owned());
+    extension
+        .attributes
+        .insert("keep:flag".to_owned(), "yes".to_owned());
     let values = Values {
         quota: Some(DavQuotaSnapshot {
             used_bytes: 400,
             available_bytes: None,
         }),
+        extension_values: vec![(DavLiveProperty::Comment, extension)],
         ..Values::default()
     };
     let item = build_live_propfind_item(
@@ -487,6 +502,7 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
         &snapshot,
         &DavPropfindRequest::Prop(vec![
             property("displayname", Some("DAV:"), Some("client")),
+            property("comment", Some("DAV:"), Some("client")),
             dav_property("quota-used-bytes"),
             dav_property("quota-available-bytes"),
             dav_property("getcontentlanguage"),
@@ -498,11 +514,35 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
     .expect("explicit property item");
     assert_eq!(
         property_names(&item, 200),
-        ["displayname", "quota-used-bytes", "color"]
+        ["displayname", "comment", "quota-used-bytes", "color"]
     );
     assert_eq!(
         property_names(&item, 404),
         ["quota-available-bytes", "getcontentlanguage", "missing"]
+    );
+    let client_xml = String::from_utf8(
+        property_element(&item, 200, "comment")
+            .to_bytes()
+            .expect("client-prefixed property XML"),
+    )
+    .expect("UTF-8 client property XML");
+    assert!(client_xml.contains("<client:comment"), "{client_xml}");
+    assert!(client_xml.contains("xmlns:client=\"DAV:\""), "{client_xml}");
+    assert!(!client_xml.contains("urn:stale"), "{client_xml}");
+    assert!(
+        client_xml.contains("xmlns:keep=\"urn:attribute\""),
+        "{client_xml}"
+    );
+    let custom_xml = String::from_utf8(
+        property_element(&item, 200, "color")
+            .to_bytes()
+            .expect("custom-prefixed property XML"),
+    )
+    .expect("UTF-8 custom property XML");
+    assert!(custom_xml.contains("<custom:color"), "{custom_xml}");
+    assert!(
+        custom_xml.contains("xmlns:custom=\"urn:test\""),
+        "{custom_xml}"
     );
     assert_eq!(
         property_element(&item, 200, "displayname")
@@ -513,6 +553,28 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
     assert_eq!(
         property_element(&item, 200, "color").prefix.as_deref(),
         Some("custom")
+    );
+
+    let default_namespace_item = build_live_propfind_item(
+        "/documents/".to_owned(),
+        &snapshot,
+        &DavPropfindRequest::Prop(vec![property("comment", Some("DAV:"), None)]),
+        &values,
+    )
+    .expect("default-namespace live property");
+    let default_namespace_xml = String::from_utf8(
+        property_element(&default_namespace_item, 200, "comment")
+            .to_bytes()
+            .expect("default-namespace property XML"),
+    )
+    .expect("UTF-8 default-namespace property XML");
+    assert!(
+        default_namespace_xml.contains("<comment"),
+        "{default_namespace_xml}"
+    );
+    assert!(
+        default_namespace_xml.contains("xmlns=\"DAV:\""),
+        "{default_namespace_xml}"
     );
 }
 
@@ -595,28 +657,35 @@ fn report_discovery_covers_every_typed_report_once() {
         &DefaultValues,
     )
     .expect("complete report catalog");
-    let xml = String::from_utf8(
-        property_element(&item, 200, "supported-report-set")
-            .to_bytes()
-            .expect("report XML"),
-    )
-    .expect("UTF-8 report XML");
-    for report in [
-        DavReportType::VersionTree,
-        DavReportType::ExpandProperty,
-        DavReportType::LocateByHistory,
-        DavReportType::MergePreview,
-        DavReportType::CompareBaseline,
-        DavReportType::LatestActivityVersion,
-        DavReportType::AclPrincipalPropSet,
-        DavReportType::PrincipalMatch,
-        DavReportType::PrincipalPropertySearch,
-        DavReportType::PrincipalSearchPropertySet,
-        DavReportType::SyncCollection,
-    ] {
-        let name = report.local_name();
-        assert_eq!(xml.matches(name).count(), 1, "report {name}: {xml}");
-    }
+    let property = property_element(&item, 200, "supported-report-set");
+    let parsed = DavXmlElement::parse(&property.to_bytes().expect("report XML"))
+        .expect("serialized report XML parses");
+    let mut actual = parsed
+        .child_elements()
+        .map(|supported| {
+            assert_eq!(supported.name, "supported-report");
+            let mut report_wrappers = supported.child_elements();
+            let report = report_wrappers.next().expect("report wrapper");
+            assert!(
+                report_wrappers.next().is_none(),
+                "each supported-report must contain exactly one report wrapper"
+            );
+            assert_eq!(report.name, "report");
+            let mut report_types = report.child_elements();
+            let report_type = report_types.next().expect("typed report");
+            assert!(
+                report_types.next().is_none(),
+                "each report wrapper must contain exactly one typed report"
+            );
+            report_type.name.clone()
+        })
+        .collect::<Vec<_>>();
+    let mut expected = DavReportType::ALL
+        .map(|report| report.local_name().to_owned())
+        .to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -738,6 +807,57 @@ fn class_two_supported_lock_and_empty_namespace_search_grammar_are_rendered() {
     )
     .expect("UTF-8 query grammar XML");
     assert!(xml.contains("<query"), "{xml}");
+    assert!(!xml.contains("xmlns=\"\""), "{xml}");
+}
+
+#[test]
+fn propname_omits_an_empty_success_group() {
+    let snapshot = plan_capabilities(DavCapabilityDeclaration::new(
+        DavResourceState::Unmapped,
+        DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Propfind]),
+    ))
+    .expect("unmapped non-DAV snapshot");
+    let item = build_live_propfind_item(
+        "/missing".to_owned(),
+        &snapshot,
+        &DavPropfindRequest::PropName,
+        &DefaultValues,
+    )
+    .expect("empty propname item");
+    assert!(item.propstats.is_empty());
+}
+
+#[test]
+fn metadata_is_read_once_per_propfind_item() {
+    struct CountingValues {
+        calls: AtomicUsize,
+    }
+
+    impl DavLivePropertyValueSnapshot for CountingValues {
+        fn metadata(&self) -> DavLivePropertyMetadata<'_> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            DavLivePropertyMetadata {
+                display_name: Some("documents"),
+                content_type: Some("httpd/unix-directory"),
+                ..DavLivePropertyMetadata::default()
+            }
+        }
+    }
+
+    let values = CountingValues {
+        calls: AtomicUsize::new(0),
+    };
+    build_live_propfind_item(
+        "/documents/".to_owned(),
+        &live_snapshot(),
+        &DavPropfindRequest::Prop(vec![
+            dav_property("displayname"),
+            dav_property("getcontenttype"),
+        ]),
+        &values,
+    )
+    .expect("metadata-backed properties");
+    assert_eq!(values.calls.load(Ordering::Relaxed), 1);
 }
 
 struct RecordingProvider {
@@ -817,7 +937,7 @@ fn canonical_provider_entrypoint_fetches_one_snapshot_per_resource() {
 }
 
 #[test]
-fn required_extension_values_reject_missing_or_invalid_product_snapshots() {
+fn sync_token_accepts_absolute_uris_and_rejects_missing_or_invalid_values() {
     let snapshot = live_snapshot();
     let urn_token = Values {
         sync_token: Some("urn:uuid:12345678-1234-1234-1234-123456789abc".to_owned()),
@@ -865,7 +985,11 @@ fn required_extension_values_reject_missing_or_invalid_product_snapshots() {
             property: DavLiveProperty::SyncToken,
         })
     );
+}
 
+#[test]
+fn current_principal_rejects_missing_or_invalid_urls() {
+    let snapshot = live_snapshot();
     for value in [
         "/principals/users/alice",
         "https:principal.example/alice",
@@ -889,6 +1013,26 @@ fn required_extension_values_reject_missing_or_invalid_product_snapshots() {
         );
     }
 
+    let missing_principal = Values {
+        current_principal: None,
+        ..Values::default()
+    };
+    assert_eq!(
+        build_live_propfind_item(
+            "/documents/".to_owned(),
+            &snapshot,
+            &DavPropfindRequest::Prop(vec![dav_property("current-user-principal")]),
+            &missing_principal,
+        ),
+        Err(DavLivePropertyError::MissingRequiredValue {
+            property: DavLiveProperty::CurrentUserPrincipal,
+        })
+    );
+}
+
+#[test]
+fn add_member_accepts_supported_uri_shapes_and_rejects_missing_or_invalid_values() {
+    let snapshot = live_snapshot();
     for value in ["urn:example:add-member", "//other.example/post"] {
         let invalid_add_member = Values {
             add_member: Some(value.to_owned()),
@@ -907,22 +1051,6 @@ fn required_extension_values_reject_missing_or_invalid_product_snapshots() {
             "invalid Add-Member URI: {value}"
         );
     }
-
-    let missing_principal = Values {
-        current_principal: None,
-        ..Values::default()
-    };
-    assert_eq!(
-        build_live_propfind_item(
-            "/documents/".to_owned(),
-            &snapshot,
-            &DavPropfindRequest::Prop(vec![dav_property("current-user-principal")]),
-            &missing_principal,
-        ),
-        Err(DavLivePropertyError::MissingRequiredValue {
-            property: DavLiveProperty::CurrentUserPrincipal,
-        })
-    );
 
     let missing_add_member = Values {
         add_member: None,
@@ -950,8 +1078,12 @@ fn required_extension_values_reject_missing_or_invalid_product_snapshots() {
         &DavPropfindRequest::Prop(vec![dav_property("add-member")]),
         &absolute_add_member,
     )
-    .expect("absolute same-origin Add-Member URI shape");
+    .expect("absolute HTTP(S) Add-Member URI shape");
+}
 
+#[test]
+fn quota_used_bytes_requires_a_snapshot_for_supported_collections() {
+    let snapshot = live_snapshot();
     let quota = Values {
         quota: None,
         ..Values::default()
@@ -1129,8 +1261,8 @@ fn system_time_boundary_for_last_modified_is_reported_only_when_requested() {
                 display_name: Some("safe"),
                 last_modified: Some(
                     SystemTime::UNIX_EPOCH
-                        .checked_add(Duration::from_secs(u64::MAX))
-                        .unwrap_or(SystemTime::UNIX_EPOCH),
+                        .checked_sub(Duration::from_secs(1))
+                        .expect("one second before the Unix epoch is representable"),
                 ),
                 ..DavLivePropertyMetadata::default()
             }
@@ -1144,4 +1276,15 @@ fn system_time_boundary_for_last_modified_is_reported_only_when_requested() {
         &ExtremeTime,
     )
     .expect("unrequested invalid date must not fail");
+    assert_eq!(
+        build_live_propfind_item(
+            "/documents/".to_owned(),
+            &snapshot,
+            &DavPropfindRequest::Prop(vec![dav_property("getlastmodified")]),
+            &ExtremeTime,
+        ),
+        Err(DavLivePropertyError::InvalidRepresentation {
+            property: DavLiveProperty::GetLastModified,
+        })
+    );
 }

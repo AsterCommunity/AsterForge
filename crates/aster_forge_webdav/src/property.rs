@@ -82,6 +82,11 @@ pub trait DavLivePropertyValueSnapshot: Send {
         &[]
     }
 
+    /// Returns quota values for this resource.
+    ///
+    /// A collection or mount root that advertises RFC 4331 quota support must provide this
+    /// snapshot when `DAV:quota-used-bytes` is selected; omission is a typed product-boundary
+    /// error rather than an absent property.
     fn quota(&self) -> Option<DavQuotaSnapshot> {
         None
     }
@@ -196,6 +201,7 @@ pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
     request: &DavPropfindRequest,
     values: &V,
 ) -> Result<DavMultiStatusItem, DavLivePropertyError> {
+    let metadata = values.metadata();
     let groups = match request {
         DavPropfindRequest::AllProp { include } => {
             let mut ok = Vec::new();
@@ -204,6 +210,7 @@ pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
                     && let Some(element) = resolve_live_property(
                         snapshot,
                         values,
+                        metadata,
                         property,
                         &canonical_property(property),
                     )?
@@ -219,7 +226,7 @@ pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
                 if contains_expanded_name(&ok, requested) {
                     continue;
                 }
-                match resolve_requested_property(snapshot, values, requested)? {
+                match resolve_requested_property(snapshot, values, metadata, requested)? {
                     Some(element) => ok.push(element),
                     None => missing.push(dav_property_name_element(requested)),
                 }
@@ -229,7 +236,7 @@ pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
         DavPropfindRequest::PropName => {
             let mut names = Vec::new();
             for_each_catalog_property(snapshot, |property| {
-                if property_is_defined(snapshot, values, property) {
+                if property_is_defined(snapshot, values, metadata, property) {
                     names.push(dav_property_name_element(&canonical_property(property)));
                 }
                 Ok(())
@@ -237,16 +244,20 @@ pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
             for dead in values.dead_properties() {
                 names.push(dav_property_name_element(&dead_property_name(dead)));
             }
-            vec![DavPropStat {
-                status: 200,
-                properties: names,
-            }]
+            if names.is_empty() {
+                Vec::new()
+            } else {
+                vec![DavPropStat {
+                    status: 200,
+                    properties: names,
+                }]
+            }
         }
         DavPropfindRequest::Prop(requested) => {
             let mut ok = Vec::new();
             let mut missing = Vec::new();
             for property in requested {
-                match resolve_requested_property(snapshot, values, property)? {
+                match resolve_requested_property(snapshot, values, metadata, property)? {
                     Some(element) => ok.push(element),
                     None => missing.push(dav_property_name_element(property)),
                 }
@@ -308,20 +319,20 @@ fn add_requirement(
             requirements.locks = true;
         }
         DavLiveProperty::QuotaAvailableBytes | DavLiveProperty::QuotaUsedBytes => {
-            requirements.quota = snapshot.supports_extension(DavExtensionPackage::Quota);
+            requirements.quota |= snapshot.supports_extension(DavExtensionPackage::Quota);
         }
         DavLiveProperty::CurrentUserPrincipal => {
-            requirements.current_principal =
+            requirements.current_principal |=
                 snapshot.supports_extension(DavExtensionPackage::CurrentPrincipal);
         }
         DavLiveProperty::SyncToken => {
-            requirements.sync_token =
+            requirements.sync_token |=
                 snapshot.supports_extension(DavExtensionPackage::CollectionSync);
         }
         DavLiveProperty::AddMember => {
-            requirements.add_member = snapshot.supports_extension(DavExtensionPackage::AddMember);
+            requirements.add_member |= snapshot.supports_extension(DavExtensionPackage::AddMember);
         }
-        _ => requirements.extension_values = snapshot.supports_live_property(property),
+        _ => requirements.extension_values |= snapshot.supports_live_property(property),
     }
 }
 
@@ -403,9 +414,9 @@ fn property_is_protected(property: DavLiveProperty) -> bool {
 fn property_is_defined<V: DavLivePropertyValueSnapshot>(
     snapshot: &DavCapabilitySnapshot,
     values: &V,
+    metadata: DavLivePropertyMetadata<'_>,
     property: DavLiveProperty,
 ) -> bool {
-    let metadata = values.metadata();
     match property {
         DavLiveProperty::CreationDate => metadata.creation_date.is_some(),
         DavLiveProperty::DisplayName => metadata.display_name.is_some(),
@@ -447,12 +458,13 @@ fn property_is_defined<V: DavLivePropertyValueSnapshot>(
 fn resolve_requested_property<V: DavLivePropertyValueSnapshot>(
     snapshot: &DavCapabilitySnapshot,
     values: &V,
+    metadata: DavLivePropertyMetadata<'_>,
     requested: &DavRequestedProperty,
 ) -> Result<Option<DavXmlElement>, DavLivePropertyError> {
     if let Some(property) = live_property(requested)
         && (is_base_property(property) || snapshot.supports_live_property(property))
     {
-        return resolve_live_property(snapshot, values, property, requested);
+        return resolve_live_property(snapshot, values, metadata, property, requested);
     }
     Ok(
         find_dead_property(values.dead_properties(), requested).map(|dead| {
@@ -468,10 +480,10 @@ fn resolve_requested_property<V: DavLivePropertyValueSnapshot>(
 fn resolve_live_property<V: DavLivePropertyValueSnapshot>(
     snapshot: &DavCapabilitySnapshot,
     values: &V,
+    metadata: DavLivePropertyMetadata<'_>,
     property: DavLiveProperty,
     requested: &DavRequestedProperty,
 ) -> Result<Option<DavXmlElement>, DavLivePropertyError> {
-    let metadata = values.metadata();
     let element = match property {
         DavLiveProperty::CreationDate => metadata
             .creation_date
@@ -696,7 +708,7 @@ fn validate_absolute_uri(
     value: &str,
     property: DavLiveProperty,
 ) -> Result<(), DavLivePropertyError> {
-    if value.trim() == value && parse_absolute_url(value, "WebDAV live property").is_ok() {
+    if uri_matches_policy(value, UriValidationPolicy::ABSOLUTE) {
         Ok(())
     } else {
         Err(DavLivePropertyError::InvalidRepresentation { property })
@@ -704,11 +716,7 @@ fn validate_absolute_uri(
 }
 
 fn validate_current_principal_url(value: &str) -> Result<(), DavLivePropertyError> {
-    let valid = value.parse::<http::Uri>().is_ok_and(|uri| {
-        uri.scheme_str().is_some_and(|scheme| {
-            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-        }) && uri.authority().is_some()
-    });
+    let valid = uri_matches_policy(value, UriValidationPolicy::HTTP_ABSOLUTE);
     if valid {
         Ok(())
     } else {
@@ -722,15 +730,7 @@ fn validate_add_member_uri(
     value: &str,
     property: DavLiveProperty,
 ) -> Result<(), DavLivePropertyError> {
-    let valid = value.parse::<http::Uri>().is_ok_and(|uri| {
-        uri.scheme_str().map_or_else(
-            || uri.path().starts_with('/') && !value.starts_with("//"),
-            |scheme| {
-                (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
-                    && uri.authority().is_some()
-            },
-        )
-    });
+    let valid = uri_matches_policy(value, UriValidationPolicy::HTTP_OR_ABSOLUTE_PATH);
     if valid {
         Ok(())
     } else {
@@ -738,10 +738,81 @@ fn validate_add_member_uri(
     }
 }
 
+#[derive(Clone, Copy)]
+enum UriSchemePolicy {
+    Any,
+    HttpOrHttps,
+}
+
+#[derive(Clone, Copy)]
+struct UriValidationPolicy {
+    schemes: UriSchemePolicy,
+    allow_path_absolute: bool,
+    require_authority: bool,
+    reject_surrounding_whitespace: bool,
+}
+
+impl UriValidationPolicy {
+    const ABSOLUTE: Self = Self {
+        schemes: UriSchemePolicy::Any,
+        allow_path_absolute: false,
+        require_authority: false,
+        reject_surrounding_whitespace: true,
+    };
+    const HTTP_ABSOLUTE: Self = Self {
+        schemes: UriSchemePolicy::HttpOrHttps,
+        allow_path_absolute: false,
+        require_authority: true,
+        reject_surrounding_whitespace: true,
+    };
+    const HTTP_OR_ABSOLUTE_PATH: Self = Self {
+        schemes: UriSchemePolicy::HttpOrHttps,
+        allow_path_absolute: true,
+        require_authority: true,
+        reject_surrounding_whitespace: true,
+    };
+}
+
+fn uri_matches_policy(value: &str, policy: UriValidationPolicy) -> bool {
+    if policy.reject_surrounding_whitespace && value.trim() != value {
+        return false;
+    }
+    if policy.allow_path_absolute && value.starts_with('/') && !value.starts_with("//") {
+        return value
+            .parse::<http::Uri>()
+            .is_ok_and(|uri| uri.scheme().is_none() && uri.authority().is_none());
+    }
+    match policy.schemes {
+        UriSchemePolicy::Any => parse_absolute_url(value, "WebDAV live property").is_ok(),
+        UriSchemePolicy::HttpOrHttps => value.parse::<http::Uri>().is_ok_and(|uri| {
+            uri.scheme_str().is_some_and(|scheme| {
+                scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+            }) && (!policy.require_authority || uri.authority().is_some())
+        }),
+    }
+}
+
 fn relexicalize(mut element: DavXmlElement, requested: &DavRequestedProperty) -> DavXmlElement {
     element.name.clone_from(&requested.name);
     element.prefix.clone_from(&requested.prefix);
     element.namespace.clone_from(&requested.namespace);
+    let inherited = std::mem::take(&mut element.namespaces);
+    for attribute in element.attributes.keys() {
+        if let Some((prefix, _)) = attribute.split_once(':')
+            && prefix != "xml"
+            && let Some(namespace) = inherited.get(prefix)
+        {
+            element
+                .namespaces
+                .insert(prefix.to_owned(), namespace.clone());
+        }
+    }
+    if let Some(namespace) = &element.namespace {
+        element.namespaces.insert(
+            element.prefix.clone().unwrap_or_default(),
+            namespace.clone(),
+        );
+    }
     element
 }
 

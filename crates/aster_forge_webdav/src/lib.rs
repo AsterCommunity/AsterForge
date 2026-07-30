@@ -80,10 +80,10 @@ pub use conditional::{
     plan_conditionals_with_backends, plan_http_conditionals,
 };
 pub use deltav::{
-    DavReportPlanError, plan_report_request, report_plan_error_response,
-    validate_version_control_request, version_control_request_error_response,
-    version_control_response, version_tree_non_file_response, version_tree_response,
-    version_tree_response_with_limits,
+    DavReportErrorResponsePolicy, DavReportPlanError, plan_report_request,
+    report_plan_error_response, validate_version_control_request,
+    version_control_request_error_response, version_control_response,
+    version_tree_non_file_response, version_tree_response, version_tree_response_with_limits,
 };
 pub use event::{
     DavEvent, DavEventOutcome, DavEventSink, DavObservationError, DavOperation,

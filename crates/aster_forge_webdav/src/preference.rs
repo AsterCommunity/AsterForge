@@ -70,21 +70,50 @@ fn requested_preferences(headers: &HeaderMap) -> DavPreferenceSet {
         let Ok(value) = value.to_str() else {
             continue;
         };
-        for preference in value.split(',') {
-            let preference = preference
-                .split_once(';')
-                .map_or(preference, |(preference, _)| preference)
-                .trim();
-            if preference.eq_ignore_ascii_case("return=minimal") {
-                requested = requested.union(DavPreferenceSet::RETURN_MINIMAL);
-            } else if preference.eq_ignore_ascii_case("return=representation") {
-                requested = requested.union(DavPreferenceSet::RETURN_REPRESENTATION);
-            } else if preference.eq_ignore_ascii_case("depth-noroot") {
-                requested = requested.union(DavPreferenceSet::DEPTH_NO_ROOT);
+        let mut start = 0;
+        let mut quoted = false;
+        let mut escaped = false;
+        for (index, byte) in value.bytes().enumerate() {
+            if escaped {
+                escaped = false;
+            } else if quoted && byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = !quoted;
+            } else if byte == b',' && !quoted {
+                add_requested_preference(&value[start..index], &mut requested);
+                start = index + 1;
             }
         }
+        add_requested_preference(&value[start..], &mut requested);
     }
     requested
+}
+
+fn add_requested_preference(value: &str, requested: &mut DavPreferenceSet) {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut end = value.len();
+    for (index, byte) in value.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+        } else if quoted && byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            quoted = !quoted;
+        } else if byte == b';' && !quoted {
+            end = index;
+            break;
+        }
+    }
+    let preference = value[..end].trim();
+    if preference.eq_ignore_ascii_case("return=minimal") {
+        *requested = requested.union(DavPreferenceSet::RETURN_MINIMAL);
+    } else if preference.eq_ignore_ascii_case("return=representation") {
+        *requested = requested.union(DavPreferenceSet::RETURN_REPRESENTATION);
+    } else if preference.eq_ignore_ascii_case("depth-noroot") {
+        *requested = requested.union(DavPreferenceSet::DEPTH_NO_ROOT);
+    }
 }
 
 fn minimal_applies(snapshot: &DavCapabilitySnapshot, method: DavMethod) -> bool {
@@ -103,6 +132,7 @@ const fn method_supports_depth(method: DavMethod) -> bool {
             | DavMethod::Copy
             | DavMethod::Move
             | DavMethod::Lock
+            | DavMethod::Report
     )
 }
 

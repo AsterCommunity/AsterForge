@@ -1,8 +1,8 @@
 use aster_forge_webdav::{
     DavCapabilityDeclaration, DavExtensionPackage, DavExtensionSet, DavMethod, DavMethodSet,
-    DavReportPlanError, DavReportType, DavResourceKind, DavResourceState, DavResponse,
-    DavResponseBody, DavVersionXml, DavXmlError, plan_capabilities, plan_report_request,
-    report_plan_error_response, validate_version_control_request,
+    DavReportErrorResponsePolicy, DavReportPlanError, DavReportType, DavResourceKind,
+    DavResourceState, DavResponse, DavResponseBody, DavVersionXml, DavXmlError, plan_capabilities,
+    plan_report_request, report_plan_error_response, validate_version_control_request,
     version_control_request_error_response, version_control_response,
     version_tree_non_file_response, version_tree_response,
 };
@@ -13,6 +13,24 @@ fn body_text(response: &DavResponse) -> String {
         panic!("response should contain bytes");
     };
     String::from_utf8(body.to_vec()).expect("UTF-8 response")
+}
+
+struct ReportResponsePolicy;
+
+impl DavReportErrorResponsePolicy for ReportResponsePolicy {
+    fn unknown_type(&self, namespace: Option<&str>, name: &str) -> DavResponse {
+        DavResponse::bytes(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("unknown {namespace:?} {name}"),
+        )
+    }
+
+    fn not_available(&self, report: DavReportType) -> DavResponse {
+        DavResponse::bytes(
+            StatusCode::CONFLICT,
+            format!("unavailable {}", report.local_name()),
+        )
+    }
 }
 
 fn report_snapshot(packages: &[DavExtensionPackage]) -> aster_forge_webdav::DavCapabilitySnapshot {
@@ -54,7 +72,7 @@ fn report_selector_accepts_only_snapshot_discovered_dav_report_types() {
     );
     assert_eq!(
         plan_report_request(&snapshot, br#"<D:sync-collection xmlns:D="DAV:"/>"#),
-        Err(DavReportPlanError::NotSupported {
+        Err(DavReportPlanError::NotAvailable {
             report: DavReportType::SyncCollection,
         })
     );
@@ -65,8 +83,26 @@ fn report_selector_accepts_only_snapshot_discovered_dav_report_types() {
     );
     assert_eq!(
         plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="urn:extension"/>"#,),
-        Err(DavReportPlanError::Unsupported {
+        Err(DavReportPlanError::UnknownType {
+            namespace: Some("urn:extension".to_owned()),
             name: "version-tree".to_owned(),
+        })
+    );
+    assert_eq!(
+        plan_report_request(
+            &snapshot,
+            br#"<X:version-tree xmlns:X="urn:other-extension"/>"#,
+        ),
+        Err(DavReportPlanError::UnknownType {
+            namespace: Some("urn:other-extension".to_owned()),
+            name: "version-tree".to_owned(),
+        })
+    );
+    assert_eq!(
+        plan_report_request(&snapshot, br#"<D:future-report xmlns:D="DAV:"/>"#),
+        Err(DavReportPlanError::UnknownType {
+            namespace: Some("DAV:".to_owned()),
+            name: "future-report".to_owned(),
         })
     );
     for body in [
@@ -154,29 +190,42 @@ fn report_selector_preserves_xml_failure_categories() {
 
 #[test]
 fn report_errors_select_plain_or_dav_xml_responses() {
-    let invalid = report_plan_error_response(&DavReportPlanError::Xml(DavXmlError::Malformed))
-        .expect("invalid response");
+    let invalid = report_plan_error_response(
+        &DavReportPlanError::Xml(DavXmlError::Malformed),
+        &ReportResponsePolicy,
+    )
+    .expect("invalid response");
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
     assert_eq!(invalid.headers.get("Cache-Control").unwrap(), "no-store");
     assert_eq!(body_text(&invalid), "Invalid XML body");
 
-    let unsupported = report_plan_error_response(&DavReportPlanError::Unsupported {
-        name: "expand-property".to_owned(),
-    })
+    let unsupported = report_plan_error_response(
+        &DavReportPlanError::UnknownType {
+            namespace: Some("urn:extension".to_owned()),
+            name: "expand-property".to_owned(),
+        },
+        &ReportResponsePolicy,
+    )
     .expect("unsupported response");
-    assert_eq!(unsupported.status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(unsupported.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body_text(&unsupported).contains("urn:extension"));
     assert!(body_text(&unsupported).contains("expand-property"));
 
-    let unavailable = report_plan_error_response(&DavReportPlanError::NotSupported {
-        report: DavReportType::SyncCollection,
-    })
+    let unavailable = report_plan_error_response(
+        &DavReportPlanError::NotAvailable {
+            report: DavReportType::SyncCollection,
+        },
+        &ReportResponsePolicy,
+    )
     .expect("unavailable response");
-    assert_eq!(unavailable.status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(unavailable.status, StatusCode::CONFLICT);
     assert!(body_text(&unavailable).contains("sync-collection"));
 
-    let external =
-        report_plan_error_response(&DavReportPlanError::Xml(DavXmlError::ExternalEntity))
-            .expect("external entity response");
+    let external = report_plan_error_response(
+        &DavReportPlanError::Xml(DavXmlError::ExternalEntity),
+        &ReportResponsePolicy,
+    )
+    .expect("external entity response");
     assert_eq!(external.status, StatusCode::FORBIDDEN);
     assert_eq!(
         external.headers.get("Content-Type").unwrap(),
@@ -184,8 +233,11 @@ fn report_errors_select_plain_or_dav_xml_responses() {
     );
     assert!(body_text(&external).contains("no-external-entities"));
 
-    let too_large = report_plan_error_response(&DavReportPlanError::Xml(DavXmlError::TooLarge))
-        .expect("too large response");
+    let too_large = report_plan_error_response(
+        &DavReportPlanError::Xml(DavXmlError::TooLarge),
+        &ReportResponsePolicy,
+    )
+    .expect("too large response");
     assert_eq!(too_large.status, StatusCode::PAYLOAD_TOO_LARGE);
 
     let version_control = version_control_request_error_response(DavXmlError::InvalidGrammar)

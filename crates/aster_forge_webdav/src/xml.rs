@@ -373,6 +373,12 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
 }
 
 /// Returns the QName of a bounded REPORT root.
+/// Parses a bounded XML document and returns only its REPORT root QName.
+///
+/// This helper applies the shared untrusted-XML safety limits but does not validate any REPORT
+/// grammar. It is intended for inspection and test tooling; production request planning should
+/// use [`crate::plan_report_request`], which performs the complete REPORT grammar and capability
+/// checks through `parse_report_request`.
 pub fn parse_report_root(body: &[u8]) -> Result<DavRequestedProperty, DavXmlError> {
     let document = parse_document(body)?;
     Ok(requested_property(document.root()))
