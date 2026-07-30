@@ -35,6 +35,8 @@ fn memory_fixtures() -> Vec<(&'static str, Vec<u8>)> {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+// SAFETY: `CountingAllocator` forwards every allocation operation to `System` with the caller's
+// pointer and layout unchanged, and updates only independent atomic counters around those calls.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: forwards the exact layout to the system allocator.

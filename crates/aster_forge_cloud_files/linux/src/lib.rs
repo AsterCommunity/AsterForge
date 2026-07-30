@@ -6,8 +6,6 @@
 //! callback-to-async dispatch. Product crates retain identity allocation, backend adapters,
 //! durable inode/content storage, change cursors, remote workers, daemon/service packaging, mount
 //! UX, authentication, permissions, and user-visible errors.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-#![deny(clippy::undocumented_unsafe_blocks, unsafe_op_in_unsafe_fn)]
 #![cfg_attr(
     not(test),
     deny(

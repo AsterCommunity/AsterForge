@@ -800,7 +800,7 @@ match outcome {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-runner 会从 durable accepted offset 读取 exact snapshot range，校验 source byte count、chunk session/generation/offset/total size 与 backend exact ack，然后逐步落下 checkpoint、remote-commit marker、outcome、metadata reconciliation 和 completion。它遇到第一个 backend/store/contract failure 就返回，由产品根据 `RetryAdvice`、store error kind、lifecycle 和 backoff policy 决定何时再次 `resume()`；它自己不循环等待。
+runner 的 chunk size 使用当前进程可直接寻址的非零 `usize`，并从 durable accepted offset 读取 exact snapshot range，校验 source byte count、chunk session/generation/offset/total size 与 backend exact ack，然后逐步落下 checkpoint、remote-commit marker、outcome、metadata reconciliation 和 completion。它遇到第一个 backend/store/contract failure 就返回，由产品根据 `RetryAdvice`、store error kind、lifecycle 和 backoff policy 决定何时再次 `resume()`；它自己不循环等待。
 
 `ContentUploadStore` 所有 mutating transition 都接收本次执行者的 `SessionGeneration`。真实 store 必须在同一数据库事务内比较 active generation 并写 transition；较旧 mount/extension/connection 的晚到 checkpoint、outcome、metadata reconcile 和 completion 返回 `StoreWriteStatus::Fenced`。较新的 generation 可以继续旧 intent 的 immutable snapshot，旧 generation 只标识最初接收者，不阻止 startup takeover。
 

@@ -12,7 +12,6 @@
 //! durable mutation runner with remote-outcome reconciliation. Native platform validation has
 //! started in the sibling platform crates while these product-neutral contracts remain
 //! platform-independent.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

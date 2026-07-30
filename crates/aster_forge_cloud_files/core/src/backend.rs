@@ -183,11 +183,7 @@ impl ContentReadResponse {
         bytes: Bytes,
         total_size: u64,
     ) -> Result<Self> {
-        let byte_len = u64::try_from(bytes.len()).map_err(|_| {
-            CloudFilesCoreError::invalid_content_response(
-                "response byte length cannot be represented as u64",
-            )
-        })?;
+        let byte_len = bytes.len() as u64;
         let Some(end) = offset.checked_add(byte_len) else {
             return Err(CloudFilesCoreError::invalid_content_response(
                 "response byte range exceeds u64",

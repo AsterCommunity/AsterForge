@@ -2,7 +2,6 @@
 //!
 //! Parsed documents use a flat arena and retain source spans for names, attributes, text, and
 //! subtrees. Values allocate only when XML decoding or configured normalization changes them.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

@@ -1,5 +1,5 @@
 #![cfg(target_os = "linux")]
-#![allow(
+#![expect(
     dead_code,
     reason = "the integration test includes the complete executable fixture"
 )]

@@ -50,11 +50,10 @@ fn ffi_identifier_round_trip_preserves_exact_fields_and_releases_owned_buffers()
         b"namespace\0team-root\0\xE6\x96\x87\xE4\xBB\xB6-item"
     );
     assert!(encoded_text.starts_with("afcf1."));
-    // SAFETY: each buffer is released once with its original fields unchanged.
-    unsafe {
-        aster_forge_cloud_files_macos_buffer_release(decoded.buffer);
-        aster_forge_cloud_files_macos_buffer_release(encoded.buffer);
-    }
+    // SAFETY: the decoded buffer is released once with its original fields unchanged.
+    unsafe { aster_forge_cloud_files_macos_buffer_release(decoded.buffer) };
+    // SAFETY: the encoded buffer is released once with its original fields unchanged.
+    unsafe { aster_forge_cloud_files_macos_buffer_release(encoded.buffer) };
 }
 
 #[test]
@@ -276,11 +275,10 @@ fn ffi_identity_limits_accept_the_boundary_and_reject_boundary_plus_one() {
     );
     assert_eq!(bytes[namespace.len() + 1 + root.len()], 0);
     assert_eq!(&bytes[namespace.len() + root.len() + 2..], item.as_slice());
-    // SAFETY: each successful allocation is released exactly once with unchanged fields.
-    unsafe {
-        aster_forge_cloud_files_macos_buffer_release(decoded.buffer);
-        aster_forge_cloud_files_macos_buffer_release(encoded.buffer);
-    }
+    // SAFETY: the decoded allocation is released exactly once with unchanged fields.
+    unsafe { aster_forge_cloud_files_macos_buffer_release(decoded.buffer) };
+    // SAFETY: the encoded allocation is released exactly once with unchanged fields.
+    unsafe { aster_forge_cloud_files_macos_buffer_release(encoded.buffer) };
 
     let oversized = vec![b'n'; MAX_IDENTITY_FIELD_BYTES + 1];
     // SAFETY: every declared slice remains readable; the oversized input is rejected before copy.
@@ -325,23 +323,20 @@ fn ffi_session_handles_fence_generation_closing_and_request_ownership() {
     assert_eq!(request.code, MacosErrorCode::Success);
     assert!(!request.handle.raw.is_null());
     // SAFETY: the session handle remains live and unreleased.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_begin_closing(session.handle) },
-        MacosErrorCode::Success
-    );
+    let closing_code =
+        unsafe { aster_forge_cloud_files_macos_session_begin_closing(session.handle) };
+    assert_eq!(closing_code, MacosErrorCode::Success);
     // SAFETY: the live session is now closing, so ingress is classified and rejected.
     let closing = unsafe { aster_forge_cloud_files_macos_session_begin_request(session.handle, 9) };
     assert_eq!(closing.code, MacosErrorCode::ProviderNotFound);
     // SAFETY: the live closing session may transition to draining.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) },
-        MacosErrorCode::Success
-    );
-    // SAFETY: each opaque handle is released exactly once with its original value.
-    unsafe {
-        aster_forge_cloud_files_macos_request_release(request.handle);
-        aster_forge_cloud_files_macos_session_release(session.handle);
-    }
+    let disconnect_code =
+        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) };
+    assert_eq!(disconnect_code, MacosErrorCode::Success);
+    // SAFETY: the request handle is released exactly once with its original value.
+    unsafe { aster_forge_cloud_files_macos_request_release(request.handle) };
+    // SAFETY: the session handle is released exactly once with its original value.
+    unsafe { aster_forge_cloud_files_macos_session_release(session.handle) };
 }
 
 #[test]
@@ -349,28 +344,26 @@ fn ffi_null_session_and_request_releases_are_noops_or_classified_errors() {
     let null_session =
         aster_forge_cloud_files_macos_bridge::MacosFfiSessionHandle { raw: ptr::null() };
     // SAFETY: null is explicitly accepted as an invalid classified session handle.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_begin_closing(null_session) },
-        MacosErrorCode::InvalidArgument
-    );
+    let closing_code = unsafe { aster_forge_cloud_files_macos_session_begin_closing(null_session) };
+    assert_eq!(closing_code, MacosErrorCode::InvalidArgument);
     // SAFETY: null is explicitly accepted as an invalid classified session handle.
     let request = unsafe { aster_forge_cloud_files_macos_session_begin_request(null_session, 1) };
     assert_eq!(request.code, MacosErrorCode::InvalidArgument);
     assert!(request.handle.raw.is_null());
     // SAFETY: null is explicitly accepted as an invalid classified session handle.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(null_session) },
-        MacosErrorCode::InvalidArgument
-    );
-    // SAFETY: null releases are explicitly idempotent no-ops.
+    let disconnect_code =
+        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(null_session) };
+    assert_eq!(disconnect_code, MacosErrorCode::InvalidArgument);
+    // SAFETY: releasing a null request handle is explicitly an idempotent no-op.
     unsafe {
         aster_forge_cloud_files_macos_request_release(
             aster_forge_cloud_files_macos_bridge::MacosFfiRequestHandle {
                 raw: ptr::null_mut(),
             },
         );
-        aster_forge_cloud_files_macos_session_release(null_session);
-    }
+    };
+    // SAFETY: releasing a null session handle is explicitly an idempotent no-op.
+    unsafe { aster_forge_cloud_files_macos_session_release(null_session) };
 }
 
 #[test]
@@ -383,30 +376,25 @@ fn ffi_session_zero_generation_and_disconnect_order_are_classified_and_idempoten
     assert_eq!(zero.code, MacosErrorCode::InvalidArgument);
     assert!(zero.handle.raw.is_null());
     // SAFETY: the live accepting session rejects disconnect before closing.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) },
-        MacosErrorCode::ProviderNotFound
-    );
+    let early_disconnect =
+        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) };
+    assert_eq!(early_disconnect, MacosErrorCode::ProviderNotFound);
     // SAFETY: the same live handle supports idempotent closing.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_begin_closing(session.handle) },
-        MacosErrorCode::Success
-    );
+    let closing_code =
+        unsafe { aster_forge_cloud_files_macos_session_begin_closing(session.handle) };
+    assert_eq!(closing_code, MacosErrorCode::Success);
     // SAFETY: repeated closing is an idempotent success for the same live handle.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_begin_closing(session.handle) },
-        MacosErrorCode::Success
-    );
+    let repeated_closing_code =
+        unsafe { aster_forge_cloud_files_macos_session_begin_closing(session.handle) };
+    assert_eq!(repeated_closing_code, MacosErrorCode::Success);
     // SAFETY: with no active requests the live closing session becomes closed.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) },
-        MacosErrorCode::Success
-    );
+    let disconnect_code =
+        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) };
+    assert_eq!(disconnect_code, MacosErrorCode::Success);
     // SAFETY: repeated disconnect is an idempotent success for the same live handle.
-    assert_eq!(
-        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) },
-        MacosErrorCode::Success
-    );
+    let repeated_disconnect_code =
+        unsafe { aster_forge_cloud_files_macos_session_mark_disconnected(session.handle) };
+    assert_eq!(repeated_disconnect_code, MacosErrorCode::Success);
     // SAFETY: the session owner remains live, but closed ingress is rejected.
     let closed = unsafe { aster_forge_cloud_files_macos_session_begin_request(session.handle, 11) };
     assert_eq!(closed.code, MacosErrorCode::ProviderNotFound);

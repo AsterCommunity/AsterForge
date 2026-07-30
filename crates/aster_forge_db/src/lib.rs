@@ -4,7 +4,6 @@
 //! pagination, full-text search query helpers, whitelisted sorting, and transaction wrappers.
 //! Product migrations, entities, and repository-specific query logic intentionally remain outside
 //! this crate.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

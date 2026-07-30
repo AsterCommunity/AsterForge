@@ -5,8 +5,6 @@
 //! `FETCH_DATA`/`CANCEL_FETCH_DATA` snapshots, bounded callback ingress, active hydration waiter
 //! cancellation, and native calls. Product authentication, remote DTOs, account policy,
 //! persistence adapters, and user-visible error mapping remain in product crates.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-#![deny(clippy::undocumented_unsafe_blocks, unsafe_op_in_unsafe_fn)]
 #![cfg_attr(
     not(test),
     deny(

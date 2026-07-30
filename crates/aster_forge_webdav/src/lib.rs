@@ -3,7 +3,6 @@
 //! This crate owns WebDAV paths, request parsing, protocol preconditions, backend ports,
 //! response models, and observable operation events. Product repositories own authentication,
 //! authorization, workspace scope, persistence, storage policy, quota, and audit semantics.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

@@ -497,13 +497,13 @@ impl MutationRemoteOutcome {
     }
 
     fn same_committed_effect(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
+        match (self, other) {
             (
                 Self::Committed { item: left } | Self::AlreadyCommitted { item: left },
                 Self::Committed { item: right } | Self::AlreadyCommitted { item: right },
-            ) if left == right
-        )
+            ) => left == right,
+            _ => false,
+        }
     }
 }
 
@@ -912,12 +912,6 @@ impl MutationRecord {
                 "remote outcome must follow remote apply or reconcile an unknown outcome",
             ));
         }
-        if self.state == MutationState::RemoteOutcomeUnknown
-            && matches!(outcome, MutationRemoteOutcome::RemoteOutcomeUnknown)
-        {
-            return Ok(MutationRecordTransition::AlreadyApplied);
-        }
-
         self.state = next_state;
         self.remote_outcome = Some(outcome);
         Ok(MutationRecordTransition::Applied)
@@ -951,5 +945,50 @@ impl MutationRecord {
                 "completion requires platform reconciliation",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CloudItemId, CloudNamespaceId, CloudRootId, CloudScope};
+
+    fn intent() -> MutationIntent {
+        let scope = CloudScope::new(
+            CloudNamespaceId::new("namespace").expect("namespace fixture should be valid"),
+            CloudRootId::new("root").expect("root fixture should be valid"),
+        );
+        let key = CloudItemKey::new(
+            scope,
+            CloudItemId::new("item").expect("item fixture should be valid"),
+        );
+        MutationIntent::new(
+            OperationId::new("operation").expect("operation fixture should be valid"),
+            IdempotencyKey::new("idempotency").expect("idempotency fixture should be valid"),
+            MutationOrigin::PlatformCommand,
+            SessionGeneration::new(1).expect("generation fixture should be valid"),
+            DesiredMutation::delete(key),
+            MutationPreconditions::default(),
+        )
+    }
+
+    #[test]
+    fn corrupted_known_record_requires_a_non_unknown_remote_outcome() {
+        let mut record = MutationRecord::persist(intent()).expect("intent should persist");
+        record.state = MutationState::RemoteOutcomeKnown;
+        assert_eq!(
+            validate_recorded_outcome(&record),
+            Err(CloudFilesCoreError::InvalidMutationTransition {
+                reason: "known, reconciled, or completed mutation omitted its remote outcome",
+            })
+        );
+
+        record.remote_outcome = Some(MutationRemoteOutcome::RemoteOutcomeUnknown);
+        assert_eq!(
+            validate_recorded_outcome(&record),
+            Err(CloudFilesCoreError::InvalidMutationTransition {
+                reason: "known, reconciled, or completed mutation retained an unknown remote outcome",
+            })
+        );
     }
 }

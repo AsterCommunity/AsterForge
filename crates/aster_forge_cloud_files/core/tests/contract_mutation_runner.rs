@@ -719,6 +719,145 @@ async fn newer_generation_fences_the_old_runner_and_resumes_the_same_intent() {
 }
 
 #[tokio::test]
+async fn submit_reports_fenced_when_the_intent_generation_is_no_longer_active() {
+    let fixture = SyntheticBackend::full();
+    let store = MemoryCloudFilesStore::default();
+    activate(&store, &fixture, 2).await;
+    let backend = ScriptedMutationBackend::default();
+
+    assert_eq!(
+        MutationRunner
+            .submit(
+                delete_intent(&fixture, "stale-submit"),
+                generation(1),
+                &store,
+                &backend,
+            )
+            .await
+            .expect("stale submit should be classified"),
+        MutationRunOutcome::Fenced
+    );
+    assert_eq!(backend.calls(), (0, 0));
+}
+
+#[tokio::test]
+async fn newer_generation_fences_unknown_known_and_platform_reconciled_transitions() {
+    let fixture = SyntheticBackend::full();
+
+    let unknown_store = MemoryCloudFilesStore::default();
+    activate(&unknown_store, &fixture, 1).await;
+    let unknown_intent = delete_intent(&fixture, "fence-unknown");
+    let unknown_operation = unknown_intent.operation_id().clone();
+    unknown_store
+        .persist_mutation_intent(unknown_intent)
+        .await
+        .expect("unknown intent should persist");
+    unknown_store
+        .begin_remote_apply(&unknown_operation, generation(1))
+        .await
+        .expect("remote apply should begin");
+    unknown_store
+        .record_remote_outcome(
+            &unknown_operation,
+            generation(1),
+            MutationRemoteOutcome::RemoteOutcomeUnknown,
+        )
+        .await
+        .expect("unknown outcome should persist");
+    activate(&unknown_store, &fixture, 2).await;
+    let unknown_backend = ScriptedMutationBackend::new(
+        [],
+        [BackendStep::outcome(
+            MutationRemoteOutcome::AlreadyCommitted { item: None },
+        )],
+    );
+    assert_eq!(
+        MutationRunner
+            .resume(
+                &unknown_operation,
+                generation(1),
+                &unknown_store,
+                &unknown_backend,
+            )
+            .await
+            .expect("unknown transition should be fenced"),
+        MutationRunOutcome::Fenced
+    );
+
+    let known_store = MemoryCloudFilesStore::default();
+    activate(&known_store, &fixture, 1).await;
+    let known_intent = delete_intent(&fixture, "fence-known");
+    let known_operation = known_intent.operation_id().clone();
+    known_store
+        .persist_mutation_intent(known_intent)
+        .await
+        .expect("known intent should persist");
+    known_store
+        .begin_remote_apply(&known_operation, generation(1))
+        .await
+        .expect("remote apply should begin");
+    known_store
+        .record_remote_outcome(
+            &known_operation,
+            generation(1),
+            MutationRemoteOutcome::Committed { item: None },
+        )
+        .await
+        .expect("known outcome should persist");
+    activate(&known_store, &fixture, 2).await;
+    assert_eq!(
+        MutationRunner
+            .resume(
+                &known_operation,
+                generation(1),
+                &known_store,
+                &ScriptedMutationBackend::default(),
+            )
+            .await
+            .expect("known transition should be fenced"),
+        MutationRunOutcome::Fenced
+    );
+
+    let reconciled_store = MemoryCloudFilesStore::default();
+    activate(&reconciled_store, &fixture, 1).await;
+    let reconciled_intent = delete_intent(&fixture, "fence-reconciled");
+    let reconciled_operation = reconciled_intent.operation_id().clone();
+    reconciled_store
+        .persist_mutation_intent(reconciled_intent)
+        .await
+        .expect("reconciled intent should persist");
+    reconciled_store
+        .begin_remote_apply(&reconciled_operation, generation(1))
+        .await
+        .expect("remote apply should begin");
+    reconciled_store
+        .record_remote_outcome(
+            &reconciled_operation,
+            generation(1),
+            MutationRemoteOutcome::Committed { item: None },
+        )
+        .await
+        .expect("known outcome should persist");
+    reconciled_store
+        .mark_platform_reconciled(&reconciled_operation, generation(1))
+        .await
+        .expect("platform state should reconcile");
+    activate(&reconciled_store, &fixture, 2).await;
+    assert_eq!(
+        MutationRunner
+            .resume(
+                &reconciled_operation,
+                generation(1),
+                &reconciled_store,
+                &ScriptedMutationBackend::default(),
+            )
+            .await
+            .expect("completion transition should be fenced"),
+        MutationRunOutcome::Fenced
+    );
+}
+
+#[tokio::test]
 async fn generation_takeover_after_remote_apply_fences_the_late_outcome_write() {
     let fixture = SyntheticBackend::full();
     let store = MemoryCloudFilesStore::default();
@@ -1034,6 +1173,48 @@ async fn existing_item_outcomes_must_match_target_and_requested_shape() {
         },
     )
     .await;
+}
+
+#[tokio::test]
+async fn matching_content_and_metadata_outcomes_reach_completion() {
+    let fixture = SyntheticBackend::full();
+
+    let content_store = MemoryCloudFilesStore::default();
+    activate(&content_store, &fixture, 1).await;
+    let content_backend = ScriptedMutationBackend::fixed_apply(MutationRemoteOutcome::Committed {
+        item: Some(fixture.moved_file().clone()),
+    });
+    assert_eq!(
+        MutationRunner
+            .submit(
+                content_intent(&fixture, "content-matching"),
+                generation(1),
+                &content_store,
+                &content_backend,
+            )
+            .await
+            .expect("matching content outcome should complete"),
+        MutationRunOutcome::Completed
+    );
+
+    let metadata_store = MemoryCloudFilesStore::default();
+    activate(&metadata_store, &fixture, 1).await;
+    let metadata_backend =
+        ScriptedMutationBackend::fixed_apply(MutationRemoteOutcome::AlreadyCommitted {
+            item: Some(fixture.moved_file().clone()),
+        });
+    assert_eq!(
+        MutationRunner
+            .submit(
+                metadata_intent(&fixture, "metadata-matching"),
+                generation(1),
+                &metadata_store,
+                &metadata_backend,
+            )
+            .await
+            .expect("matching metadata outcome should complete"),
+        MutationRunOutcome::Completed
+    );
 }
 
 #[tokio::test]

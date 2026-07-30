@@ -4,7 +4,6 @@
 //! `utoipa::path` metadata when the `openapi` feature is enabled for debug builds. This lets
 //! application code keep a single annotation path without pulling OpenAPI generation into normal
 //! release binaries.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

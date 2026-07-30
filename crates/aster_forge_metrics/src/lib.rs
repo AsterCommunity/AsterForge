@@ -6,7 +6,6 @@
 //! product-specific method into a single shared trait. Concrete backends are selected once at the
 //! product entrypoint through Forge feature flags, so business modules record metric semantics
 //! without depending on exporter crates.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

@@ -157,6 +157,13 @@ fn hydration_request_constructors_and_accessors_preserve_all_boundaries() {
     assert_eq!(whole.read().read_range(), ContentReadRange::Whole);
     assert_eq!(whole.alignment(), Alignment::ONE);
     assert_eq!(whole.session_generation(), generation(3));
+    assert_eq!(
+        HydrationCoordinator::new(Arc::new(FailingContentBackend::new(
+            CloudBackendError::new(CloudBackendErrorKind::Internal),
+        )))
+        .limits(),
+        HydrationLimits::DEFAULT
+    );
 
     let range_request = HydrationRequest::new(
         ContentReadRequest::range(
@@ -773,6 +780,59 @@ async fn whole_file_work_can_satisfy_a_range_waiter_without_a_second_read() {
 }
 
 #[tokio::test]
+async fn range_after_overlapping_range_and_whole_work_skips_the_covered_inner_dependency() {
+    let (fixture, content) = content_fixture();
+    let backend = Arc::new(RecordingContentBackend::new(vec![content.clone()]));
+    let coordinator =
+        HydrationCoordinator::new(Arc::clone(&backend) as Arc<dyn CloudContentBackend>);
+    let inner = coordinator
+        .request(request(
+            &fixture,
+            content.revision.clone(),
+            2,
+            2,
+            1,
+            generation(1),
+        ))
+        .expect("inner waiter should register");
+    let whole = coordinator
+        .request(HydrationRequest::whole(
+            fixture.moved_file().key().clone(),
+            content.revision.clone(),
+            16,
+            generation(1),
+        ))
+        .expect("whole waiter should register");
+    let covered = coordinator
+        .request(request(&fixture, content.revision, 0, 8, 1, generation(1)))
+        .expect("covered waiter should register");
+
+    let (inner, whole, covered) = tokio::join!(inner.wait(), whole.wait(), covered.wait());
+    assert_eq!(
+        inner
+            .expect("inner hydration should succeed")
+            .bytes()
+            .as_ref(),
+        b"23"
+    );
+    assert_eq!(
+        whole
+            .expect("whole hydration should succeed")
+            .bytes()
+            .as_ref(),
+        content.bytes.as_ref()
+    );
+    assert_eq!(
+        covered
+            .expect("covered hydration should succeed")
+            .bytes()
+            .as_ref(),
+        b"01234567"
+    );
+    assert_eq!(backend.requests().len(), 2);
+}
+
+#[tokio::test]
 async fn one_range_can_join_two_existing_segments_and_fetch_only_the_middle_gap() {
     let (fixture, content) = content_fixture();
     let backend = Arc::new(RecordingContentBackend::new(vec![content.clone()]));
@@ -957,6 +1017,37 @@ async fn coordinator_enforces_global_and_per_content_work_limits() {
     coordinator
         .request(request(&fixture, revision, 4, 2, 1, generation(1)))
         .expect("capacity should be released after completion");
+
+    let zero_global = HydrationCoordinator::with_limits(
+        Arc::clone(&backend) as Arc<dyn CloudContentBackend>,
+        HydrationLimits {
+            max_in_flight_work: 0,
+            max_in_flight_per_content: 1,
+        },
+    );
+    assert!(matches!(
+        zero_global.request(request(
+            &fixture,
+            content.revision.clone(),
+            0,
+            1,
+            1,
+            generation(2),
+        )),
+        Err(HydrationError::InFlightLimitExceeded { scope: "global" })
+    ));
+
+    let zero_content = HydrationCoordinator::with_limits(
+        backend as Arc<dyn CloudContentBackend>,
+        HydrationLimits {
+            max_in_flight_work: 1,
+            max_in_flight_per_content: 0,
+        },
+    );
+    assert!(matches!(
+        zero_content.request(request(&fixture, content.revision, 0, 1, 1, generation(3),)),
+        Err(HydrationError::InFlightLimitExceeded { scope: "content" })
+    ));
 }
 
 #[tokio::test]

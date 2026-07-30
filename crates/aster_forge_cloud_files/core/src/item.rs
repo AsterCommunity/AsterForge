@@ -72,14 +72,16 @@ impl CloudItem {
         name: impl Into<String>,
         metadata_revision: MetadataRevision,
     ) -> Result<Self> {
-        Self::new(
+        let name = name.into();
+        validate_item_location(&key, parent_id.as_ref(), &name)?;
+        Ok(Self {
             key,
             parent_id,
-            name.into(),
-            CloudItemKind::Directory,
+            name,
+            kind: CloudItemKind::Directory,
             metadata_revision,
-            None,
-        )
+            content: None,
+        })
     }
 
     /// Creates a regular file. Files always require a parent within the same scope.
@@ -90,57 +92,15 @@ impl CloudItem {
         metadata_revision: MetadataRevision,
         content: CloudContentMetadata,
     ) -> Result<Self> {
-        Self::new(
-            key,
-            Some(parent_id),
-            name.into(),
-            CloudItemKind::File,
-            metadata_revision,
-            Some(content),
-        )
-    }
-
-    fn new(
-        key: CloudItemKey,
-        parent_id: Option<CloudItemId>,
-        name: String,
-        kind: CloudItemKind,
-        metadata_revision: MetadataRevision,
-        content: Option<CloudContentMetadata>,
-    ) -> Result<Self> {
-        if name.is_empty() {
-            return Err(CloudFilesCoreError::empty("cloud item name"));
-        }
-        if parent_id.as_ref() == Some(key.item_id()) {
-            return Err(CloudFilesCoreError::invalid_item(
-                "an item must not be its own parent",
-            ));
-        }
-        match (kind, parent_id.as_ref(), content.as_ref()) {
-            (CloudItemKind::File, None, _) => {
-                return Err(CloudFilesCoreError::invalid_item(
-                    "a file must have a parent",
-                ));
-            }
-            (CloudItemKind::File, Some(_), None) => {
-                return Err(CloudFilesCoreError::invalid_item(
-                    "a file must have content metadata",
-                ));
-            }
-            (CloudItemKind::Directory, _, Some(_)) => {
-                return Err(CloudFilesCoreError::invalid_item(
-                    "a directory must not have content metadata",
-                ));
-            }
-            _ => {}
-        }
+        let name = name.into();
+        validate_item_location(&key, Some(&parent_id), &name)?;
         Ok(Self {
             key,
-            parent_id,
+            parent_id: Some(parent_id),
             name,
-            kind,
+            kind: CloudItemKind::File,
             metadata_revision,
-            content,
+            content: Some(content),
         })
     }
 
@@ -205,6 +165,22 @@ impl CloudItem {
         self.metadata_revision = metadata_revision;
         Ok(self)
     }
+}
+
+fn validate_item_location(
+    key: &CloudItemKey,
+    parent_id: Option<&CloudItemId>,
+    name: &str,
+) -> Result<()> {
+    if name.is_empty() {
+        return Err(CloudFilesCoreError::empty("cloud item name"));
+    }
+    if parent_id == Some(key.item_id()) {
+        return Err(CloudFilesCoreError::invalid_item(
+            "an item must not be its own parent",
+        ));
+    }
+    Ok(())
 }
 
 /// One page of directory items returned by a backend adapter.

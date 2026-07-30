@@ -45,10 +45,17 @@ authors = [
     "AptS-1543 <apts-1543@esaps.net>",
 ]
 
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
 [workspace.lints.clippy]
 # Suppressions must remain observable: `expect` reports when its justification goes stale.
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+multiple_unsafe_ops_per_block = "deny"
+undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
 actix-web = "4.14.0"

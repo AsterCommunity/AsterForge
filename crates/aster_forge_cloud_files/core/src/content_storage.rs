@@ -83,8 +83,8 @@ impl ContentRangeSet {
             } else if end < existing.offset() {
                 if !inserted {
                     merged.push(ByteRange::new(start, end.saturating_sub(start))?);
-                    inserted = true;
                 }
+                inserted = true;
                 merged.push(*existing);
             } else {
                 start = start.min(existing.offset());
@@ -961,5 +961,102 @@ impl ContentEvictionRecord {
         (!self.plan.remove_provider_cache || self.provider_cache_removed)
             && (!self.plan.evict_platform_materialization || self.platform_materialization_evicted)
             && (!self.plan.invalidate_platform_content || self.platform_content_invalidated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CloudItemId, CloudNamespaceId, CloudRootId, CloudScope, ContentRevision};
+
+    fn cache_key() -> ContentCacheKey {
+        ContentCacheKey::new(
+            CloudItemKey::new(
+                CloudScope::new(
+                    CloudNamespaceId::new("namespace").expect("namespace fixture should be valid"),
+                    CloudRootId::new("root").expect("root fixture should be valid"),
+                ),
+                CloudItemId::new("item").expect("item fixture should be valid"),
+            ),
+            ContentRevision::from_slice(b"content-v1")
+                .expect("content revision fixture should be valid"),
+        )
+    }
+
+    #[test]
+    fn sparse_range_insertion_between_existing_ranges_takes_the_middle_branch() {
+        let mut ranges = ContentRangeSet::new();
+        ranges
+            .insert(ByteRange::new(0, 2).expect("range should be valid"), 16)
+            .expect("prefix range should insert");
+        ranges
+            .insert(ByteRange::new(10, 2).expect("range should be valid"), 16)
+            .expect("suffix range should insert");
+        ranges
+            .insert(ByteRange::new(4, 2).expect("range should be valid"), 16)
+            .expect("middle range should insert");
+
+        assert_eq!(
+            ranges.ranges(),
+            &[
+                ByteRange::new(0, 2).expect("range should be valid"),
+                ByteRange::new(4, 2).expect("range should be valid"),
+                ByteRange::new(10, 2).expect("range should be valid"),
+            ]
+        );
+    }
+
+    #[test]
+    fn private_lease_and_cache_write_counters_reject_overflow_and_underflow() {
+        let mut counts = ContentLeaseCounts {
+            open: u32::MAX,
+            ..ContentLeaseCounts::default()
+        };
+        assert_eq!(
+            counts.increment(ContentLeaseKind::Open),
+            Err(CloudFilesCoreError::InvalidContentStorageState {
+                reason: "content lease count overflowed",
+            })
+        );
+
+        let mut counts = ContentLeaseCounts::default();
+        assert_eq!(
+            counts.decrement(ContentLeaseKind::Read),
+            Err(CloudFilesCoreError::InvalidContentStorageState {
+                reason: "content lease count was already zero",
+            })
+        );
+
+        let mut entry =
+            ContentStorageEntry::new(cache_key(), ContentStorageMode::ProviderManaged, 16);
+        entry.active_cache_writes = u32::MAX;
+        assert_eq!(
+            entry.begin_cache_write(),
+            Err(CloudFilesCoreError::InvalidContentStorageState {
+                reason: "active cache write count overflowed",
+            })
+        );
+    }
+
+    #[test]
+    fn corrupted_eviction_record_rejects_late_unobserved_physical_effect() {
+        let target = ContentEvictionTarget::ProviderCache;
+        let intent = ContentEvictionIntent::new(
+            ContentEvictionOperationId::new("eviction").expect("operation fixture should be valid"),
+            cache_key(),
+            target,
+            SessionGeneration::new(1).expect("generation fixture should be valid"),
+        );
+        let plan = ContentEvictionPlan::for_target(ContentStorageMode::ProviderManaged, target)
+            .expect("eviction plan should be valid");
+        let mut record = ContentEvictionRecord::persist(intent, plan);
+        record.state = ContentEvictionState::MetadataReconciled;
+
+        assert_eq!(
+            record.record_physical_effect(ContentEvictionPhysicalEffect::ProviderCacheRemoved),
+            Err(CloudFilesCoreError::InvalidContentEvictionTransition {
+                reason: "physical effect must precede metadata reconciliation",
+            })
+        );
     }
 }

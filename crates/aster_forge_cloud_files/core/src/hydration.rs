@@ -371,18 +371,17 @@ impl HydrationCoordinator {
         let existing = dependencies.clone();
         let mut gaps = Vec::new();
         for dependency in existing {
-            if dependency.end <= cursor {
-                continue;
-            }
-            if dependency.start > cursor {
-                let gap_end = dependency.start.min(physical_end);
-                if cursor < gap_end {
-                    gaps.push((cursor, gap_end));
+            if dependency.end > cursor {
+                if dependency.start > cursor {
+                    let gap_end = dependency.start.min(physical_end);
+                    if cursor < gap_end {
+                        gaps.push((cursor, gap_end));
+                    }
                 }
-            }
-            cursor = cursor.max(dependency.end.min(physical_end));
-            if cursor >= physical_end {
-                break;
+                cursor = cursor.max(dependency.end.min(physical_end));
+                if cursor >= physical_end {
+                    break;
+                }
             }
         }
         if cursor < physical_end {
@@ -720,27 +719,20 @@ impl HydrationWaiter {
             }
             let copy_start = cursor.max(dependency.start);
             let copy_end = self.target_end.min(dependency.end);
-            if copy_start >= copy_end {
-                continue;
-            }
-            let relative_start = usize::try_from(copy_start.saturating_sub(response.offset()))
-                .map_err(|_| {
-                    CloudFilesCoreError::invalid_content_response(
-                        "hydration slice start cannot be represented as usize",
-                    )
-                })?;
-            let relative_end = usize::try_from(copy_end.saturating_sub(response.offset()))
-                .map_err(|_| {
-                    CloudFilesCoreError::invalid_content_response(
-                        "hydration slice end cannot be represented as usize",
-                    )
-                })?;
-            if relative_end > response.bytes().len() || relative_start > relative_end {
+            let relative_start = copy_start.saturating_sub(response.offset());
+            let relative_end = copy_end.saturating_sub(response.offset());
+            if relative_end > response.bytes().len() as u64 || relative_start > relative_end {
                 return Err(CloudFilesCoreError::invalid_content_response(
                     "hydration dependency did not cover its claimed logical range",
                 )
                 .into());
             }
+            // Both offsets were checked against `Bytes::len()`, so conversion cannot truncate.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "both offsets were bounded by the usize-sized response buffer"
+            )]
+            let (relative_start, relative_end) = (relative_start as usize, relative_end as usize);
             slices.push(response.bytes().slice(relative_start..relative_end));
             cursor = copy_end;
             if cursor == self.target_end {
@@ -779,18 +771,335 @@ fn combine_slices(mut slices: Vec<Bytes>) -> HydrationResult<Bytes> {
         0 => Ok(Bytes::new()),
         1 => Ok(slices.remove(0)),
         _ => {
-            let total_len = slices.iter().try_fold(0usize, |total, bytes| {
-                total.checked_add(bytes.len()).ok_or_else(|| {
-                    CloudFilesCoreError::invalid_content_response(
-                        "hydration result length exceeds usize",
-                    )
-                })
-            })?;
+            let total_len = checked_slice_total(slices.iter().map(Bytes::len))?;
             let mut combined = BytesMut::with_capacity(total_len);
             for bytes in slices {
                 combined.extend_from_slice(&bytes);
             }
             Ok(combined.freeze())
         }
+    }
+}
+
+fn checked_slice_total(lengths: impl IntoIterator<Item = usize>) -> HydrationResult<usize> {
+    lengths.into_iter().try_fold(0usize, |total, length| {
+        total.checked_add(length).ok_or_else(|| {
+            CloudFilesCoreError::invalid_content_response("hydration result length exceeds usize")
+                .into()
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestBackend;
+
+    #[async_trait::async_trait]
+    impl CloudContentBackend for TestBackend {
+        async fn read_content(
+            &self,
+            _request: &ContentReadRequest,
+        ) -> crate::BackendResult<ContentReadResponse> {
+            Err(CloudBackendError::new(
+                CloudBackendErrorKind::InvalidRequest,
+            ))
+        }
+    }
+
+    fn request(range: ContentReadRange) -> HydrationRequest {
+        let scope = crate::CloudScope::new(
+            crate::CloudNamespaceId::new("namespace").expect("namespace fixture should be valid"),
+            crate::CloudRootId::new("root").expect("root fixture should be valid"),
+        );
+        let key = CloudItemKey::new(
+            scope,
+            crate::CloudItemId::new("item").expect("item fixture should be valid"),
+        );
+        let revision = ContentRevision::from_slice(b"content-v1")
+            .expect("content revision fixture should be valid");
+        let read = match range {
+            ContentReadRange::Whole => ContentReadRequest::whole(key, revision, 4),
+            ContentReadRange::Range(range) => ContentReadRequest::range(key, revision, 4, range),
+        };
+        HydrationRequest::new(
+            read,
+            Alignment::ONE,
+            SessionGeneration::new(1).expect("generation fixture should be valid"),
+        )
+    }
+
+    fn response(offset: u64, bytes: &'static [u8]) -> ContentReadResponse {
+        ContentReadResponse::new(
+            ContentRevision::from_slice(b"content-v1")
+                .expect("content revision fixture should be valid"),
+            offset,
+            Bytes::from_static(bytes),
+            4,
+        )
+        .expect("response fixture should be valid")
+    }
+
+    fn dependency(id: u64, start: u64, end: u64) -> WorkDependency {
+        WorkDependency {
+            id,
+            start,
+            end,
+            future: futures::future::ready(Err(HydrationError::Cancelled))
+                .boxed()
+                .shared(),
+        }
+    }
+
+    fn waiter(
+        request: HydrationRequest,
+        target_start: u64,
+        target_end: u64,
+        dependencies: Vec<WorkDependency>,
+    ) -> HydrationWaiter {
+        let (_, cancel_rx) = oneshot::channel();
+        HydrationWaiter {
+            request,
+            target_start,
+            target_end,
+            dependencies,
+            cancel_rx,
+            inner: Arc::new(WaiterInner {
+                terminal: AtomicU8::new(TERMINAL_PENDING),
+                released: AtomicBool::new(false),
+                coordinator: Weak::new(),
+                work_ids: Vec::new(),
+                cancel_tx: Mutex::new(None),
+            }),
+            finished: false,
+        }
+    }
+
+    #[test]
+    fn poisoned_coordinator_mutex_recovers_its_inner_state() {
+        let mutex = Arc::new(Mutex::new(7usize));
+        let poison_target = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_target.lock().expect("mutex should initially lock");
+            panic!("poison coordinator fixture");
+        })
+        .join();
+
+        assert_eq!(*lock(&mutex), 7);
+    }
+
+    #[test]
+    fn work_identity_and_alignment_overflow_are_contract_failures() {
+        let mut state = CoordinatorState {
+            next_work_id: u64::MAX,
+            ..CoordinatorState::default()
+        };
+        let scope = crate::CloudScope::new(
+            crate::CloudNamespaceId::new("namespace").expect("namespace fixture should be valid"),
+            crate::CloudRootId::new("root").expect("root fixture should be valid"),
+        );
+        let key = CloudItemKey::new(
+            scope,
+            crate::CloudItemId::new("item").expect("item fixture should be valid"),
+        );
+        let revision = ContentRevision::from_slice(b"content-v1")
+            .expect("content revision fixture should be valid");
+        let request = HydrationRequest::whole(
+            key,
+            revision,
+            1,
+            SessionGeneration::new(1).expect("generation fixture should be valid"),
+        );
+        let content = HydrationContentKey::from_request(&request);
+        assert!(futures::executor::block_on(TestBackend.read_content(request.read())).is_err());
+
+        assert!(matches!(
+            insert_work(
+                &mut state,
+                Arc::new(TestBackend),
+                content,
+                request.read().clone(),
+                0,
+                1,
+                true,
+            ),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+        assert!(matches!(
+            aligned_extent(
+                u64::MAX - 1,
+                u64::MAX - 1,
+                u64::MAX,
+                Alignment::new(8).expect("alignment fixture should be valid"),
+            ),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidByteRange { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn coordinator_propagates_work_identity_and_alignment_failures_from_each_request_shape() {
+        let coordinator = HydrationCoordinator {
+            backend: Arc::new(TestBackend),
+            state: Arc::new(Mutex::new(CoordinatorState {
+                next_work_id: u64::MAX,
+                ..CoordinatorState::default()
+            })),
+            limits: HydrationLimits::DEFAULT,
+        };
+
+        let whole = request(ContentReadRange::Whole);
+        assert!(matches!(
+            coordinator.request(whole),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+
+        let empty = request(ContentReadRange::Range(
+            ByteRange::new(4, 1).expect("range fixture should be valid"),
+        ));
+        assert!(matches!(
+            coordinator.request(empty),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+
+        let range = request(ContentReadRange::Range(
+            ByteRange::new(0, 1).expect("range fixture should be valid"),
+        ));
+        assert!(matches!(
+            coordinator.request(range),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+
+        let overflow = HydrationRequest::range(
+            request(ContentReadRange::Whole).read().key().clone(),
+            ContentRevision::from_slice(b"content-v1")
+                .expect("content revision fixture should be valid"),
+            u64::MAX,
+            ByteRange::new(u64::MAX - 2, 1).expect("range fixture should be valid"),
+            Alignment::new(8).expect("alignment fixture should be valid"),
+            SessionGeneration::new(1).expect("generation fixture should be valid"),
+        );
+        assert!(matches!(
+            coordinator.request(overflow),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidByteRange { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn release_work_is_idempotent_and_tolerates_missing_internal_indexes() {
+        let empty_state = Arc::new(Mutex::new(CoordinatorState::default()));
+        let repeated = WaiterInner {
+            terminal: AtomicU8::new(TERMINAL_PENDING),
+            released: AtomicBool::new(false),
+            coordinator: Arc::downgrade(&empty_state),
+            work_ids: Vec::new(),
+            cancel_tx: Mutex::new(None),
+        };
+        repeated.release_work();
+        repeated.release_work();
+
+        let missing_work = WaiterInner {
+            terminal: AtomicU8::new(TERMINAL_PENDING),
+            released: AtomicBool::new(false),
+            coordinator: Arc::downgrade(&empty_state),
+            work_ids: vec![7],
+            cancel_tx: Mutex::new(None),
+        };
+        missing_work.release_work();
+
+        let request = request(ContentReadRange::Whole);
+        let content = HydrationContentKey::from_request(&request);
+        let mut state = CoordinatorState::default();
+        state.work.insert(
+            9,
+            WorkEntry {
+                content,
+                start: 0,
+                end: 4,
+                whole: true,
+                future: futures::future::ready(Err(HydrationError::Cancelled))
+                    .boxed()
+                    .shared(),
+                waiter_count: 1,
+            },
+        );
+        let missing_index_state = Arc::new(Mutex::new(state));
+        let missing_index = WaiterInner {
+            terminal: AtomicU8::new(TERMINAL_PENDING),
+            released: AtomicBool::new(false),
+            coordinator: Arc::downgrade(&missing_index_state),
+            work_ids: vec![9],
+            cancel_tx: Mutex::new(None),
+        };
+        missing_index.release_work();
+        assert!(lock(&missing_index_state).work.is_empty());
+    }
+
+    #[test]
+    fn assembly_rejects_changed_missing_and_short_dependencies() {
+        let request = request(ContentReadRange::Range(
+            ByteRange::new(0, 4).expect("range fixture should be valid"),
+        ));
+
+        let changed = waiter(request.clone(), 0, 4, vec![dependency(1, 0, 4)]);
+        assert!(matches!(
+            changed.assemble(Vec::new()),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+
+        let missing = waiter(request.clone(), 0, 4, vec![dependency(2, 4, 4)]);
+        assert!(matches!(
+            missing.assemble(vec![response(4, b"")]),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+
+        let short = waiter(request.clone(), 0, 4, vec![dependency(3, 0, 4)]);
+        assert!(matches!(
+            short.assemble(vec![response(0, b"ab")]),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
+
+        let complete = waiter(request, 0, 4, vec![dependency(4, 0, 4)]);
+        assert_eq!(
+            complete
+                .assemble(vec![response(0, b"abcd")])
+                .expect("complete dependency should assemble")
+                .bytes()
+                .as_ref(),
+            b"abcd"
+        );
+        assert!(
+            combine_slices(Vec::new())
+                .expect("empty slices should combine")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn slice_length_accumulator_rejects_usize_overflow() {
+        assert!(matches!(
+            checked_slice_total([usize::MAX, 1]),
+            Err(HydrationError::Contract(
+                CloudFilesCoreError::InvalidContentResponse { .. }
+            ))
+        ));
     }
 }

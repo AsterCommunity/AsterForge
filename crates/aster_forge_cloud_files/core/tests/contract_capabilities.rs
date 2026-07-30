@@ -320,6 +320,19 @@ fn every_boolean_capability_dimension_uses_logical_intersection() {
             conditional_content_access: false,
         }
     );
+    assert!(
+        !RevisionCapabilities {
+            separate_metadata_and_content: false,
+            conditional_metadata_mutation: true,
+            conditional_content_access: false,
+        }
+        .intersection(RevisionCapabilities {
+            separate_metadata_and_content: false,
+            conditional_metadata_mutation: false,
+            conditional_content_access: false,
+        })
+        .conditional_metadata_mutation
+    );
 
     assert_eq!(
         EnumerationCapabilities {

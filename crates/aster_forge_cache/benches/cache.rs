@@ -36,13 +36,13 @@ fn bench_bloom_insert(c: &mut Criterion) {
 
 fn bench_bloom_bulk_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("bloom/bulk_insert");
-    for size in [100_u64, 500, 1_000] {
+    for (size, throughput) in [(100_usize, 100_u64), (500, 500), (1_000, 1_000)] {
         let keys: Vec<String> = (0..size).map(|index| format!("bulk_key_{index}")).collect();
-        group.throughput(Throughput::Elements(size));
+        group.throughput(Throughput::Elements(throughput));
         group.bench_with_input(BenchmarkId::new("keys", size), &keys, |b, keys| {
             b.iter_batched(
                 || {
-                    BloomFilter::new(BloomConfig::new(size as usize, 0.001))
+                    BloomFilter::new(BloomConfig::new(size, 0.001))
                         .expect("valid Bloom configuration")
                 },
                 |filter| filter.insert_many(keys.iter().map(String::as_str)),

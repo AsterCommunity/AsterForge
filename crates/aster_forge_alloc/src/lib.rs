@@ -5,8 +5,6 @@
 //! pieces used by Aster services: a debug tracking allocator for system-allocator
 //! builds, and a single `stats` API that reports either tracked system
 //! allocation counters or jemalloc counters depending on enabled features.
-#![deny(unsafe_op_in_unsafe_fn)]
-#![deny(clippy::undocumented_unsafe_blocks)]
 #![cfg_attr(
     not(test),
     deny(

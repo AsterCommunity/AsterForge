@@ -79,6 +79,22 @@ async fn prepare_store(store: &MemoryContentStorageStore, intent: &ContentUpload
         .expect("dirty snapshot should be recorded");
 }
 
+fn upload_session(accepted_offset: u64) -> ContentUploadSession {
+    ContentUploadSession::new(
+        ContentUploadSessionId::new("scripted-session")
+            .expect("upload session fixture should be valid"),
+        accepted_offset,
+    )
+}
+
+async fn persist_upload(store: &MemoryContentStorageStore, intent: &ContentUploadIntent) {
+    prepare_store(store, intent).await;
+    store
+        .persist_content_upload_intent(intent.clone(), generation(1))
+        .await
+        .expect("upload intent should persist");
+}
+
 fn uploaded_item(intent: &ContentUploadIntent, revision: &str) -> CloudItem {
     let fixture = SyntheticBackend::full();
     let current = fixture.moved_file();
@@ -1036,6 +1052,239 @@ async fn newer_session_fences_old_executor_and_resumes_the_same_immutable_intent
             .expect("new executor should resume old intent"),
         ContentUploadRunOutcome::Completed
     ));
+}
+
+#[tokio::test]
+async fn submit_reports_fenced_when_the_upload_generation_is_no_longer_active() {
+    let fixture = SyntheticBackend::full();
+    let bytes = Bytes::from_static(b"stale-submit");
+    let intent = intent(&fixture, &bytes);
+    let store = MemoryContentStorageStore::default();
+    prepare_store(&store, &intent).await;
+    store.activate_content_upload_generation(
+        intent.base_cache_key().item_key().scope().clone(),
+        generation(2),
+    );
+
+    assert_eq!(
+        ContentUploadRunner::new(4)
+            .expect("runner config should be valid")
+            .submit(
+                intent,
+                generation(1),
+                &store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes),
+            )
+            .await
+            .expect("stale submit should be classified"),
+        ContentUploadRunOutcome::Fenced
+    );
+}
+
+#[tokio::test]
+async fn newer_generation_fences_every_post_session_upload_transition() {
+    let fixture = SyntheticBackend::full();
+    let bytes = Bytes::from_static(b"fence-every-stage");
+    let intent = intent(&fixture, &bytes);
+    let scope = intent.base_cache_key().item_key().scope().clone();
+    let runner = ContentUploadRunner::new(4).expect("runner config should be valid");
+
+    let checkpoint_store = MemoryContentStorageStore::default();
+    persist_upload(&checkpoint_store, &intent).await;
+    checkpoint_store
+        .record_content_upload_session(intent.operation_id(), upload_session(0), generation(1))
+        .await
+        .expect("uploading state should persist");
+    checkpoint_store.activate_content_upload_generation(scope.clone(), generation(2));
+    assert_eq!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &checkpoint_store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes.clone()),
+            )
+            .await
+            .expect("checkpoint transition should be fenced"),
+        ContentUploadRunOutcome::Fenced
+    );
+
+    let commit_begin_store = MemoryContentStorageStore::default();
+    persist_upload(&commit_begin_store, &intent).await;
+    commit_begin_store
+        .record_content_upload_session(
+            intent.operation_id(),
+            upload_session(intent.snapshot().size()),
+            generation(1),
+        )
+        .await
+        .expect("complete session should persist");
+    commit_begin_store.activate_content_upload_generation(scope.clone(), generation(2));
+    assert_eq!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &commit_begin_store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes.clone()),
+            )
+            .await
+            .expect("commit begin should be fenced"),
+        ContentUploadRunOutcome::Fenced
+    );
+
+    let outcome_store = MemoryContentStorageStore::default();
+    persist_upload(&outcome_store, &intent).await;
+    outcome_store
+        .record_content_upload_session(
+            intent.operation_id(),
+            upload_session(intent.snapshot().size()),
+            generation(1),
+        )
+        .await
+        .expect("complete session should persist");
+    outcome_store
+        .begin_content_upload_remote_commit(intent.operation_id(), generation(1))
+        .await
+        .expect("remote commit should begin");
+    outcome_store.activate_content_upload_generation(scope.clone(), generation(2));
+    assert_eq!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &outcome_store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes.clone()),
+            )
+            .await
+            .expect("outcome transition should be fenced"),
+        ContentUploadRunOutcome::Fenced
+    );
+
+    let unknown_store = MemoryContentStorageStore::default();
+    persist_upload(&unknown_store, &intent).await;
+    unknown_store
+        .record_content_upload_session(
+            intent.operation_id(),
+            upload_session(intent.snapshot().size()),
+            generation(1),
+        )
+        .await
+        .expect("complete session should persist");
+    unknown_store
+        .begin_content_upload_remote_commit(intent.operation_id(), generation(1))
+        .await
+        .expect("remote commit should begin");
+    unknown_store
+        .record_content_upload_remote_outcome(
+            intent.operation_id(),
+            MutationRemoteOutcome::RemoteOutcomeUnknown,
+            generation(1),
+        )
+        .await
+        .expect("unknown outcome should persist");
+    unknown_store.activate_content_upload_generation(scope.clone(), generation(2));
+    assert_eq!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &unknown_store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes.clone()),
+            )
+            .await
+            .expect("unknown reconciliation should be fenced"),
+        ContentUploadRunOutcome::Fenced
+    );
+
+    let metadata_store = MemoryContentStorageStore::default();
+    persist_upload(&metadata_store, &intent).await;
+    metadata_store
+        .record_content_upload_session(
+            intent.operation_id(),
+            upload_session(intent.snapshot().size()),
+            generation(1),
+        )
+        .await
+        .expect("complete session should persist");
+    metadata_store
+        .begin_content_upload_remote_commit(intent.operation_id(), generation(1))
+        .await
+        .expect("remote commit should begin");
+    metadata_store
+        .record_content_upload_remote_outcome(
+            intent.operation_id(),
+            MutationRemoteOutcome::PreconditionFailed {
+                metadata_revision: None,
+                content_revision: None,
+            },
+            generation(1),
+        )
+        .await
+        .expect("known outcome should persist");
+    metadata_store.activate_content_upload_generation(scope.clone(), generation(2));
+    assert_eq!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &metadata_store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes.clone()),
+            )
+            .await
+            .expect("metadata transition should be fenced"),
+        ContentUploadRunOutcome::Fenced
+    );
+
+    let completion_store = MemoryContentStorageStore::default();
+    persist_upload(&completion_store, &intent).await;
+    completion_store
+        .record_content_upload_session(
+            intent.operation_id(),
+            upload_session(intent.snapshot().size()),
+            generation(1),
+        )
+        .await
+        .expect("complete session should persist");
+    completion_store
+        .begin_content_upload_remote_commit(intent.operation_id(), generation(1))
+        .await
+        .expect("remote commit should begin");
+    completion_store
+        .record_content_upload_remote_outcome(
+            intent.operation_id(),
+            MutationRemoteOutcome::PreconditionFailed {
+                metadata_revision: None,
+                content_revision: None,
+            },
+            generation(1),
+        )
+        .await
+        .expect("known outcome should persist");
+    completion_store
+        .reconcile_content_upload_metadata(intent.operation_id(), generation(1))
+        .await
+        .expect("metadata should reconcile");
+    completion_store.activate_content_upload_generation(scope, generation(2));
+    assert_eq!(
+        runner
+            .resume(
+                intent.operation_id(),
+                generation(1),
+                &completion_store,
+                &ScriptedUploadBackend::default(),
+                &MemorySnapshotReader::new(bytes),
+            )
+            .await
+            .expect("completion transition should be fenced"),
+        ContentUploadRunOutcome::Fenced
+    );
 }
 
 #[tokio::test]

@@ -165,7 +165,10 @@ jobs:
           - package: aster_forge_cloud_files_core
             miri_flags: ''
           - package: aster_forge_cloud_files_linux
-            miri_flags: -Zmiri-strict-provenance
+            # The Linux memory-drive recovery contracts intentionally exercise durable filesystem
+            # persistence. Keep strict provenance enabled while allowing those host filesystem
+            # operations through Miri's isolation boundary.
+            miri_flags: -Zmiri-strict-provenance -Zmiri-disable-isolation
           - package: aster_forge_cloud_files_macos_bridge
             miri_flags: -Zmiri-strict-provenance
           - package: aster_forge_cloud_files_windows

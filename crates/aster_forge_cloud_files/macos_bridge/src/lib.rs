@@ -5,8 +5,6 @@
 //! retains all `NSFileProvider*` objects and completion handlers. Product crates retain backend
 //! adapters, authentication, persistence, domain policy, packaging, signing, and user-visible
 //! errors.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-#![deny(clippy::undocumented_unsafe_blocks, unsafe_op_in_unsafe_fn)]
 #![cfg_attr(
     not(test),
     deny(

@@ -538,3 +538,26 @@ fn committed_and_already_committed_with_the_same_item_are_one_durable_fact() {
         Some(MutationRemoteOutcome::Committed { .. })
     ));
 }
+
+#[test]
+fn committed_and_already_committed_with_different_items_are_not_equivalent() {
+    let mut record = MutationRecord::persist(intent("operation-different", "item"))
+        .expect("record fixture should be valid");
+    record
+        .begin_remote_apply()
+        .expect("remote apply should begin");
+    record
+        .record_remote_outcome(MutationRemoteOutcome::Committed {
+            item: Some(current_file("item", 4)),
+        })
+        .expect("committed outcome should persist");
+
+    assert_eq!(
+        record.record_remote_outcome(MutationRemoteOutcome::AlreadyCommitted {
+            item: Some(current_file("other-item", 4)),
+        }),
+        Err(CloudFilesCoreError::InvalidMutationTransition {
+            reason: "remote outcome must follow remote apply or reconcile an unknown outcome",
+        })
+    );
+}

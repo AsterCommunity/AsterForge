@@ -1,6 +1,6 @@
 //! Product-neutral resumable content-upload requests, backend port, and durable recovery model.
 
-use std::fmt;
+use std::{fmt, num::NonZeroUsize};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -165,11 +165,7 @@ impl ContentUploadChunk {
         bytes: Bytes,
         total_size: u64,
     ) -> Result<Self> {
-        let byte_len = u64::try_from(bytes.len()).map_err(|_| {
-            CloudFilesCoreError::invalid_content_upload(
-                "upload chunk length cannot be represented as u64",
-            )
-        })?;
+        let byte_len = bytes.len() as u64;
         if byte_len == 0 {
             return Err(CloudFilesCoreError::invalid_content_upload(
                 "upload chunks must contain at least one byte",
@@ -183,14 +179,32 @@ impl ContentUploadChunk {
                 "upload chunk exceeds the immutable snapshot size",
             ));
         }
-        Ok(Self {
+        Ok(Self::from_validated_parts(
             session_id,
             local_generation,
             offset,
             bytes,
             byte_len,
             total_size,
-        })
+        ))
+    }
+
+    fn from_validated_parts(
+        session_id: ContentUploadSessionId,
+        local_generation: LocalContentGeneration,
+        offset: u64,
+        bytes: Bytes,
+        byte_len: u64,
+        total_size: u64,
+    ) -> Self {
+        Self {
+            session_id,
+            local_generation,
+            offset,
+            bytes,
+            byte_len,
+            total_size,
+        }
     }
 
     /// Returns the backend upload-session identity.
@@ -400,28 +414,21 @@ pub enum ContentUploadRunOutcome {
 /// unknown remote outcome, is fenced, or returns the first backend/store/contract failure.
 #[derive(Debug, Clone, Copy)]
 pub struct ContentUploadRunner {
-    chunk_size: u64,
+    chunk_size: NonZeroUsize,
 }
 
 impl ContentUploadRunner {
-    /// Creates a runner with a non-zero chunk size representable by the current process.
-    pub fn new(chunk_size: u64) -> Result<Self> {
-        if chunk_size == 0 {
-            return Err(CloudFilesCoreError::invalid_content_upload(
-                "upload runner chunk size must be non-zero",
-            ));
-        }
-        usize::try_from(chunk_size).map_err(|_| {
-            CloudFilesCoreError::invalid_content_upload(
-                "upload runner chunk size cannot be represented as usize",
-            )
+    /// Creates a runner with a non-zero in-memory chunk size.
+    pub fn new(chunk_size: usize) -> Result<Self> {
+        let chunk_size = NonZeroUsize::new(chunk_size).ok_or_else(|| {
+            CloudFilesCoreError::invalid_content_upload("upload runner chunk size must be non-zero")
         })?;
         Ok(Self { chunk_size })
     }
 
     /// Returns the maximum immutable byte count submitted in one backend chunk.
-    pub const fn chunk_size(&self) -> u64 {
-        self.chunk_size
+    pub const fn chunk_size(&self) -> usize {
+        self.chunk_size.get()
     }
 
     /// Persists a caller-owned upload intent, then advances its durable record.
@@ -486,16 +493,15 @@ impl ContentUploadRunner {
                     }
                 }
                 ContentUploadState::Uploading => {
-                    let session = record.session().ok_or_else(|| {
-                        CloudFilesCoreError::invalid_content_upload(
-                            "uploading record omitted its backend session",
-                        )
-                    })?;
+                    let session = required_upload_session(
+                        &record,
+                        "uploading record omitted its backend session",
+                    )?;
                     session.validate_for(record.intent())?;
                     if session.accepted_offset() < record.intent().snapshot().size() {
                         let remaining =
                             record.intent().snapshot().size() - session.accepted_offset();
-                        let length = remaining.min(self.chunk_size);
+                        let length = remaining.min(self.chunk_size.get() as u64);
                         let bytes = source
                             .read_snapshot(
                                 record.intent().snapshot(),
@@ -504,14 +510,14 @@ impl ContentUploadRunner {
                             )
                             .await?;
                         validate_source_bytes(&bytes, length)?;
-                        let chunk = ContentUploadChunk::new(
+                        let chunk = ContentUploadChunk::from_validated_parts(
                             session.id().clone(),
                             record.intent().snapshot().generation(),
                             session.accepted_offset(),
                             bytes,
+                            length,
                             record.intent().snapshot().size(),
-                        )?;
-                        chunk.validate_for(record.intent(), session)?;
+                        );
                         let acknowledgement =
                             match backend.upload_chunk(record.intent(), &chunk).await {
                                 Ok(acknowledgement) => acknowledgement,
@@ -563,11 +569,10 @@ impl ContentUploadRunner {
                     }
                 }
                 ContentUploadState::RemoteCommitting => {
-                    let session = record.session().ok_or_else(|| {
-                        CloudFilesCoreError::invalid_content_upload(
-                            "remote-committing record omitted its backend session",
-                        )
-                    })?;
+                    let session = required_upload_session(
+                        &record,
+                        "remote-committing record omitted its backend session",
+                    )?;
                     let outcome = backend.commit_upload(record.intent(), session).await?;
                     let pending = matches!(outcome, MutationRemoteOutcome::RemoteOutcomeUnknown);
                     if observe_transition(
@@ -655,11 +660,7 @@ impl ContentUploadRunner {
                     }
                 }
                 ContentUploadState::Completed => {
-                    record.remote_outcome().ok_or_else(|| {
-                        CloudFilesCoreError::invalid_content_upload(
-                            "completed upload record omitted its remote outcome",
-                        )
-                    })?;
+                    validate_completed_upload(&record)?;
                     return Ok(ContentUploadRunOutcome::Completed);
                 }
             }
@@ -667,12 +668,28 @@ impl ContentUploadRunner {
     }
 }
 
+fn required_upload_session<'a>(
+    record: &'a ContentUploadRecord,
+    missing_reason: &'static str,
+) -> Result<&'a ContentUploadSession> {
+    record
+        .session()
+        .ok_or_else(|| CloudFilesCoreError::invalid_content_upload(missing_reason))
+}
+
+fn validate_completed_upload(record: &ContentUploadRecord) -> Result<()> {
+    record
+        .remote_outcome()
+        .ok_or_else(|| {
+            CloudFilesCoreError::invalid_content_upload(
+                "completed upload record omitted its remote outcome",
+            )
+        })
+        .map(|_| ())
+}
+
 fn validate_source_bytes(bytes: &Bytes, expected: u64) -> Result<()> {
-    let actual = u64::try_from(bytes.len()).map_err(|_| {
-        CloudFilesCoreError::invalid_content_upload(
-            "local upload source length cannot be represented as u64",
-        )
-    })?;
+    let actual = bytes.len() as u64;
     if actual != expected {
         return Err(CloudFilesCoreError::invalid_content_upload(
             "local upload source returned a partial or oversized range",
@@ -872,15 +889,15 @@ impl ContentUploadRecord {
         } else {
             ContentUploadState::RemoteOutcomeKnown
         };
-        if self.remote_outcome.as_ref() == Some(&outcome)
-            && matches!(
-                self.state,
-                ContentUploadState::RemoteOutcomeUnknown
-                    | ContentUploadState::RemoteOutcomeKnown
-                    | ContentUploadState::MetadataReconciled
-                    | ContentUploadState::Completed
-            )
-        {
+        let same_outcome = self.remote_outcome.as_ref() == Some(&outcome);
+        let outcome_is_already_durable = matches!(
+            self.state,
+            ContentUploadState::RemoteOutcomeUnknown
+                | ContentUploadState::RemoteOutcomeKnown
+                | ContentUploadState::MetadataReconciled
+                | ContentUploadState::Completed
+        );
+        if same_outcome && outcome_is_already_durable {
             return Ok(ContentUploadRecordTransition::AlreadyApplied);
         }
         if !matches!(
@@ -924,5 +941,75 @@ impl ContentUploadRecord {
                 "upload completion requires metadata reconciliation",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope, LocalContentReference,
+    };
+
+    fn intent() -> ContentUploadIntent {
+        let item_key = CloudItemKey::new(
+            CloudScope::new(
+                CloudNamespaceId::new("namespace").expect("namespace fixture should be valid"),
+                CloudRootId::new("root").expect("root fixture should be valid"),
+            ),
+            CloudItemId::new("item").expect("item fixture should be valid"),
+        );
+        let snapshot = LocalContentSnapshot::new(
+            item_key.clone(),
+            LocalContentGeneration::new(1).expect("local generation fixture should be valid"),
+            LocalContentReference::new("local-reference")
+                .expect("local reference fixture should be valid"),
+            4,
+            None,
+        );
+        ContentUploadIntent::new(
+            OperationId::new("operation").expect("operation fixture should be valid"),
+            IdempotencyKey::new("idempotency").expect("idempotency fixture should be valid"),
+            ContentCacheKey::new(
+                item_key,
+                crate::ContentRevision::from_slice(b"content-v1")
+                    .expect("content revision fixture should be valid"),
+            ),
+            snapshot,
+            ContentLeaseId::new("upload-lease").expect("lease fixture should be valid"),
+            SessionGeneration::new(1).expect("generation fixture should be valid"),
+        )
+        .expect("upload intent fixture should be valid")
+    }
+
+    #[test]
+    fn corrupted_runner_records_require_sessions_and_completed_outcomes() {
+        let mut record = ContentUploadRecord::persist(intent());
+        record.state = ContentUploadState::Uploading;
+        assert_eq!(
+            required_upload_session(&record, "uploading record omitted its backend session"),
+            Err(CloudFilesCoreError::InvalidContentUploadTransition {
+                reason: "uploading record omitted its backend session",
+            })
+        );
+
+        record.state = ContentUploadState::RemoteCommitting;
+        assert_eq!(
+            required_upload_session(
+                &record,
+                "remote-committing record omitted its backend session",
+            ),
+            Err(CloudFilesCoreError::InvalidContentUploadTransition {
+                reason: "remote-committing record omitted its backend session",
+            })
+        );
+
+        record.state = ContentUploadState::Completed;
+        assert_eq!(
+            validate_completed_upload(&record),
+            Err(CloudFilesCoreError::InvalidContentUploadTransition {
+                reason: "completed upload record omitted its remote outcome",
+            })
+        );
     }
 }

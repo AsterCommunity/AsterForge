@@ -1,5 +1,5 @@
 // Each integration-test crate imports the same fixture module but exercises a different subset.
-#![allow(
+#![expect(
     dead_code,
     reason = "shared test support exposes fixtures used by separate integration binaries"
 )]
