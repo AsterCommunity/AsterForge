@@ -748,33 +748,25 @@ enum UriSchemePolicy {
 struct UriValidationPolicy {
     schemes: UriSchemePolicy,
     allow_path_absolute: bool,
-    require_authority: bool,
-    reject_surrounding_whitespace: bool,
 }
 
 impl UriValidationPolicy {
     const ABSOLUTE: Self = Self {
         schemes: UriSchemePolicy::Any,
         allow_path_absolute: false,
-        require_authority: false,
-        reject_surrounding_whitespace: true,
     };
     const HTTP_ABSOLUTE: Self = Self {
         schemes: UriSchemePolicy::HttpOrHttps,
         allow_path_absolute: false,
-        require_authority: true,
-        reject_surrounding_whitespace: true,
     };
     const HTTP_OR_ABSOLUTE_PATH: Self = Self {
         schemes: UriSchemePolicy::HttpOrHttps,
         allow_path_absolute: true,
-        require_authority: true,
-        reject_surrounding_whitespace: true,
     };
 }
 
 fn uri_matches_policy(value: &str, policy: UriValidationPolicy) -> bool {
-    if policy.reject_surrounding_whitespace && value.trim() != value {
+    if value.trim() != value {
         return false;
     }
     if policy.allow_path_absolute && value.starts_with('/') && !value.starts_with("//") {
@@ -787,7 +779,7 @@ fn uri_matches_policy(value: &str, policy: UriValidationPolicy) -> bool {
         UriSchemePolicy::HttpOrHttps => value.parse::<http::Uri>().is_ok_and(|uri| {
             uri.scheme_str().is_some_and(|scheme| {
                 scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-            }) && (!policy.require_authority || uri.authority().is_some())
+            }) && uri.authority().is_some()
         }),
     }
 }
@@ -797,14 +789,9 @@ fn relexicalize(mut element: DavXmlElement, requested: &DavRequestedProperty) ->
     element.prefix.clone_from(&requested.prefix);
     element.namespace.clone_from(&requested.namespace);
     let inherited = std::mem::take(&mut element.namespaces);
-    for attribute in element.attributes.keys() {
-        if let Some((prefix, _)) = attribute.split_once(':')
-            && prefix != "xml"
-            && let Some(namespace) = inherited.get(prefix)
-        {
-            element
-                .namespaces
-                .insert(prefix.to_owned(), namespace.clone());
+    for (prefix, namespace) in inherited {
+        if prefix != "xml" && subtree_uses_prefix(&element, &prefix) {
+            element.namespaces.insert(prefix, namespace);
         }
     }
     if let Some(namespace) = &element.namespace {
@@ -814,6 +801,22 @@ fn relexicalize(mut element: DavXmlElement, requested: &DavRequestedProperty) ->
         );
     }
     element
+}
+
+fn subtree_uses_prefix(element: &DavXmlElement, prefix: &str) -> bool {
+    element.prefix.as_deref() == Some(prefix)
+        || element.attributes.keys().any(|attribute| {
+            attribute
+                .split_once(':')
+                .is_some_and(|(attribute_prefix, _)| attribute_prefix == prefix)
+        })
+        || element.children.iter().any(|child| match child {
+            DavXmlNode::Element(child) => subtree_uses_prefix(child, prefix),
+            DavXmlNode::Text(_)
+            | DavXmlNode::CData(_)
+            | DavXmlNode::Comment(_)
+            | DavXmlNode::ProcessingInstruction(_, _) => false,
+        })
 }
 
 fn append_all_dead_properties(dead: &[DavProp], output: &mut Vec<DavXmlElement>) {

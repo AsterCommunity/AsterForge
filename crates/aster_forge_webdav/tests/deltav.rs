@@ -105,6 +105,19 @@ fn report_selector_accepts_only_snapshot_discovered_dav_report_types() {
             name: "future-report".to_owned(),
         })
     );
+    let namespaced =
+        plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="urn:extension"/>"#)
+            .expect_err("extension namespace is not a DAV REPORT type");
+    assert_eq!(
+        namespaced.to_string(),
+        r#"unknown WebDAV REPORT type "version-tree" in namespace Some("urn:extension")"#
+    );
+    let unqualified = plan_report_request(&snapshot, br#"<version-tree/>"#)
+        .expect_err("an unqualified root is not a DAV REPORT type");
+    assert_eq!(
+        unqualified.to_string(),
+        r#"unknown WebDAV REPORT type "version-tree" in namespace None"#
+    );
     for body in [
         br#"<D:version-tree xmlns:D="DAV:"><D:prop/><D:prop/></D:version-tree>"#.as_slice(),
         br#"<D:version-tree xmlns:D="DAV:">text</D:version-tree>"#,

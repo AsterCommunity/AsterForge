@@ -9,7 +9,7 @@ use aster_forge_webdav::{
     DavLivePropertyProvider, DavLivePropertyRequirements, DavLivePropertyValueSnapshot,
     DavLockingCapability, DavMethod, DavMethodSet, DavProp, DavPropfindRequest, DavQuotaSnapshot,
     DavReportType, DavRequestedProperty, DavResourceState, DavResponseBody, DavSearchCapabilities,
-    DavSearchGrammar, DavXmlElement, DavXmlError, build_live_propfind_item,
+    DavSearchGrammar, DavXmlElement, DavXmlError, DavXmlNode, build_live_propfind_item,
     build_live_propfind_item_with_provider, build_proppatch_item, dav_property_name_element,
     dav_property_text_element, format_creation_date, is_protected_live_property,
     live_property_requirements, plan_atomic_proppatch, plan_capabilities,
@@ -487,8 +487,19 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
         .namespaces
         .insert("keep".to_owned(), "urn:attribute".to_owned());
     extension
+        .namespaces
+        .insert("child".to_owned(), "urn:child".to_owned());
+    extension
+        .namespaces
+        .insert("meta".to_owned(), "urn:metadata".to_owned());
+    extension
         .attributes
         .insert("keep:flag".to_owned(), "yes".to_owned());
+    let mut child = DavXmlElement::new("child:value");
+    child
+        .attributes
+        .insert("meta:kind".to_owned(), "nested".to_owned());
+    extension.children.push(DavXmlNode::Element(child));
     let values = Values {
         quota: Some(DavQuotaSnapshot {
             used_bytes: 400,
@@ -531,6 +542,16 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
     assert!(!client_xml.contains("urn:stale"), "{client_xml}");
     assert!(
         client_xml.contains("xmlns:keep=\"urn:attribute\""),
+        "{client_xml}"
+    );
+    assert!(client_xml.contains("<child:value"), "{client_xml}");
+    assert!(client_xml.contains("meta:kind=\"nested\""), "{client_xml}");
+    assert!(
+        client_xml.contains("xmlns:child=\"urn:child\""),
+        "{client_xml}"
+    );
+    assert!(
+        client_xml.contains("xmlns:meta=\"urn:metadata\""),
         "{client_xml}"
     );
     let custom_xml = String::from_utf8(

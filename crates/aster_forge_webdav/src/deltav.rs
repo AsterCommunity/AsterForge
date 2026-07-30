@@ -17,7 +17,7 @@ pub enum DavReportPlanError {
     #[error(transparent)]
     Xml(#[from] DavXmlError),
     /// The REPORT root is not a standard type known to Forge.
-    #[error("unknown WebDAV REPORT type: {name}")]
+    #[error("unknown WebDAV REPORT type {name:?} in namespace {namespace:?}")]
     UnknownType {
         namespace: Option<String>,
         name: String,
@@ -29,8 +29,12 @@ pub enum DavReportPlanError {
 
 /// Product-owned mapping for REPORT selection errors that are not XML syntax failures.
 pub trait DavReportErrorResponsePolicy {
+    /// Maps an unknown REPORT QName; `None` means the request root had no namespace.
+    ///
+    /// Both values come from the request, so the product decides whether to echo them to clients.
     fn unknown_type(&self, namespace: Option<&str>, name: &str) -> DavResponse;
 
+    /// Maps a known REPORT type that is unavailable for the target resource's capabilities.
     fn not_available(&self, report: DavReportType) -> DavResponse;
 }
 

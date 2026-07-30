@@ -1177,21 +1177,28 @@ fn validate_search_grammars(grammars: &[DavSearchGrammar]) -> Result<(), DavCapa
     Ok(())
 }
 
+const LIVE_PROPERTY_SET_WORDS: usize = 2;
+const LIVE_PROPERTY_SET_CAPACITY: usize = LIVE_PROPERTY_SET_WORDS * u64::BITS as usize;
+const REPORT_SET_CAPACITY: usize = u16::BITS as usize;
+
+const _: () = assert!(DavLiveProperty::COUNT <= LIVE_PROPERTY_SET_CAPACITY);
+const _: () = assert!(DavReportType::COUNT <= REPORT_SET_CAPACITY);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct DavLivePropertySet([u64; 2]);
+struct DavLivePropertySet([u64; LIVE_PROPERTY_SET_WORDS]);
 
 impl DavLivePropertySet {
     const fn empty() -> Self {
-        Self([0; 2])
+        Self([0; LIVE_PROPERTY_SET_WORDS])
     }
 
     fn insert(&mut self, property: DavLiveProperty) {
-        let index = property as usize;
+        let index = property.index();
         self.0[index / 64] |= 1u64 << (index % 64);
     }
 
     const fn contains(self, property: DavLiveProperty) -> bool {
-        let index = property as usize;
+        let index = property.index();
         self.0[index / 64] & (1u64 << (index % 64)) != 0
     }
 }

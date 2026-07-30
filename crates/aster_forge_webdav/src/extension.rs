@@ -227,224 +227,132 @@ pub struct DavExtensionMethod {
     pub body: DavExtensionBodyKind,
 }
 
-/// Standard live properties that can be discovered through Forge's catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum DavLiveProperty {
-    CreationDate,
-    DisplayName,
-    GetContentLanguage,
-    GetContentLength,
-    GetContentType,
-    GetEtag,
-    GetLastModified,
-    LockDiscovery,
-    ResourceType,
-    SupportedLock,
-    AlternateUriSet,
-    PrincipalUrl,
-    GroupMemberSet,
-    GroupMembership,
-    Owner,
-    Group,
-    SupportedPrivilegeSet,
-    CurrentUserPrivilegeSet,
-    Acl,
-    AclRestrictions,
-    InheritedAclSet,
-    PrincipalCollectionSet,
-    Comment,
-    CreatorDisplayName,
-    SupportedMethodSet,
-    SupportedLivePropertySet,
-    SupportedReportSet,
-    CheckedIn,
-    AutoVersion,
-    CheckedOut,
-    PredecessorSet,
-    SuccessorSet,
-    CheckoutSet,
-    VersionName,
-    CheckoutFork,
-    CheckinFork,
-    VersionSet,
-    RootVersion,
-    VersionHistory,
-    WorkspaceCheckoutSet,
-    Workspace,
-    LabelNameSet,
-    AutoUpdate,
-    MergeSet,
-    AutoMergeSet,
-    BaselineControlledCollection,
-    SubbaselineSet,
-    BaselineCollection,
-    VersionControlledConfiguration,
-    BaselineControlledCollectionSet,
-    ActivityVersionSet,
-    ActivityCheckoutSet,
-    SubactivitySet,
-    CurrentWorkspaceSet,
-    ActivitySet,
-    Unreserved,
-    CurrentActivitySet,
-    EclipsedSet,
-    VersionControlledBindingSet,
-    SupportedQueryGrammarSet,
-    QuotaAvailableBytes,
-    QuotaUsedBytes,
-    SyncToken,
-    CurrentUserPrincipal,
-    OrderingType,
-    RedirectLifetime,
-    RefTarget,
-    ResourceId,
-    ParentSet,
-    AddMember,
+macro_rules! protocol_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $($variant:ident => $local_name:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u8)]
+        pub enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            /// Number of variants in this protocol enum.
+            pub const COUNT: usize = [$(Self::$variant),+].len();
+
+            /// Values in canonical discovery and parsing order.
+            pub const ALL: [Self; Self::COUNT] = [$(Self::$variant),+];
+
+            pub(crate) const fn index(self) -> usize {
+                self as usize
+            }
+
+            /// DAV namespace local name.
+            #[must_use]
+            pub const fn local_name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $local_name),+
+                }
+            }
+        }
+    };
 }
 
-impl DavLiveProperty {
-    /// DAV namespace local name.
-    #[must_use]
-    pub const fn local_name(self) -> &'static str {
-        match self {
-            Self::CreationDate => "creationdate",
-            Self::DisplayName => "displayname",
-            Self::GetContentLanguage => "getcontentlanguage",
-            Self::GetContentLength => "getcontentlength",
-            Self::GetContentType => "getcontenttype",
-            Self::GetEtag => "getetag",
-            Self::GetLastModified => "getlastmodified",
-            Self::LockDiscovery => "lockdiscovery",
-            Self::ResourceType => "resourcetype",
-            Self::SupportedLock => "supportedlock",
-            Self::AlternateUriSet => "alternate-URI-set",
-            Self::PrincipalUrl => "principal-URL",
-            Self::GroupMemberSet => "group-member-set",
-            Self::GroupMembership => "group-membership",
-            Self::Owner => "owner",
-            Self::Group => "group",
-            Self::SupportedPrivilegeSet => "supported-privilege-set",
-            Self::CurrentUserPrivilegeSet => "current-user-privilege-set",
-            Self::Acl => "acl",
-            Self::AclRestrictions => "acl-restrictions",
-            Self::InheritedAclSet => "inherited-acl-set",
-            Self::PrincipalCollectionSet => "principal-collection-set",
-            Self::Comment => "comment",
-            Self::CreatorDisplayName => "creator-displayname",
-            Self::SupportedMethodSet => "supported-method-set",
-            Self::SupportedLivePropertySet => "supported-live-property-set",
-            Self::SupportedReportSet => "supported-report-set",
-            Self::CheckedIn => "checked-in",
-            Self::AutoVersion => "auto-version",
-            Self::CheckedOut => "checked-out",
-            Self::PredecessorSet => "predecessor-set",
-            Self::SuccessorSet => "successor-set",
-            Self::CheckoutSet => "checkout-set",
-            Self::VersionName => "version-name",
-            Self::CheckoutFork => "checkout-fork",
-            Self::CheckinFork => "checkin-fork",
-            Self::VersionSet => "version-set",
-            Self::RootVersion => "root-version",
-            Self::VersionHistory => "version-history",
-            Self::WorkspaceCheckoutSet => "workspace-checkout-set",
-            Self::Workspace => "workspace",
-            Self::LabelNameSet => "label-name-set",
-            Self::AutoUpdate => "auto-update",
-            Self::MergeSet => "merge-set",
-            Self::AutoMergeSet => "auto-merge-set",
-            Self::BaselineControlledCollection => "baseline-controlled-collection",
-            Self::SubbaselineSet => "subbaseline-set",
-            Self::BaselineCollection => "baseline-collection",
-            Self::VersionControlledConfiguration => "version-controlled-configuration",
-            Self::BaselineControlledCollectionSet => "baseline-controlled-collection-set",
-            Self::ActivityVersionSet => "activity-version-set",
-            Self::ActivityCheckoutSet => "activity-checkout-set",
-            Self::SubactivitySet => "subactivity-set",
-            Self::CurrentWorkspaceSet => "current-workspace-set",
-            Self::ActivitySet => "activity-set",
-            Self::Unreserved => "unreserved",
-            Self::CurrentActivitySet => "current-activity-set",
-            Self::EclipsedSet => "eclipsed-set",
-            Self::VersionControlledBindingSet => "version-controlled-binding-set",
-            Self::SupportedQueryGrammarSet => "supported-query-grammar-set",
-            Self::QuotaAvailableBytes => "quota-available-bytes",
-            Self::QuotaUsedBytes => "quota-used-bytes",
-            Self::SyncToken => "sync-token",
-            Self::CurrentUserPrincipal => "current-user-principal",
-            Self::OrderingType => "ordering-type",
-            Self::RedirectLifetime => "redirect-lifetime",
-            Self::RefTarget => "reftarget",
-            Self::ResourceId => "resource-id",
-            Self::ParentSet => "parent-set",
-            Self::AddMember => "add-member",
-        }
+protocol_enum! {
+    /// Standard live properties that can be discovered through Forge's catalog.
+    pub enum DavLiveProperty {
+        CreationDate => "creationdate",
+        DisplayName => "displayname",
+        GetContentLanguage => "getcontentlanguage",
+        GetContentLength => "getcontentlength",
+        GetContentType => "getcontenttype",
+        GetEtag => "getetag",
+        GetLastModified => "getlastmodified",
+        LockDiscovery => "lockdiscovery",
+        ResourceType => "resourcetype",
+        SupportedLock => "supportedlock",
+        AlternateUriSet => "alternate-URI-set",
+        PrincipalUrl => "principal-URL",
+        GroupMemberSet => "group-member-set",
+        GroupMembership => "group-membership",
+        Owner => "owner",
+        Group => "group",
+        SupportedPrivilegeSet => "supported-privilege-set",
+        CurrentUserPrivilegeSet => "current-user-privilege-set",
+        Acl => "acl",
+        AclRestrictions => "acl-restrictions",
+        InheritedAclSet => "inherited-acl-set",
+        PrincipalCollectionSet => "principal-collection-set",
+        Comment => "comment",
+        CreatorDisplayName => "creator-displayname",
+        SupportedMethodSet => "supported-method-set",
+        SupportedLivePropertySet => "supported-live-property-set",
+        SupportedReportSet => "supported-report-set",
+        CheckedIn => "checked-in",
+        AutoVersion => "auto-version",
+        CheckedOut => "checked-out",
+        PredecessorSet => "predecessor-set",
+        SuccessorSet => "successor-set",
+        CheckoutSet => "checkout-set",
+        VersionName => "version-name",
+        CheckoutFork => "checkout-fork",
+        CheckinFork => "checkin-fork",
+        VersionSet => "version-set",
+        RootVersion => "root-version",
+        VersionHistory => "version-history",
+        WorkspaceCheckoutSet => "workspace-checkout-set",
+        Workspace => "workspace",
+        LabelNameSet => "label-name-set",
+        AutoUpdate => "auto-update",
+        MergeSet => "merge-set",
+        AutoMergeSet => "auto-merge-set",
+        BaselineControlledCollection => "baseline-controlled-collection",
+        SubbaselineSet => "subbaseline-set",
+        BaselineCollection => "baseline-collection",
+        VersionControlledConfiguration => "version-controlled-configuration",
+        BaselineControlledCollectionSet => "baseline-controlled-collection-set",
+        ActivityVersionSet => "activity-version-set",
+        ActivityCheckoutSet => "activity-checkout-set",
+        SubactivitySet => "subactivity-set",
+        CurrentWorkspaceSet => "current-workspace-set",
+        ActivitySet => "activity-set",
+        Unreserved => "unreserved",
+        CurrentActivitySet => "current-activity-set",
+        EclipsedSet => "eclipsed-set",
+        VersionControlledBindingSet => "version-controlled-binding-set",
+        SupportedQueryGrammarSet => "supported-query-grammar-set",
+        QuotaAvailableBytes => "quota-available-bytes",
+        QuotaUsedBytes => "quota-used-bytes",
+        SyncToken => "sync-token",
+        CurrentUserPrincipal => "current-user-principal",
+        OrderingType => "ordering-type",
+        RedirectLifetime => "redirect-lifetime",
+        RefTarget => "reftarget",
+        ResourceId => "resource-id",
+        ParentSet => "parent-set",
+        AddMember => "add-member",
     }
 }
 
-/// REPORT types contributed by RFC packages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DavReportType {
-    VersionTree,
-    ExpandProperty,
-    LocateByHistory,
-    MergePreview,
-    CompareBaseline,
-    LatestActivityVersion,
-    AclPrincipalPropSet,
-    PrincipalMatch,
-    PrincipalPropertySearch,
-    PrincipalSearchPropertySet,
-    SyncCollection,
-}
-
-impl DavReportType {
-    /// REPORT types in canonical discovery and parsing order.
-    pub const ALL: [Self; 11] = [
-        Self::VersionTree,
-        Self::ExpandProperty,
-        Self::LocateByHistory,
-        Self::MergePreview,
-        Self::CompareBaseline,
-        Self::LatestActivityVersion,
-        Self::AclPrincipalPropSet,
-        Self::PrincipalMatch,
-        Self::PrincipalPropertySearch,
-        Self::PrincipalSearchPropertySet,
-        Self::SyncCollection,
-    ];
-
-    pub(crate) const fn index(self) -> u32 {
-        match self {
-            Self::VersionTree => 0,
-            Self::ExpandProperty => 1,
-            Self::LocateByHistory => 2,
-            Self::MergePreview => 3,
-            Self::CompareBaseline => 4,
-            Self::LatestActivityVersion => 5,
-            Self::AclPrincipalPropSet => 6,
-            Self::PrincipalMatch => 7,
-            Self::PrincipalPropertySearch => 8,
-            Self::PrincipalSearchPropertySet => 9,
-            Self::SyncCollection => 10,
-        }
-    }
-
-    #[must_use]
-    pub const fn local_name(self) -> &'static str {
-        match self {
-            Self::VersionTree => "version-tree",
-            Self::ExpandProperty => "expand-property",
-            Self::LocateByHistory => "locate-by-history",
-            Self::MergePreview => "merge-preview",
-            Self::CompareBaseline => "compare-baseline",
-            Self::LatestActivityVersion => "latest-activity-version",
-            Self::AclPrincipalPropSet => "acl-principal-prop-set",
-            Self::PrincipalMatch => "principal-match",
-            Self::PrincipalPropertySearch => "principal-property-search",
-            Self::PrincipalSearchPropertySet => "principal-search-property-set",
-            Self::SyncCollection => "sync-collection",
-        }
+protocol_enum! {
+    /// REPORT types contributed by RFC packages.
+    pub enum DavReportType {
+        VersionTree => "version-tree",
+        ExpandProperty => "expand-property",
+        LocateByHistory => "locate-by-history",
+        MergePreview => "merge-preview",
+        CompareBaseline => "compare-baseline",
+        LatestActivityVersion => "latest-activity-version",
+        AclPrincipalPropSet => "acl-principal-prop-set",
+        PrincipalMatch => "principal-match",
+        PrincipalPropertySearch => "principal-property-search",
+        PrincipalSearchPropertySet => "principal-search-property-set",
+        SyncCollection => "sync-collection",
     }
 }
 

@@ -165,7 +165,7 @@ pub use traversal::{
 pub use xml::{
     DavLockRequestBody, DavPropertyPatchRequest, DavPropertyPatchValue, DavPropfindRequest,
     DavRequestedProperty, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
-    parse_propfind_request, parse_proppatch_request, parse_report_root,
+    parse_propfind_request, parse_proppatch_request,
 };
 pub use xml_response::{
     DavErrorCondition, DavLockXml, DavMultiStatusItem, DavPropStat, DavVersionXml,
