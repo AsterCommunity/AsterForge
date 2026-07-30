@@ -1,9 +1,9 @@
 use std::io::{self, Cursor, Read};
 
 use aster_forge_webdav::{
-    DavPropfindRequest, DavVersionTreeReportError, DavXmlElement, DavXmlError, DavXmlNode,
-    parse_lock_request, parse_propfind_request, parse_proppatch_request, parse_report_root,
-    validate_version_control_request, validate_version_tree_report,
+    DavPropfindRequest, DavXmlElement, DavXmlError, DavXmlNode, parse_lock_request,
+    parse_propfind_request, parse_proppatch_request, parse_report_root,
+    validate_version_control_request,
 };
 use aster_forge_xml::{DEFAULT_XML_MAX_DEPTH, XmlSafetyPolicy};
 
@@ -30,10 +30,7 @@ fn lock_parser(body: &[u8]) -> Result<(), DavXmlError> {
 }
 
 fn report_parser(body: &[u8]) -> Result<(), DavXmlError> {
-    validate_version_tree_report(body).map_err(|error| match error {
-        DavVersionTreeReportError::Xml(error) => error,
-        DavVersionTreeReportError::Unsupported { .. } => DavXmlError::InvalidGrammar,
-    })
+    parse_report_root(body).map(|_| ())
 }
 
 fn version_control_parser(body: &[u8]) -> Result<(), DavXmlError> {

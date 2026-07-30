@@ -1,22 +1,32 @@
-//! Resource-aware WebDAV capability declarations and response snapshots.
+//! Resource-aware WebDAV capability declarations and validated discovery snapshots.
 
 use std::marker::PhantomData;
 
+use aster_forge_utils::url::parse_absolute_url;
+use aster_forge_xml::is_valid_xml_local_name;
 use headers::Mime;
 use http::HeaderValue;
 
-use crate::{DavBackendError, DavMethod, DavPath};
+use crate::extension::{
+    DavExtensionBodyKind, DavExtensionPackage, DavExtensionSet, DavLiveProperty, DavPreferenceSet,
+    DavReportType, extension_body_kind, extension_methods,
+};
+use crate::request::{DavBodyPolicy, DavMethod, DavMethodSet};
+use crate::{DavBackendError, DavPath};
 
-/// The resource state visible to the WebDAV capability planner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Resource state visible to the capability planner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DavResourceState {
     Unmapped,
     File,
     Collection,
     MountRoot,
+    Principal,
+    RedirectReference,
+    AddMemberEndpoint,
 }
 
-/// A request target supplied to a capability provider.
+/// Request target supplied to a capability provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilityTarget {
     pub path: DavPath,
@@ -46,13 +56,6 @@ pub enum DavLockingCapability {
     Class2,
 }
 
-/// RFC 3253 core versioning compliance advertised for a resource.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DavVersioningCapability {
-    Disabled,
-    Core,
-}
-
 /// Optional non-standard compatibility signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavCompatibilityCapabilities {
@@ -62,66 +65,55 @@ pub struct DavCompatibilityCapabilities {
 /// Conditional request policy required before a partial write can execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavWritePrecondition {
-    /// Apply the ordinary RFC 9110 conditional request rules when headers are present.
     Optional,
-    /// Require an `If-Match` field containing at least one strong entity-tag.
     RequireStrongIfMatch,
 }
 
 /// RFC 9110 partial PUT support negotiated by private agreement with the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DavPartialPutCapability {
-    /// Reject every PUT request carrying `Content-Range`.
     #[default]
     Disabled,
-    /// Accept a single `bytes` content range under the declared precondition policy.
-    ContentRangeBytes { precondition: DavWritePrecondition },
+    ContentRangeBytes {
+        precondition: DavWritePrecondition,
+    },
 }
 
 /// Body handling selected by one RFC 5789 patch document format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavPatchBodyPolicy {
-    /// Collect at most the declared number of bytes before invoking product code.
     Bounded { maximum: usize },
-    /// Leave the body as a stream for the product patch adapter.
     Stream,
 }
 
 /// One statically declared RFC 5789 patch document format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavPatchFormat {
-    /// Media type advertised through `Accept-Patch` and matched against `Content-Type`.
-    ///
-    /// Matching and duplicate detection use equality of the complete parsed [`Mime`], including
-    /// every declared parameter. Missing, additional, or different parameter values do not match.
+    /// Complete media type. Parameters participate in exact matching and duplicate detection.
     pub media_type: &'static str,
-    /// Transport body contract for this patch document format.
     pub body_policy: DavPatchBodyPolicy,
-    /// Conditional request policy required by this format's base-point semantics.
     pub precondition: DavWritePrecondition,
 }
 
 /// RFC 5789 PATCH capability for one resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DavPatchCapability {
-    /// PATCH is unavailable and must not appear in `Allow` or `Accept-Patch`.
     #[default]
     Disabled,
-    /// PATCH is available for the statically declared patch document formats.
     Formats(&'static [DavPatchFormat]),
 }
 
 /// Explicitly named private range-update compatibility surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DavPrivateUpdateRangeCapability {
-    /// Reject `X-Update-Range` instead of treating it as an ordinary PUT.
     #[default]
     Disabled,
-    /// Pass one validated `X-Update-Range` field to the product adapter.
-    XUpdateRange { precondition: DavWritePrecondition },
+    XUpdateRange {
+        precondition: DavWritePrecondition,
+    },
 }
 
-/// Mutation capabilities that are deliberately separate from ordinary full-replacement PUT.
+/// Mutation capabilities deliberately separate from ordinary replacement PUT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavWriteCapabilities {
     pub partial_put: DavPartialPutCapability,
@@ -129,83 +121,148 @@ pub struct DavWriteCapabilities {
     pub private_update_range: DavPrivateUpdateRangeCapability,
 }
 
-/// RFC compliance classes represented by the declaration.
+/// RFC 4918 compliance classes represented by a runtime declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavComplianceClasses {
     pub class1: bool,
+    /// RFC 4918 class 3 requires class 1 and does not imply class 2 locking.
+    pub class3: bool,
 }
 
-/// Product implementation provides the RFC 4918 class 1 backend contract.
+/// Resource-aware RFC 5323 query grammar discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DavSearchCapabilities {
+    /// Static grammar descriptors; SEARCH requires [`DavSearchGrammar::BASICSEARCH`].
+    pub grammars: &'static [DavSearchGrammar],
+}
+
+/// One RFC 5323 query grammar's HTTP identifier and XML element type.
+///
+/// RFC 5323 explicitly states that the DASL coded-URL does not necessarily correspond to the XML
+/// element namespace and local name. Keeping all three fields prevents discovery responses from
+/// guessing an XML QName from a URI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DavSearchGrammar {
+    /// Absolute-URI rendered inside angle brackets in the `DASL` response header.
+    pub coded_url: &'static str,
+    /// Namespace URI reference of the grammar element; an empty string means no namespace.
+    pub xml_namespace: &'static str,
+    /// XML local name of the grammar element.
+    pub xml_local_name: &'static str,
+}
+
+impl DavSearchGrammar {
+    /// Mandatory RFC 5323 basic search grammar.
+    pub const BASICSEARCH: Self = Self {
+        coded_url: "DAV:basicsearch",
+        xml_namespace: "DAV:",
+        xml_local_name: "basicsearch",
+    };
+
+    /// Declares a static SEARCH grammar without a runtime registry or per-request allocation.
+    #[must_use]
+    pub const fn new(
+        coded_url: &'static str,
+        xml_namespace: &'static str,
+        xml_local_name: &'static str,
+    ) -> Self {
+        Self {
+            coded_url,
+            xml_namespace,
+            xml_local_name,
+        }
+    }
+}
+
+/// Product implementation provides RFC 4918 class 1.
 pub trait DavClass1Support: Send + Sync {}
-
-/// Product implementation provides the complete RFC 4918 class 2 locking contract.
+/// Product implementation provides RFC 4918 class 2 locking.
 pub trait DavClass2Support: DavClass1Support {}
+/// Product implementation provides RFC 4918 class 3 revised semantics.
+///
+/// ```compile_fail
+/// use aster_forge_webdav::DavClass3Support;
+/// struct MissingClassOne;
+/// impl DavClass3Support for MissingClassOne {}
+/// ```
+pub trait DavClass3Support: DavClass1Support {}
 
-/// Product implementation provides the complete RFC 3253 core versioning contract.
-pub trait DavCoreVersioningSupport: DavClass1Support {}
+/// Product implementation provides the complete RFC 3744 package.
+pub trait DavAccessControlSupport: DavClass1Support {}
+/// Product implementation provides RFC 3253 version-control.
+pub trait DavVersionControlSupport: DavClass1Support {}
+pub trait DavCheckoutInPlaceSupport: DavVersionControlSupport {}
+pub trait DavVersionHistorySupport: DavVersionControlSupport {}
+/// Complete workspace support includes checkout-in-place and version-history at compile time.
+///
+/// ```compile_fail
+/// use aster_forge_webdav::{DavClass1Support, DavVersionControlSupport, DavWorkspaceSupport};
+/// struct IncompleteWorkspace;
+/// impl DavClass1Support for IncompleteWorkspace {}
+/// impl DavVersionControlSupport for IncompleteWorkspace {}
+/// impl DavWorkspaceSupport for IncompleteWorkspace {}
+/// ```
+pub trait DavWorkspaceSupport: DavCheckoutInPlaceSupport + DavVersionHistorySupport {}
+pub trait DavUpdateSupport: DavVersionControlSupport {}
+pub trait DavLabelSupport: DavVersionControlSupport {}
+pub trait DavWorkingResourceSupport: DavVersionControlSupport {}
+pub trait DavMergeSupport: DavVersionControlSupport {}
+pub trait DavBaselineSupport: DavVersionControlSupport {}
+pub trait DavActivitySupport: DavVersionControlSupport {}
+pub trait DavVersionControlledCollectionSupport: DavVersionControlSupport {}
+pub trait DavSearchSupport: DavClass1Support {}
+pub trait DavQuotaSupport: DavClass1Support {}
+pub trait DavCollectionSyncSupport: DavClass1Support {}
+pub trait DavExtendedMkcolSupport: DavClass1Support {}
+pub trait DavCurrentPrincipalSupport: DavClass1Support {}
+pub trait DavOrderedCollectionsSupport: DavClass1Support {}
+pub trait DavRedirectReferencesSupport: DavClass1Support {}
+pub trait DavBindingsSupport: DavClass1Support {}
+pub trait DavAddMemberSupport: DavClass1Support {}
+pub trait DavPreferSupport: DavClass1Support {}
 
-/// Product implementation provides the storage contract required by partial PUT.
 pub trait DavPartialPutSupport: Send + Sync {}
-
-/// Product implementation provides atomic application for its declared PATCH formats.
 pub trait DavPatchSupport: Send + Sync {}
-
-/// Product implementation provides the named private `X-Update-Range` contract.
 pub trait DavPrivateUpdateRangeSupport: Send + Sync {}
 
 mod sealed {
     pub trait Sealed {}
+    pub trait ExtensionSealed {}
+    pub trait Class1Profile<Provider: ?Sized> {}
 }
 
 /// Static maximum capability profile selected by a product provider.
 pub trait DavCapabilityProfile<Provider: ?Sized>: sealed::Sealed {
     const CLASS1: bool;
     const CLASS2: bool;
-    const VERSION_CONTROL: bool;
+    const CLASS3: bool;
+    const EXTENSIONS: DavExtensionSet;
     const PARTIAL_PUT: bool;
     const PATCH: bool;
     const PRIVATE_UPDATE_RANGE: bool;
 }
 
-/// Profile for targets that expose HTTP methods without DAV compliance.
 pub struct DavNonDavProfile;
-
-/// Profile for RFC 4918 class 1 implementations.
 pub struct DavClass1Profile;
-
-/// Profile for complete RFC 4918 class 2 implementations.
 pub struct DavClass2Profile;
-
-/// Profile for RFC 4918 class 1 plus RFC 3253 core versioning.
-pub struct DavClass1VersioningProfile;
-
-/// Profile for RFC 4918 class 2 plus RFC 3253 core versioning.
-pub struct DavClass2VersioningProfile;
-
-/// Adds partial PUT to another static capability profile.
-pub struct DavWithPartialPut<Base>(PhantomData<fn() -> Base>);
-
-/// Adds RFC 5789 PATCH to another static capability profile.
-pub struct DavWithPatch<Base>(PhantomData<fn() -> Base>);
-
-/// Adds the private `X-Update-Range` surface to another static capability profile.
-pub struct DavWithPrivateUpdateRange<Base>(PhantomData<fn() -> Base>);
+/// RFC 4918 classes `1, 3`, without class 2 locking.
+pub struct DavClass3Profile;
+/// RFC 4918 classes `1, 2, 3`.
+pub struct DavClass2And3Profile;
 
 impl sealed::Sealed for DavNonDavProfile {}
 impl sealed::Sealed for DavClass1Profile {}
 impl sealed::Sealed for DavClass2Profile {}
-impl sealed::Sealed for DavClass1VersioningProfile {}
-impl sealed::Sealed for DavClass2VersioningProfile {}
-impl<Base: sealed::Sealed> sealed::Sealed for DavWithPartialPut<Base> {}
-impl<Base: sealed::Sealed> sealed::Sealed for DavWithPatch<Base> {}
-impl<Base: sealed::Sealed> sealed::Sealed for DavWithPrivateUpdateRange<Base> {}
+impl sealed::Sealed for DavClass3Profile {}
+impl sealed::Sealed for DavClass2And3Profile {}
 
-macro_rules! static_profile {
-    ($profile:ty, $class1:expr, $class2:expr, $version_control:expr) => {
-        impl<Provider: ?Sized> DavCapabilityProfile<Provider> for $profile {
+macro_rules! base_profile {
+    ($profile:ty, $provider:path, $class1:expr, $class2:expr, $class3:expr) => {
+        impl<Provider: $provider + ?Sized> DavCapabilityProfile<Provider> for $profile {
             const CLASS1: bool = $class1;
             const CLASS2: bool = $class2;
-            const VERSION_CONTROL: bool = $version_control;
+            const CLASS3: bool = $class3;
+            const EXTENSIONS: DavExtensionSet = DavExtensionSet::empty();
             const PARTIAL_PUT: bool = false;
             const PATCH: bool = false;
             const PRIVATE_UPDATE_RANGE: bool = false;
@@ -213,169 +270,293 @@ macro_rules! static_profile {
     };
 }
 
-static_profile!(DavNonDavProfile, false, false, false);
-
-impl<Provider: DavClass1Support + ?Sized> DavCapabilityProfile<Provider> for DavClass1Profile {
-    const CLASS1: bool = true;
+impl<Provider: ?Sized> DavCapabilityProfile<Provider> for DavNonDavProfile {
+    const CLASS1: bool = false;
     const CLASS2: bool = false;
-    const VERSION_CONTROL: bool = false;
+    const CLASS3: bool = false;
+    const EXTENSIONS: DavExtensionSet = DavExtensionSet::empty();
     const PARTIAL_PUT: bool = false;
     const PATCH: bool = false;
     const PRIVATE_UPDATE_RANGE: bool = false;
 }
+base_profile!(DavClass1Profile, DavClass1Support, true, false, false);
+base_profile!(DavClass2Profile, DavClass2Support, true, true, false);
+base_profile!(DavClass3Profile, DavClass3Support, true, false, true);
 
-impl<Provider: DavClass2Support + ?Sized> DavCapabilityProfile<Provider> for DavClass2Profile {
-    const CLASS1: bool = true;
-    const CLASS2: bool = true;
-    const VERSION_CONTROL: bool = false;
-    const PARTIAL_PUT: bool = false;
-    const PATCH: bool = false;
-    const PRIVATE_UPDATE_RANGE: bool = false;
-}
+impl<Provider: DavClass1Support + ?Sized> sealed::Class1Profile<Provider> for DavClass1Profile {}
+impl<Provider: DavClass2Support + ?Sized> sealed::Class1Profile<Provider> for DavClass2Profile {}
+impl<Provider: DavClass3Support + ?Sized> sealed::Class1Profile<Provider> for DavClass3Profile {}
 
-impl<Provider: DavCoreVersioningSupport + ?Sized> DavCapabilityProfile<Provider>
-    for DavClass1VersioningProfile
-{
-    const CLASS1: bool = true;
-    const CLASS2: bool = false;
-    const VERSION_CONTROL: bool = true;
-    const PARTIAL_PUT: bool = false;
-    const PATCH: bool = false;
-    const PRIVATE_UPDATE_RANGE: bool = false;
-}
-
-impl<Provider: DavClass2Support + DavCoreVersioningSupport + ?Sized> DavCapabilityProfile<Provider>
-    for DavClass2VersioningProfile
+impl<Provider: DavClass2Support + DavClass3Support + ?Sized> DavCapabilityProfile<Provider>
+    for DavClass2And3Profile
 {
     const CLASS1: bool = true;
     const CLASS2: bool = true;
-    const VERSION_CONTROL: bool = true;
+    const CLASS3: bool = true;
+    const EXTENSIONS: DavExtensionSet = DavExtensionSet::empty();
     const PARTIAL_PUT: bool = false;
     const PATCH: bool = false;
     const PRIVATE_UPDATE_RANGE: bool = false;
 }
 
-impl<Provider, Base> DavCapabilityProfile<Provider> for DavWithPartialPut<Base>
+impl<Provider: DavClass2Support + DavClass3Support + ?Sized> sealed::Class1Profile<Provider>
+    for DavClass2And3Profile
+{
+}
+
+/// Adds one statically implemented RFC package to another profile.
+pub struct DavWithExtension<Base, Extension>(PhantomData<fn() -> (Base, Extension)>);
+
+impl<Base: sealed::Sealed, Extension> sealed::Sealed for DavWithExtension<Base, Extension> {}
+
+/// Sealed link between a package marker and its product implementation trait.
+pub trait DavExtensionMarker<Provider: ?Sized>: sealed::ExtensionSealed {
+    const PACKAGES: DavExtensionSet;
+}
+
+macro_rules! extension_marker {
+    ($marker:ident, $support:path, $package:ident $(, $required:ident)*) => {
+        pub struct $marker;
+        impl sealed::ExtensionSealed for $marker {}
+        impl<Provider: $support + ?Sized> DavExtensionMarker<Provider> for $marker {
+            const PACKAGES: DavExtensionSet = DavExtensionSet::from_packages(&[
+                $(DavExtensionPackage::$required,)*
+                DavExtensionPackage::$package,
+            ]);
+        }
+    };
+}
+
+extension_marker!(
+    DavAccessControlExtension,
+    DavAccessControlSupport,
+    AccessControl
+);
+extension_marker!(
+    DavVersionControlExtension,
+    DavVersionControlSupport,
+    VersionControl
+);
+extension_marker!(
+    DavCheckoutInPlaceExtension,
+    DavCheckoutInPlaceSupport,
+    CheckoutInPlace,
+    VersionControl
+);
+extension_marker!(
+    DavVersionHistoryExtension,
+    DavVersionHistorySupport,
+    VersionHistory,
+    VersionControl
+);
+extension_marker!(
+    DavWorkspaceExtension,
+    DavWorkspaceSupport,
+    Workspace,
+    VersionControl,
+    CheckoutInPlace,
+    VersionHistory
+);
+extension_marker!(DavUpdateExtension, DavUpdateSupport, Update, VersionControl);
+extension_marker!(DavLabelExtension, DavLabelSupport, Label, VersionControl);
+extension_marker!(
+    DavWorkingResourceExtension,
+    DavWorkingResourceSupport,
+    WorkingResource,
+    VersionControl
+);
+extension_marker!(DavMergeExtension, DavMergeSupport, Merge, VersionControl);
+extension_marker!(
+    DavBaselineExtension,
+    DavBaselineSupport,
+    Baseline,
+    VersionControl
+);
+extension_marker!(
+    DavActivityExtension,
+    DavActivitySupport,
+    Activity,
+    VersionControl
+);
+extension_marker!(
+    DavVersionControlledCollectionExtension,
+    DavVersionControlledCollectionSupport,
+    VersionControlledCollection,
+    VersionControl
+);
+extension_marker!(DavSearchExtension, DavSearchSupport, Search);
+extension_marker!(DavQuotaExtension, DavQuotaSupport, Quota);
+extension_marker!(
+    DavCollectionSyncExtension,
+    DavCollectionSyncSupport,
+    CollectionSync
+);
+extension_marker!(
+    DavExtendedMkcolExtension,
+    DavExtendedMkcolSupport,
+    ExtendedMkcol
+);
+extension_marker!(
+    DavCurrentPrincipalExtension,
+    DavCurrentPrincipalSupport,
+    CurrentPrincipal
+);
+extension_marker!(
+    DavOrderedCollectionsExtension,
+    DavOrderedCollectionsSupport,
+    OrderedCollections
+);
+extension_marker!(
+    DavRedirectReferencesExtension,
+    DavRedirectReferencesSupport,
+    RedirectReferences
+);
+extension_marker!(DavBindingsExtension, DavBindingsSupport, Bindings);
+extension_marker!(DavAddMemberExtension, DavAddMemberSupport, AddMember);
+extension_marker!(DavPreferExtension, DavPreferSupport, Prefer);
+
+impl<Provider, Base, Extension> DavCapabilityProfile<Provider> for DavWithExtension<Base, Extension>
 where
-    Provider: DavPartialPutSupport + ?Sized,
-    Base: DavCapabilityProfile<Provider>,
+    Provider: ?Sized,
+    Base: DavCapabilityProfile<Provider> + sealed::Class1Profile<Provider>,
+    Extension: DavExtensionMarker<Provider>,
 {
     const CLASS1: bool = Base::CLASS1;
     const CLASS2: bool = Base::CLASS2;
-    const VERSION_CONTROL: bool = Base::VERSION_CONTROL;
-    const PARTIAL_PUT: bool = true;
+    const CLASS3: bool = Base::CLASS3;
+    const EXTENSIONS: DavExtensionSet = Base::EXTENSIONS.union(Extension::PACKAGES);
+    const PARTIAL_PUT: bool = Base::PARTIAL_PUT;
     const PATCH: bool = Base::PATCH;
     const PRIVATE_UPDATE_RANGE: bool = Base::PRIVATE_UPDATE_RANGE;
 }
 
-impl<Provider, Base> DavCapabilityProfile<Provider> for DavWithPatch<Base>
+impl<Provider, Base, Extension> sealed::Class1Profile<Provider>
+    for DavWithExtension<Base, Extension>
 where
-    Provider: DavPatchSupport + ?Sized,
-    Base: DavCapabilityProfile<Provider>,
+    Provider: ?Sized,
+    Base: sealed::Class1Profile<Provider>,
+    Extension: DavExtensionMarker<Provider>,
 {
-    const CLASS1: bool = Base::CLASS1;
-    const CLASS2: bool = Base::CLASS2;
-    const VERSION_CONTROL: bool = Base::VERSION_CONTROL;
-    const PARTIAL_PUT: bool = Base::PARTIAL_PUT;
-    const PATCH: bool = true;
-    const PRIVATE_UPDATE_RANGE: bool = Base::PRIVATE_UPDATE_RANGE;
 }
 
-impl<Provider, Base> DavCapabilityProfile<Provider> for DavWithPrivateUpdateRange<Base>
-where
-    Provider: DavPrivateUpdateRangeSupport + ?Sized,
-    Base: DavCapabilityProfile<Provider>,
+/// Builds a readable aggregate profile without a runtime registry.
+///
+/// Selecting a package without its implementation marker is a compile-time error:
+///
+/// ```compile_fail
+/// use aster_forge_webdav::{
+///     DavBackendError, DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityProvider,
+///     DavCapabilityTarget, DavClass1Profile, DavClass1Support, DavQuotaExtension,
+///     dav_capability_profile,
+/// };
+/// struct MissingQuotaImplementation;
+/// impl DavClass1Support for MissingQuotaImplementation {}
+/// impl DavCapabilityProvider for MissingQuotaImplementation {
+///     type Profile = dav_capability_profile!(DavClass1Profile; DavQuotaExtension);
+///     async fn capabilities(
+///         &self,
+///         _target: &DavCapabilityTarget,
+///         _context: &DavCapabilityContext,
+///     ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+///         loop {}
+///     }
+/// }
+/// ```
+///
+/// An RFC package also cannot be attached to a non-Class-1 base profile:
+///
+/// ```compile_fail
+/// use aster_forge_webdav::{
+///     DavBackendError, DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityProvider,
+///     DavCapabilityTarget, DavClass1Support, DavNonDavProfile, DavQuotaExtension,
+///     DavQuotaSupport, dav_capability_profile,
+/// };
+/// struct InvalidBase;
+/// impl DavClass1Support for InvalidBase {}
+/// impl DavQuotaSupport for InvalidBase {}
+/// impl DavCapabilityProvider for InvalidBase {
+///     type Profile = dav_capability_profile!(DavNonDavProfile; DavQuotaExtension);
+///     async fn capabilities(
+///         &self,
+///         _target: &DavCapabilityTarget,
+///         _context: &DavCapabilityContext,
+///     ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+///         loop {}
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! dav_capability_profile {
+    ($base:ty $(,)?) => { $base };
+    ($base:ty; $extension:ty $(,)?) => {
+        $crate::DavWithExtension<$base, $extension>
+    };
+    ($base:ty; $extension:ty, $($remaining:ty),+ $(,)?) => {
+        $crate::dav_capability_profile!(
+            $crate::DavWithExtension<$base, $extension>;
+            $($remaining),+
+        )
+    };
+}
+
+pub struct DavWithPartialPut<Base>(PhantomData<fn() -> Base>);
+pub struct DavWithPatch<Base>(PhantomData<fn() -> Base>);
+pub struct DavWithPrivateUpdateRange<Base>(PhantomData<fn() -> Base>);
+
+impl<Provider: ?Sized, Base: sealed::Class1Profile<Provider>> sealed::Class1Profile<Provider>
+    for DavWithPartialPut<Base>
 {
-    const CLASS1: bool = Base::CLASS1;
-    const CLASS2: bool = Base::CLASS2;
-    const VERSION_CONTROL: bool = Base::VERSION_CONTROL;
-    const PARTIAL_PUT: bool = Base::PARTIAL_PUT;
-    const PATCH: bool = Base::PATCH;
-    const PRIVATE_UPDATE_RANGE: bool = true;
+}
+impl<Provider: ?Sized, Base: sealed::Class1Profile<Provider>> sealed::Class1Profile<Provider>
+    for DavWithPatch<Base>
+{
+}
+impl<Provider: ?Sized, Base: sealed::Class1Profile<Provider>> sealed::Class1Profile<Provider>
+    for DavWithPrivateUpdateRange<Base>
+{
 }
 
-/// Compact, duplicate-free set of methods advertised for one target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DavMethodSet(u16);
+impl<Base: sealed::Sealed> sealed::Sealed for DavWithPartialPut<Base> {}
+impl<Base: sealed::Sealed> sealed::Sealed for DavWithPatch<Base> {}
+impl<Base: sealed::Sealed> sealed::Sealed for DavWithPrivateUpdateRange<Base> {}
 
-impl DavMethodSet {
-    #[must_use]
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-
-    #[must_use]
-    pub const fn from_methods(methods: &[DavMethod]) -> Self {
-        let mut set = Self::empty();
-        let mut index = 0;
-        while index < methods.len() {
-            set = set.with(methods[index]);
-            index += 1;
+macro_rules! write_profile {
+    ($wrapper:ident, $support:path, $partial:expr, $patch:expr, $private:expr) => {
+        impl<Provider, Base> DavCapabilityProfile<Provider> for $wrapper<Base>
+        where
+            Provider: $support + ?Sized,
+            Base: DavCapabilityProfile<Provider>,
+        {
+            const CLASS1: bool = Base::CLASS1;
+            const CLASS2: bool = Base::CLASS2;
+            const CLASS3: bool = Base::CLASS3;
+            const EXTENSIONS: DavExtensionSet = Base::EXTENSIONS;
+            const PARTIAL_PUT: bool = $partial || Base::PARTIAL_PUT;
+            const PATCH: bool = $patch || Base::PATCH;
+            const PRIVATE_UPDATE_RANGE: bool = $private || Base::PRIVATE_UPDATE_RANGE;
         }
-        set
-    }
-
-    #[must_use]
-    pub const fn with(self, method: DavMethod) -> Self {
-        Self(self.0 | (1u16 << method.index()))
-    }
-
-    #[must_use]
-    pub const fn contains(self, method: DavMethod) -> bool {
-        self.0 & (1u16 << method.index()) != 0
-    }
-
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
-    #[must_use]
-    pub const fn iter(self) -> DavMethodSetIter {
-        DavMethodSetIter {
-            set: self,
-            index: 0,
-        }
-    }
-
-    #[must_use]
-    pub fn render(self) -> String {
-        self.iter()
-            .map(DavMethod::as_str)
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
+    };
 }
 
-/// Iterator over methods in the canonical protocol order.
-#[derive(Debug, Clone, Copy)]
-pub struct DavMethodSetIter {
-    set: DavMethodSet,
-    index: usize,
-}
-
-impl Iterator for DavMethodSetIter {
-    type Item = DavMethod;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < DavMethod::ALL.len() {
-            let method = DavMethod::ALL[self.index];
-            self.index += 1;
-            if self.set.contains(method) {
-                return Some(method);
-            }
-        }
-        None
-    }
-}
+write_profile!(DavWithPartialPut, DavPartialPutSupport, true, false, false);
+write_profile!(DavWithPatch, DavPatchSupport, false, true, false);
+write_profile!(
+    DavWithPrivateUpdateRange,
+    DavPrivateUpdateRangeSupport,
+    false,
+    false,
+    true
+);
 
 /// Product-owned facts projected for one target and request context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilityDeclaration {
     pub resource: DavResourceState,
+    /// Methods allowed for this principal and target. Package implementation methods are derived.
     pub methods: DavMethodSet,
     pub locking: DavLockingCapability,
-    pub versioning: DavVersioningCapability,
+    pub extensions: DavExtensionSet,
+    pub search: DavSearchCapabilities,
     pub compatibility: DavCompatibilityCapabilities,
     pub writes: DavWriteCapabilities,
     pub compliance: DavComplianceClasses,
@@ -388,7 +569,8 @@ impl DavCapabilityDeclaration {
             resource,
             methods,
             locking: DavLockingCapability::Disabled,
-            versioning: DavVersioningCapability::Disabled,
+            extensions: DavExtensionSet::empty(),
+            search: DavSearchCapabilities { grammars: &[] },
             compatibility: DavCompatibilityCapabilities {
                 ms_author_via: false,
             },
@@ -397,7 +579,10 @@ impl DavCapabilityDeclaration {
                 patch: DavPatchCapability::Disabled,
                 private_update_range: DavPrivateUpdateRangeCapability::Disabled,
             },
-            compliance: DavComplianceClasses { class1: false },
+            compliance: DavComplianceClasses {
+                class1: false,
+                class3: false,
+            },
         }
     }
 }
@@ -415,12 +600,28 @@ pub enum DavCapabilityPlanError {
     Class2WithoutLockMethods,
     #[error("LOCK and UNLOCK require DAV compliance class 2")]
     LockMethodsWithoutClass2,
-    #[error("RFC 3253 version-control requires DAV compliance class 1")]
-    VersionControlWithoutClass1,
-    #[error("RFC 3253 version-control requires REPORT and VERSION-CONTROL methods")]
-    VersionControlWithoutMethods,
-    #[error("VERSION-CONTROL requires the RFC 3253 core versioning capability")]
-    VersionControlMethodWithoutCore,
+    #[error("DAV compliance class 3 requires class 1")]
+    Class3WithoutClass1,
+    #[error("RFC extension {package:?} requires class 1")]
+    ExtensionWithoutClass1 { package: DavExtensionPackage },
+    #[error("RFC extension {package:?} requires {required:?}")]
+    ExtensionMissingPrerequisite {
+        package: DavExtensionPackage,
+        required: DavExtensionPackage,
+    },
+    #[error("RFC extension {package:?} does not apply to {resource:?}")]
+    ExtensionNotApplicable {
+        package: DavExtensionPackage,
+        resource: DavResourceState,
+    },
+    #[error("method {method:?} requires an applicable RFC extension package")]
+    ExtensionMethodWithoutPackage { method: DavMethod },
+    #[error("SEARCH requires at least DAV:basicsearch")]
+    SearchWithoutBasicSearch,
+    #[error("SEARCH grammars require the SEARCH extension package")]
+    SearchGrammarsWithoutPackage,
+    #[error("a SEARCH grammar coded URL is invalid")]
+    InvalidSearchGrammar,
     #[error("partial PUT requires the PUT method")]
     PartialPutWithoutPut,
     #[error("PATCH requires at least one declared patch document format")]
@@ -437,8 +638,10 @@ pub enum DavCapabilityPlanError {
     Class1ExceedsProfile,
     #[error("runtime class 2 capability exceeds the provider's static profile")]
     Class2ExceedsProfile,
-    #[error("runtime version-control capability exceeds the provider's static profile")]
-    VersionControlExceedsProfile,
+    #[error("runtime class 3 capability exceeds the provider's static profile")]
+    Class3ExceedsProfile,
+    #[error("runtime extension {package:?} exceeds the provider's static profile")]
+    ExtensionExceedsProfile { package: DavExtensionPackage },
     #[error("runtime partial PUT capability exceeds the provider's static profile")]
     PartialPutExceedsProfile,
     #[error("runtime PATCH capability exceeds the provider's static profile")]
@@ -449,7 +652,6 @@ pub enum DavCapabilityPlanError {
     InvalidHeaderRepresentation,
 }
 
-/// Failure while resolving and planning capabilities through a product provider.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavCapabilityEvaluationError {
     #[error(transparent)]
@@ -458,19 +660,21 @@ pub enum DavCapabilityEvaluationError {
     Plan(#[from] DavCapabilityPlanError),
 }
 
-/// Result of checking a request method against a validated capability snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavMethodGateError {
     #[error("WebDAV method is not allowed for this resource")]
     MethodNotAllowed,
 }
 
-/// Immutable, validated capability state consumed by all response and dispatch paths.
+/// Immutable capability state consumed by discovery, dispatch and property planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilitySnapshot {
     declaration: DavCapabilityDeclaration,
+    supported_methods: DavMethodSet,
+    preferences: DavPreferenceSet,
     allow: HeaderValue,
     dav: Option<HeaderValue>,
+    dasl: Option<HeaderValue>,
     accept_patch: Option<HeaderValue>,
     ms_author_via: bool,
 }
@@ -482,13 +686,52 @@ impl DavCapabilitySnapshot {
     }
 
     #[must_use]
-    pub fn methods(&self) -> DavMethodSet {
+    pub const fn methods(&self) -> DavMethodSet {
         self.declaration.methods
     }
 
     #[must_use]
-    pub fn allows(&self, method: DavMethod) -> bool {
+    pub const fn supported_methods(&self) -> DavMethodSet {
+        self.supported_methods
+    }
+
+    #[must_use]
+    pub const fn allows(&self, method: DavMethod) -> bool {
         self.methods().contains(method)
+    }
+
+    #[must_use]
+    pub const fn supports(&self, method: DavMethod) -> bool {
+        self.supported_methods.contains(method)
+    }
+
+    #[must_use]
+    pub const fn extensions(&self) -> DavExtensionSet {
+        self.declaration.extensions
+    }
+
+    #[must_use]
+    pub const fn supports_extension(&self, package: DavExtensionPackage) -> bool {
+        self.extensions().contains(package)
+    }
+
+    #[must_use]
+    pub fn supports_live_property(&self, property: DavLiveProperty) -> bool {
+        self.extensions()
+            .iter()
+            .any(|package| package.descriptor().live_properties.contains(&property))
+    }
+
+    #[must_use]
+    pub fn supports_report(&self, report: DavReportType) -> bool {
+        self.extensions()
+            .iter()
+            .any(|package| package.descriptor().reports.contains(&report))
+    }
+
+    #[must_use]
+    pub const fn preferences(&self) -> DavPreferenceSet {
+        self.preferences
     }
 
     #[must_use]
@@ -499,6 +742,11 @@ impl DavCapabilitySnapshot {
     #[must_use]
     pub fn dav_header(&self) -> Option<&HeaderValue> {
         self.dav.as_ref()
+    }
+
+    #[must_use]
+    pub fn dasl_header(&self) -> Option<&HeaderValue> {
+        self.dasl.as_ref()
     }
 
     #[must_use]
@@ -522,130 +770,105 @@ impl DavCapabilitySnapshot {
     pub const fn has_ms_author_via(&self) -> bool {
         self.ms_author_via
     }
+
+    /// Selects body handling from the same snapshot used by dispatch and discovery.
+    pub fn body_policy(
+        &self,
+        method: DavMethod,
+        xml_limit: usize,
+    ) -> Result<Option<DavBodyPolicy>, DavMethodGateError> {
+        if !self.allows(method) {
+            return Err(DavMethodGateError::MethodNotAllowed);
+        }
+        let extension_kind = || {
+            extension_body_kind(
+                self.declaration.extensions,
+                self.declaration.resource,
+                method,
+            )
+        };
+        Ok(match method {
+            DavMethod::Patch => None,
+            DavMethod::Mkcol => Some(extension_kind().map_or(DavBodyPolicy::Empty, |kind| {
+                extension_body_policy(kind, xml_limit)
+            })),
+            DavMethod::Options
+            | DavMethod::Delete
+            | DavMethod::Copy
+            | DavMethod::Move
+            | DavMethod::Unlock => Some(DavBodyPolicy::Empty),
+            DavMethod::Propfind | DavMethod::Proppatch | DavMethod::Lock => {
+                Some(DavBodyPolicy::BoundedXml { maximum: xml_limit })
+            }
+            DavMethod::Post => Some(extension_kind().map_or(DavBodyPolicy::Stream, |kind| {
+                extension_body_policy(kind, xml_limit)
+            })),
+            DavMethod::Put => Some(DavBodyPolicy::Stream),
+            DavMethod::Get | DavMethod::Head => Some(DavBodyPolicy::Unused),
+            DavMethod::Acl
+            | DavMethod::Report
+            | DavMethod::VersionControl
+            | DavMethod::Checkout
+            | DavMethod::Checkin
+            | DavMethod::Uncheckout
+            | DavMethod::Mkworkspace
+            | DavMethod::Update
+            | DavMethod::Label
+            | DavMethod::Merge
+            | DavMethod::BaselineControl
+            | DavMethod::Mkactivity
+            | DavMethod::Search
+            | DavMethod::Orderpatch
+            | DavMethod::Mkredirectref
+            | DavMethod::Updateredirectref
+            | DavMethod::Bind
+            | DavMethod::Unbind
+            | DavMethod::Rebind => {
+                extension_kind().map(|kind| extension_body_policy(kind, xml_limit))
+            }
+        })
+    }
 }
 
-/// Builds and validates a capability snapshot from a product declaration.
+/// Builds and validates a capability snapshot from product-owned runtime facts.
 pub fn plan_capabilities(
     mut declaration: DavCapabilityDeclaration,
 ) -> Result<DavCapabilitySnapshot, DavCapabilityPlanError> {
-    if !declaration.methods.contains(DavMethod::Options) {
-        return Err(DavCapabilityPlanError::OptionsMissing);
-    }
-    if declaration.methods.contains(DavMethod::Get) {
-        declaration.methods = declaration.methods.with(DavMethod::Head);
-    }
-    if declaration.methods.contains(DavMethod::Head)
-        && !declaration.methods.contains(DavMethod::Get)
-    {
-        return Err(DavCapabilityPlanError::HeadWithoutGet);
-    }
-    let locking_enabled = declaration.locking == DavLockingCapability::Class2;
-    if locking_enabled && !declaration.compliance.class1 {
-        return Err(DavCapabilityPlanError::Class2WithoutClass1);
-    }
-    let has_lock_method = declaration.methods.contains(DavMethod::Lock)
-        || declaration.methods.contains(DavMethod::Unlock);
-    let has_lock_methods = declaration.methods.contains(DavMethod::Lock)
-        && declaration.methods.contains(DavMethod::Unlock);
-    if has_lock_method && !has_lock_methods {
-        return Err(DavCapabilityPlanError::Class2WithoutLockMethods);
-    }
-    if locking_enabled && !has_lock_methods {
-        return Err(DavCapabilityPlanError::Class2WithoutLockMethods);
-    }
-    if has_lock_methods && !locking_enabled {
-        return Err(DavCapabilityPlanError::LockMethodsWithoutClass2);
-    }
-    let versioning_enabled = declaration.versioning == DavVersioningCapability::Core;
-    if versioning_enabled && !declaration.compliance.class1 {
-        return Err(DavCapabilityPlanError::VersionControlWithoutClass1);
-    }
-    if versioning_enabled
-        && !(declaration.methods.contains(DavMethod::Report)
-            && declaration.methods.contains(DavMethod::VersionControl))
-    {
-        return Err(DavCapabilityPlanError::VersionControlWithoutMethods);
-    }
-    if declaration.methods.contains(DavMethod::VersionControl) && !versioning_enabled {
-        return Err(DavCapabilityPlanError::VersionControlMethodWithoutCore);
-    }
-    let put_enabled = declaration.methods.contains(DavMethod::Put);
-    if declaration.writes.partial_put != DavPartialPutCapability::Disabled && !put_enabled {
-        return Err(DavCapabilityPlanError::PartialPutWithoutPut);
-    }
-    if declaration.writes.private_update_range != DavPrivateUpdateRangeCapability::Disabled
-        && !put_enabled
-    {
-        return Err(DavCapabilityPlanError::PrivateUpdateRangeWithoutPut);
-    }
-    let patch_enabled = declaration.methods.contains(DavMethod::Patch);
-    let patch_formats = match declaration.writes.patch {
-        DavPatchCapability::Disabled => {
-            if patch_enabled {
-                return Err(DavCapabilityPlanError::PatchWithoutFormats);
-            }
-            None
-        }
-        DavPatchCapability::Formats(formats) => {
-            if !patch_enabled {
-                return Err(DavCapabilityPlanError::PatchFormatsWithoutMethod);
-            }
-            if formats.is_empty() {
-                return Err(DavCapabilityPlanError::PatchWithoutFormats);
-            }
-            validate_patch_formats(formats)?;
-            Some(formats)
-        }
-    };
+    validate_base_methods(&mut declaration)?;
+    validate_compliance(&declaration)?;
+    validate_extensions(&declaration)?;
+    validate_extension_methods(&declaration)?;
+    validate_writes(&declaration)?;
 
-    let allow = HeaderValue::from_str(&declaration.methods.render())
-        .map_err(|_| DavCapabilityPlanError::InvalidHeaderRepresentation)?;
-    let dav_text = {
-        let mut tokens = Vec::new();
-        if declaration.compliance.class1 {
-            tokens.push("1");
-        }
-        if locking_enabled {
-            tokens.push("2");
-        }
-        if versioning_enabled {
-            tokens.push("version-control");
-        }
-        if tokens.is_empty() {
-            None
-        } else {
-            Some(
-                HeaderValue::from_str(&tokens.join(", "))
-                    .map_err(|_| DavCapabilityPlanError::InvalidHeaderRepresentation)?,
-            )
-        }
+    let package_methods = extension_methods(declaration.extensions, declaration.resource);
+    let supported_methods = declaration.methods.union(package_methods);
+    let allow = header_value(&declaration.methods.render())?;
+    let dav = render_dav_header(&declaration)?;
+    let dasl = render_dasl_header(&declaration)?;
+    let accept_patch = match declaration.writes.patch {
+        DavPatchCapability::Disabled => None,
+        DavPatchCapability::Formats(formats) => Some(header_value(&render_patch_formats(formats))?),
     };
-    let accept_patch = patch_formats
-        .map(render_patch_formats)
-        .map(|value| {
-            HeaderValue::from_str(&value)
-                .map_err(|_| DavCapabilityPlanError::InvalidHeaderRepresentation)
-        })
-        .transpose()?;
-
+    let mut preferences = DavPreferenceSet::empty();
+    for package in declaration.extensions.iter() {
+        preferences = preferences.union(package.descriptor().preferences);
+    }
     let ms_author_via = declaration.compatibility.ms_author_via;
     Ok(DavCapabilitySnapshot {
         declaration,
+        supported_methods,
+        preferences,
         allow,
-        dav: dav_text,
+        dav,
+        dasl,
         accept_patch,
         ms_author_via,
     })
 }
 
-/// Product capability provider used by transport adapters and WebDAV dispatchers.
-///
-/// The associated profile is checked against support supertraits at compile time. For example,
-/// selecting [`DavClass2Profile`] requires the provider to implement [`DavClass2Support`], which
-/// itself requires [`DavClass1Support`].
 #[expect(
     async_fn_in_trait,
-    reason = "The provider is intentionally generic and uses async fn without boxing futures."
+    reason = "The provider is generic and intentionally preserves native async futures."
 )]
 pub trait DavCapabilityProvider: Send + Sync {
     type Profile: DavCapabilityProfile<Self>;
@@ -657,7 +880,7 @@ pub trait DavCapabilityProvider: Send + Sync {
     ) -> Result<DavCapabilityDeclaration, DavBackendError>;
 }
 
-/// Resolves product facts and returns the validated snapshot used by the request.
+/// Resolves product facts and enforces the static profile maximum before planning.
 pub async fn plan_capabilities_with_provider<Provider: DavCapabilityProvider>(
     provider: &Provider,
     target: &DavCapabilityTarget,
@@ -670,10 +893,13 @@ pub async fn plan_capabilities_with_provider<Provider: DavCapabilityProvider>(
     if declaration.locking == DavLockingCapability::Class2 && !Provider::Profile::CLASS2 {
         return Err(DavCapabilityPlanError::Class2ExceedsProfile.into());
     }
-    if declaration.versioning == DavVersioningCapability::Core
-        && !Provider::Profile::VERSION_CONTROL
-    {
-        return Err(DavCapabilityPlanError::VersionControlExceedsProfile.into());
+    if declaration.compliance.class3 && !Provider::Profile::CLASS3 {
+        return Err(DavCapabilityPlanError::Class3ExceedsProfile.into());
+    }
+    for package in declaration.extensions.iter() {
+        if !Provider::Profile::EXTENSIONS.contains(package) {
+            return Err(DavCapabilityPlanError::ExtensionExceedsProfile { package }.into());
+        }
     }
     if declaration.writes.partial_put != DavPartialPutCapability::Disabled
         && !Provider::Profile::PARTIAL_PUT
@@ -689,6 +915,215 @@ pub async fn plan_capabilities_with_provider<Provider: DavCapabilityProvider>(
         return Err(DavCapabilityPlanError::PrivateUpdateRangeExceedsProfile.into());
     }
     plan_capabilities(declaration).map_err(Into::into)
+}
+
+fn validate_base_methods(
+    declaration: &mut DavCapabilityDeclaration,
+) -> Result<(), DavCapabilityPlanError> {
+    if !declaration.methods.contains(DavMethod::Options) {
+        return Err(DavCapabilityPlanError::OptionsMissing);
+    }
+    if declaration.methods.contains(DavMethod::Get) {
+        declaration.methods = declaration.methods.with(DavMethod::Head);
+    }
+    if declaration.methods.contains(DavMethod::Head)
+        && !declaration.methods.contains(DavMethod::Get)
+    {
+        return Err(DavCapabilityPlanError::HeadWithoutGet);
+    }
+    Ok(())
+}
+
+fn validate_compliance(
+    declaration: &DavCapabilityDeclaration,
+) -> Result<(), DavCapabilityPlanError> {
+    let locking_enabled = declaration.locking == DavLockingCapability::Class2;
+    if locking_enabled && !declaration.compliance.class1 {
+        return Err(DavCapabilityPlanError::Class2WithoutClass1);
+    }
+    if declaration.compliance.class3 && !declaration.compliance.class1 {
+        return Err(DavCapabilityPlanError::Class3WithoutClass1);
+    }
+    let has_lock_method = declaration.methods.contains(DavMethod::Lock)
+        || declaration.methods.contains(DavMethod::Unlock);
+    let has_lock_methods = declaration.methods.contains(DavMethod::Lock)
+        && declaration.methods.contains(DavMethod::Unlock);
+    if (has_lock_method || locking_enabled) && !has_lock_methods {
+        return Err(DavCapabilityPlanError::Class2WithoutLockMethods);
+    }
+    if has_lock_methods && !locking_enabled {
+        return Err(DavCapabilityPlanError::LockMethodsWithoutClass2);
+    }
+    Ok(())
+}
+
+fn validate_extensions(
+    declaration: &DavCapabilityDeclaration,
+) -> Result<(), DavCapabilityPlanError> {
+    for package in declaration.extensions.iter() {
+        let descriptor = package.descriptor();
+        if !declaration.compliance.class1 {
+            return Err(DavCapabilityPlanError::ExtensionWithoutClass1 { package });
+        }
+        for required in descriptor.prerequisites.iter() {
+            if !declaration.extensions.contains(required) {
+                return Err(DavCapabilityPlanError::ExtensionMissingPrerequisite {
+                    package,
+                    required,
+                });
+            }
+        }
+        if !descriptor.resources.contains(declaration.resource) {
+            return Err(DavCapabilityPlanError::ExtensionNotApplicable {
+                package,
+                resource: declaration.resource,
+            });
+        }
+    }
+    let search_enabled = declaration.extensions.contains(DavExtensionPackage::Search);
+    if search_enabled {
+        if !declaration
+            .search
+            .grammars
+            .contains(&DavSearchGrammar::BASICSEARCH)
+        {
+            return Err(DavCapabilityPlanError::SearchWithoutBasicSearch);
+        }
+        validate_search_grammars(declaration.search.grammars)?;
+    } else if !declaration.search.grammars.is_empty() {
+        return Err(DavCapabilityPlanError::SearchGrammarsWithoutPackage);
+    }
+    Ok(())
+}
+
+fn validate_extension_methods(
+    declaration: &DavCapabilityDeclaration,
+) -> Result<(), DavCapabilityPlanError> {
+    let package_methods = extension_methods(declaration.extensions, declaration.resource);
+    for method in declaration.methods.iter() {
+        if is_extension_only_method(method) && !package_methods.contains(method) {
+            return Err(DavCapabilityPlanError::ExtensionMethodWithoutPackage { method });
+        }
+    }
+    Ok(())
+}
+
+const fn is_extension_only_method(method: DavMethod) -> bool {
+    matches!(
+        method,
+        DavMethod::Acl
+            | DavMethod::Report
+            | DavMethod::VersionControl
+            | DavMethod::Checkout
+            | DavMethod::Checkin
+            | DavMethod::Uncheckout
+            | DavMethod::Mkworkspace
+            | DavMethod::Update
+            | DavMethod::Label
+            | DavMethod::Merge
+            | DavMethod::BaselineControl
+            | DavMethod::Mkactivity
+            | DavMethod::Search
+            | DavMethod::Orderpatch
+            | DavMethod::Mkredirectref
+            | DavMethod::Updateredirectref
+            | DavMethod::Bind
+            | DavMethod::Unbind
+            | DavMethod::Rebind
+    )
+}
+
+fn validate_writes(declaration: &DavCapabilityDeclaration) -> Result<(), DavCapabilityPlanError> {
+    let put_enabled = declaration.methods.contains(DavMethod::Put);
+    if declaration.writes.partial_put != DavPartialPutCapability::Disabled && !put_enabled {
+        return Err(DavCapabilityPlanError::PartialPutWithoutPut);
+    }
+    if declaration.writes.private_update_range != DavPrivateUpdateRangeCapability::Disabled
+        && !put_enabled
+    {
+        return Err(DavCapabilityPlanError::PrivateUpdateRangeWithoutPut);
+    }
+    let patch_enabled = declaration.methods.contains(DavMethod::Patch);
+    match declaration.writes.patch {
+        DavPatchCapability::Disabled if patch_enabled => {
+            Err(DavCapabilityPlanError::PatchWithoutFormats)
+        }
+        DavPatchCapability::Disabled => Ok(()),
+        DavPatchCapability::Formats(_) if !patch_enabled => {
+            Err(DavCapabilityPlanError::PatchFormatsWithoutMethod)
+        }
+        DavPatchCapability::Formats([]) => Err(DavCapabilityPlanError::PatchWithoutFormats),
+        DavPatchCapability::Formats(formats) => validate_patch_formats(formats),
+    }
+}
+
+fn render_dav_header(
+    declaration: &DavCapabilityDeclaration,
+) -> Result<Option<HeaderValue>, DavCapabilityPlanError> {
+    let mut rendered = String::new();
+    if declaration.compliance.class1 {
+        push_token(&mut rendered, "1");
+    }
+    if declaration.locking == DavLockingCapability::Class2 {
+        push_token(&mut rendered, "2");
+    }
+    if declaration.compliance.class3 {
+        push_token(&mut rendered, "3");
+    }
+    for package in declaration.extensions.iter() {
+        if let Some(token) = package.descriptor().dav_token {
+            push_token(&mut rendered, token);
+        }
+    }
+    if rendered.is_empty() {
+        Ok(None)
+    } else {
+        header_value(&rendered).map(Some)
+    }
+}
+
+fn render_dasl_header(
+    declaration: &DavCapabilityDeclaration,
+) -> Result<Option<HeaderValue>, DavCapabilityPlanError> {
+    if declaration.search.grammars.is_empty() {
+        return Ok(None);
+    }
+    let mut rendered = String::new();
+    for grammar in declaration.search.grammars {
+        if !rendered.is_empty() {
+            rendered.push_str(", ");
+        }
+        rendered.push('<');
+        rendered.push_str(grammar.coded_url);
+        rendered.push('>');
+    }
+    header_value(&rendered).map(Some)
+}
+
+fn validate_search_grammars(grammars: &[DavSearchGrammar]) -> Result<(), DavCapabilityPlanError> {
+    for (index, grammar) in grammars.iter().enumerate() {
+        if grammar.coded_url.is_empty()
+            || grammar.coded_url.bytes().any(|byte| {
+                byte <= b' ' || byte == b'<' || byte == b'>' || byte == b',' || byte == 0x7f
+            })
+            || parse_absolute_url(grammar.coded_url, "SEARCH grammar coded-URL").is_err()
+            || !is_valid_xml_local_name(grammar.xml_local_name)
+            || (!grammar.xml_namespace.is_empty()
+                && (grammar.xml_namespace.trim() != grammar.xml_namespace
+                    || parse_absolute_url(grammar.xml_namespace, "SEARCH grammar namespace")
+                        .is_err()))
+        {
+            return Err(DavCapabilityPlanError::InvalidSearchGrammar);
+        }
+        if grammars[..index].iter().any(|previous| {
+            previous.coded_url == grammar.coded_url
+                || (previous.xml_namespace == grammar.xml_namespace
+                    && previous.xml_local_name == grammar.xml_local_name)
+        }) {
+            return Err(DavCapabilityPlanError::InvalidSearchGrammar);
+        }
+    }
+    Ok(())
 }
 
 fn validate_patch_formats(formats: &[DavPatchFormat]) -> Result<(), DavCapabilityPlanError> {
@@ -724,4 +1159,22 @@ fn render_patch_formats(formats: &[DavPatchFormat]) -> String {
         rendered.push_str(format.media_type);
     }
     rendered
+}
+
+fn header_value(value: &str) -> Result<HeaderValue, DavCapabilityPlanError> {
+    HeaderValue::from_str(value).map_err(|_| DavCapabilityPlanError::InvalidHeaderRepresentation)
+}
+
+fn push_token(rendered: &mut String, token: &str) {
+    if !rendered.is_empty() {
+        rendered.push_str(", ");
+    }
+    rendered.push_str(token);
+}
+
+const fn extension_body_policy(kind: DavExtensionBodyKind, xml_limit: usize) -> DavBodyPolicy {
+    match kind {
+        DavExtensionBodyKind::Xml => DavBodyPolicy::BoundedXml { maximum: xml_limit },
+        DavExtensionBodyKind::Stream => DavBodyPolicy::Stream,
+    }
 }

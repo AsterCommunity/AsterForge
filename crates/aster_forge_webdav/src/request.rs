@@ -26,8 +26,26 @@ pub enum DavMethod {
     Move,
     Lock,
     Unlock,
+    Acl,
     Report,
     VersionControl,
+    Checkout,
+    Checkin,
+    Uncheckout,
+    Mkworkspace,
+    Update,
+    Label,
+    Merge,
+    BaselineControl,
+    Mkactivity,
+    Search,
+    Orderpatch,
+    Mkredirectref,
+    Updateredirectref,
+    Bind,
+    Unbind,
+    Rebind,
+    Post,
 }
 
 /// How the transport adapter must handle a request body before product code runs.
@@ -47,10 +65,11 @@ pub enum DavBodyPolicy {
 
 impl DavMethod {
     /// Methods in the canonical `Allow` rendering order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 33] = [
         Self::Options,
         Self::Get,
         Self::Head,
+        Self::Post,
         Self::Put,
         Self::Patch,
         Self::Delete,
@@ -61,8 +80,25 @@ impl DavMethod {
         Self::Proppatch,
         Self::Lock,
         Self::Unlock,
+        Self::Acl,
         Self::Report,
         Self::VersionControl,
+        Self::Checkout,
+        Self::Checkin,
+        Self::Uncheckout,
+        Self::Mkworkspace,
+        Self::Update,
+        Self::Label,
+        Self::Merge,
+        Self::BaselineControl,
+        Self::Mkactivity,
+        Self::Search,
+        Self::Orderpatch,
+        Self::Mkredirectref,
+        Self::Updateredirectref,
+        Self::Bind,
+        Self::Unbind,
+        Self::Rebind,
     ];
 
     #[must_use]
@@ -71,18 +107,36 @@ impl DavMethod {
             Self::Options => 0,
             Self::Get => 1,
             Self::Head => 2,
-            Self::Put => 3,
-            Self::Patch => 4,
-            Self::Delete => 5,
-            Self::Mkcol => 6,
-            Self::Copy => 7,
-            Self::Move => 8,
-            Self::Propfind => 9,
-            Self::Proppatch => 10,
-            Self::Lock => 11,
-            Self::Unlock => 12,
-            Self::Report => 13,
-            Self::VersionControl => 14,
+            Self::Post => 3,
+            Self::Put => 4,
+            Self::Patch => 5,
+            Self::Delete => 6,
+            Self::Mkcol => 7,
+            Self::Copy => 8,
+            Self::Move => 9,
+            Self::Propfind => 10,
+            Self::Proppatch => 11,
+            Self::Lock => 12,
+            Self::Unlock => 13,
+            Self::Acl => 14,
+            Self::Report => 15,
+            Self::VersionControl => 16,
+            Self::Checkout => 17,
+            Self::Checkin => 18,
+            Self::Uncheckout => 19,
+            Self::Mkworkspace => 20,
+            Self::Update => 21,
+            Self::Label => 22,
+            Self::Merge => 23,
+            Self::BaselineControl => 24,
+            Self::Mkactivity => 25,
+            Self::Search => 26,
+            Self::Orderpatch => 27,
+            Self::Mkredirectref => 28,
+            Self::Updateredirectref => 29,
+            Self::Bind => 30,
+            Self::Unbind => 31,
+            Self::Rebind => 32,
         }
     }
 
@@ -94,6 +148,7 @@ impl DavMethod {
             Self::Proppatch => "PROPPATCH",
             Self::Get => "GET",
             Self::Head => "HEAD",
+            Self::Post => "POST",
             Self::Put => "PUT",
             Self::Patch => "PATCH",
             Self::Mkcol => "MKCOL",
@@ -102,8 +157,25 @@ impl DavMethod {
             Self::Move => "MOVE",
             Self::Lock => "LOCK",
             Self::Unlock => "UNLOCK",
+            Self::Acl => "ACL",
             Self::Report => "REPORT",
             Self::VersionControl => "VERSION-CONTROL",
+            Self::Checkout => "CHECKOUT",
+            Self::Checkin => "CHECKIN",
+            Self::Uncheckout => "UNCHECKOUT",
+            Self::Mkworkspace => "MKWORKSPACE",
+            Self::Update => "UPDATE",
+            Self::Label => "LABEL",
+            Self::Merge => "MERGE",
+            Self::BaselineControl => "BASELINE-CONTROL",
+            Self::Mkactivity => "MKACTIVITY",
+            Self::Search => "SEARCH",
+            Self::Orderpatch => "ORDERPATCH",
+            Self::Mkredirectref => "MKREDIRECTREF",
+            Self::Updateredirectref => "UPDATEREDIRECTREF",
+            Self::Bind => "BIND",
+            Self::Unbind => "UNBIND",
+            Self::Rebind => "REBIND",
         }
     }
 
@@ -122,6 +194,7 @@ impl DavMethod {
             "PROPPATCH" => Some(Self::Proppatch),
             "GET" => Some(Self::Get),
             "HEAD" => Some(Self::Head),
+            "POST" => Some(Self::Post),
             "PUT" => Some(Self::Put),
             "PATCH" => Some(Self::Patch),
             "MKCOL" => Some(Self::Mkcol),
@@ -130,8 +203,25 @@ impl DavMethod {
             "MOVE" => Some(Self::Move),
             "LOCK" => Some(Self::Lock),
             "UNLOCK" => Some(Self::Unlock),
+            "ACL" => Some(Self::Acl),
             "REPORT" => Some(Self::Report),
             "VERSION-CONTROL" => Some(Self::VersionControl),
+            "CHECKOUT" => Some(Self::Checkout),
+            "CHECKIN" => Some(Self::Checkin),
+            "UNCHECKOUT" => Some(Self::Uncheckout),
+            "MKWORKSPACE" => Some(Self::Mkworkspace),
+            "UPDATE" => Some(Self::Update),
+            "LABEL" => Some(Self::Label),
+            "MERGE" => Some(Self::Merge),
+            "BASELINE-CONTROL" => Some(Self::BaselineControl),
+            "MKACTIVITY" => Some(Self::Mkactivity),
+            "SEARCH" => Some(Self::Search),
+            "ORDERPATCH" => Some(Self::Orderpatch),
+            "MKREDIRECTREF" => Some(Self::Mkredirectref),
+            "UPDATEREDIRECTREF" => Some(Self::Updateredirectref),
+            "BIND" => Some(Self::Bind),
+            "UNBIND" => Some(Self::Unbind),
+            "REBIND" => Some(Self::Rebind),
             _ => None,
         }
     }
@@ -145,6 +235,7 @@ impl DavMethod {
             Self::Proppatch => DavOperation::Proppatch,
             Self::Get => DavOperation::Get,
             Self::Head => DavOperation::Head,
+            Self::Post => DavOperation::Post,
             Self::Put => DavOperation::Put,
             Self::Patch => DavOperation::Patch,
             Self::Mkcol => DavOperation::Mkcol,
@@ -153,28 +244,115 @@ impl DavMethod {
             Self::Move => DavOperation::Move,
             Self::Lock => DavOperation::Lock,
             Self::Unlock => DavOperation::Unlock,
+            Self::Acl => DavOperation::Acl,
             Self::Report => DavOperation::Report,
             Self::VersionControl => DavOperation::VersionControl,
+            Self::Checkout => DavOperation::Checkout,
+            Self::Checkin => DavOperation::Checkin,
+            Self::Uncheckout => DavOperation::Uncheckout,
+            Self::Mkworkspace => DavOperation::Mkworkspace,
+            Self::Update => DavOperation::Update,
+            Self::Label => DavOperation::Label,
+            Self::Merge => DavOperation::Merge,
+            Self::BaselineControl => DavOperation::BaselineControl,
+            Self::Mkactivity => DavOperation::Mkactivity,
+            Self::Search => DavOperation::Search,
+            Self::Orderpatch => DavOperation::Orderpatch,
+            Self::Mkredirectref => DavOperation::Mkredirectref,
+            Self::Updateredirectref => DavOperation::Updateredirectref,
+            Self::Bind => DavOperation::Bind,
+            Self::Unbind => DavOperation::Unbind,
+            Self::Rebind => DavOperation::Rebind,
+        }
+    }
+}
+
+/// Compact, duplicate-free set of methods in canonical protocol order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DavMethodSet(u64);
+
+impl DavMethodSet {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    #[must_use]
+    pub const fn from_methods(methods: &[DavMethod]) -> Self {
+        let mut set = Self::empty();
+        let mut index = 0;
+        while index < methods.len() {
+            set = set.with(methods[index]);
+            index += 1;
+        }
+        set
+    }
+
+    #[must_use]
+    pub const fn with(self, method: DavMethod) -> Self {
+        Self(self.0 | (1u64 << method.index()))
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    #[must_use]
+    pub const fn contains(self, method: DavMethod) -> bool {
+        self.0 & (1u64 << method.index()) != 0
+    }
+
+    #[must_use]
+    pub const fn is_subset_of(self, other: Self) -> bool {
+        self.0 & !other.0 == 0
+    }
+
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    #[must_use]
+    pub const fn iter(self) -> DavMethodSetIter {
+        DavMethodSetIter {
+            set: self,
+            index: 0,
         }
     }
 
-    /// Returns the body handling contract that does not depend on a declared PATCH format.
-    ///
-    /// PATCH returns `None`; use [`crate::plan_patch_request`] to select its format-specific
-    /// bounded or streaming policy from the validated capability snapshot.
     #[must_use]
-    pub const fn standard_body_policy(self, xml_limit: usize) -> Option<DavBodyPolicy> {
-        match self {
-            Self::Options | Self::Mkcol | Self::Delete | Self::Copy | Self::Move | Self::Unlock => {
-                Some(DavBodyPolicy::Empty)
+    pub fn render(self) -> String {
+        let mut rendered = String::new();
+        for method in self.iter() {
+            if !rendered.is_empty() {
+                rendered.push_str(", ");
             }
-            Self::Propfind | Self::Proppatch | Self::Lock | Self::Report | Self::VersionControl => {
-                Some(DavBodyPolicy::BoundedXml { maximum: xml_limit })
-            }
-            Self::Put => Some(DavBodyPolicy::Stream),
-            Self::Get | Self::Head => Some(DavBodyPolicy::Unused),
-            Self::Patch => None,
+            rendered.push_str(method.as_str());
         }
+        rendered
+    }
+}
+
+/// Iterator over methods in canonical protocol order.
+#[derive(Debug, Clone, Copy)]
+pub struct DavMethodSetIter {
+    set: DavMethodSet,
+    index: usize,
+}
+
+impl Iterator for DavMethodSetIter {
+    type Item = DavMethod;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.index < DavMethod::ALL.len() {
+            let method = DavMethod::ALL[self.index];
+            self.index += 1;
+            if self.set.contains(method) {
+                return Some(method);
+            }
+        }
+        None
     }
 }
 

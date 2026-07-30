@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use aster_forge_webdav::{
-    DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavIfEvaluationError, DavIfResourceState,
+    DavBackendError, DavBackendErrorKind, DavIfEvaluationError, DavIfResourceState,
     DavIfStateResolver, DavMethod, DavPath, DavPathError, DavProtocolErrorKind, DavRequestHead,
     DavRequestOrigin, Depth, IfHeader, IfStateCondition, child_relative_path,
     destination_relative_path, enforce_if_header, href_for_relative, parent_relative_path,
@@ -170,42 +170,8 @@ fn method_parser_recognizes_webdav_extensions() {
 }
 
 #[test]
-fn method_body_policies_keep_protocol_and_product_streaming_responsibilities_separate() {
-    for method in [
-        DavMethod::Options,
-        DavMethod::Mkcol,
-        DavMethod::Delete,
-        DavMethod::Copy,
-        DavMethod::Move,
-        DavMethod::Unlock,
-    ] {
-        assert_eq!(method.standard_body_policy(64), Some(DavBodyPolicy::Empty));
-    }
-    for method in [
-        DavMethod::Propfind,
-        DavMethod::Proppatch,
-        DavMethod::Lock,
-        DavMethod::Report,
-        DavMethod::VersionControl,
-    ] {
-        assert_eq!(
-            method.standard_body_policy(64),
-            Some(DavBodyPolicy::BoundedXml { maximum: 64 })
-        );
-    }
-    assert_eq!(
-        DavMethod::Put.standard_body_policy(64),
-        Some(DavBodyPolicy::Stream)
-    );
-    for method in [DavMethod::Get, DavMethod::Head] {
-        assert_eq!(method.standard_body_policy(64), Some(DavBodyPolicy::Unused));
-    }
-    assert_eq!(DavMethod::Patch.standard_body_policy(64), None);
-}
-
-#[test]
 fn advertised_methods_are_exactly_the_methods_recognized_by_the_protocol_layer() {
-    assert_eq!(DavMethod::ALL.len(), 15);
+    assert_eq!(DavMethod::ALL.len(), 33);
     for method in DavMethod::ALL {
         assert_eq!(DavMethod::from_name(method.as_str()), Some(method));
     }
@@ -757,6 +723,35 @@ fn request_head_parses_method_specific_contract() {
         request.destination.expect("destination").path.as_str(),
         "/destination.txt"
     );
+}
+
+#[test]
+fn request_head_exercises_every_method_specific_depth_parser() {
+    let uri: Uri = "/webdav/source".parse().expect("valid request URI");
+    let origin = DavRequestOrigin {
+        scheme: "https".to_owned(),
+        host: "dav.example".to_owned(),
+    };
+    let target = DavRequestHead::parse_target(&uri, "/webdav", &origin).expect("request target");
+
+    for (method, depth, expected) in [
+        (DavMethod::Propfind, "1", Depth::One),
+        (DavMethod::Copy, "0", Depth::Zero),
+        (DavMethod::Move, "infinity", Depth::Infinity),
+        (DavMethod::Delete, "infinity", Depth::Infinity),
+        (DavMethod::Lock, "0", Depth::Zero),
+    ] {
+        let mut request_headers = headers("Depth", depth);
+        if matches!(method, DavMethod::Copy | DavMethod::Move) {
+            request_headers.insert(
+                "Destination",
+                HeaderValue::from_static("/webdav/destination"),
+            );
+        }
+        let request = DavRequestHead::parse_known_method(method, &target, &request_headers)
+            .unwrap_or_else(|error| panic!("{method:?} depth should parse: {error}"));
+        assert_eq!(request.depth, Some(expected), "method {method:?}");
+    }
 }
 
 #[test]

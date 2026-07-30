@@ -24,10 +24,12 @@ pub mod capability;
 pub mod conditional;
 pub mod deltav;
 pub mod event;
+pub mod extension;
 pub mod lock;
 pub mod multistatus;
 pub mod patch;
 pub mod path;
+pub mod preference;
 pub mod property;
 pub mod protocol;
 pub mod put;
@@ -47,16 +49,30 @@ pub use backend::{
     DavWriteSystem, FsError, FsFuture, FsResult, LsFuture,
 };
 pub use capability::{
-    DavCapabilityContext, DavCapabilityDeclaration, DavCapabilityEvaluationError,
-    DavCapabilityPlanError, DavCapabilityProfile, DavCapabilityProvider, DavCapabilitySnapshot,
-    DavCapabilityTarget, DavClass1Profile, DavClass1Support, DavClass1VersioningProfile,
-    DavClass2Profile, DavClass2Support, DavClass2VersioningProfile, DavCompatibilityCapabilities,
-    DavComplianceClasses, DavCoreVersioningSupport, DavLockingCapability, DavMethodGateError,
-    DavMethodSet, DavNonDavProfile, DavPartialPutCapability, DavPartialPutSupport,
-    DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat, DavPatchSupport,
-    DavPrivateUpdateRangeCapability, DavPrivateUpdateRangeSupport, DavResourceState,
-    DavVersioningCapability, DavWithPartialPut, DavWithPatch, DavWithPrivateUpdateRange,
-    DavWriteCapabilities, DavWritePrecondition, plan_capabilities, plan_capabilities_with_provider,
+    DavAccessControlExtension, DavAccessControlSupport, DavActivityExtension, DavActivitySupport,
+    DavAddMemberExtension, DavAddMemberSupport, DavBaselineExtension, DavBaselineSupport,
+    DavBindingsExtension, DavBindingsSupport, DavCapabilityContext, DavCapabilityDeclaration,
+    DavCapabilityEvaluationError, DavCapabilityPlanError, DavCapabilityProfile,
+    DavCapabilityProvider, DavCapabilitySnapshot, DavCapabilityTarget, DavCheckoutInPlaceExtension,
+    DavCheckoutInPlaceSupport, DavClass1Profile, DavClass1Support, DavClass2And3Profile,
+    DavClass2Profile, DavClass2Support, DavClass3Profile, DavClass3Support,
+    DavCollectionSyncExtension, DavCollectionSyncSupport, DavCompatibilityCapabilities,
+    DavComplianceClasses, DavCurrentPrincipalExtension, DavCurrentPrincipalSupport,
+    DavExtendedMkcolExtension, DavExtendedMkcolSupport, DavExtensionMarker, DavLabelExtension,
+    DavLabelSupport, DavLockingCapability, DavMergeExtension, DavMergeSupport, DavMethodGateError,
+    DavNonDavProfile, DavOrderedCollectionsExtension, DavOrderedCollectionsSupport,
+    DavPartialPutCapability, DavPartialPutSupport, DavPatchBodyPolicy, DavPatchCapability,
+    DavPatchFormat, DavPatchSupport, DavPreferExtension, DavPreferSupport,
+    DavPrivateUpdateRangeCapability, DavPrivateUpdateRangeSupport, DavQuotaExtension,
+    DavQuotaSupport, DavRedirectReferencesExtension, DavRedirectReferencesSupport,
+    DavResourceState, DavSearchCapabilities, DavSearchExtension, DavSearchGrammar,
+    DavSearchSupport, DavUpdateExtension, DavUpdateSupport, DavVersionControlExtension,
+    DavVersionControlSupport, DavVersionControlledCollectionExtension,
+    DavVersionControlledCollectionSupport, DavVersionHistoryExtension, DavVersionHistorySupport,
+    DavWithExtension, DavWithPartialPut, DavWithPatch, DavWithPrivateUpdateRange,
+    DavWorkingResourceExtension, DavWorkingResourceSupport, DavWorkspaceExtension,
+    DavWorkspaceSupport, DavWriteCapabilities, DavWritePrecondition, plan_capabilities,
+    plan_capabilities_with_provider,
 };
 pub use conditional::{
     DavConditionalEvaluationError, DavConditionalOutcome, DavConditionalPlan,
@@ -64,15 +80,20 @@ pub use conditional::{
     plan_conditionals_with_backends, plan_http_conditionals,
 };
 pub use deltav::{
-    DavVersionTreeReportError, validate_version_control_request, validate_version_tree_report,
-    version_control_request_error_response, version_control_response,
-    version_tree_non_file_response, version_tree_report_error_response, version_tree_response,
+    DavReportPlanError, plan_report_request, report_plan_error_response,
+    validate_version_control_request, version_control_request_error_response,
+    version_control_response, version_tree_non_file_response, version_tree_response,
     version_tree_response_with_limits,
 };
 pub use event::{
     DavEvent, DavEventOutcome, DavEventSink, DavObservationError, DavOperation,
     DavOperationObservations, DavProtocolFailureClass, DavStreamOutcome, NoopDavEventSink,
     publish_non_authoritative,
+};
+pub use extension::{
+    DavExtensionBodyKind, DavExtensionDescriptor, DavExtensionMethod, DavExtensionPackage,
+    DavExtensionSet, DavExtensionSetIter, DavLiveProperty, DavPreferenceSet, DavReportType,
+    DavResourceStateSet, extension_body_kind, extension_methods,
 };
 pub use lock::{
     DavLockPlan, DavLockPlanError, enforce_parent_unlocked, enforce_unlocked,
@@ -91,8 +112,13 @@ pub use path::{
     DavPath, DavPathError, child_relative_path, decode_relative_path, display_name, encode_href,
     href_for_dav_path, href_for_relative, parent_relative_path,
 };
+pub use preference::{DavPreferencePlan, plan_preferences};
 pub use property::{
-    DavProppatchAtomicPlan, build_propfind_item, build_proppatch_item, format_creation_date,
+    DavCurrentPrincipal, DavLivePropertyError, DavLivePropertyEvaluationError,
+    DavLivePropertyMetadata, DavLivePropertyProvider, DavLivePropertyRequirements,
+    DavLivePropertyValueSnapshot, DavProppatchAtomicPlan, DavQuotaSnapshot,
+    build_live_propfind_item, build_live_propfind_item_with_provider, build_proppatch_item,
+    format_creation_date, is_protected_live_property, live_property_requirements,
     plan_atomic_proppatch, property_multistatus_response,
     property_multistatus_response_with_limits, propfind_finite_depth_response,
     propfind_request_label, propfind_xml_error_response, proppatch_xml_error_response,
@@ -108,7 +134,10 @@ pub use put::{
     DavPartialPutPlan, DavPutPlan, DavPutPlanError, DavPutResourceState, DavPutResponseError,
     DavPutWritePlan, plan_put_request, put_plan_error_response, put_success_response,
 };
-pub use request::{DavBodyPolicy, DavMethod, DavRequestHead, DavRequestOrigin, DavRequestTarget};
+pub use request::{
+    DavBodyPolicy, DavMethod, DavMethodSet, DavMethodSetIter, DavRequestHead, DavRequestOrigin,
+    DavRequestTarget,
+};
 pub use resource::{
     DavCopyMoveMethod, DavCopyMovePlan, DavMutationFailure, DavMutationPlanError,
     DavMutationResponseError, collection_created_response, delete_success_response,

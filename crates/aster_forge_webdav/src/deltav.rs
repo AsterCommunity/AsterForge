@@ -5,29 +5,40 @@ use http::{HeaderValue, StatusCode};
 
 use crate::xml::{parse_report_request, parse_version_control_request};
 use crate::{
-    DavErrorCondition, DavMultiStatusError, DavMultiStatusLimits, DavResourceKind, DavResponse,
-    DavVersionXml, DavXmlError, dav_error_element, dav_version_multistatus_bytes,
+    DavCapabilitySnapshot, DavErrorCondition, DavMultiStatusError, DavMultiStatusLimits,
+    DavReportType, DavResourceKind, DavResponse, DavVersionXml, DavXmlError, dav_error_element,
+    dav_version_multistatus_bytes,
 };
 
-/// Failure while selecting the supported DeltaV REPORT grammar.
+/// Failure while selecting a REPORT type through a capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DavVersionTreeReportError {
+pub enum DavReportPlanError {
     /// The REPORT body is not safe, well-formed WebDAV XML.
     #[error(transparent)]
     Xml(#[from] DavXmlError),
-    /// The REPORT root is not the supported `DAV:version-tree` report.
-    #[error("unsupported DeltaV REPORT type: {name}")]
+    /// The REPORT root is not a standard type known to Forge.
+    #[error("unknown WebDAV REPORT type: {name}")]
     Unsupported { name: String },
+    /// The type is known but absent from this target's validated package set.
+    #[error("WebDAV REPORT type is not supported by this resource: {report:?}")]
+    NotSupported { report: DavReportType },
 }
 
-/// Validates that a REPORT request selects `DAV:version-tree`.
-pub fn validate_version_tree_report(body: &[u8]) -> Result<(), DavVersionTreeReportError> {
+/// Parses and gates a REPORT body through the same snapshot used for discovery and dispatch.
+pub fn plan_report_request(
+    snapshot: &DavCapabilitySnapshot,
+    body: &[u8],
+) -> Result<DavReportType, DavReportPlanError> {
     let root = parse_report_request(body)?;
-    if root.name == "version-tree" && root.namespace.as_deref() == Some("DAV:") {
-        Ok(())
-    } else {
-        Err(DavVersionTreeReportError::Unsupported { name: root.name })
+    if root.namespace.as_deref() != Some("DAV:") {
+        return Err(DavReportPlanError::Unsupported { name: root.name });
     }
+    let report =
+        report_type(&root.name).ok_or(DavReportPlanError::Unsupported { name: root.name })?;
+    if !snapshot.supports_report(report) {
+        return Err(DavReportPlanError::NotSupported { report });
+    }
+    Ok(report)
 }
 
 /// Validates the optional RFC 3253 `DAV:version-control` request body.
@@ -36,14 +47,16 @@ pub fn validate_version_control_request(body: &[u8]) -> Result<(), DavXmlError> 
 }
 
 /// Builds the protocol response for a REPORT grammar selection failure.
-pub fn version_tree_report_error_response(
-    error: &DavVersionTreeReportError,
-) -> Result<DavResponse, DavXmlError> {
+pub fn report_plan_error_response(error: &DavReportPlanError) -> Result<DavResponse, DavXmlError> {
     match error {
-        DavVersionTreeReportError::Xml(error) => xml_request_error_response(*error),
-        DavVersionTreeReportError::Unsupported { name } => Ok(text_response(
+        DavReportPlanError::Xml(error) => xml_request_error_response(*error),
+        DavReportPlanError::Unsupported { name } => Ok(text_response(
             StatusCode::NOT_IMPLEMENTED,
             format!("Unsupported REPORT type: {name}"),
+        )),
+        DavReportPlanError::NotSupported { report } => Ok(text_response(
+            StatusCode::NOT_IMPLEMENTED,
+            format!("Unsupported REPORT type: {}", report.local_name()),
         )),
     }
 }
@@ -144,4 +157,22 @@ fn xml_response(
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     Ok(response)
+}
+
+fn report_type(name: &str) -> Option<DavReportType> {
+    [
+        DavReportType::VersionTree,
+        DavReportType::ExpandProperty,
+        DavReportType::LocateByHistory,
+        DavReportType::MergePreview,
+        DavReportType::CompareBaseline,
+        DavReportType::LatestActivityVersion,
+        DavReportType::AclPrincipalPropSet,
+        DavReportType::PrincipalMatch,
+        DavReportType::PrincipalPropertySearch,
+        DavReportType::PrincipalSearchPropertySet,
+        DavReportType::SyncCollection,
+    ]
+    .into_iter()
+    .find(|report| report.local_name() == name)
 }
