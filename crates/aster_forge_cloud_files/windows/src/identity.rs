@@ -21,6 +21,10 @@ pub struct WindowsFileIdentity(Vec<u8>);
 
 impl WindowsFileIdentity {
     /// Encodes a scoped, path-independent Forge item key using the current versioned envelope.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn encode(key: &CloudItemKey) -> Result<Self> {
         let fields = [
             key.scope().namespace_id().as_str().as_bytes(),
@@ -61,6 +65,10 @@ impl WindowsFileIdentity {
     }
 
     /// Validates owned bytes and preserves the canonical identity envelope.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
         validate_size(bytes.len())?;
         decode_bytes(&bytes)?;
@@ -68,26 +76,34 @@ impl WindowsFileIdentity {
     }
 
     /// Decodes the stable scoped Forge item key.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn decode(&self) -> Result<CloudItemKey> {
         decode_bytes(&self.0)
     }
 
     /// Returns the exact bytes supplied to CFAPI.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// Returns the encoded byte length.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns whether the encoded identity is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Consumes the identity and returns its exact bytes.
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }

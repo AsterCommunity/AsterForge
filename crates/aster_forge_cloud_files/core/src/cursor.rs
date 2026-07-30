@@ -12,6 +12,10 @@ macro_rules! opaque_cursor {
 
         impl $name {
             /// Creates a non-empty opaque continuation token.
+            /// # Errors
+            ///
+            /// Returns an error when validation fails or an underlying backend, store, or platform
+            /// operation fails.
             pub fn new(value: impl Into<Vec<u8>>) -> Result<Self> {
                 let value = value.into();
                 if value.is_empty() {
@@ -21,6 +25,10 @@ macro_rules! opaque_cursor {
             }
 
             /// Copies a non-empty continuation token from a byte slice.
+            /// # Errors
+            ///
+            /// Returns an error when validation fails or an underlying backend, store, or platform
+            /// operation fails.
             pub fn from_slice(value: &[u8]) -> Result<Self> {
                 Self::new(value.to_vec())
             }

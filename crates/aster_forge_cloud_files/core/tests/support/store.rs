@@ -99,6 +99,10 @@ impl MemoryCloudFilesStore {
         CloudFilesStoreError::new(kind, context)
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "this adapter is passed directly to Result::map_err and therefore owns the source error"
+    )]
     fn transition_error(error: CloudFilesCoreError) -> CloudFilesStoreError {
         Self::store_error(
             CloudFilesStoreErrorKind::InvalidTransition,
@@ -328,16 +332,6 @@ impl MutationJournalStore for MemoryCloudFilesStore {
             .lock()
             .expect("memory store mutex should not be poisoned");
         match state.sessions.get(scope).copied() {
-            None => {
-                state.sessions.insert(
-                    scope.clone(),
-                    SessionRecord {
-                        generation,
-                        state: SessionState::Accepting,
-                    },
-                );
-                Ok(StoreWriteStatus::Applied)
-            }
             Some(active) if generation < active.generation => Ok(StoreWriteStatus::Fenced),
             Some(active) if generation == active.generation => {
                 if active.state == SessionState::Accepting {
@@ -349,7 +343,7 @@ impl MutationJournalStore for MemoryCloudFilesStore {
                     ))
                 }
             }
-            Some(_) => {
+            None | Some(_) => {
                 state.sessions.insert(
                     scope.clone(),
                     SessionRecord {

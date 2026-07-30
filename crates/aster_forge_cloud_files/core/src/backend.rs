@@ -2,7 +2,7 @@
 //!
 //! These traits intentionally cover Phase 1 metadata, enumeration, change discovery, and content
 //! reads. Resumable content mutation uses the separate upload port and durable journal model. The
-//! async dispatch shape remains provisional until synthetic and platform PoCs exercise hot paths.
+//! async dispatch shape remains provisional until synthetic and platform `PoCs` exercise hot paths.
 
 use std::num::NonZeroU64;
 
@@ -23,6 +23,10 @@ pub struct ByteRange {
 
 impl ByteRange {
     /// Creates a non-empty range and rejects end-position overflow.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(offset: u64, length: u64) -> Result<Self> {
         let Some(length) = NonZeroU64::new(length) else {
             return Err(CloudFilesCoreError::invalid_byte_range(
@@ -38,16 +42,19 @@ impl ByteRange {
     }
 
     /// Returns the first requested byte offset.
+    #[must_use]
     pub const fn offset(self) -> u64 {
         self.offset
     }
 
     /// Returns the requested byte length.
+    #[must_use]
     pub const fn length(self) -> u64 {
         self.length.get()
     }
 
     /// Returns the exclusive range end. Construction guarantees this addition cannot overflow.
+    #[must_use]
     pub const fn end_exclusive(self) -> u64 {
         self.offset + self.length.get()
     }
@@ -87,6 +94,7 @@ pub struct ContentReadRequest {
 
 impl ContentReadRequest {
     /// Creates a complete-file read request.
+    #[must_use]
     pub const fn whole(key: CloudItemKey, revision: ContentRevision, expected_size: u64) -> Self {
         Self {
             key,
@@ -97,6 +105,7 @@ impl ContentReadRequest {
     }
 
     /// Creates a range read request.
+    #[must_use]
     pub const fn range(
         key: CloudItemKey,
         revision: ContentRevision,
@@ -112,26 +121,34 @@ impl ContentReadRequest {
     }
 
     /// Returns the fully scoped item identity.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the exact expected content revision.
+    #[must_use]
     pub const fn revision(&self) -> &ContentRevision {
         &self.revision
     }
 
     /// Returns the logical size reported by metadata for this exact revision.
+    #[must_use]
     pub const fn expected_size(&self) -> u64 {
         self.expected_size
     }
 
     /// Returns the requested extent.
+    #[must_use]
     pub const fn read_range(&self) -> ContentReadRange {
         self.range
     }
 
     /// Validates that a backend response satisfies this exact request.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_response(&self, response: &ContentReadResponse) -> Result<()> {
         if response.revision() != &self.revision {
             return Err(CloudFilesCoreError::invalid_content_response(
@@ -191,6 +208,10 @@ pub struct ContentReadResponse {
 
 impl ContentReadResponse {
     /// Creates a response and verifies that its bytes remain within the logical file size.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         revision: ContentRevision,
         offset: u64,

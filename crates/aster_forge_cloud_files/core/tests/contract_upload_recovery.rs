@@ -584,6 +584,10 @@ async fn precondition_failure_keeps_local_content_dirty_for_conflict_policy() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the recovery contract verifies lost-return idempotency at every persisted upload transition"
+)]
 async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
     let backend = SyntheticBackend::full();
     let store = MemoryContentStorageStore::default();
@@ -831,6 +835,10 @@ async fn upload_operation_idempotency_and_lease_id_conflicts_are_distinct() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the concurrency contract keeps both upload lease lifecycles visible in one scenario"
+)]
 async fn concurrent_uploads_hold_independent_leases_until_each_completion() {
     let backend = SyntheticBackend::full();
     let store = MemoryContentStorageStore::default();

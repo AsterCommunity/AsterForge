@@ -12,18 +12,22 @@ pub struct LinuxRemoteEntry {
 }
 
 impl LinuxRemoteEntry {
+    #[must_use]
     pub const fn new(item: CloudItem, inode_record: LinuxInodeRecord) -> Self {
         Self { item, inode_record }
     }
 
+    #[must_use]
     pub const fn item(&self) -> &CloudItem {
         &self.item
     }
 
+    #[must_use]
     pub const fn inode_record(&self) -> &LinuxInodeRecord {
         &self.inode_record
     }
 
+    #[must_use]
     pub fn into_parts(self) -> (CloudItem, LinuxInodeRecord) {
         (self.item, self.inode_record)
     }
@@ -37,16 +41,22 @@ pub struct LinuxRemoteLocation {
 }
 
 impl LinuxRemoteLocation {
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(parent_key: CloudItemKey, name: impl Into<String>) -> Result<Self> {
         let name = name.into();
         validate_linux_name(&name)?;
         Ok(Self { parent_key, name })
     }
 
+    #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -63,6 +73,10 @@ pub struct LinuxRemoteDelete {
 }
 
 impl LinuxRemoteDelete {
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         key: CloudItemKey,
         inode_record: LinuxInodeRecord,
@@ -81,22 +95,27 @@ impl LinuxRemoteDelete {
         })
     }
 
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    #[must_use]
     pub const fn inode_record(&self) -> &LinuxInodeRecord {
         &self.inode_record
     }
 
+    #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
@@ -111,6 +130,7 @@ pub struct LinuxRemoteUpsert {
 }
 
 impl LinuxRemoteUpsert {
+    #[must_use]
     pub const fn new(
         entry: LinuxRemoteEntry,
         previous: Option<LinuxRemoteLocation>,
@@ -123,18 +143,22 @@ impl LinuxRemoteUpsert {
         }
     }
 
+    #[must_use]
     pub const fn entry(&self) -> &LinuxRemoteEntry {
         &self.entry
     }
 
+    #[must_use]
     pub const fn previous(&self) -> Option<&LinuxRemoteLocation> {
         self.previous.as_ref()
     }
 
+    #[must_use]
     pub const fn replaced(&self) -> Option<&LinuxRemoteDelete> {
         self.replaced.as_ref()
     }
 
+    #[must_use]
     pub fn into_parts(
         self,
     ) -> (

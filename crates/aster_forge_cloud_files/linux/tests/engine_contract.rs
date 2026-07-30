@@ -127,6 +127,10 @@ fn linux_name_boundaries_reject_path_and_reserved_dot_components() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the end-to-end read contract keeps paging, lookup, attributes, and revision-bound reads together"
+)]
 async fn paged_directory_snapshot_and_revision_bound_range_read_work() {
     let engine = engine().await;
     let cloned = engine.clone();

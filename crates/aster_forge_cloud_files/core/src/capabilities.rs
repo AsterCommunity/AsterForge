@@ -13,16 +13,22 @@ impl Alignment {
     pub const ONE: Self = Self(1);
 
     /// Creates a non-zero byte alignment.
+    #[must_use]
     pub const fn new(bytes: u64) -> Option<Self> {
         if bytes == 0 { None } else { Some(Self(bytes)) }
     }
 
     /// Returns the alignment in bytes.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
     /// Combines two physical alignment requirements using their least common multiple.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn intersection(self, other: Self) -> Result<Self> {
         let divisor = greatest_common_divisor(self.0, other.0);
         let left = self.0 / divisor;
@@ -46,6 +52,10 @@ const fn greatest_common_divisor(mut left: u64, mut right: u64) -> u64 {
 }
 
 /// Stable identity properties exposed by a backend/adapter boundary.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "identity guarantees are independent capabilities rather than mutually exclusive state"
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IdentityCapabilities {
     /// Item identifiers remain stable for the supported lifetime.
@@ -60,6 +70,7 @@ pub struct IdentityCapabilities {
 
 impl IdentityCapabilities {
     /// Computes capabilities guaranteed by both sides of an adapter boundary.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             stable_item_ids: self.stable_item_ids && other.stable_item_ids,
@@ -73,6 +84,10 @@ impl IdentityCapabilities {
     }
 
     /// Validates the identity invariants required by the core model.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_core_requirements(self) -> Result<()> {
         if !self.stable_item_ids {
             return Err(CloudFilesCoreError::MissingRequiredCapability {
@@ -106,6 +121,7 @@ pub struct RevisionCapabilities {
 
 impl RevisionCapabilities {
     /// Computes revision guarantees shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             separate_metadata_and_content: self.separate_metadata_and_content
@@ -129,6 +145,7 @@ pub struct EnumerationCapabilities {
 
 impl EnumerationCapabilities {
     /// Computes enumeration guarantees shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             paged: self.paged && other.paged,
@@ -168,6 +185,7 @@ pub struct ChangeCapabilities {
 
 impl ChangeCapabilities {
     /// Computes change-discovery strategies shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         let anchored = match (self.anchored, other.anchored) {
             (Some(left), Some(right)) => Some(left.intersection(right)),
@@ -192,6 +210,10 @@ pub struct RangeHydrationCapabilities {
 
 impl RangeHydrationCapabilities {
     /// Computes range guarantees and physical constraints shared by both sides.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn intersection(self, other: Self) -> Result<Self> {
         Ok(Self {
             alignment: self.alignment.intersection(other.alignment)?,
@@ -215,6 +237,10 @@ pub struct HydrationCapabilities {
 
 impl HydrationCapabilities {
     /// Computes hydration strategies shared by both sides.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn intersection(self, other: Self) -> Result<Self> {
         let range = match (self.range, other.range) {
             (Some(left), Some(right)) => Some(left.intersection(right)?),
@@ -235,6 +261,10 @@ impl HydrationCapabilities {
 }
 
 /// Mutation operations supported across a backend/adapter boundary.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mutation support is an independent capability set rather than mutually exclusive state"
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MutationCapabilities {
     /// Create file or directory items.
@@ -255,6 +285,7 @@ pub struct MutationCapabilities {
 
 impl MutationCapabilities {
     /// Computes mutation operations shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             create: self.create && other.create,
@@ -281,6 +312,7 @@ pub struct ContentStorageModes {
 
 impl ContentStorageModes {
     /// Computes storage modes shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             platform_managed: self.platform_managed && other.platform_managed,
@@ -290,6 +322,7 @@ impl ContentStorageModes {
     }
 
     /// Returns whether at least one materialization mode remains available.
+    #[must_use]
     pub const fn is_supported(self) -> bool {
         self.platform_managed || self.provider_managed || self.hybrid
     }
@@ -304,6 +337,7 @@ pub struct MaterializationCapabilities {
 
 impl MaterializationCapabilities {
     /// Computes materialization modes shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             storage_modes: self.storage_modes.intersection(other.storage_modes),
@@ -312,6 +346,10 @@ impl MaterializationCapabilities {
 }
 
 /// Eviction and pinning mechanics available to the effective adapter.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "eviction guarantees are independent capabilities rather than mutually exclusive state"
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EvictionCapabilities {
     /// Physical content can be evicted or dehydrated.
@@ -326,6 +364,7 @@ pub struct EvictionCapabilities {
 
 impl EvictionCapabilities {
     /// Computes eviction guarantees shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         let supported = self.supported && other.supported;
         Self {
@@ -353,6 +392,7 @@ pub enum CancellationLevel {
 
 impl CancellationLevel {
     /// Returns the strongest cancellation level guaranteed by both sides.
+    #[must_use]
     pub fn intersection(self, other: Self) -> Self {
         std::cmp::min(self, other)
     }
@@ -371,6 +411,7 @@ pub struct NamingCapabilities {
 
 impl NamingCapabilities {
     /// Computes naming guarantees shared by both sides.
+    #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self {
             case_sensitive: self.case_sensitive && other.case_sensitive,
@@ -398,6 +439,7 @@ pub struct CloudFilesLimits {
 
 impl CloudFilesLimits {
     /// Computes the tightest quantitative limits imposed by either side.
+    #[must_use]
     pub fn intersection(self, other: Self) -> Self {
         Self {
             native_identity_max_bytes: minimum_optional_limit(
@@ -424,6 +466,10 @@ impl CloudFilesLimits {
     }
 
     /// Validates an adapter's encoded native identity against the effective platform limit.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_native_identity(self, encoded: &[u8]) -> Result<()> {
         let Some(max_bytes) = self.native_identity_max_bytes else {
             return Ok(());
@@ -482,6 +528,7 @@ impl CloudFilesCapabilities {
     /// Use this as a pass-through baseline when one boundary does not constrain some dimensions,
     /// then replace every dimension that boundary actually owns. It is not a declaration that a
     /// concrete backend or platform has been validated to support every operation.
+    #[must_use]
     pub const fn unconstrained() -> Self {
         let unconstrained_range = RangeHydrationCapabilities {
             alignment: Alignment::ONE,
@@ -559,6 +606,10 @@ impl CloudFilesCapabilities {
     ///
     /// Call this successively for backend, platform, and product-host descriptions. Unsupported
     /// optional operations remain ordinary capability state rather than producing an error.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn intersection(self, other: Self) -> Result<Self> {
         Ok(Self {
             identity: self.identity.intersection(other.identity),
@@ -576,6 +627,10 @@ impl CloudFilesCapabilities {
     }
 
     /// Validates the non-negotiable identity invariants required by the core model.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_core_requirements(self) -> Result<()> {
         self.identity.validate_core_requirements()
     }

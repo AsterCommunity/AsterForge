@@ -25,21 +25,28 @@ pub struct MacosEnumerationRequest {
 
 impl MacosEnumerationRequest {
     /// Creates a request for a product directory or the root system container.
+    #[must_use]
     pub const fn new(container: MacosFileProviderIdentifier, page: Option<PageCursor>) -> Self {
         Self { container, page }
     }
 
     /// Returns the native-facing container identifier.
+    #[must_use]
     pub const fn container(&self) -> &MacosFileProviderIdentifier {
         &self.container
     }
 
     /// Returns the opaque backend page cursor.
+    #[must_use]
     pub const fn page(&self) -> Option<&PageCursor> {
         self.page.as_ref()
     }
 
     /// Resolves the backend parent key, using `root_key` only for Apple's root container.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn backend_parent<'a>(&'a self, root_key: &'a CloudItemKey) -> Result<&'a CloudItemKey> {
         match &self.container {
             MacosFileProviderIdentifier::Item { key, .. } => Ok(key),
@@ -76,6 +83,7 @@ pub struct MacosEnumerationState {
 
 impl MacosEnumerationState {
     /// Creates a fresh enumerator for one immutable container identity.
+    #[must_use]
     pub fn new(container: MacosFileProviderIdentifier) -> Self {
         Self {
             container,
@@ -89,6 +97,10 @@ impl MacosEnumerationState {
     }
 
     /// Returns the next backend request. Calling after the terminal page is a contract error.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn request(&self) -> Result<MacosEnumerationRequest> {
         if self.finished {
             return Err(MacosBridgeError::InvalidBackendResponse {
@@ -102,6 +114,10 @@ impl MacosEnumerationState {
     }
 
     /// Accepts one page and advances the handle-scoped continuation state.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn accept_page(&mut self, page: MacosEnumerationPage) -> Result<MacosEnumerationPage> {
         if self.finished {
             return Err(MacosBridgeError::InvalidBackendResponse {
@@ -183,6 +199,7 @@ impl MacosEnumerationState {
     }
 
     /// Returns whether a terminal page has been accepted.
+    #[must_use]
     pub const fn is_finished(&self) -> bool {
         self.finished
     }
@@ -191,6 +208,10 @@ impl MacosEnumerationState {
 impl MacosEnumerationPage {
     /// Validates a backend page against the exact domain root and requested parent before exposing
     /// it to File Provider.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_backend(
         root_key: &CloudItemKey,
         parent: &CloudItemKey,
@@ -231,16 +252,19 @@ impl MacosEnumerationPage {
     }
 
     /// Returns items in backend enumeration order.
+    #[must_use]
     pub fn items(&self) -> &[MacosFileProviderItem] {
         &self.items
     }
 
     /// Returns the next opaque page cursor.
+    #[must_use]
     pub const fn next_page(&self) -> Option<&PageCursor> {
         self.next_page.as_ref()
     }
 
     /// Consumes the page into owned items and continuation cursor.
+    #[must_use]
     pub fn into_parts(self) -> (Vec<MacosFileProviderItem>, Option<PageCursor>) {
         (self.items, self.next_page)
     }

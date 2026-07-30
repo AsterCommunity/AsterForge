@@ -49,6 +49,7 @@ pub enum LinuxDispatchRejection {
 
 impl LinuxDispatchRejection {
     /// Returns the FUSE-visible portable error classification.
+    #[must_use]
     pub const fn error_code(self) -> LinuxErrorCode {
         match self {
             Self::Saturated => LinuxErrorCode::TryAgain,
@@ -72,6 +73,10 @@ pub struct LinuxRequestDispatcher {
 
 impl LinuxRequestDispatcher {
     /// Creates a dispatcher backed by a caller-owned runtime.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(runtime: Handle, max_in_flight: usize) -> Result<Self> {
         if max_in_flight == 0 {
             return Err(LinuxCloudFilesError::InvalidConfiguration {
@@ -89,6 +94,10 @@ impl LinuxRequestDispatcher {
     }
 
     /// Reserves one in-flight slot without blocking the callback thread.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn reserve(&self) -> std::result::Result<LinuxDispatchReservation, LinuxDispatchRejection> {
         if self.inner.closing.load(Ordering::Acquire) {
             self.inner.metrics.closing.fetch_add(1, Ordering::Relaxed);
@@ -144,11 +153,13 @@ impl LinuxRequestDispatcher {
     }
 
     /// Returns whether new callback work is rejected.
+    #[must_use]
     pub fn is_closing(&self) -> bool {
         self.inner.closing.load(Ordering::Acquire)
     }
 
     /// Returns an atomic metrics snapshot.
+    #[must_use]
     pub fn metrics(&self) -> LinuxDispatchMetrics {
         LinuxDispatchMetrics {
             accepted: self.inner.metrics.accepted.load(Ordering::Relaxed),

@@ -18,6 +18,10 @@ pub struct MacosFileProviderItemVersion {
 
 impl MacosFileProviderItemVersion {
     /// Creates an item version while preserving both opaque revision values exactly.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(metadata: MetadataRevision, content: ContentRevision) -> Result<Self> {
         validate_component(metadata.as_bytes(), "metadata version")?;
         validate_component(content.as_bytes(), "content version")?;
@@ -25,6 +29,10 @@ impl MacosFileProviderItemVersion {
     }
 
     /// Creates a directory version with a fixed content component and exact metadata revision.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn directory(metadata: MetadataRevision) -> Result<Self> {
         let content = ContentRevision::from_slice(DIRECTORY_CONTENT_VERSION).map_err(|_| {
             MacosBridgeError::InvalidItemVersion {
@@ -35,16 +43,19 @@ impl MacosFileProviderItemVersion {
     }
 
     /// Returns the opaque metadata version bytes.
+    #[must_use]
     pub const fn metadata(&self) -> &MetadataRevision {
         &self.metadata
     }
 
     /// Returns the opaque content version bytes.
+    #[must_use]
     pub const fn content(&self) -> &ContentRevision {
         &self.content
     }
 
     /// Consumes the version into metadata and content components.
+    #[must_use]
     pub fn into_parts(self) -> (MetadataRevision, ContentRevision) {
         (self.metadata, self.content)
     }

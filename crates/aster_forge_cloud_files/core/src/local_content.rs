@@ -10,6 +10,10 @@ pub struct LocalContentReference(String);
 
 impl LocalContentReference {
     /// Creates a non-empty local-content reference and preserves it exactly.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -19,11 +23,13 @@ impl LocalContentReference {
     }
 
     /// Returns the opaque reference.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Consumes the wrapper and returns the opaque reference.
+    #[must_use]
     pub fn into_string(self) -> String {
         self.0
     }
@@ -44,6 +50,10 @@ pub struct LocalContentGeneration(NonZeroU64);
 
 impl LocalContentGeneration {
     /// Creates a non-zero local generation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub const fn new(value: u64) -> Result<Self> {
         match NonZeroU64::new(value) {
             Some(value) => Ok(Self(value)),
@@ -52,6 +62,7 @@ impl LocalContentGeneration {
     }
 
     /// Returns the numeric generation fence value.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0.get()
     }
@@ -69,6 +80,7 @@ pub struct LocalContentSnapshot {
 
 impl LocalContentSnapshot {
     /// Creates a snapshot. The referenced bytes must remain immutable for this generation.
+    #[must_use]
     pub const fn new(
         item_key: CloudItemKey,
         generation: LocalContentGeneration,
@@ -86,26 +98,31 @@ impl LocalContentSnapshot {
     }
 
     /// Returns the stable item identity whose local bytes were captured.
+    #[must_use]
     pub const fn item_key(&self) -> &CloudItemKey {
         &self.item_key
     }
 
     /// Returns the item-local generation used to fence stale upload completion.
+    #[must_use]
     pub const fn generation(&self) -> LocalContentGeneration {
         self.generation
     }
 
     /// Returns the opaque reference used by the platform/host content reader.
+    #[must_use]
     pub const fn reference(&self) -> &LocalContentReference {
         &self.reference
     }
 
     /// Returns the immutable byte length.
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
 
     /// Returns the optional real integrity digest.
+    #[must_use]
     pub const fn digest(&self) -> Option<&ContentDigest> {
         self.digest.as_ref()
     }

@@ -621,11 +621,11 @@ async fn range_beyond_eof_is_rejected_before_backend_work() {
     let backend = Arc::new(RecordingContentBackend::new(vec![content.clone()]));
     let coordinator =
         HydrationCoordinator::new(Arc::clone(&backend) as Arc<dyn CloudContentBackend>);
-    let error =
-        match coordinator.request(request(&fixture, content.revision, 17, 1, 1, generation(1))) {
-            Ok(_) => panic!("range beyond EOF should be rejected"),
-            Err(error) => error,
-        };
+    let Err(error) =
+        coordinator.request(request(&fixture, content.revision, 17, 1, 1, generation(1)))
+    else {
+        panic!("range beyond EOF should be rejected");
+    };
 
     assert!(matches!(
         error,

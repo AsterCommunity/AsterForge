@@ -18,6 +18,10 @@ macro_rules! opaque_string {
 
         impl $name {
             /// Creates a non-empty opaque value and preserves it exactly.
+            /// # Errors
+            ///
+            /// Returns an error when validation fails or an underlying backend, store, or platform
+            /// operation fails.
             pub fn new(value: impl Into<String>) -> Result<Self> {
                 let value = value.into();
                 if value.is_empty() {
@@ -75,6 +79,10 @@ pub struct SessionGeneration(NonZeroU64);
 
 impl SessionGeneration {
     /// Creates a non-zero session generation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub const fn new(value: u64) -> Result<Self> {
         match NonZeroU64::new(value) {
             Some(value) => Ok(Self(value)),
@@ -83,6 +91,7 @@ impl SessionGeneration {
     }
 
     /// Returns the numeric fence value.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0.get()
     }
@@ -103,6 +112,7 @@ pub enum SessionState {
 
 impl SessionState {
     /// Returns whether moving from this state to `next` is a valid idempotent lifecycle step.
+    #[must_use]
     pub const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
@@ -136,6 +146,7 @@ pub struct MutationPreconditions {
 
 impl MutationPreconditions {
     /// Creates independent metadata and content revision preconditions.
+    #[must_use]
     pub const fn new(
         metadata_revision: Option<MetadataRevision>,
         content_revision: Option<ContentRevision>,
@@ -147,11 +158,13 @@ impl MutationPreconditions {
     }
 
     /// Returns the expected metadata revision, when one is required.
+    #[must_use]
     pub const fn metadata_revision(&self) -> Option<&MetadataRevision> {
         self.metadata_revision.as_ref()
     }
 
     /// Returns the expected content revision, when one is required.
+    #[must_use]
     pub const fn content_revision(&self) -> Option<&ContentRevision> {
         self.content_revision.as_ref()
     }
@@ -194,6 +207,10 @@ pub enum DesiredMutation {
 
 impl DesiredMutation {
     /// Creates a child intent with a non-empty opaque name.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn create(
         scope: CloudScope,
         parent_id: CloudItemId,
@@ -213,11 +230,16 @@ impl DesiredMutation {
     }
 
     /// Creates a content replacement intent.
+    #[must_use]
     pub const fn modify_content(key: CloudItemKey) -> Self {
         Self::ModifyContent { key }
     }
 
     /// Creates a metadata intent that changes the parent, name, or both.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn modify_metadata(
         key: CloudItemKey,
         parent_id: Option<CloudItemId>,
@@ -239,11 +261,13 @@ impl DesiredMutation {
     }
 
     /// Creates a delete intent.
+    #[must_use]
     pub const fn delete(key: CloudItemKey) -> Self {
         Self::Delete { key }
     }
 
     /// Returns the namespace/root scope affected by this mutation.
+    #[must_use]
     pub const fn scope(&self) -> &CloudScope {
         match self {
             Self::Create { scope, .. } => scope,
@@ -254,6 +278,7 @@ impl DesiredMutation {
     }
 
     /// Returns the existing item key when the mutation targets an already identified item.
+    #[must_use]
     pub const fn existing_item_key(&self) -> Option<&CloudItemKey> {
         match self {
             Self::Create { .. } => None,
@@ -277,6 +302,7 @@ pub struct MutationRetryMetadata {
 
 impl MutationRetryMetadata {
     /// Creates retry metadata from an attempt count and optional absolute retry time.
+    #[must_use]
     pub const fn new(attempt: u32, not_before: Option<SystemTime>) -> Self {
         Self {
             attempt,
@@ -285,11 +311,13 @@ impl MutationRetryMetadata {
     }
 
     /// Returns how many remote attempts have already started.
+    #[must_use]
     pub const fn attempt(&self) -> u32 {
         self.attempt
     }
 
     /// Returns the earliest retry time, when one is scheduled.
+    #[must_use]
     pub const fn not_before(&self) -> Option<SystemTime> {
         self.not_before
     }
@@ -318,6 +346,7 @@ pub struct MutationIntent {
 
 impl MutationIntent {
     /// Creates an intent. Call [`Self::validate_for_persistence`] before durable insertion.
+    #[must_use]
     pub const fn new(
         operation_id: OperationId,
         idempotency_key: IdempotencyKey,
@@ -341,12 +370,14 @@ impl MutationIntent {
     }
 
     /// Attaches an owned local-content reference.
+    #[must_use]
     pub fn with_local_content(mut self, local_content: LocalContentSnapshot) -> Self {
         self.local_content = Some(local_content);
         self
     }
 
     /// Attaches an owned platform correlation token.
+    #[must_use]
     pub fn with_platform_correlation(
         mut self,
         platform_correlation: PlatformRequestCorrelation,
@@ -356,6 +387,7 @@ impl MutationIntent {
     }
 
     /// Attaches a backend status/change-feed reconciliation key.
+    #[must_use]
     pub fn with_remote_reconciliation_key(
         mut self,
         remote_reconciliation_key: RemoteReconciliationKey,
@@ -365,12 +397,17 @@ impl MutationIntent {
     }
 
     /// Replaces persisted retry metadata.
+    #[must_use]
     pub fn with_retry(mut self, retry: MutationRetryMetadata) -> Self {
         self.retry = retry;
         self
     }
 
     /// Validates invariants needed before the intent becomes recoverable.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_for_persistence(&self) -> Result<()> {
         if self.desired.requires_local_content() && self.local_content.is_none() {
             return Err(CloudFilesCoreError::invalid_mutation_intent(
@@ -395,51 +432,61 @@ impl MutationIntent {
     }
 
     /// Returns the operation identity.
+    #[must_use]
     pub const fn operation_id(&self) -> &OperationId {
         &self.operation_id
     }
 
     /// Returns the backend idempotency key.
+    #[must_use]
     pub const fn idempotency_key(&self) -> &IdempotencyKey {
         &self.idempotency_key
     }
 
     /// Returns how the mutation entered the shared mechanism.
+    #[must_use]
     pub const fn origin(&self) -> MutationOrigin {
         self.origin
     }
 
     /// Returns the platform session generation captured by the intent.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
 
     /// Returns the desired product-neutral mutation.
+    #[must_use]
     pub const fn desired(&self) -> &DesiredMutation {
         &self.desired
     }
 
     /// Returns independent metadata/content revision preconditions.
+    #[must_use]
     pub const fn preconditions(&self) -> &MutationPreconditions {
         &self.preconditions
     }
 
     /// Returns the owned local-content reference, when needed.
+    #[must_use]
     pub const fn local_content(&self) -> Option<&LocalContentSnapshot> {
         self.local_content.as_ref()
     }
 
     /// Returns the owned platform request correlation token.
+    #[must_use]
     pub const fn platform_correlation(&self) -> Option<&PlatformRequestCorrelation> {
         self.platform_correlation.as_ref()
     }
 
     /// Returns the remote status/change-feed reconciliation key.
+    #[must_use]
     pub const fn remote_reconciliation_key(&self) -> Option<&RemoteReconciliationKey> {
         self.remote_reconciliation_key.as_ref()
     }
 
     /// Returns persisted retry metadata.
+    #[must_use]
     pub const fn retry(&self) -> &MutationRetryMetadata {
         &self.retry
     }
@@ -568,6 +615,10 @@ pub struct MutationRunner;
 
 impl MutationRunner {
     /// Persists a caller-owned intent, then advances its durable record.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn submit(
         &self,
         intent: MutationIntent,
@@ -590,6 +641,10 @@ impl MutationRunner {
     }
 
     /// Advances one already-persisted mutation using the active executor generation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn resume(
         &self,
         operation_id: &OperationId,
@@ -854,6 +909,10 @@ pub struct MutationRecord {
 
 impl MutationRecord {
     /// Converts a validated in-memory intent into its first recoverable journal state.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn persist(intent: MutationIntent) -> Result<Self> {
         intent.validate_for_persistence()?;
         Ok(Self {
@@ -864,21 +923,28 @@ impl MutationRecord {
     }
 
     /// Returns the immutable persisted intent.
+    #[must_use]
     pub const fn intent(&self) -> &MutationIntent {
         &self.intent
     }
 
     /// Returns the current durable state.
+    #[must_use]
     pub const fn state(&self) -> MutationState {
         self.state
     }
 
     /// Returns the durable remote outcome, when one has been recorded.
+    #[must_use]
     pub const fn remote_outcome(&self) -> Option<&MutationRemoteOutcome> {
         self.remote_outcome.as_ref()
     }
 
     /// Marks that a remote effect has started.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn begin_remote_apply(&mut self) -> Result<MutationRecordTransition> {
         match self.state {
             MutationState::IntentPersisted => {
@@ -894,6 +960,10 @@ impl MutationRecord {
     }
 
     /// Durably records a known or unknown remote outcome.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn record_remote_outcome(
         &mut self,
         outcome: MutationRemoteOutcome,
@@ -918,6 +988,10 @@ impl MutationRecord {
     }
 
     /// Marks required platform effects as reconciled.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_platform_reconciled(&mut self) -> Result<MutationRecordTransition> {
         match self.state {
             MutationState::RemoteOutcomeKnown => {
@@ -934,6 +1008,10 @@ impl MutationRecord {
     }
 
     /// Marks the operation complete after platform reconciliation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn complete(&mut self) -> Result<MutationRecordTransition> {
         match self.state {
             MutationState::PlatformReconciled => {

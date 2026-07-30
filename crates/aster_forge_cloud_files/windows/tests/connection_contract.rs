@@ -16,13 +16,13 @@ use aster_forge_cloud_files_windows::{
     CFAPI_MAX_PRIORITY_HINT, CFAPI_TRANSFER_ALIGNMENT_BYTES, WindowsCallbackInfoSnapshot,
     WindowsCallbackRange, WindowsCallbackRangeLength, WindowsCallbackRequest,
     WindowsCancelFetchDataFlags, WindowsCancelFetchDataSnapshot, WindowsCloudFilesError,
-    WindowsConnectionKey, WindowsConnectionSession, WindowsFetchDataFailure, WindowsFetchDataFlags,
-    WindowsFetchDataPreparation, WindowsFetchDataProgress, WindowsFetchDataRequest,
-    WindowsFetchDataSnapshot, WindowsFetchDataTransfer, WindowsFetchDataWaiterRegistry,
-    WindowsFetchDataWatchdogConfig, WindowsFileIdentity, WindowsObservedNotification,
-    WindowsPreflightSnapshot, WindowsProcessInfoSnapshot, WindowsRequestKey,
-    WindowsRestartHydration, WindowsSyncRootConnectOptions, WindowsSyncRootIdentity,
-    WindowsTransferKey,
+    WindowsConnectionKey, WindowsConnectionSession, WindowsFetchDataCancellationOutcome,
+    WindowsFetchDataFailure, WindowsFetchDataFlags, WindowsFetchDataPreparation,
+    WindowsFetchDataProgress, WindowsFetchDataRequest, WindowsFetchDataSnapshot,
+    WindowsFetchDataTransfer, WindowsFetchDataWaiterRegistry, WindowsFetchDataWatchdogConfig,
+    WindowsFileIdentity, WindowsObservedNotification, WindowsPreflightSnapshot,
+    WindowsProcessInfoSnapshot, WindowsRequestKey, WindowsRestartHydration,
+    WindowsSyncRootConnectOptions, WindowsSyncRootIdentity, WindowsTransferKey,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -800,7 +800,7 @@ async fn cancellation_correlation_includes_session_generation() {
     }
     assert_eq!(
         registry.cancel(&cancel).expect("range should validate"),
-        Default::default()
+        WindowsFetchDataCancellationOutcome::default()
     );
     assert_eq!(registry.metrics().unmatched_cancellations(), 1);
     backend.release();

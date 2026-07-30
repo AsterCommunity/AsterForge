@@ -71,6 +71,7 @@ pub struct HydrationRequest {
 
 impl HydrationRequest {
     /// Creates a hydration request from an exact content read and physical transfer alignment.
+    #[must_use]
     pub const fn new(
         read: ContentReadRequest,
         alignment: Alignment,
@@ -84,6 +85,7 @@ impl HydrationRequest {
     }
 
     /// Creates a complete-file hydration request.
+    #[must_use]
     pub const fn whole(
         key: CloudItemKey,
         revision: ContentRevision,
@@ -98,6 +100,7 @@ impl HydrationRequest {
     }
 
     /// Creates a range hydration request with adapter-owned physical alignment.
+    #[must_use]
     pub const fn range(
         key: CloudItemKey,
         revision: ContentRevision,
@@ -114,16 +117,19 @@ impl HydrationRequest {
     }
 
     /// Returns the exact logical content request.
+    #[must_use]
     pub const fn read(&self) -> &ContentReadRequest {
         &self.read
     }
 
     /// Returns the physical range alignment owned by the active adapter boundary.
+    #[must_use]
     pub const fn alignment(&self) -> Alignment {
         self.alignment
     }
 
     /// Returns the platform session generation that owns this waiter and its completion.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -212,6 +218,7 @@ impl HydrationCoordinator {
     }
 
     /// Returns the configured in-flight work limits.
+    #[must_use]
     pub const fn limits(&self) -> HydrationLimits {
         self.limits
     }
@@ -221,6 +228,10 @@ impl HydrationCoordinator {
     /// Exact requests share one backend future. Overlapping range requests reuse existing work and
     /// add backend reads only for uncovered physical gaps. All sharing keys include item scope,
     /// content revision, and expected size.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn request(&self, request: HydrationRequest) -> HydrationResult<HydrationWaiter> {
         let content = HydrationContentKey::from_request(&request);
         let (target_start, target_end) = logical_extent(request.read())?;
@@ -288,7 +299,7 @@ impl HydrationCoordinator {
             &mut state,
             Arc::clone(&self.backend),
             content.clone(),
-            request.clone(),
+            request,
             0,
             content.expected_size,
             true,
@@ -326,7 +337,7 @@ impl HydrationCoordinator {
             &mut state,
             Arc::clone(&self.backend),
             content.clone(),
-            request.clone(),
+            request,
             offset,
             offset,
             false,
@@ -417,14 +428,14 @@ fn insert_range_work(
         original_request.expected_size(),
         range,
     );
-    insert_work(state, backend, content, request, start, end, false)
+    insert_work(state, backend, content, &request, start, end, false)
 }
 
 fn insert_work(
     state: &mut CoordinatorState,
     backend: Arc<dyn CloudContentBackend>,
     content: HydrationContentKey,
-    request: ContentReadRequest,
+    request: &ContentReadRequest,
     start: u64,
     end: u64,
     whole: bool,
@@ -627,6 +638,7 @@ pub struct HydrationCancellationHandle {
 
 impl HydrationCancellationHandle {
     /// Attempts to cancel this waiter without cancelling work still owned by other waiters.
+    #[must_use]
     pub fn cancel(&self) -> HydrationCancellationOutcome {
         self.inner.cancel()
     }
@@ -645,6 +657,7 @@ pub struct HydrationWaiter {
 
 impl HydrationWaiter {
     /// Returns an independently cloneable cancellation handle for this waiter.
+    #[must_use]
     pub fn cancellation_handle(&self) -> HydrationCancellationHandle {
         HydrationCancellationHandle {
             inner: Arc::clone(&self.inner),
@@ -652,6 +665,10 @@ impl HydrationWaiter {
     }
 
     /// Drives shared backend work and returns only the exact logical bytes requested by this waiter.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn wait(mut self) -> HydrationResult<ContentReadResponse> {
         if self.inner.terminal.load(Ordering::Acquire) == TERMINAL_CANCELLED {
             self.finished = true;
@@ -672,10 +689,10 @@ impl HydrationWaiter {
         };
         let result = match selected {
             Some(result) => {
-                if !self.inner.complete() {
-                    Err(HydrationError::Cancelled)
-                } else {
+                if self.inner.complete() {
                     result.and_then(|responses| self.assemble(responses))
+                } else {
+                    Err(HydrationError::Cancelled)
                 }
             }
             None => Err(HydrationError::Cancelled),
@@ -910,7 +927,7 @@ mod tests {
                 &mut state,
                 Arc::new(TestBackend),
                 content,
-                request.read().clone(),
+                request.read(),
                 0,
                 1,
                 true,

@@ -118,6 +118,7 @@ pub enum LinuxCloudFilesError {
 
 impl LinuxCloudFilesError {
     /// Returns the portable errno classification expected by the FUSE adapter.
+    #[must_use]
     pub const fn error_code(&self) -> LinuxErrorCode {
         match self {
             Self::UnknownInode { .. } => LinuxErrorCode::NotFound,
@@ -145,6 +146,7 @@ impl LinuxCloudFilesError {
 }
 
 /// Maps durable Linux namespace failures to FUSE-visible classifications.
+#[must_use]
 pub const fn namespace_store_error_code(
     kind: crate::LinuxNamespaceMutationStoreErrorKind,
 ) -> LinuxErrorCode {
@@ -164,6 +166,7 @@ pub const fn namespace_store_error_code(
 }
 
 /// Maps durable local-write failures to FUSE-visible classifications.
+#[must_use]
 pub const fn writeback_store_error_code(kind: CloudFilesStoreErrorKind) -> LinuxErrorCode {
     match kind {
         CloudFilesStoreErrorKind::NotFound => LinuxErrorCode::NotFound,
@@ -174,6 +177,7 @@ pub const fn writeback_store_error_code(kind: CloudFilesStoreErrorKind) -> Linux
 }
 
 /// Maps product-neutral backend failures to FUSE-visible classifications.
+#[must_use]
 pub const fn backend_error_code(kind: CloudBackendErrorKind) -> LinuxErrorCode {
     match kind {
         CloudBackendErrorKind::NotFound => LinuxErrorCode::NotFound,

@@ -18,6 +18,10 @@ pub struct ContentUploadSessionId(String);
 
 impl ContentUploadSessionId {
     /// Creates a non-empty backend session identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -27,6 +31,7 @@ impl ContentUploadSessionId {
     }
 
     /// Returns the opaque backend session identity.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -54,6 +59,10 @@ pub struct ContentUploadIntent {
 
 impl ContentUploadIntent {
     /// Creates an upload bound to one base remote revision and immutable local generation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         operation_id: OperationId,
         idempotency_key: IdempotencyKey,
@@ -78,31 +87,37 @@ impl ContentUploadIntent {
     }
 
     /// Returns the durable operation identity shared with mutation reconciliation.
+    #[must_use]
     pub const fn operation_id(&self) -> &OperationId {
         &self.operation_id
     }
 
     /// Returns the backend idempotency/status reconciliation key.
+    #[must_use]
     pub const fn idempotency_key(&self) -> &IdempotencyKey {
         &self.idempotency_key
     }
 
     /// Returns the exact remote content revision used as the conditional upload base.
+    #[must_use]
     pub const fn base_cache_key(&self) -> &ContentCacheKey {
         &self.base_cache_key
     }
 
     /// Returns the immutable local source snapshot.
+    #[must_use]
     pub const fn snapshot(&self) -> &LocalContentSnapshot {
         &self.snapshot
     }
 
     /// Returns the operation-owned upload lease identity.
+    #[must_use]
     pub const fn upload_lease_id(&self) -> &ContentLeaseId {
         &self.upload_lease_id
     }
 
     /// Returns the platform session generation that accepted the upload.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -117,6 +132,7 @@ pub struct ContentUploadSession {
 
 impl ContentUploadSession {
     /// Creates a backend upload-session checkpoint.
+    #[must_use]
     pub const fn new(id: ContentUploadSessionId, accepted_offset: u64) -> Self {
         Self {
             id,
@@ -125,16 +141,22 @@ impl ContentUploadSession {
     }
 
     /// Returns the backend upload-session identity.
+    #[must_use]
     pub const fn id(&self) -> &ContentUploadSessionId {
         &self.id
     }
 
     /// Returns the first local byte not yet accepted by the backend.
+    #[must_use]
     pub const fn accepted_offset(&self) -> u64 {
         self.accepted_offset
     }
 
     /// Validates that the backend checkpoint remains within the immutable snapshot.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_for(&self, intent: &ContentUploadIntent) -> Result<()> {
         if self.accepted_offset > intent.snapshot().size() {
             return Err(CloudFilesCoreError::invalid_content_upload(
@@ -158,6 +180,10 @@ pub struct ContentUploadChunk {
 
 impl ContentUploadChunk {
     /// Creates a non-empty chunk within the immutable snapshot size.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         session_id: ContentUploadSessionId,
         local_generation: LocalContentGeneration,
@@ -243,6 +269,10 @@ impl ContentUploadChunk {
     }
 
     /// Validates that this chunk continues the exact durable session and immutable snapshot.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_for(
         &self,
         intent: &ContentUploadIntent,
@@ -281,6 +311,7 @@ pub struct ContentUploadChunkAck {
 
 impl ContentUploadChunkAck {
     /// Creates an acknowledgement whose offset is validated by the submitted chunk.
+    #[must_use]
     pub const fn new(session_id: ContentUploadSessionId, accepted_offset: u64) -> Self {
         Self {
             session_id,
@@ -289,16 +320,22 @@ impl ContentUploadChunkAck {
     }
 
     /// Returns the backend upload-session identity.
+    #[must_use]
     pub const fn session_id(&self) -> &ContentUploadSessionId {
         &self.session_id
     }
 
     /// Returns the first byte not yet accepted by the backend.
+    #[must_use]
     pub const fn accepted_offset(&self) -> u64 {
         self.accepted_offset
     }
 
     /// Validates exact, monotonic acknowledgement of the submitted chunk.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_for(&self, chunk: &ContentUploadChunk) -> Result<()> {
         if self.session_id != chunk.session_id {
             return Err(CloudFilesCoreError::invalid_content_upload(
@@ -419,6 +456,10 @@ pub struct ContentUploadRunner {
 
 impl ContentUploadRunner {
     /// Creates a runner with a non-zero in-memory chunk size.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(chunk_size: usize) -> Result<Self> {
         let chunk_size = NonZeroUsize::new(chunk_size).ok_or_else(|| {
             CloudFilesCoreError::invalid_content_upload("upload runner chunk size must be non-zero")
@@ -427,11 +468,16 @@ impl ContentUploadRunner {
     }
 
     /// Returns the maximum immutable byte count submitted in one backend chunk.
+    #[must_use]
     pub const fn chunk_size(&self) -> usize {
         self.chunk_size.get()
     }
 
     /// Persists a caller-owned upload intent, then advances its durable record.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn submit(
         &self,
         intent: ContentUploadIntent,
@@ -458,6 +504,14 @@ impl ContentUploadRunner {
     }
 
     /// Advances one already-persisted upload using the active executor generation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the upload recovery loop keeps every durable state transition in one auditable match"
+    )]
     pub async fn resume(
         &self,
         operation_id: &OperationId,
@@ -755,6 +809,7 @@ pub struct ContentUploadRecord {
 
 impl ContentUploadRecord {
     /// Creates the first recoverable upload state.
+    #[must_use]
     pub const fn persist(intent: ContentUploadIntent) -> Self {
         Self {
             intent,
@@ -765,26 +820,34 @@ impl ContentUploadRecord {
     }
 
     /// Returns the immutable upload intent.
+    #[must_use]
     pub const fn intent(&self) -> &ContentUploadIntent {
         &self.intent
     }
 
     /// Returns the durable upload state.
+    #[must_use]
     pub const fn state(&self) -> ContentUploadState {
         self.state
     }
 
     /// Returns the durable backend session checkpoint.
+    #[must_use]
     pub const fn session(&self) -> Option<&ContentUploadSession> {
         self.session.as_ref()
     }
 
     /// Returns the durable remote outcome.
+    #[must_use]
     pub const fn remote_outcome(&self) -> Option<&MutationRemoteOutcome> {
         self.remote_outcome.as_ref()
     }
 
     /// Records or advances the backend session's accepted offset.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn record_session(
         &mut self,
         session: ContentUploadSession,
@@ -822,6 +885,10 @@ impl ContentUploadRecord {
     }
 
     /// Marks remote commit started after all immutable bytes were accepted.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn begin_remote_commit(&mut self) -> Result<ContentUploadRecordTransition> {
         match self.state {
             ContentUploadState::Uploading => {
@@ -850,6 +917,10 @@ impl ContentUploadRecord {
     }
 
     /// Records a known or unknown conditional remote outcome.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn record_remote_outcome(
         &mut self,
         outcome: MutationRemoteOutcome,
@@ -908,6 +979,10 @@ impl ContentUploadRecord {
     }
 
     /// Marks local metadata reconciled after a known remote outcome.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_metadata_reconciled(&mut self) -> Result<ContentUploadRecordTransition> {
         match self.state {
             ContentUploadState::RemoteOutcomeKnown => {
@@ -924,6 +999,10 @@ impl ContentUploadRecord {
     }
 
     /// Marks the upload terminal after metadata reconciliation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn complete(&mut self) -> Result<ContentUploadRecordTransition> {
         match self.state {
             ContentUploadState::MetadataReconciled => {

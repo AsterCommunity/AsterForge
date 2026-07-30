@@ -12,6 +12,10 @@ macro_rules! string_identity {
 
         impl $name {
             /// Creates an identity while preserving the caller-provided opaque value exactly.
+            /// # Errors
+            ///
+            /// Returns an error when validation fails or an underlying backend, store, or platform
+            /// operation fails.
             pub fn new(value: impl Into<String>) -> Result<Self> {
                 let value = value.into();
                 if value.is_empty() {
@@ -73,6 +77,7 @@ pub struct CloudScope {
 
 impl CloudScope {
     /// Creates a scoped root identity.
+    #[must_use]
     pub const fn new(namespace_id: CloudNamespaceId, root_id: CloudRootId) -> Self {
         Self {
             namespace_id,
@@ -81,16 +86,19 @@ impl CloudScope {
     }
 
     /// Returns the backend identity namespace.
+    #[must_use]
     pub const fn namespace_id(&self) -> &CloudNamespaceId {
         &self.namespace_id
     }
 
     /// Returns the stable root identity.
+    #[must_use]
     pub const fn root_id(&self) -> &CloudRootId {
         &self.root_id
     }
 
     /// Consumes the scope and returns its namespace and root identities.
+    #[must_use]
     pub fn into_parts(self) -> (CloudNamespaceId, CloudRootId) {
         (self.namespace_id, self.root_id)
     }
@@ -108,21 +116,25 @@ pub struct CloudItemKey {
 
 impl CloudItemKey {
     /// Creates a fully scoped item key.
+    #[must_use]
     pub const fn new(scope: CloudScope, item_id: CloudItemId) -> Self {
         Self { scope, item_id }
     }
 
     /// Returns the namespace/root scope.
+    #[must_use]
     pub const fn scope(&self) -> &CloudScope {
         &self.scope
     }
 
     /// Returns the stable path-independent item identity.
+    #[must_use]
     pub const fn item_id(&self) -> &CloudItemId {
         &self.item_id
     }
 
     /// Consumes the key and returns its scope and item identity.
+    #[must_use]
     pub fn into_parts(self) -> (CloudScope, CloudItemId) {
         (self.scope, self.item_id)
     }

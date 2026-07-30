@@ -22,16 +22,19 @@ pub struct MacosContentFetchPlan {
 
 impl MacosContentFetchPlan {
     /// Returns the exact scoped item being fetched.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the exact revision being fetched.
+    #[must_use]
     pub const fn revision(&self) -> &ContentRevision {
         &self.revision
     }
 
     /// Returns the complete logical file size.
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
@@ -86,11 +89,16 @@ where
     }
 
     /// Returns the stable root item key mapped to Apple's root system container.
+    #[must_use]
     pub const fn root_key(&self) -> &CloudItemKey {
         &self.root_key
     }
 
     /// Loads an item by persistent identifier and validates its identity/root role.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn item(
         &self,
         identifier: &MacosFileProviderIdentifier,
@@ -118,6 +126,10 @@ where
     }
 
     /// Loads and validates one backend page for a File Provider enumerator.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn enumerate(
         &self,
         request: &MacosEnumerationRequest,
@@ -144,6 +156,10 @@ where
     }
 
     /// Validates metadata and revision before a caller creates native staging storage.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn prepare_content_fetch(
         &self,
         identifier: &MacosFileProviderIdentifier,
@@ -181,6 +197,10 @@ where
     }
 
     /// Reads one bounded chunk for a validated fetch plan.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn read_content_chunk(
         &self,
         plan: &MacosContentFetchPlan,

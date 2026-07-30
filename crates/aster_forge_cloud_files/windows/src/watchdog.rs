@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::{Result, WindowsCloudFilesError};
 
 /// The fixed callback timeout documented by Windows CFAPI.
-pub const WINDOWS_CFAPI_CALLBACK_TIMEOUT: Duration = Duration::from_secs(60);
+pub const WINDOWS_CFAPI_CALLBACK_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Host-controlled watchdog configuration for one pending fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +15,10 @@ pub struct WindowsFetchDataWatchdogConfig {
 
 impl WindowsFetchDataWatchdogConfig {
     /// Creates a positive timeout no longer than the platform callback contract.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(timeout: Duration) -> Result<Self> {
         if timeout.is_zero() {
             return Err(WindowsCloudFilesError::InvalidWatchdogTimeout {
@@ -30,6 +34,7 @@ impl WindowsFetchDataWatchdogConfig {
     }
 
     /// Returns the configured timeout.
+    #[must_use]
     pub const fn timeout(self) -> Duration {
         self.timeout
     }
@@ -53,6 +58,7 @@ pub struct WindowsFetchDataWatchdog {
 
 impl WindowsFetchDataWatchdog {
     /// Starts a watchdog at `now`.
+    #[must_use]
     pub const fn started(config: WindowsFetchDataWatchdogConfig, now: Instant) -> Self {
         Self {
             config,
@@ -61,6 +67,7 @@ impl WindowsFetchDataWatchdog {
     }
 
     /// Returns the next deadline, or `None` if the host clock cannot represent it.
+    #[must_use]
     pub fn deadline(self) -> Option<Instant> {
         self.last_activity.checked_add(self.config.timeout)
     }
@@ -71,6 +78,7 @@ impl WindowsFetchDataWatchdog {
     }
 
     /// Returns whether the watchdog is due at `now`.
+    #[must_use]
     pub fn is_due(self, now: Instant) -> bool {
         self.deadline().is_some_and(|deadline| now >= deadline)
     }

@@ -29,6 +29,7 @@ pub struct MacosExtensionSession {
 
 impl MacosExtensionSession {
     /// Starts one accepting extension generation.
+    #[must_use]
     pub fn new(generation: SessionGeneration) -> Self {
         Self {
             inner: Arc::new(SessionInner {
@@ -42,16 +43,19 @@ impl MacosExtensionSession {
     }
 
     /// Returns the monotonic extension-instance generation.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.inner.generation
     }
 
     /// Returns the current lifecycle state.
+    #[must_use]
     pub fn state(&self) -> SessionState {
         lock(&self.inner.lifecycle).state
     }
 
     /// Returns the number of accepted requests still owned by downstream work.
+    #[must_use]
     pub fn active_requests(&self) -> usize {
         lock(&self.inner.lifecycle).active_requests
     }
@@ -75,19 +79,22 @@ impl MacosExtensionSession {
         Ok(Self { inner })
     }
 
-    pub(crate) unsafe fn release_ffi_handle(handle: *const ()) -> Result<()> {
+    pub(crate) unsafe fn release_ffi_handle(handle: *const ()) {
         if handle.is_null() {
-            return Ok(());
+            return;
         }
         let pointer = handle.cast::<SessionInner>();
         // SAFETY: the C ABI contract requires one live unreleased session handle returned by
         // `into_ffi_handle`. Reconstructing and dropping consumes that exact owner once.
         let session = unsafe { Arc::from_raw(pointer) };
         drop(session);
-        Ok(())
     }
 
     /// Accepts one request only while the exact generation is accepting work.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn begin_request(
         &self,
         callback_generation: SessionGeneration,
@@ -116,6 +123,7 @@ impl MacosExtensionSession {
     }
 
     /// Moves `Accepting -> Closing` and rejects later request ingress.
+    #[must_use]
     pub fn begin_closing(&self) -> bool {
         let mut lifecycle = lock(&self.inner.lifecycle);
         if lifecycle.state == SessionState::Accepting {
@@ -127,6 +135,10 @@ impl MacosExtensionSession {
     }
 
     /// Marks the native extension/domain bridge disconnected and begins draining accepted work.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_disconnected(&self) -> Result<()> {
         let mut lifecycle = lock(&self.inner.lifecycle);
         match lifecycle.state {
@@ -155,11 +167,13 @@ pub struct MacosExtensionRequestLease {
 
 impl MacosExtensionRequestLease {
     /// Returns the generation that accepted the request.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.session.generation
     }
 
     /// Returns whether completion still belongs to the supplied extension instance.
+    #[must_use]
     pub fn accepts_completion(&self, session: &MacosExtensionSession) -> bool {
         !self.released
             && Arc::ptr_eq(&self.session, &session.inner)
@@ -175,15 +189,14 @@ impl MacosExtensionRequestLease {
         Box::into_raw(Box::new(self)).cast()
     }
 
-    pub(crate) unsafe fn release_ffi_handle(handle: *mut ()) -> Result<()> {
+    pub(crate) unsafe fn release_ffi_handle(handle: *mut ()) {
         if handle.is_null() {
-            return Ok(());
+            return;
         }
         // SAFETY: the C ABI contract requires one live unreleased request handle returned by
         // `into_ffi_handle`. Reconstructing the Box consumes that exact allocation once.
         let lease = unsafe { Box::from_raw(handle.cast::<Self>()) };
         drop(lease);
-        Ok(())
     }
 
     fn release_inner(&mut self) {

@@ -49,6 +49,7 @@ authors = [
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
 # Suppressions must remain observable: `expect` reports when its justification goes stale.
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"

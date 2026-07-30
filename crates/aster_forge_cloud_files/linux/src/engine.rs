@@ -27,6 +27,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Validates a string-backed cloud item name for one Linux directory component.
+/// # Errors
+///
+/// Returns an error when validation fails or an underlying backend, store, or platform
+/// operation fails.
 pub fn validate_linux_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(LinuxCloudFilesError::InvalidName {
@@ -74,6 +78,10 @@ pub struct LinuxAttributePolicy {
 
 impl LinuxAttributePolicy {
     /// Creates an explicit Linux attribute policy.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         uid: u32,
         gid: u32,
@@ -98,36 +106,43 @@ impl LinuxAttributePolicy {
     }
 
     /// Returns the mount-owner user ID.
+    #[must_use]
     pub const fn uid(&self) -> u32 {
         self.uid
     }
 
     /// Returns the mount-owner group ID.
+    #[must_use]
     pub const fn gid(&self) -> u32 {
         self.gid
     }
 
     /// Returns regular-file permissions.
+    #[must_use]
     pub const fn file_permissions(&self) -> u16 {
         self.file_permissions
     }
 
     /// Returns directory permissions.
+    #[must_use]
     pub const fn directory_permissions(&self) -> u16 {
         self.directory_permissions
     }
 
     /// Returns the reported preferred I/O block size.
+    #[must_use]
     pub const fn block_size(&self) -> u32 {
         self.block_size
     }
 
     /// Returns the kernel entry and attribute cache TTL.
+    #[must_use]
     pub const fn cache_ttl(&self) -> Duration {
         self.cache_ttl
     }
 
     /// Returns the timestamp used until a platform adapter supplies native times.
+    #[must_use]
     pub const fn fallback_time(&self) -> SystemTime {
         self.fallback_time
     }
@@ -164,51 +179,61 @@ pub struct LinuxFileAttributes {
 
 impl LinuxFileAttributes {
     /// Returns the restored inode.
+    #[must_use]
     pub const fn inode(&self) -> LinuxInode {
         self.inode
     }
 
     /// Returns the logical content size.
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
 
     /// Returns allocated 512-byte block count reported to the kernel.
+    #[must_use]
     pub const fn blocks(&self) -> u64 {
         self.blocks
     }
 
     /// Returns the portable node kind.
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
 
     /// Returns Unix permission bits.
+    #[must_use]
     pub const fn permissions(&self) -> u16 {
         self.permissions
     }
 
     /// Returns the reported hard-link count.
+    #[must_use]
     pub const fn links(&self) -> u32 {
         self.links
     }
 
     /// Returns the owner user ID.
+    #[must_use]
     pub const fn uid(&self) -> u32 {
         self.uid
     }
 
     /// Returns the owner group ID.
+    #[must_use]
     pub const fn gid(&self) -> u32 {
         self.gid
     }
 
     /// Returns the preferred I/O block size.
+    #[must_use]
     pub const fn block_size(&self) -> u32 {
         self.block_size
     }
 
     /// Returns the fallback timestamp used for all native time fields.
+    #[must_use]
     pub const fn time(&self) -> SystemTime {
         self.time
     }
@@ -224,16 +249,19 @@ pub struct LinuxNode {
 
 impl LinuxNode {
     /// Returns the stable scoped cloud identity.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the inode generation fence.
+    #[must_use]
     pub const fn generation(&self) -> LinuxInodeGeneration {
         self.generation
     }
 
     /// Returns portable Linux attributes.
+    #[must_use]
     pub const fn attributes(&self) -> &LinuxFileAttributes {
         &self.attributes
     }
@@ -251,6 +279,10 @@ pub struct LinuxFileHandle(u64);
 
 impl LinuxFileHandle {
     /// Restores a native file handle supplied by FUSE.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub const fn new(value: u64) -> Result<Self> {
         if value == 0 {
             return Err(LinuxCloudFilesError::StaleHandle);
@@ -259,6 +291,7 @@ impl LinuxFileHandle {
     }
 
     /// Returns the native handle value.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -270,6 +303,10 @@ pub struct LinuxDirectoryHandle(u64);
 
 impl LinuxDirectoryHandle {
     /// Restores a native directory handle supplied by FUSE.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub const fn new(value: u64) -> Result<Self> {
         if value == 0 {
             return Err(LinuxCloudFilesError::StaleHandle);
@@ -278,6 +315,7 @@ impl LinuxDirectoryHandle {
     }
 
     /// Returns the native handle value.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -294,21 +332,25 @@ pub struct LinuxDirectoryEntry {
 
 impl LinuxDirectoryEntry {
     /// Returns the restored child inode.
+    #[must_use]
     pub const fn inode(&self) -> LinuxInode {
         self.inode
     }
 
     /// Returns the child generation fence.
+    #[must_use]
     pub const fn generation(&self) -> LinuxInodeGeneration {
         self.generation
     }
 
     /// Returns the exact UTF-8 backend name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the portable child kind.
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
@@ -333,16 +375,19 @@ pub struct LinuxDirectorySnapshot {
 
 impl LinuxDirectorySnapshot {
     /// Returns the opened directory inode.
+    #[must_use]
     pub const fn directory(&self) -> LinuxInode {
         self.directory
     }
 
     /// Returns the parent inode used by the `..` entry.
+    #[must_use]
     pub const fn parent(&self) -> LinuxInode {
         self.parent
     }
 
     /// Returns children in the backend enumeration order captured by this handle.
+    #[must_use]
     pub fn entries(&self) -> &[LinuxDirectoryEntry] {
         &self.entries
     }
@@ -427,16 +472,22 @@ where
     }
 
     /// Returns the active immutable inode table.
+    #[must_use]
     pub fn inode_table(&self) -> &LinuxInodeTable {
         &self.inner.inodes
     }
 
     /// Returns the active native attribute policy.
+    #[must_use]
     pub fn attribute_policy(&self) -> &LinuxAttributePolicy {
         &self.inner.attributes
     }
 
     /// Resolves one name by enumerating all backend pages for the parent snapshot.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn lookup(&self, parent: LinuxInode, name: &str) -> Result<LinuxNode> {
         validate_linux_name(name)?;
         let parent_item = self.load_item_for_overlay(parent).await?;
@@ -455,12 +506,20 @@ where
     }
 
     /// Loads attributes for one restored inode.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn getattr(&self, inode: LinuxInode) -> Result<LinuxNode> {
         let item = self.load_item_for_overlay(inode).await?;
         self.node_from_item(&item)
     }
 
     /// Opens a regular file and captures its exact content revision for subsequent range reads.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn open_file(&self, inode: LinuxInode) -> Result<LinuxFileHandle> {
         let item = self.load_item_for_overlay(inode).await?;
         if item.kind() != CloudItemKind::File {
@@ -531,6 +590,10 @@ where
     }
 
     /// Reads an exact range using the revision captured by `open_file`.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn read_file(
         &self,
         inode: LinuxInode,
@@ -568,6 +631,10 @@ where
     }
 
     /// Releases one file handle. Releasing the same handle twice reports a stale handle.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn release_file(&self, handle: LinuxFileHandle) -> Result<()> {
         if lock(&self.inner.handles).files.remove(&handle).is_none() {
             return Err(LinuxCloudFilesError::StaleHandle);
@@ -576,6 +643,10 @@ where
     }
 
     /// Opens a directory and freezes one complete paged snapshot for stable FUSE cookies.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn open_directory(&self, inode: LinuxInode) -> Result<LinuxDirectoryHandle> {
         let item = self.load_item_for_overlay(inode).await?;
         if item.kind() != CloudItemKind::Directory {
@@ -617,6 +688,10 @@ where
     }
 
     /// Returns the immutable snapshot associated with an open directory handle.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn directory_snapshot(
         &self,
         inode: LinuxInode,
@@ -633,6 +708,10 @@ where
     }
 
     /// Releases one directory snapshot handle.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn release_directory(&self, handle: LinuxDirectoryHandle) -> Result<()> {
         if lock(&self.inner.handles)
             .directories

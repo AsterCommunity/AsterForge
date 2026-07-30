@@ -76,6 +76,10 @@ pub struct LinuxMountConfig {
 
 impl LinuxMountConfig {
     /// Creates a read-only mount configuration with one fuser event-loop thread.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(filesystem_name: impl Into<String>) -> Result<Self> {
         let filesystem_name = filesystem_name.into();
         validate_mount_text(&filesystem_name, "filesystem name")?;
@@ -88,6 +92,10 @@ impl LinuxMountConfig {
     }
 
     /// Sets the optional FUSE filesystem subtype.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn with_subtype(mut self, subtype: impl Into<String>) -> Result<Self> {
         let subtype = subtype.into();
         validate_mount_text(&subtype, "filesystem subtype")?;
@@ -96,6 +104,10 @@ impl LinuxMountConfig {
     }
 
     /// Sets native event-loop concurrency and Linux `FUSE_DEV_IOC_CLONE` use.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn with_kernel_threads(mut self, threads: usize, clone_fd: bool) -> Result<Self> {
         if threads == 0 {
             return Err(LinuxCloudFilesError::InvalidConfiguration {
@@ -108,21 +120,25 @@ impl LinuxMountConfig {
     }
 
     /// Returns the filesystem name reported by the mount.
+    #[must_use]
     pub fn filesystem_name(&self) -> &str {
         &self.filesystem_name
     }
 
     /// Returns the optional filesystem subtype.
+    #[must_use]
     pub fn subtype(&self) -> Option<&str> {
         self.subtype.as_deref()
     }
 
     /// Returns native fuser event-loop concurrency.
+    #[must_use]
     pub const fn kernel_threads(&self) -> Option<usize> {
         self.kernel_threads
     }
 
     /// Returns whether Linux should clone the FUSE device fd for event-loop workers.
+    #[must_use]
     pub const fn clone_fd(&self) -> bool {
         self.clone_fd
     }

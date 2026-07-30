@@ -136,6 +136,10 @@ fn inode_record_accessors_and_table_lookups_preserve_exact_values() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the table verifies stable Linux classifications for every backend error kind"
+)]
 fn every_backend_error_kind_has_a_stable_linux_classification() {
     let cases = [
         (CloudBackendErrorKind::NotFound, LinuxErrorCode::NotFound),

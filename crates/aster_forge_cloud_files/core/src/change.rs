@@ -23,6 +23,7 @@ pub enum CloudChange {
 
 impl CloudChange {
     /// Returns the fully scoped item identity affected by this change.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         match self {
             Self::Upsert { item } => item.key(),
@@ -41,6 +42,7 @@ pub struct ChangeBatch {
 
 impl ChangeBatch {
     /// Creates a change batch. The cursor becomes active only after effects are durably replayable.
+    #[must_use]
     pub const fn new(changes: Vec<CloudChange>, next_cursor: ChangeCursor, has_more: bool) -> Self {
         Self {
             changes,
@@ -50,21 +52,25 @@ impl ChangeBatch {
     }
 
     /// Returns changes in backend-defined application order.
+    #[must_use]
     pub fn changes(&self) -> &[CloudChange] {
         &self.changes
     }
 
     /// Returns the checkpoint following this batch.
+    #[must_use]
     pub const fn next_cursor(&self) -> &ChangeCursor {
         &self.next_cursor
     }
 
     /// Returns whether another batch is immediately available.
+    #[must_use]
     pub const fn has_more(&self) -> bool {
         self.has_more
     }
 
     /// Consumes the batch and returns its changes, next cursor, and continuation flag.
+    #[must_use]
     pub fn into_parts(self) -> (Vec<CloudChange>, ChangeCursor, bool) {
         (self.changes, self.next_cursor, self.has_more)
     }

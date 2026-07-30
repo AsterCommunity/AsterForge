@@ -340,6 +340,10 @@ impl MemoryCreateStore {
 }
 
 #[async_trait]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the in-memory namespace store keeps the complete durability contract in one test implementation"
+)]
 impl LinuxNamespaceMutationStore for MemoryCreateStore {
     async fn activate_namespace(
         &self,
@@ -824,7 +828,7 @@ async fn create_returns_stable_entry_open_handle_and_durable_empty_staging() {
         .create_file(
             LINUX_ROOT_INODE,
             "new.txt",
-            0o100664,
+            0o100_664,
             0o002,
             LinuxFileAccess::ReadWrite,
         )
@@ -867,7 +871,7 @@ async fn create_write_read_sync_release_reopen_and_directory_snapshot_work() {
         .create_file(
             LINUX_ROOT_INODE,
             "written.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::ReadWrite,
         )
@@ -939,7 +943,7 @@ async fn existing_and_concurrent_same_name_create_report_one_conflict() {
             .create_file(
                 LINUX_ROOT_INODE,
                 "file.txt",
-                0o100644,
+                0o100_644,
                 0,
                 LinuxFileAccess::Write,
             )
@@ -951,14 +955,14 @@ async fn existing_and_concurrent_same_name_create_report_one_conflict() {
         engine.create_file(
             LINUX_ROOT_INODE,
             "race.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::Write,
         ),
         engine.create_file(
             LINUX_ROOT_INODE,
             "race.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::Write,
         )
@@ -985,14 +989,14 @@ async fn concurrent_different_name_creates_keep_distinct_stable_allocations() {
         engine.create_file(
             LINUX_ROOT_INODE,
             "left.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::Write,
         ),
         engine.create_file(
             LINUX_ROOT_INODE,
             "right.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::Write,
         )
@@ -1012,7 +1016,7 @@ async fn invalid_name_parent_and_unconfigured_namespace_fail_before_exposure() {
     for name in ["", ".", "..", "a/b", "nul\0name"] {
         assert!(matches!(
             engine
-                .create_file(LINUX_ROOT_INODE, name, 0o100644, 0, LinuxFileAccess::Write,)
+                .create_file(LINUX_ROOT_INODE, name, 0o100_644, 0, LinuxFileAccess::Write,)
                 .await,
             Err(LinuxCloudFilesError::InvalidName { .. })
         ));
@@ -1022,7 +1026,7 @@ async fn invalid_name_parent_and_unconfigured_namespace_fail_before_exposure() {
             .create_file(
                 LinuxInode::new(2).expect("inode should be valid"),
                 "child.txt",
-                0o100644,
+                0o100_644,
                 0,
                 LinuxFileAccess::Write,
             )
@@ -1034,7 +1038,7 @@ async fn invalid_name_parent_and_unconfigured_namespace_fail_before_exposure() {
             .create_file(
                 LinuxInode::new(999).expect("inode should be valid"),
                 "child.txt",
-                0o100644,
+                0o100_644,
                 0,
                 LinuxFileAccess::Write,
             )
@@ -1055,7 +1059,7 @@ async fn invalid_name_parent_and_unconfigured_namespace_fail_before_exposure() {
             .create_file(
                 LINUX_ROOT_INODE,
                 "unsupported.txt",
-                0o100644,
+                0o100_644,
                 0,
                 LinuxFileAccess::Write,
             )
@@ -1075,7 +1079,7 @@ async fn store_failure_does_not_expose_an_inode_or_directory_entry() {
             .create_file(
                 LINUX_ROOT_INODE,
                 "failed.txt",
-                0o100644,
+                0o100_644,
                 0,
                 LinuxFileAccess::Write,
             )
@@ -1105,7 +1109,7 @@ async fn invalid_product_acceptance_is_rejected_for_every_identity_boundary() {
                 .create_file(
                     LINUX_ROOT_INODE,
                     "invalid.txt",
-                    0o100644,
+                    0o100_644,
                     0,
                     LinuxFileAccess::Write,
                 )
@@ -1129,7 +1133,7 @@ async fn durable_acceptance_survives_lost_reply_and_restart_without_remote_hydra
     let request = LinuxCreateFileRequest::new(
         backend.root.key().clone(),
         "lost-reply.txt",
-        0o100644,
+        0o100_644,
         0,
         LinuxFileAccess::ReadWrite,
         first.session_generation(),
@@ -1173,7 +1177,7 @@ async fn created_dirty_bytes_and_size_survive_a_new_mount_generation() {
         .create_file(
             LINUX_ROOT_INODE,
             "restart-dirty.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::ReadWrite,
         )
@@ -1228,7 +1232,7 @@ async fn newer_mount_generation_fences_late_create_and_preserves_recovery() {
             .create_file(
                 LINUX_ROOT_INODE,
                 "stale.txt",
-                0o100644,
+                0o100_644,
                 0,
                 LinuxFileAccess::Write,
             )
@@ -1240,7 +1244,7 @@ async fn newer_mount_generation_fences_late_create_and_preserves_recovery() {
         .create_file(
             LINUX_ROOT_INODE,
             "current.txt",
-            0o100644,
+            0o100_644,
             0,
             LinuxFileAccess::Write,
         )

@@ -171,6 +171,10 @@ impl CloudFilesBackend for FixtureBackend {
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the fields are independent failure-injection switches for the writeback contract"
+)]
 #[derive(Default)]
 struct MemoryWritebackState {
     active_generation: Option<SessionGeneration>,
@@ -688,7 +692,7 @@ async fn access_modes_and_handle_identity_are_enforced() {
                 Bytes::from_static(b"x")
             )
             .await,
-        Err(LinuxCloudFilesError::AccessModeMismatch) | Err(LinuxCloudFilesError::StaleHandle)
+        Err(LinuxCloudFilesError::AccessModeMismatch | LinuxCloudFilesError::StaleHandle)
     ));
     engine
         .release_file(write)
@@ -985,8 +989,8 @@ async fn recovery_rejects_wrong_scope_unknown_root_and_conflicting_snapshots() {
                 SessionGeneration::new(1).expect("generation should be valid"),
             )
             .await,
-            Err(LinuxCloudFilesError::ScopeMismatch)
-                | Err(LinuxCloudFilesError::InvalidBackendResponse { .. })
+            Err(LinuxCloudFilesError::ScopeMismatch
+                | LinuxCloudFilesError::InvalidBackendResponse { .. })
         ));
     }
 }

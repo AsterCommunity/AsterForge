@@ -191,7 +191,7 @@ pub unsafe extern "C" fn aster_forge_cloud_files_macos_session_begin_closing(
     ffi_code(|| {
         // SAFETY: required by this exported function's handle contract.
         let session = unsafe { MacosExtensionSession::clone_from_ffi_handle(session.raw) }?;
-        session.begin_closing();
+        let _transitioned = session.begin_closing();
         Ok(())
     })
 }
@@ -222,7 +222,7 @@ pub unsafe extern "C" fn aster_forge_cloud_files_macos_request_release(
     request: MacosFfiRequestHandle,
 ) {
     // SAFETY: required by this exported function's request-handle contract.
-    let _result = unsafe { MacosExtensionRequestLease::release_ffi_handle(request.raw) };
+    unsafe { MacosExtensionRequestLease::release_ffi_handle(request.raw) };
 }
 
 /// Releases one extension session owner after native disconnect and request cleanup.
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn aster_forge_cloud_files_macos_session_release(
     session: MacosFfiSessionHandle,
 ) {
     // SAFETY: required by this exported function's session-handle contract.
-    let _result = unsafe { MacosExtensionSession::release_ffi_handle(session.raw) };
+    unsafe { MacosExtensionSession::release_ffi_handle(session.raw) };
 }
 
 /// Encodes three UTF-8 identity fields into one persistent File Provider identifier.

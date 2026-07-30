@@ -15,6 +15,10 @@ pub struct LinuxInode(u64);
 
 impl LinuxInode {
     /// Creates a non-zero Linux inode.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub const fn new(value: u64) -> Result<Self> {
         if value == 0 {
             return Err(LinuxCloudFilesError::ZeroInode);
@@ -23,6 +27,7 @@ impl LinuxInode {
     }
 
     /// Returns the native inode number.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -34,6 +39,10 @@ pub struct LinuxInodeGeneration(u64);
 
 impl LinuxInodeGeneration {
     /// Creates a non-zero inode generation fence.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub const fn new(value: u64) -> Result<Self> {
         if value == 0 {
             return Err(LinuxCloudFilesError::ZeroGeneration);
@@ -42,6 +51,7 @@ impl LinuxInodeGeneration {
     }
 
     /// Returns the native generation value.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -57,6 +67,7 @@ pub struct LinuxInodeRecord {
 
 impl LinuxInodeRecord {
     /// Creates one restored inode record.
+    #[must_use]
     pub const fn new(
         key: CloudItemKey,
         inode: LinuxInode,
@@ -70,21 +81,25 @@ impl LinuxInodeRecord {
     }
 
     /// Returns the stable scoped cloud identity.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the restored native inode.
+    #[must_use]
     pub const fn inode(&self) -> LinuxInode {
         self.inode
     }
 
     /// Returns the restored inode generation fence.
+    #[must_use]
     pub const fn generation(&self) -> LinuxInodeGeneration {
         self.generation
     }
 
     /// Consumes the record into its durable fields.
+    #[must_use]
     pub fn into_parts(self) -> (CloudItemKey, LinuxInode, LinuxInodeGeneration) {
         (self.key, self.inode, self.generation)
     }
@@ -104,6 +119,10 @@ pub struct LinuxInodeTable {
 
 impl LinuxInodeTable {
     /// Restores an immutable table. `records` must exclude the root record.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         root: LinuxInodeRecord,
         records: impl IntoIterator<Item = LinuxInodeRecord>,
@@ -142,16 +161,19 @@ impl LinuxInodeTable {
     }
 
     /// Returns the scope shared by every restored record.
+    #[must_use]
     pub const fn scope(&self) -> &CloudScope {
         &self.scope
     }
 
     /// Returns the root record.
+    #[must_use]
     pub const fn root(&self) -> &LinuxInodeRecord {
         &self.root
     }
 
     /// Returns the restored record for one stable key.
+    #[must_use]
     pub fn by_key(&self, key: &CloudItemKey) -> Option<&LinuxInodeRecord> {
         if key == self.root.key() {
             Some(&self.root)
@@ -161,6 +183,7 @@ impl LinuxInodeTable {
     }
 
     /// Returns the restored record for one native inode.
+    #[must_use]
     pub fn by_inode(&self, inode: LinuxInode) -> Option<&LinuxInodeRecord> {
         if inode == LINUX_ROOT_INODE {
             Some(&self.root)

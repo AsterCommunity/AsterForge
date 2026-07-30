@@ -53,6 +53,7 @@ pub struct CloudBackendError {
 
 impl CloudBackendError {
     /// Creates a non-retryable backend error.
+    #[must_use]
     pub const fn new(kind: CloudBackendErrorKind) -> Self {
         Self {
             kind,
@@ -61,6 +62,7 @@ impl CloudBackendError {
     }
 
     /// Creates a retryable backend error using coordinator-controlled backoff.
+    #[must_use]
     pub const fn retryable(kind: CloudBackendErrorKind) -> Self {
         Self {
             kind,
@@ -69,6 +71,7 @@ impl CloudBackendError {
     }
 
     /// Creates a retryable backend error with a minimum delay.
+    #[must_use]
     pub const fn retry_after(kind: CloudBackendErrorKind, delay: Duration) -> Self {
         Self {
             kind,
@@ -77,16 +80,19 @@ impl CloudBackendError {
     }
 
     /// Returns the stable failure classification.
+    #[must_use]
     pub const fn kind(&self) -> CloudBackendErrorKind {
         self.kind
     }
 
     /// Returns the backend's retry guidance.
+    #[must_use]
     pub const fn retry_advice(&self) -> RetryAdvice {
         self.retry
     }
 
     /// Returns whether a coordinator may retry the request.
+    #[must_use]
     pub const fn is_retryable(&self) -> bool {
         !matches!(self.retry, RetryAdvice::Never)
     }

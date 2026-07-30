@@ -201,7 +201,8 @@ impl CloudContentBackend for Backend {
             aster_forge_cloud_files_core::ContentReadRange::Whole => None,
             aster_forge_cloud_files_core::ContentReadRange::Range(range) => Some(range),
         };
-        let normal_offset = requested_range.map_or(0, |range| range.offset());
+        let normal_offset =
+            requested_range.map_or(0, aster_forge_cloud_files_core::ByteRange::offset);
         let normal_bytes = requested_range.map_or_else(
             || self.contents.clone(),
             |range| {

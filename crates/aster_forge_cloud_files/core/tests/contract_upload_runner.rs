@@ -1083,6 +1083,10 @@ async fn submit_reports_fenced_when_the_upload_generation_is_no_longer_active() 
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fencing contract exercises every durable upload transition in one scenario matrix"
+)]
 async fn newer_generation_fences_every_post_session_upload_transition() {
     let fixture = SyntheticBackend::full();
     let bytes = Bytes::from_static(b"fence-every-stage");

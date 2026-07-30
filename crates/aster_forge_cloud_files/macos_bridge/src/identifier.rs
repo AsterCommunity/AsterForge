@@ -48,6 +48,10 @@ pub enum MacosFileProviderIdentifier {
 
 impl MacosFileProviderIdentifier {
     /// Encodes one stable path-independent item key as a File Provider identifier.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn encode(key: &CloudItemKey) -> Result<Self> {
         for field in [
             key.scope().namespace_id().as_str(),
@@ -76,6 +80,10 @@ impl MacosFileProviderIdentifier {
     }
 
     /// Parses an identifier received from Swift/File Provider.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.len() > MAX_FILE_PROVIDER_IDENTIFIER_BYTES {
@@ -144,6 +152,7 @@ impl MacosFileProviderIdentifier {
     }
 
     /// Returns the exact identifier string supplied to File Provider.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Item { encoded, .. } => encoded,
@@ -160,6 +169,10 @@ impl MacosFileProviderIdentifier {
     }
 
     /// Returns the decoded product item key, or a classified system-container error.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn item_key(&self) -> Result<&CloudItemKey> {
         match self {
             Self::Item { key, .. } => Ok(key),
@@ -168,6 +181,7 @@ impl MacosFileProviderIdentifier {
     }
 
     /// Returns the system-container class, when this is not a product item.
+    #[must_use]
     pub const fn system_container(&self) -> Option<MacosFileProviderSystemContainer> {
         match self {
             Self::Item { .. } => None,
@@ -176,6 +190,7 @@ impl MacosFileProviderIdentifier {
     }
 
     /// Consumes the identifier into its exact string representation.
+    #[must_use]
     pub fn into_string(self) -> String {
         match self {
             Self::Item { encoded, .. } => encoded,

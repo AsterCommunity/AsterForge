@@ -103,6 +103,7 @@ pub enum MacosBridgeError {
 
 impl MacosBridgeError {
     /// Returns the native-facing portable classification.
+    #[must_use]
     pub const fn error_code(&self) -> MacosErrorCode {
         match self {
             Self::InvalidIdentifier { .. }
@@ -123,6 +124,7 @@ impl MacosBridgeError {
 }
 
 /// Maps product-neutral backend failures to File Provider-facing classifications.
+#[must_use]
 pub const fn backend_error_code(kind: CloudBackendErrorKind) -> MacosErrorCode {
     match kind {
         CloudBackendErrorKind::NotFound => MacosErrorCode::NotFound,

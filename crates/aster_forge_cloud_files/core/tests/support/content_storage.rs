@@ -185,6 +185,10 @@ impl MemoryContentStorageStore {
         CloudFilesStoreError::new(kind, context)
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "this adapter is passed directly to Result::map_err and therefore owns the source error"
+    )]
     fn transition_error(error: CloudFilesCoreError) -> CloudFilesStoreError {
         Self::store_error(
             CloudFilesStoreErrorKind::InvalidTransition,

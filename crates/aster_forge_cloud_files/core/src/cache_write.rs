@@ -10,6 +10,10 @@ pub struct ContentCacheWriteOperationId(String);
 
 impl ContentCacheWriteOperationId {
     /// Creates a non-empty opaque write identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -21,6 +25,7 @@ impl ContentCacheWriteOperationId {
     }
 
     /// Returns the opaque operation identity.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -56,6 +61,10 @@ pub struct ContentCacheWriteIntent {
 
 impl ContentCacheWriteIntent {
     /// Creates and validates a revision-bound provider-cache write intent.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         operation_id: ContentCacheWriteOperationId,
         cache_key: ContentCacheKey,
@@ -80,26 +89,31 @@ impl ContentCacheWriteIntent {
     }
 
     /// Returns the durable operation identity.
+    #[must_use]
     pub const fn operation_id(&self) -> &ContentCacheWriteOperationId {
         &self.operation_id
     }
 
     /// Returns the exact revision-bound cache identity.
+    #[must_use]
     pub const fn cache_key(&self) -> &ContentCacheKey {
         &self.cache_key
     }
 
     /// Returns the expected size of the exact content revision.
+    #[must_use]
     pub const fn expected_size(&self) -> u64 {
         self.expected_size
     }
 
     /// Returns the logical extent whose physical bytes are installed.
+    #[must_use]
     pub const fn extent(&self) -> ContentCacheWriteExtent {
         self.extent
     }
 
     /// Returns the platform session generation that created the write.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -136,6 +150,7 @@ pub struct ContentCacheWriteRecord {
 
 impl ContentCacheWriteRecord {
     /// Creates the first recoverable state after the entry write reservation is durable.
+    #[must_use]
     pub const fn persist(intent: ContentCacheWriteIntent) -> Self {
         Self {
             intent,
@@ -144,16 +159,22 @@ impl ContentCacheWriteRecord {
     }
 
     /// Returns the immutable write intent.
+    #[must_use]
     pub const fn intent(&self) -> &ContentCacheWriteIntent {
         &self.intent
     }
 
     /// Returns the current durable state.
+    #[must_use]
     pub const fn state(&self) -> ContentCacheWriteState {
         self.state
     }
 
     /// Records that physical bytes were atomically installed.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_physical_bytes_committed(&mut self) -> Result<ContentCacheWriteRecordTransition> {
         match self.state {
             ContentCacheWriteState::IntentPersisted => {
@@ -169,6 +190,10 @@ impl ContentCacheWriteRecord {
     }
 
     /// Marks sparse coverage committed after physical bytes are observable.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_coverage_committed(&mut self) -> Result<ContentCacheWriteRecordTransition> {
         match self.state {
             ContentCacheWriteState::PhysicalBytesCommitted => {
@@ -187,6 +212,10 @@ impl ContentCacheWriteRecord {
     }
 
     /// Marks the write terminal after coverage commit.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn complete(&mut self) -> Result<ContentCacheWriteRecordTransition> {
         match self.state {
             ContentCacheWriteState::CoverageCommitted => {

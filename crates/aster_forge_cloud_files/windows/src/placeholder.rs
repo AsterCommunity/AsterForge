@@ -32,6 +32,10 @@ pub struct WindowsPlaceholderMetadata {
 
 impl WindowsPlaceholderMetadata {
     /// Maps one core item into minimal Windows filesystem metadata.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_item(item: &CloudItem, times: WindowsFileTimes) -> Result<Self> {
         let (file_size, file_attributes) = match item.kind() {
             CloudItemKind::File => {
@@ -57,22 +61,29 @@ impl WindowsPlaceholderMetadata {
     }
 
     /// Returns the signed CFAPI file size.
+    #[must_use]
     pub const fn file_size(&self) -> i64 {
         self.file_size
     }
 
     /// Returns Windows file-attribute bits.
+    #[must_use]
     pub const fn file_attributes(&self) -> u32 {
         self.file_attributes
     }
 
     /// Returns all Windows file times.
+    #[must_use]
     pub const fn times(&self) -> WindowsFileTimes {
         self.times
     }
 }
 
 /// CFAPI placeholder creation options kept independent from windows-rs types.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these fields map independent CFAPI placeholder creation flags"
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WindowsPlaceholderOptions {
     /// Mark the placeholder in-sync during creation.
@@ -96,6 +107,10 @@ pub struct WindowsPlaceholder {
 
 impl WindowsPlaceholder {
     /// Creates an owned placeholder request and verifies identity/item binding.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_item(
         item: &CloudItem,
         identity: WindowsFileIdentity,
@@ -115,26 +130,31 @@ impl WindowsPlaceholder {
     }
 
     /// Returns the validated single-component Windows relative name.
+    #[must_use]
     pub fn relative_name(&self) -> &str {
         &self.relative_name
     }
 
     /// Returns the owned filesystem metadata.
+    #[must_use]
     pub const fn metadata(&self) -> WindowsPlaceholderMetadata {
         self.metadata
     }
 
     /// Returns the stable native identity bytes.
+    #[must_use]
     pub const fn identity(&self) -> &WindowsFileIdentity {
         &self.identity
     }
 
     /// Returns creation options.
+    #[must_use]
     pub const fn options(&self) -> WindowsPlaceholderOptions {
         self.options
     }
 
     /// Consumes the request and returns all owned parts.
+    #[must_use]
     pub fn into_parts(
         self,
     ) -> (

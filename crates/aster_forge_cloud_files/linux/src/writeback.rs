@@ -80,6 +80,10 @@ pub struct LinuxWriteSessionId(String);
 
 impl LinuxWriteSessionId {
     /// Creates a non-empty session identity and preserves it exactly.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -91,6 +95,7 @@ impl LinuxWriteSessionId {
     }
 
     /// Returns the opaque session identity.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -116,6 +121,7 @@ pub struct LinuxWriteOpenRequest {
 
 impl LinuxWriteOpenRequest {
     /// Creates an existing-file write request from its exact remote snapshot.
+    #[must_use]
     pub const fn new(
         key: CloudItemKey,
         base_revision: ContentRevision,
@@ -131,21 +137,25 @@ impl LinuxWriteOpenRequest {
     }
 
     /// Returns the stable item identity.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the exact remote content revision hydrated into staging.
+    #[must_use]
     pub const fn base_revision(&self) -> &ContentRevision {
         &self.base_revision
     }
 
     /// Returns the exact hydrated byte length.
+    #[must_use]
     pub const fn base_size(&self) -> u64 {
         self.base_size
     }
 
     /// Returns the active mount session generation that owns this open.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -163,6 +173,7 @@ pub struct LinuxWriteSession {
 
 impl LinuxWriteSession {
     /// Creates a staging session response.
+    #[must_use]
     pub const fn new(
         id: LinuxWriteSessionId,
         key: CloudItemKey,
@@ -179,6 +190,7 @@ impl LinuxWriteSession {
     }
 
     /// Creates a session reopened from one immutable durable dirty snapshot.
+    #[must_use]
     pub fn from_recovered(
         id: LinuxWriteSessionId,
         snapshot: LocalContentSnapshot,
@@ -194,26 +206,31 @@ impl LinuxWriteSession {
     }
 
     /// Returns the opaque product-owned session identity.
+    #[must_use]
     pub const fn id(&self) -> &LinuxWriteSessionId {
         &self.id
     }
 
     /// Returns the item whose bytes are staged.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the current logical staging size.
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
 
     /// Returns the mount session generation bound to this writeback session.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
 
     /// Returns the immutable dirty snapshot used to reopen this session, when present.
+    #[must_use]
     pub const fn snapshot(&self) -> Option<&LocalContentSnapshot> {
         self.snapshot.as_ref()
     }
@@ -227,16 +244,19 @@ pub struct LinuxWriteCommit {
 
 impl LinuxWriteCommit {
     /// Creates a commit backed by one immutable local generation.
+    #[must_use]
     pub const fn new(snapshot: LocalContentSnapshot) -> Self {
         Self { snapshot }
     }
 
     /// Returns the immutable dirty snapshot that is safe for upload recovery.
+    #[must_use]
     pub const fn snapshot(&self) -> &LocalContentSnapshot {
         &self.snapshot
     }
 
     /// Consumes the commit into its immutable snapshot.
+    #[must_use]
     pub fn into_snapshot(self) -> LocalContentSnapshot {
         self.snapshot
     }
@@ -452,6 +472,10 @@ where
     S: LinuxWritebackStore + 'static,
 {
     /// Activates one mount generation and restores durable dirty snapshots before exposure.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn activate(
         readonly: LinuxReadOnlyEngine<B>,
         store: Arc<S>,
@@ -461,6 +485,10 @@ where
     }
 
     /// Activates writeback plus a durable namespace port for native regular-file creation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn activate_with_namespace<N>(
         readonly: LinuxReadOnlyEngine<B>,
         store: Arc<S>,
@@ -481,6 +509,10 @@ where
     }
 
     /// Activates namespace/writeback state with product-persisted remote inode mappings.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn activate_with_namespace_and_remote<N>(
         readonly: LinuxReadOnlyEngine<B>,
         store: Arc<S>,
@@ -536,7 +568,7 @@ where
                 state: Mutex::new(WritableState::default()),
             }),
         };
-        engine.restore_namespace_overlay(overlay).await?;
+        engine.restore_namespace_overlay(overlay)?;
         engine.restore_remote_overlay(remote_entries).await?;
         engine.restore_created_files(created).await?;
         engine.restore_dirty_snapshots(snapshots)?;
@@ -544,16 +576,22 @@ where
     }
 
     /// Returns the underlying read-only engine used for metadata and directory operations.
+    #[must_use]
     pub fn readonly(&self) -> &LinuxReadOnlyEngine<B> {
         &self.inner.readonly
     }
 
     /// Returns the durable mount generation that owns this engine's writeback sessions.
+    #[must_use]
     pub fn session_generation(&self) -> SessionGeneration {
         self.inner.session_generation
     }
 
     /// Restores product-persisted remote entries before the mount is exposed to the kernel.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn restore_remote_overlay(
         &self,
         entries: impl IntoIterator<Item = LinuxRemoteEntry>,
@@ -568,6 +606,10 @@ where
     }
 
     /// Applies one already-durable remote namespace transition and returns kernel invalidations.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn apply_remote_change(
         &self,
         change: LinuxRemoteChange,
@@ -582,6 +624,10 @@ where
     }
 
     /// Loads attributes, overlaying the current staged size when a writable handle is supplied.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn getattr(
         &self,
         inode: LinuxInode,
@@ -651,6 +697,10 @@ where
     }
 
     /// Resolves one child and overlays its current dirty staging size.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn lookup(&self, parent: LinuxInode, name: &str) -> Result<LinuxNode> {
         crate::validate_linux_name(name)?;
         let parent_node = self.getattr(parent, None).await?;
@@ -712,6 +762,10 @@ where
     }
 
     /// Opens an existing file for remote reads or durable local writeback.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn open_file(
         &self,
         inode: LinuxInode,
@@ -800,6 +854,10 @@ where
     }
 
     /// Atomically accepts a durable regular-file create and returns its entry plus open handle.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn create_file(
         &self,
         parent: LinuxInode,
@@ -827,10 +885,14 @@ where
         )?;
         let handle = lock(&self.inner.state).allocate()?;
         let acceptance = namespace_store.create_file(&request).await?;
-        self.accept_created_file(request, acceptance, handle)
+        self.accept_created_file(&request, acceptance, handle)
     }
 
     /// Atomically accepts a durable directory create and exposes its stable inode.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn create_directory(
         &self,
         parent: LinuxInode,
@@ -859,6 +921,10 @@ where
     }
 
     /// Atomically renames or moves one namespace entry while preserving stable identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn rename(
         &self,
         parent: LinuxInode,
@@ -911,6 +977,10 @@ where
     }
 
     /// Atomically accepts unlink or rmdir and hides the durable tombstone from new lookups.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn remove(
         &self,
         parent: LinuxInode,
@@ -946,6 +1016,14 @@ where
     }
 
     /// Opens a directory snapshot that includes durable local creates accepted before this call.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the directory snapshot keeps backend, created, renamed, and tombstoned entries in one ordering pass"
+    )]
     pub async fn open_directory(&self, inode: LinuxInode) -> Result<LinuxDirectoryHandle> {
         let node = self.getattr(inode, None).await?;
         if node.attributes().kind() != crate::LinuxNodeKind::Directory {
@@ -1017,7 +1095,7 @@ where
                     state
                         .remote_tombstones_by_name
                         .children(node.key().item_id())
-                        .map(|(name, _)| name.to_owned()),
+                        .map(|(name, ())| name.to_owned()),
                 )
                 .collect::<HashSet<_>>();
             // A current overlay entry is authoritative over an older tombstone for the same
@@ -1067,6 +1145,10 @@ where
     }
 
     /// Returns the immutable writable-directory snapshot for one handle.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn directory_snapshot(
         &self,
         inode: LinuxInode,
@@ -1232,6 +1314,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the remote upsert applies one atomic namespace transition with all identity and replacement checks visible"
+    )]
     async fn apply_remote_upsert(
         &self,
         entry: LinuxRemoteEntry,
@@ -1267,7 +1353,7 @@ where
                     && existing.attributes().kind() == replaced.kind()
                     && replaced.parent_key() == &parent_key
                     && replaced.name() == entry.item().name() => {}
-            (None, None) | (Some(_), None) => {}
+            (None | Some(_), None) => {}
             _ => {
                 return Err(LinuxCloudFilesError::InvalidBackendResponse {
                     reason: "remote upsert replacement did not match its current destination",
@@ -1495,6 +1581,10 @@ where
     }
 
     /// Releases one writable-directory snapshot handle.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn release_directory(&self, handle: LinuxDirectoryHandle) -> Result<()> {
         if lock(&self.inner.state)
             .directories
@@ -1507,6 +1597,10 @@ where
     }
 
     /// Reads from the remote revision or current durable staging, depending on the handle mode.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn read_file(
         &self,
         inode: LinuxInode,
@@ -1550,11 +1644,15 @@ where
             OpenFile::Writeback { access, .. } if !access.readable() => {
                 Err(LinuxCloudFilesError::AccessModeMismatch)
             }
-            _ => Err(LinuxCloudFilesError::StaleHandle),
+            OpenFile::Writeback { .. } => Err(LinuxCloudFilesError::StaleHandle),
         }
     }
 
     /// Durably applies a positioned write before reporting accepted bytes to FUSE.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn write_file(
         &self,
         inode: LinuxInode,
@@ -1581,6 +1679,10 @@ where
     }
 
     /// Durably truncates or extends the staged file.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn truncate_file(
         &self,
         inode: LinuxInode,
@@ -1594,6 +1696,10 @@ where
     }
 
     /// Opens, truncates, and releases one existing file for handle-less `setattr` requests.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn truncate_once(&self, inode: LinuxInode, size: u64) -> Result<LinuxNode> {
         let handle = self.open_file(inode, LinuxFileAccess::Write).await?;
         let result = self.truncate_file(inode, handle, size).await;
@@ -1605,6 +1711,10 @@ where
     }
 
     /// Applies an idempotent flush or explicit fsync durability boundary.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn sync_file(
         &self,
         inode: LinuxInode,
@@ -1638,12 +1748,15 @@ where
                 access: LinuxFileAccess::Read,
                 ..
             }) if *opened_inode == inode => Ok(None),
-            Some(OpenFile::Writeback { .. }) => Err(LinuxCloudFilesError::StaleHandle),
-            None => Err(LinuxCloudFilesError::StaleHandle),
+            Some(OpenFile::Writeback { .. }) | None => Err(LinuxCloudFilesError::StaleHandle),
         }
     }
 
     /// Releases one file handle and its product-owned writeback session.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn release_file(&self, handle: LinuxFileHandle) -> Result<()> {
         let opened = lock(&self.inner.state)
             .files
@@ -1677,12 +1790,12 @@ where
 
     fn accept_created_file(
         &self,
-        request: LinuxCreateFileRequest,
+        request: &LinuxCreateFileRequest,
         acceptance: LinuxCreateFileAcceptance,
         handle: LinuxFileHandle,
     ) -> Result<(LinuxNode, LinuxFileHandle)> {
         let (created, session) = acceptance.into_parts();
-        self.validate_created_file(&created, Some(&request))?;
+        self.validate_created_file(&created, Some(request))?;
         self.validate_created_session(&created, &session)?;
         let node = self
             .inner
@@ -1812,7 +1925,7 @@ where
         request: &LinuxRemoveRequest,
         tombstone: LinuxNamespaceTombstone,
     ) -> Result<()> {
-        self.validate_remove_acceptance(request, &tombstone)?;
+        Self::validate_remove_acceptance(request, &tombstone)?;
         let name_key = (
             request.parent_key().item_id().clone(),
             request.name().to_owned(),
@@ -1933,7 +2046,6 @@ where
     }
 
     fn validate_remove_acceptance(
-        &self,
         request: &LinuxRemoveRequest,
         tombstone: &LinuxNamespaceTombstone,
     ) -> Result<()> {
@@ -2189,7 +2301,7 @@ where
         Ok(())
     }
 
-    async fn restore_namespace_overlay(&self, overlay: LinuxNamespaceOverlay) -> Result<()> {
+    fn restore_namespace_overlay(&self, overlay: LinuxNamespaceOverlay) -> Result<()> {
         let (items, tombstones) = overlay.into_parts();
         for item in items {
             self.validate_namespace_item(&item)?;

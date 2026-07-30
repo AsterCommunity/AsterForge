@@ -27,16 +27,19 @@ pub struct ContentCacheKey {
 
 impl ContentCacheKey {
     /// Creates a path-independent cache key for one exact content revision.
+    #[must_use]
     pub const fn new(item_key: CloudItemKey, revision: ContentRevision) -> Self {
         Self { item_key, revision }
     }
 
     /// Returns the fully scoped stable item identity.
+    #[must_use]
     pub const fn item_key(&self) -> &CloudItemKey {
         &self.item_key
     }
 
     /// Returns the exact content revision represented by this entry.
+    #[must_use]
     pub const fn revision(&self) -> &ContentRevision {
         &self.revision
     }
@@ -53,16 +56,22 @@ impl ContentRangeSet {
     pub const MAX_RANGES: usize = 8_192;
 
     /// Creates an empty sparse coverage set.
+    #[must_use]
     pub const fn new() -> Self {
         Self { ranges: Vec::new() }
     }
 
     /// Returns normalized ranges in ascending order.
+    #[must_use]
     pub fn ranges(&self) -> &[ByteRange] {
         &self.ranges
     }
 
     /// Inserts one range and merges all overlapping or adjacent ranges.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn insert(&mut self, range: ByteRange, total_size: u64) -> Result<bool> {
         if range.end_exclusive() > total_size {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -96,6 +105,7 @@ impl ContentRangeSet {
     }
 
     /// Returns whether every byte in one range is cached.
+    #[must_use]
     pub fn covers(&self, range: ByteRange) -> bool {
         let index = self
             .ranges
@@ -106,6 +116,7 @@ impl ContentRangeSet {
     }
 
     /// Returns whether the complete logical file is cached.
+    #[must_use]
     pub fn is_complete(&self, total_size: u64) -> bool {
         if total_size == 0 {
             return true;
@@ -158,6 +169,10 @@ pub struct ContentLeaseId(String);
 
 impl ContentLeaseId {
     /// Creates a non-empty opaque lease identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -167,6 +182,7 @@ impl ContentLeaseId {
     }
 
     /// Returns the opaque lease identity.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -273,6 +289,10 @@ pub struct ContentEvictionPlan {
 
 impl ContentEvictionPlan {
     /// Builds the required physical effects for a storage mode and target.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn for_target(mode: ContentStorageMode, target: ContentEvictionTarget) -> Result<Self> {
         let plan = match (mode, target) {
             (ContentStorageMode::PlatformManaged, ContentEvictionTarget::ProviderCache)
@@ -284,25 +304,19 @@ impl ContentEvictionPlan {
                     "eviction target is not owned by the selected storage mode",
                 ));
             }
-            (ContentStorageMode::PlatformManaged, _) => Self {
-                remove_provider_cache: false,
-                evict_platform_materialization: true,
-                invalidate_platform_content: false,
-            },
-            (ContentStorageMode::ProviderManaged, _) => Self {
+            (ContentStorageMode::PlatformManaged, _)
+            | (ContentStorageMode::Hybrid, ContentEvictionTarget::PlatformMaterialization) => {
+                Self {
+                    remove_provider_cache: false,
+                    evict_platform_materialization: true,
+                    invalidate_platform_content: false,
+                }
+            }
+            (ContentStorageMode::ProviderManaged, _)
+            | (ContentStorageMode::Hybrid, ContentEvictionTarget::ProviderCache) => Self {
                 remove_provider_cache: true,
                 evict_platform_materialization: false,
                 invalidate_platform_content: true,
-            },
-            (ContentStorageMode::Hybrid, ContentEvictionTarget::ProviderCache) => Self {
-                remove_provider_cache: true,
-                evict_platform_materialization: false,
-                invalidate_platform_content: true,
-            },
-            (ContentStorageMode::Hybrid, ContentEvictionTarget::PlatformMaterialization) => Self {
-                remove_provider_cache: false,
-                evict_platform_materialization: true,
-                invalidate_platform_content: false,
             },
             (ContentStorageMode::Hybrid, ContentEvictionTarget::AllManagedContent) => Self {
                 remove_provider_cache: true,
@@ -314,16 +328,19 @@ impl ContentEvictionPlan {
     }
 
     /// Returns whether provider-owned bytes must be removed.
+    #[must_use]
     pub const fn remove_provider_cache(self) -> bool {
         self.remove_provider_cache
     }
 
     /// Returns whether the platform materialized copy must be evicted.
+    #[must_use]
     pub const fn evict_platform_materialization(self) -> bool {
         self.evict_platform_materialization
     }
 
     /// Returns whether native/kernel content caches must be invalidated after provider removal.
+    #[must_use]
     pub const fn invalidate_platform_content(self) -> bool {
         self.invalidate_platform_content
     }
@@ -420,61 +437,76 @@ impl ContentStorageEntry {
     }
 
     /// Returns the revision-bound cache identity.
+    #[must_use]
     pub const fn key(&self) -> &ContentCacheKey {
         &self.key
     }
 
     /// Returns the selected ownership mode.
+    #[must_use]
     pub const fn mode(&self) -> ContentStorageMode {
         self.mode
     }
 
     /// Returns the logical size for this exact revision.
+    #[must_use]
     pub const fn total_size(&self) -> u64 {
         self.total_size
     }
 
     /// Returns provider-owned sparse range coverage, when the mode owns such a cache.
+    #[must_use]
     pub const fn provider_ranges(&self) -> Option<&ContentRangeSet> {
         self.provider_ranges.as_ref()
     }
 
     /// Returns platform-observed materialization without claiming provider ownership.
+    #[must_use]
     pub const fn platform_materialization(&self) -> Option<PlatformMaterializationState> {
         self.platform_materialization
     }
 
     /// Returns whether policy pins this content.
+    #[must_use]
     pub const fn is_pinned(&self) -> bool {
         self.pinned
     }
 
     /// Returns whether local content has uncommitted changes.
+    #[must_use]
     pub const fn is_dirty(&self) -> bool {
         self.dirty_snapshot.is_some()
     }
 
     /// Returns the immutable local snapshot currently protecting this entry from eviction.
+    #[must_use]
     pub const fn dirty_snapshot(&self) -> Option<&LocalContentSnapshot> {
         self.dirty_snapshot.as_ref()
     }
 
     /// Returns runtime lease counts.
+    #[must_use]
     pub const fn lease_counts(&self) -> ContentLeaseCounts {
         self.lease_counts
     }
 
     /// Returns the number of durable provider-cache writes protecting this entry.
+    #[must_use]
     pub const fn active_cache_writes(&self) -> u32 {
         self.active_cache_writes
     }
 
     /// Returns whether an eviction intent currently reserves this entry.
+    #[must_use]
     pub const fn is_eviction_reserved(&self) -> bool {
         self.eviction_reserved
     }
 
     /// Records provider-owned cached bytes. Platform-managed mode rejects this operation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn record_provider_range(&mut self, range: ByteRange) -> Result<bool> {
         let Some(ranges) = self.provider_ranges.as_mut() else {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -485,6 +517,10 @@ impl ContentStorageEntry {
     }
 
     /// Updates platform-observed materialization. Provider-managed mode has no such owned state.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn observe_platform_materialization(
         &mut self,
         state: PlatformMaterializationState,
@@ -502,6 +538,10 @@ impl ContentStorageEntry {
     }
 
     /// Updates the product/native pin guard and reports a late blocker transition.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn set_pinned(&mut self, pinned: bool) -> Result<bool> {
         if pinned && self.eviction_reserved {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -514,6 +554,10 @@ impl ContentStorageEntry {
     }
 
     /// Records an immutable dirty snapshot and fences older local generations.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_dirty(&mut self, snapshot: LocalContentSnapshot) -> Result<DirtyContentTransition> {
         if self.eviction_reserved {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -545,6 +589,10 @@ impl ContentStorageEntry {
     }
 
     /// Clears dirty state only when the completed upload still owns the active generation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn clear_dirty(
         &mut self,
         generation: LocalContentGeneration,
@@ -565,6 +613,10 @@ impl ContentStorageEntry {
     }
 
     /// Acquires one idempotently identified runtime lease.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn acquire_lease(
         &mut self,
         lease_id: ContentLeaseId,
@@ -589,6 +641,10 @@ impl ContentStorageEntry {
     }
 
     /// Releases one runtime lease.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn release_lease(&mut self, lease_id: &ContentLeaseId) -> Result<bool> {
         let Some(kind) = self.leases.remove(lease_id) else {
             return Ok(false);
@@ -598,6 +654,10 @@ impl ContentStorageEntry {
     }
 
     /// Reserves one provider-cache write against concurrent eviction.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn begin_cache_write(&mut self) -> Result<()> {
         if self.provider_ranges.is_none() {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -616,6 +676,10 @@ impl ContentStorageEntry {
     }
 
     /// Releases one completed provider-cache write reservation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn complete_cache_write(&mut self) -> Result<()> {
         self.active_cache_writes = self.active_cache_writes.checked_sub(1).ok_or_else(|| {
             CloudFilesCoreError::invalid_content_storage(
@@ -626,6 +690,7 @@ impl ContentStorageEntry {
     }
 
     /// Computes blockers without changing reservation state.
+    #[must_use]
     pub fn eviction_blockers(&self) -> Vec<ContentEvictionBlocker> {
         let mut blockers = Vec::new();
         if self.pinned {
@@ -662,6 +727,10 @@ impl ContentStorageEntry {
     }
 
     /// Atomically evaluates guards and reserves this entry for an eviction intent.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn reserve_eviction(
         &mut self,
         target: ContentEvictionTarget,
@@ -676,6 +745,10 @@ impl ContentStorageEntry {
     }
 
     /// Applies reconciled physical effects to metadata while retaining the reservation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn reconcile_eviction(&mut self, plan: ContentEvictionPlan) -> Result<()> {
         if !self.eviction_reserved {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -702,6 +775,10 @@ impl ContentStorageEntry {
     }
 
     /// Releases the reservation after the durable eviction record reaches completion.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn complete_eviction(&mut self) -> Result<()> {
         if !self.eviction_reserved {
             return Err(CloudFilesCoreError::invalid_content_storage(
@@ -719,6 +796,10 @@ pub struct ContentEvictionOperationId(String);
 
 impl ContentEvictionOperationId {
     /// Creates a non-empty opaque eviction operation identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -728,6 +809,7 @@ impl ContentEvictionOperationId {
     }
 
     /// Returns the opaque operation identity.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -753,6 +835,7 @@ pub struct ContentEvictionIntent {
 
 impl ContentEvictionIntent {
     /// Creates a product-neutral eviction intent.
+    #[must_use]
     pub const fn new(
         operation_id: ContentEvictionOperationId,
         cache_key: ContentCacheKey,
@@ -768,21 +851,25 @@ impl ContentEvictionIntent {
     }
 
     /// Returns the durable operation identity.
+    #[must_use]
     pub const fn operation_id(&self) -> &ContentEvictionOperationId {
         &self.operation_id
     }
 
     /// Returns the revision-bound content key.
+    #[must_use]
     pub const fn cache_key(&self) -> &ContentCacheKey {
         &self.cache_key
     }
 
     /// Returns the selected physical eviction target.
+    #[must_use]
     pub const fn target(&self) -> ContentEvictionTarget {
         self.target
     }
 
     /// Returns the platform session generation that created the intent.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -834,6 +921,7 @@ pub struct ContentEvictionRecord {
 
 impl ContentEvictionRecord {
     /// Creates the first recoverable state after the entry reservation is durable.
+    #[must_use]
     pub const fn persist(intent: ContentEvictionIntent, plan: ContentEvictionPlan) -> Self {
         Self {
             intent,
@@ -846,21 +934,25 @@ impl ContentEvictionRecord {
     }
 
     /// Returns the immutable eviction intent.
+    #[must_use]
     pub const fn intent(&self) -> &ContentEvictionIntent {
         &self.intent
     }
 
     /// Returns the required physical effect plan.
+    #[must_use]
     pub const fn plan(&self) -> ContentEvictionPlan {
         self.plan
     }
 
     /// Returns the current durable state.
+    #[must_use]
     pub const fn state(&self) -> ContentEvictionState {
         self.state
     }
 
     /// Returns whether one required physical effect has been observed.
+    #[must_use]
     pub const fn has_observed_effect(&self, effect: ContentEvictionPhysicalEffect) -> bool {
         match effect {
             ContentEvictionPhysicalEffect::ProviderCacheRemoved => self.provider_cache_removed,
@@ -874,6 +966,10 @@ impl ContentEvictionRecord {
     }
 
     /// Records one idempotent physical effect and advances when the complete plan is observed.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn record_physical_effect(
         &mut self,
         effect: ContentEvictionPhysicalEffect,
@@ -920,6 +1016,10 @@ impl ContentEvictionRecord {
     }
 
     /// Marks content metadata reconciled after all physical effects are durable or observable.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_metadata_reconciled(&mut self) -> Result<ContentEvictionRecordTransition> {
         match self.state {
             ContentEvictionState::PhysicalEffectsApplied => {
@@ -929,13 +1029,19 @@ impl ContentEvictionRecord {
             ContentEvictionState::MetadataReconciled | ContentEvictionState::Completed => {
                 Ok(ContentEvictionRecordTransition::AlreadyApplied)
             }
-            _ => Err(CloudFilesCoreError::invalid_content_eviction(
-                "metadata reconciliation requires all physical effects",
-            )),
+            ContentEvictionState::IntentPersisted => {
+                Err(CloudFilesCoreError::invalid_content_eviction(
+                    "metadata reconciliation requires all physical effects",
+                ))
+            }
         }
     }
 
     /// Marks the eviction terminal after metadata reconciliation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn complete(&mut self) -> Result<ContentEvictionRecordTransition> {
         match self.state {
             ContentEvictionState::MetadataReconciled => {

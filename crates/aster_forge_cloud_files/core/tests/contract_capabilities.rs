@@ -9,6 +9,10 @@ use aster_forge_cloud_files_core::{
 };
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the capability contract keeps one complete intersection scenario visible as a table"
+)]
 fn effective_capabilities_keep_only_shared_operations() {
     let backend = CloudFilesCapabilities {
         identity: IdentityCapabilities {
@@ -280,6 +284,10 @@ fn alignment_handles_zero_identity_equal_multiple_and_coprime_boundaries() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the contract enumerates every independent boolean capability dimension in one matrix"
+)]
 fn every_boolean_capability_dimension_uses_logical_intersection() {
     let identity_left = IdentityCapabilities {
         stable_item_ids: true,

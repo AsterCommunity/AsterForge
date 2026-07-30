@@ -29,6 +29,10 @@ impl MacosFileProviderItem {
     ///
     /// `root_key` determines both the root item role and whether a direct child's parent must use
     /// Apple's root system identifier instead of an ordinary encoded item identifier.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_cloud_item(item: &CloudItem, root_key: &CloudItemKey) -> Result<Self> {
         if item.key().scope() != root_key.scope() {
             return Err(MacosBridgeError::InvalidBackendResponse {
@@ -98,31 +102,37 @@ impl MacosFileProviderItem {
     }
 
     /// Returns the persistent item identifier.
+    #[must_use]
     pub const fn identifier(&self) -> &MacosFileProviderIdentifier {
         &self.identifier
     }
 
     /// Returns the current parent identifier.
+    #[must_use]
     pub const fn parent_identifier(&self) -> &MacosFileProviderIdentifier {
         &self.parent_identifier
     }
 
     /// Returns the current display filename.
+    #[must_use]
     pub fn filename(&self) -> &str {
         &self.filename
     }
 
     /// Returns the item kind.
+    #[must_use]
     pub const fn kind(&self) -> MacosFileProviderItemKind {
         self.kind
     }
 
     /// Returns the logical content size, or zero for directories.
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
 
     /// Returns separate metadata/content versions for regular files.
+    #[must_use]
     pub const fn version(&self) -> &MacosFileProviderItemVersion {
         &self.version
     }

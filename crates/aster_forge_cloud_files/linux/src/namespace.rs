@@ -54,11 +54,13 @@ impl LinuxNamespaceMutationStoreError {
     }
 
     /// Returns the stable store-error classification.
+    #[must_use]
     pub const fn kind(&self) -> LinuxNamespaceMutationStoreErrorKind {
         self.kind
     }
 
     /// Returns implementation diagnostic context. Product layers own user-facing text.
+    #[must_use]
     pub fn context(&self) -> &str {
         &self.context
     }
@@ -77,6 +79,10 @@ pub struct LinuxCreateFileRequest {
 
 impl LinuxCreateFileRequest {
     /// Creates a request without allocating any product identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         parent_key: CloudItemKey,
         name: impl Into<String>,
@@ -98,31 +104,37 @@ impl LinuxCreateFileRequest {
     }
 
     /// Returns the stable parent identity resolved from the requested inode.
+    #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
     /// Returns the exact requested Linux directory-component name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the raw create mode supplied by FUSE.
+    #[must_use]
     pub const fn mode(&self) -> u32 {
         self.mode
     }
 
     /// Returns the caller umask supplied by FUSE.
+    #[must_use]
     pub const fn umask(&self) -> u32 {
         self.umask
     }
 
     /// Returns the access mode requested for the newly opened handle.
+    #[must_use]
     pub const fn access(&self) -> LinuxFileAccess {
         self.access
     }
 
     /// Returns the active mount generation accepting this create.
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -138,6 +150,7 @@ pub struct LinuxCreatedFile {
 
 impl LinuxCreatedFile {
     /// Creates a durable local namespace record from product-allocated values.
+    #[must_use]
     pub const fn new(
         item: CloudItem,
         inode_record: LinuxInodeRecord,
@@ -151,21 +164,25 @@ impl LinuxCreatedFile {
     }
 
     /// Returns the product-neutral local item state.
+    #[must_use]
     pub const fn item(&self) -> &CloudItem {
         &self.item
     }
 
     /// Returns the stable Linux inode/generation allocation.
+    #[must_use]
     pub const fn inode_record(&self) -> &LinuxInodeRecord {
         &self.inode_record
     }
 
     /// Returns the create mutation intent persisted in the same product transaction.
+    #[must_use]
     pub const fn mutation_intent(&self) -> &MutationIntent {
         &self.mutation_intent
     }
 
     /// Consumes the record into its durable fields.
+    #[must_use]
     pub fn into_parts(self) -> (CloudItem, LinuxInodeRecord, MutationIntent) {
         (self.item, self.inode_record, self.mutation_intent)
     }
@@ -180,21 +197,25 @@ pub struct LinuxCreateFileAcceptance {
 
 impl LinuxCreateFileAcceptance {
     /// Creates an acceptance containing durable namespace, mutation, and staging state.
+    #[must_use]
     pub const fn new(created: LinuxCreatedFile, session: LinuxWriteSession) -> Self {
         Self { created, session }
     }
 
     /// Returns the durable local namespace allocation.
+    #[must_use]
     pub const fn created(&self) -> &LinuxCreatedFile {
         &self.created
     }
 
     /// Returns the empty local staging session opened by the transaction.
+    #[must_use]
     pub const fn session(&self) -> &LinuxWriteSession {
         &self.session
     }
 
     /// Consumes the acceptance into the durable record and opened staging session.
+    #[must_use]
     pub fn into_parts(self) -> (LinuxCreatedFile, LinuxWriteSession) {
         (self.created, self.session)
     }
@@ -210,6 +231,7 @@ pub struct LinuxNamespaceItem {
 
 impl LinuxNamespaceItem {
     /// Creates a durable namespace item with its stable native mapping and mutation intent.
+    #[must_use]
     pub const fn new(
         item: CloudItem,
         inode_record: LinuxInodeRecord,
@@ -223,21 +245,25 @@ impl LinuxNamespaceItem {
     }
 
     /// Returns current product-neutral metadata for the local namespace overlay.
+    #[must_use]
     pub const fn item(&self) -> &CloudItem {
         &self.item
     }
 
     /// Returns the stable inode/generation record preserved across rename and restart.
+    #[must_use]
     pub const fn inode_record(&self) -> &LinuxInodeRecord {
         &self.inode_record
     }
 
     /// Returns the durable core mutation that produced this local overlay state.
+    #[must_use]
     pub const fn mutation_intent(&self) -> &MutationIntent {
         &self.mutation_intent
     }
 
     /// Consumes the item into its durable fields.
+    #[must_use]
     pub fn into_parts(self) -> (CloudItem, LinuxInodeRecord, MutationIntent) {
         (self.item, self.inode_record, self.mutation_intent)
     }
@@ -263,6 +289,10 @@ pub struct LinuxNamespaceTombstone {
 
 impl LinuxNamespaceTombstone {
     /// Creates a tombstone from the exact removed namespace facts.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         key: CloudItemKey,
         inode_generation: LinuxInodeGeneration,
@@ -284,31 +314,37 @@ impl LinuxNamespaceTombstone {
     }
 
     /// Returns the stable removed item identity.
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
     /// Returns the removed inode generation used to reject substituted tombstones.
+    #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
     /// Returns the exact former parent identity.
+    #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
     /// Returns the exact former directory-component name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns whether the removed entry was a regular file or directory.
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
 
     /// Returns the durable delete intent.
+    #[must_use]
     pub const fn mutation_intent(&self) -> &MutationIntent {
         &self.mutation_intent
     }
@@ -323,6 +359,7 @@ pub struct LinuxNamespaceOverlay {
 
 impl LinuxNamespaceOverlay {
     /// Creates a restart overlay from current local entries and deletion markers.
+    #[must_use]
     pub const fn new(
         items: Vec<LinuxNamespaceItem>,
         tombstones: Vec<LinuxNamespaceTombstone>,
@@ -331,16 +368,19 @@ impl LinuxNamespaceOverlay {
     }
 
     /// Returns current local namespace entries.
+    #[must_use]
     pub fn items(&self) -> &[LinuxNamespaceItem] {
         &self.items
     }
 
     /// Returns current local deletion markers.
+    #[must_use]
     pub fn tombstones(&self) -> &[LinuxNamespaceTombstone] {
         &self.tombstones
     }
 
     /// Consumes the overlay into its durable collections.
+    #[must_use]
     pub fn into_parts(self) -> (Vec<LinuxNamespaceItem>, Vec<LinuxNamespaceTombstone>) {
         (self.items, self.tombstones)
     }
@@ -358,6 +398,10 @@ pub struct LinuxCreateDirectoryRequest {
 
 impl LinuxCreateDirectoryRequest {
     /// Creates a directory request without allocating product identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         parent_key: CloudItemKey,
         name: impl Into<String>,
@@ -376,22 +420,27 @@ impl LinuxCreateDirectoryRequest {
         })
     }
 
+    #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub const fn mode(&self) -> u32 {
         self.mode
     }
 
+    #[must_use]
     pub const fn umask(&self) -> u32 {
         self.umask
     }
 
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -417,6 +466,10 @@ impl LinuxRenameRequest {
         clippy::too_many_arguments,
         reason = "the request preserves exact native source, destination, and generation facts"
     )]
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         key: CloudItemKey,
         inode_generation: LinuxInodeGeneration,
@@ -447,42 +500,52 @@ impl LinuxRenameRequest {
         })
     }
 
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
 
+    #[must_use]
     pub const fn old_parent_key(&self) -> &CloudItemKey {
         &self.old_parent_key
     }
 
+    #[must_use]
     pub fn old_name(&self) -> &str {
         &self.old_name
     }
 
+    #[must_use]
     pub const fn new_parent_key(&self) -> &CloudItemKey {
         &self.new_parent_key
     }
 
+    #[must_use]
     pub fn new_name(&self) -> &str {
         &self.new_name
     }
 
+    #[must_use]
     pub const fn destination(&self) -> Option<&LinuxRenameDestination> {
         self.destination.as_ref()
     }
 
+    #[must_use]
     pub const fn no_replace(&self) -> bool {
         self.no_replace
     }
 
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }
@@ -497,6 +560,7 @@ pub struct LinuxRenameDestination {
 }
 
 impl LinuxRenameDestination {
+    #[must_use]
     pub const fn new(
         key: CloudItemKey,
         inode_generation: LinuxInodeGeneration,
@@ -509,14 +573,17 @@ impl LinuxRenameDestination {
         }
     }
 
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
@@ -531,6 +598,7 @@ pub struct LinuxRenameAcceptance {
 }
 
 impl LinuxRenameAcceptance {
+    #[must_use]
     pub const fn new(
         item: LinuxNamespaceItem,
         source: LinuxNamespaceTombstone,
@@ -543,18 +611,22 @@ impl LinuxRenameAcceptance {
         }
     }
 
+    #[must_use]
     pub const fn item(&self) -> &LinuxNamespaceItem {
         &self.item
     }
 
+    #[must_use]
     pub const fn source(&self) -> &LinuxNamespaceTombstone {
         &self.source
     }
 
+    #[must_use]
     pub const fn replaced(&self) -> Option<&LinuxNamespaceTombstone> {
         self.replaced.as_ref()
     }
 
+    #[must_use]
     pub fn into_parts(
         self,
     ) -> (
@@ -578,6 +650,10 @@ pub struct LinuxRemoveRequest {
 }
 
 impl LinuxRemoveRequest {
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         key: CloudItemKey,
         inode_generation: LinuxInodeGeneration,
@@ -598,26 +674,32 @@ impl LinuxRemoveRequest {
         })
     }
 
+    #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
+    #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
 
+    #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
     }

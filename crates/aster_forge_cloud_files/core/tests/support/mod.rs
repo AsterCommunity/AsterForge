@@ -60,6 +60,10 @@ impl SyntheticBackend {
         Self::fixture(SyntheticProfile::ReadOnly)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the shared backend fixture keeps its complete capability and namespace dataset together"
+    )]
     fn fixture(profile: SyntheticProfile) -> Self {
         let namespace = CloudNamespaceId::new("synthetic-provider")
             .expect("synthetic namespace should be valid");
@@ -70,8 +74,8 @@ impl SyntheticBackend {
         let folder_key = item_key(&scope, "folder-docs");
         let moved_file_key = item_key(&scope, "file-alpha");
         let deleted_file_key = item_key(&scope, "file-deleted");
-        let file_c_key = item_key(&scope, "file-charlie");
-        let file_d_key = item_key(&scope, "file-delta");
+        let charlie_file_key = item_key(&scope, "file-charlie");
+        let delta_file_key = item_key(&scope, "file-delta");
 
         let root =
             CloudItem::directory(root_key.clone(), None, "root", metadata_revision("root-m1"))
@@ -108,7 +112,7 @@ impl SyntheticBackend {
         )
         .expect("synthetic deleted file should be valid");
         let file_c = CloudItem::file(
-            file_c_key.clone(),
+            charlie_file_key.clone(),
             root_key.item_id().clone(),
             "charlie.txt",
             metadata_revision("charlie-m1"),
@@ -116,7 +120,7 @@ impl SyntheticBackend {
         )
         .expect("synthetic file should be valid");
         let file_d = CloudItem::file(
-            file_d_key.clone(),
+            delta_file_key.clone(),
             root_key.item_id().clone(),
             "delta.txt",
             metadata_revision("delta-m1"),
@@ -128,13 +132,17 @@ impl SyntheticBackend {
             (root_key.clone(), root),
             (folder_key.clone(), folder),
             (moved_file_key.clone(), moved_file.clone()),
-            (file_c_key.clone(), file_c.clone()),
-            (file_d_key.clone(), file_d.clone()),
+            (charlie_file_key.clone(), file_c.clone()),
+            (delta_file_key.clone(), file_d.clone()),
         ]);
         let children = HashMap::from([
             (
                 root_key.clone(),
-                vec![folder_key.clone(), file_c_key.clone(), file_d_key.clone()],
+                vec![
+                    folder_key.clone(),
+                    charlie_file_key.clone(),
+                    delta_file_key.clone(),
+                ],
             ),
             (folder_key.clone(), vec![moved_file_key.clone()]),
         ]);
@@ -358,7 +366,7 @@ impl CloudMetadataBackend for SyntheticBackend {
                 CloudBackendErrorKind::InvalidRequest,
             ));
         }
-        let child_keys = self.children.get(parent).map(Vec::as_slice).unwrap_or(&[]);
+        let child_keys: &[CloudItemKey] = self.children.get(parent).map_or(&[], Vec::as_slice);
         let offset = match cursor {
             Some(cursor) => Self::decode_page_cursor(parent, cursor)?,
             None => 0,

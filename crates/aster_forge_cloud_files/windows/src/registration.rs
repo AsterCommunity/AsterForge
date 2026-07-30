@@ -22,6 +22,10 @@ pub struct WindowsProviderId(u128);
 
 impl WindowsProviderId {
     /// Creates a stable non-zero GUID value from its canonical `u128` representation.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: u128) -> Result<Self> {
         if value == 0 {
             return Err(WindowsCloudFilesError::EmptyProviderId);
@@ -30,6 +34,7 @@ impl WindowsProviderId {
     }
 
     /// Returns the canonical GUID value.
+    #[must_use]
     pub const fn as_u128(self) -> u128 {
         self.0
     }
@@ -47,6 +52,10 @@ pub struct WindowsSyncRootIdentity(Vec<u8>);
 
 impl WindowsSyncRootIdentity {
     /// Encodes one product-neutral scope into the current Windows sync-root envelope.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn encode(scope: &CloudScope) -> Result<Self> {
         let fields = [
             scope.namespace_id().as_str().as_bytes(),
@@ -86,6 +95,10 @@ impl WindowsSyncRootIdentity {
     }
 
     /// Imports and validates a canonical sync-root identity envelope.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
         validate_sync_root_identity_size(bytes.len())?;
         decode_sync_root_identity(&bytes)?;
@@ -93,26 +106,34 @@ impl WindowsSyncRootIdentity {
     }
 
     /// Decodes the product-neutral namespace/root scope.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn decode(&self) -> Result<CloudScope> {
         decode_sync_root_identity(&self.0)
     }
 
     /// Returns the exact bytes persisted by CFAPI.
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// Returns the encoded byte length.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns whether the envelope is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Consumes the identity and returns its exact bytes.
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
@@ -140,6 +161,10 @@ pub enum WindowsHydrationPolicyPrimary {
 }
 
 /// Primary hydration behavior plus independently negotiated CFAPI modifiers.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these fields map independent native hydration policy modifiers"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowsHydrationPolicy {
     /// Primary hydration behavior.
@@ -156,6 +181,10 @@ pub struct WindowsHydrationPolicy {
 
 impl WindowsHydrationPolicy {
     /// Validates conflicts and platform-version gates.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate(self, platform: WindowsPlatformVersion) -> Result<()> {
         if self.validation_required && self.streaming_allowed {
             return Err(invalid_policy(
@@ -215,11 +244,13 @@ impl WindowsInSyncPolicy {
     pub const PRESERVE_FOR_SYNC_ENGINE: Self = Self(0x8000_0000);
 
     /// Returns the exact CFAPI bitset.
+    #[must_use]
     pub const fn bits(self) -> u32 {
         self.0
     }
 
     /// Returns whether all requested bits are present.
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -256,6 +287,7 @@ pub struct WindowsPlaceholderManagementPolicy {
 
 impl WindowsPlaceholderManagementPolicy {
     /// Returns whether any integration-gated permission is requested.
+    #[must_use]
     pub const fn is_unrestricted(self) -> bool {
         self.create_unrestricted || self.convert_unrestricted || self.update_unrestricted
     }
@@ -278,6 +310,10 @@ pub struct WindowsSyncRootPolicies {
 
 impl WindowsSyncRootPolicies {
     /// Validates policy conflicts and platform integration gates.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate(self, platform: WindowsPlatformVersion) -> Result<()> {
         self.hydration.validate(platform)?;
         if self.placeholder_management.is_unrestricted()
@@ -329,6 +365,10 @@ pub struct WindowsSyncRootRegistration {
 
 impl WindowsSyncRootRegistration {
     /// Creates a persistent registration request and validates all portable identity boundaries.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         provider_name: impl Into<String>,
         provider_version: impl Into<String>,
@@ -357,46 +397,58 @@ impl WindowsSyncRootRegistration {
     }
 
     /// Validates policies against one detected Windows platform version.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn validate_for_platform(&self, platform: WindowsPlatformVersion) -> Result<()> {
         self.policies.validate(platform)
     }
 
     /// Returns the user-facing provider name.
+    #[must_use]
     pub fn provider_name(&self) -> &str {
         &self.provider_name
     }
 
     /// Returns the user-facing provider version.
+    #[must_use]
     pub fn provider_version(&self) -> &str {
         &self.provider_version
     }
 
     /// Returns the stable provider GUID.
+    #[must_use]
     pub const fn provider_id(&self) -> WindowsProviderId {
         self.provider_id
     }
 
     /// Returns the persistent sync-root identity.
+    #[must_use]
     pub const fn sync_root_identity(&self) -> &WindowsSyncRootIdentity {
         &self.sync_root_identity
     }
 
     /// Returns the required file identity used when callbacks target the root itself.
+    #[must_use]
     pub const fn root_file_identity(&self) -> &WindowsFileIdentity {
         &self.root_file_identity
     }
 
     /// Returns the requested sync-root policies.
+    #[must_use]
     pub const fn policies(&self) -> WindowsSyncRootPolicies {
         self.policies
     }
 
     /// Returns persistent registration flags.
+    #[must_use]
     pub const fn options(&self) -> WindowsSyncRootRegistrationOptions {
         self.options
     }
 
     /// Consumes the registration and returns every owned boundary value.
+    #[must_use]
     pub fn into_parts(
         self,
     ) -> (

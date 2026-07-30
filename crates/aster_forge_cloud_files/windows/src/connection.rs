@@ -47,11 +47,13 @@ pub struct WindowsConnectionKey(i64);
 
 impl WindowsConnectionKey {
     /// Wraps the exact opaque scalar returned by CFAPI.
+    #[must_use]
     pub const fn new(value: i64) -> Self {
         Self(value)
     }
 
     /// Returns the exact native scalar.
+    #[must_use]
     pub const fn get(self) -> i64 {
         self.0
     }
@@ -63,11 +65,13 @@ pub struct WindowsTransferKey(i64);
 
 impl WindowsTransferKey {
     /// Wraps the exact callback scalar.
+    #[must_use]
     pub const fn new(value: i64) -> Self {
         Self(value)
     }
 
     /// Returns the exact callback scalar.
+    #[must_use]
     pub const fn get(self) -> i64 {
         self.0
     }
@@ -79,11 +83,13 @@ pub struct WindowsRequestKey(i64);
 
 impl WindowsRequestKey {
     /// Wraps the exact callback scalar.
+    #[must_use]
     pub const fn new(value: i64) -> Self {
         Self(value)
     }
 
     /// Returns the exact callback scalar.
+    #[must_use]
     pub const fn get(self) -> i64 {
         self.0
     }
@@ -107,6 +113,10 @@ pub struct WindowsCallbackRange {
 
 impl WindowsCallbackRange {
     /// Creates one exact non-empty range and rejects end overflow.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn exact(offset: u64, length: u64) -> Result<Self> {
         if offset > i64::MAX as u64 {
             return Err(invalid_callback(
@@ -136,6 +146,10 @@ impl WindowsCallbackRange {
     }
 
     /// Creates a range extending from `offset` through the current end of file.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn to_end(offset: u64) -> Result<Self> {
         if offset > i64::MAX as u64 {
             return Err(invalid_callback(
@@ -149,6 +163,10 @@ impl WindowsCallbackRange {
     }
 
     /// Converts the signed CFAPI offset/length pair into an owned range.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_cfapi(offset: i64, length: i64) -> Result<Self> {
         let offset = u64::try_from(offset)
             .map_err(|_| invalid_callback("callback range offset must be non-negative"))?;
@@ -166,16 +184,19 @@ impl WindowsCallbackRange {
     }
 
     /// Returns the first requested byte offset.
+    #[must_use]
     pub const fn offset(self) -> u64 {
         self.offset
     }
 
     /// Returns the exact native length semantics.
+    #[must_use]
     pub const fn length(self) -> WindowsCallbackRangeLength {
         self.length
     }
 
     /// Returns the exclusive end for an exact range, or `None` for `ToEnd`.
+    #[must_use]
     pub const fn end_exclusive(self) -> Option<u64> {
         match self.length {
             WindowsCallbackRangeLength::Exact(length) => Some(self.offset + length),
@@ -227,6 +248,10 @@ impl WindowsCallbackInfoSnapshot {
         clippy::too_many_arguments,
         reason = "the constructor mirrors the flat, versioned CF_CALLBACK_INFO ownership boundary"
     )]
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(
         generation: SessionGeneration,
         connection_key: WindowsConnectionKey,
@@ -279,76 +304,91 @@ impl WindowsCallbackInfoSnapshot {
     }
 
     /// Returns the durable platform session fence captured at callback ingress.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.generation
     }
 
     /// Returns the native connection key used by later CFAPI operations.
+    #[must_use]
     pub const fn connection_key(&self) -> WindowsConnectionKey {
         self.connection_key
     }
 
     /// Returns the native transfer key.
+    #[must_use]
     pub const fn transfer_key(&self) -> WindowsTransferKey {
         self.transfer_key
     }
 
     /// Returns the native request key.
+    #[must_use]
     pub const fn request_key(&self) -> WindowsRequestKey {
         self.request_key
     }
 
     /// Returns the optional volume GUID name.
+    #[must_use]
     pub fn volume_guid_name(&self) -> Option<&std::ffi::OsStr> {
         self.volume_guid_name.as_deref()
     }
 
     /// Returns the optional DOS volume name.
+    #[must_use]
     pub fn volume_dos_name(&self) -> Option<&std::ffi::OsStr> {
         self.volume_dos_name.as_deref()
     }
 
     /// Returns the native volume serial number.
+    #[must_use]
     pub const fn volume_serial_number(&self) -> u32 {
         self.volume_serial_number
     }
 
     /// Returns the sync-root file identifier.
+    #[must_use]
     pub const fn sync_root_file_id(&self) -> i64 {
         self.sync_root_file_id
     }
 
     /// Returns the owned sync-root identity bytes.
+    #[must_use]
     pub const fn sync_root_identity(&self) -> &WindowsSyncRootIdentity {
         &self.sync_root_identity
     }
 
     /// Returns the native placeholder file identifier.
+    #[must_use]
     pub const fn file_id(&self) -> i64 {
         self.file_id
     }
 
     /// Returns the non-negative file size copied from CFAPI.
+    #[must_use]
     pub const fn file_size(&self) -> u64 {
         self.file_size
     }
 
     /// Returns the owned stable item identity.
+    #[must_use]
     pub const fn file_identity(&self) -> &WindowsFileIdentity {
         &self.file_identity
     }
 
     /// Returns the optional owned normalized path.
+    #[must_use]
     pub fn normalized_path(&self) -> Option<&std::path::Path> {
         self.normalized_path.as_deref()
     }
 
     /// Returns the native scheduling priority hint.
+    #[must_use]
     pub const fn priority_hint(&self) -> u8 {
         self.priority_hint
     }
 
     /// Returns optional owned process metadata.
+    #[must_use]
     pub const fn process(&self) -> Option<&WindowsProcessInfoSnapshot> {
         self.process.as_ref()
     }
@@ -385,16 +425,19 @@ impl WindowsFetchDataFlags {
     pub const EXPLICIT_HYDRATION: Self = Self(0x2);
 
     /// Preserves the exact native bitset, including future bits.
+    #[must_use]
     pub const fn from_bits_retain(bits: u32) -> Self {
         Self(bits)
     }
 
     /// Returns the exact native bitset.
+    #[must_use]
     pub const fn bits(self) -> u32 {
         self.0
     }
 
     /// Returns whether all bits in `other` are present.
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -413,6 +456,7 @@ pub struct WindowsFetchDataSnapshot {
 
 impl WindowsFetchDataSnapshot {
     /// Creates an owned fetch snapshot after native pointers have been copied.
+    #[must_use]
     pub const fn new(
         info: WindowsCallbackInfoSnapshot,
         flags: WindowsFetchDataFlags,
@@ -432,11 +476,13 @@ impl WindowsFetchDataSnapshot {
     }
 
     /// Returns common owned callback information.
+    #[must_use]
     pub const fn info(&self) -> &WindowsCallbackInfoSnapshot {
         &self.info
     }
 
     /// Returns native fetch flags.
+    #[must_use]
     pub const fn flags(&self) -> WindowsFetchDataFlags {
         self.flags
     }
@@ -444,26 +490,31 @@ impl WindowsFetchDataSnapshot {
     /// Returns whether CFAPI is recovering hydration interrupted by an unclean provider or system
     /// shutdown. Products should reconcile their durable content/cache state before selecting the
     /// revision passed to `hydrate` or `restart_hydration`.
+    #[must_use]
     pub const fn is_recovery(&self) -> bool {
         self.flags.contains(WindowsFetchDataFlags::RECOVERY)
     }
 
     /// Returns the range required to satisfy outstanding I/O.
+    #[must_use]
     pub const fn required_range(&self) -> WindowsCallbackRange {
         self.required_range
     }
 
     /// Returns the optional broader hydration hint.
+    #[must_use]
     pub const fn optional_range(&self) -> Option<WindowsCallbackRange> {
         self.optional_range
     }
 
     /// Returns the native last-dehydration timestamp.
+    #[must_use]
     pub const fn last_dehydration_time(&self) -> i64 {
         self.last_dehydration_time
     }
 
     /// Returns the exact native last-dehydration reason bits.
+    #[must_use]
     pub const fn last_dehydration_reason(&self) -> u32 {
         self.last_dehydration_reason
     }
@@ -480,16 +531,19 @@ impl WindowsCancelFetchDataFlags {
     pub const IO_ABORTED: Self = Self(0x2);
 
     /// Preserves the exact native bitset, including future bits.
+    #[must_use]
     pub const fn from_bits_retain(bits: u32) -> Self {
         Self(bits)
     }
 
     /// Returns the exact native bitset.
+    #[must_use]
     pub const fn bits(self) -> u32 {
         self.0
     }
 
     /// Returns whether all bits in `other` are present.
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -505,6 +559,7 @@ pub struct WindowsCancelFetchDataSnapshot {
 
 impl WindowsCancelFetchDataSnapshot {
     /// Creates an owned cancellation snapshot.
+    #[must_use]
     pub const fn new(
         info: WindowsCallbackInfoSnapshot,
         flags: WindowsCancelFetchDataFlags,
@@ -514,16 +569,19 @@ impl WindowsCancelFetchDataSnapshot {
     }
 
     /// Returns common owned callback information.
+    #[must_use]
     pub const fn info(&self) -> &WindowsCallbackInfoSnapshot {
         &self.info
     }
 
     /// Returns the native cancellation reason flags.
+    #[must_use]
     pub const fn flags(&self) -> WindowsCancelFetchDataFlags {
         self.flags
     }
 
     /// Returns the original hydration subrange that is no longer needed.
+    #[must_use]
     pub const fn range(&self) -> WindowsCallbackRange {
         self.range
     }
@@ -553,6 +611,7 @@ pub struct WindowsRestartHydration {
 
 impl WindowsRestartHydration {
     /// Starts with no metadata or identity replacement.
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             metadata: None,
@@ -562,34 +621,40 @@ impl WindowsRestartHydration {
     }
 
     /// Replaces the native filesystem metadata, including the logical file size.
+    #[must_use]
     pub const fn with_metadata(mut self, metadata: crate::WindowsPlaceholderMetadata) -> Self {
         self.metadata = Some(metadata);
         self
     }
 
     /// Replaces the persisted native identity after same-item validation.
+    #[must_use]
     pub fn with_identity(mut self, identity: WindowsFileIdentity) -> Self {
         self.identity = Some(identity);
         self
     }
 
     /// Marks the restarted placeholder in-sync after successful native completion.
+    #[must_use]
     pub const fn mark_in_sync(mut self) -> Self {
         self.mark_in_sync = true;
         self
     }
 
     /// Returns the optional replacement metadata.
+    #[must_use]
     pub const fn metadata(&self) -> Option<crate::WindowsPlaceholderMetadata> {
         self.metadata
     }
 
     /// Returns the optional replacement identity.
+    #[must_use]
     pub const fn identity(&self) -> Option<&WindowsFileIdentity> {
         self.identity.as_ref()
     }
 
     /// Returns whether the native restart should set CFAPI in-sync state.
+    #[must_use]
     pub const fn should_mark_in_sync(&self) -> bool {
         self.mark_in_sync
     }
@@ -616,6 +681,7 @@ pub struct WindowsFetchDataProgressReporter {
 
 impl WindowsFetchDataProgressReporter {
     /// Returns the owned callback correlation used for progress reporting.
+    #[must_use]
     pub const fn correlation(&self) -> WindowsFetchDataCorrelation {
         self.correlation
     }
@@ -662,26 +728,31 @@ impl WindowsFetchDataCorrelation {
     }
 
     /// Returns the accepting session generation.
+    #[must_use]
     pub const fn generation(self) -> SessionGeneration {
         self.generation
     }
 
     /// Returns the native connection key.
+    #[must_use]
     pub const fn connection_key(self) -> WindowsConnectionKey {
         self.connection_key
     }
 
     /// Returns the native transfer key.
+    #[must_use]
     pub const fn transfer_key(self) -> WindowsTransferKey {
         self.transfer_key
     }
 
     /// Returns the native request key.
+    #[must_use]
     pub const fn request_key(self) -> WindowsRequestKey {
         self.request_key
     }
 
     /// Returns the native placeholder file identifier.
+    #[must_use]
     pub const fn file_id(self) -> i64 {
         self.file_id
     }
@@ -792,22 +863,26 @@ impl FetchTerminalGate {
 
 impl WindowsFetchDataRequest {
     /// Returns the immutable callback snapshot.
+    #[must_use]
     pub const fn snapshot(&self) -> &WindowsFetchDataSnapshot {
         &self.snapshot
     }
 
     /// Returns the accepted generation lease.
+    #[must_use]
     pub const fn lease(&self) -> &WindowsCallbackLease {
         &self.lease
     }
 
     /// Returns whether this request already made its one terminal native completion attempt.
+    #[must_use]
     pub fn terminal_attempted(&self) -> bool {
         self.terminal.attempted()
     }
 
     /// Creates an owned progress reporter that can be moved to another worker while this request
     /// awaits hydration.
+    #[must_use]
     pub fn progress_reporter(&self) -> WindowsFetchDataProgressReporter {
         WindowsFetchDataProgressReporter {
             correlation: WindowsFetchDataCorrelation::from_info(self.snapshot.info()),
@@ -833,6 +908,10 @@ impl WindowsFetchDataRequest {
     ///
     /// The caller resolves `revision` from product-owned metadata using the stable item identity
     /// in the snapshot. Windows callback paths and filenames are never used as revision sources.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn hydration_request(
         &self,
         revision: ContentRevision,
@@ -859,6 +938,10 @@ impl WindowsFetchDataRequest {
     /// This method performs no native call and does not consume terminal completion ownership.
     /// Platform workers may use it for explicit orchestration; ordinary Windows workers should
     /// prefer `WindowsFetchDataRequest::hydrate` so every error is terminally reported to CFAPI.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn prepare_transfer(
         &self,
         coordinator: &HydrationCoordinator,
@@ -876,6 +959,10 @@ impl WindowsFetchDataRequest {
     /// A platform cancellation that covers the complete waiter range returns `Cancelled` without
     /// manufacturing a core/backend failure. Partial cancellation retains the waiter because bytes
     /// outside that subrange remain required by CFAPI.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub async fn prepare_registered_transfer(
         &mut self,
         coordinator: &HydrationCoordinator,
@@ -1039,6 +1126,10 @@ pub struct WindowsFetchDataTransfer {
 
 impl WindowsFetchDataTransfer {
     /// Validates that a core response exactly satisfies the native required range.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn from_response(
         snapshot: &WindowsFetchDataSnapshot,
         revision: &ContentRevision,
@@ -1157,6 +1248,7 @@ pub enum WindowsObservedNotification {
 
 impl WindowsObservedNotification {
     /// Returns the common callback information.
+    #[must_use]
     pub const fn info(&self) -> &WindowsCallbackInfoSnapshot {
         match self {
             Self::DehydrateCompleted { info, .. }
@@ -1207,6 +1299,7 @@ pub enum WindowsPreflightSnapshot {
 
 impl WindowsPreflightSnapshot {
     /// Returns common callback information.
+    #[must_use]
     pub const fn info(&self) -> &WindowsCallbackInfoSnapshot {
         match self {
             Self::ValidateData { info, .. }
@@ -1229,16 +1322,19 @@ pub struct WindowsPreflightRequest {
 
 impl WindowsPreflightRequest {
     /// Returns the immutable preflight snapshot.
+    #[must_use]
     pub const fn snapshot(&self) -> &WindowsPreflightSnapshot {
         &self.snapshot
     }
 
     /// Returns the accepted generation lease.
+    #[must_use]
     pub const fn lease(&self) -> &WindowsCallbackLease {
         &self.lease
     }
 
     /// Returns whether this request has already attempted its native acknowledgement.
+    #[must_use]
     pub const fn acknowledged(&self) -> bool {
         self.acknowledged
     }
@@ -1300,46 +1396,59 @@ pub struct WindowsCallbackQueueMetrics {
 }
 
 impl WindowsCallbackQueueMetrics {
+    #[must_use]
     pub const fn accepted_callbacks(self) -> u64 {
         self.accepted_callbacks
     }
+    #[must_use]
     pub const fn queued_fetch_data(self) -> u64 {
         self.queued_fetch_data
     }
+    #[must_use]
     pub const fn queued_cancel_observations(self) -> u64 {
         self.queued_cancel_observations
     }
     /// Returns blocking native preflight requests queued for durable product decisions.
+    #[must_use]
     pub const fn queued_preflights(self) -> u64 {
         self.queued_preflights
     }
     /// Returns completed native filesystem observations queued for reconciliation.
+    #[must_use]
     pub const fn queued_observations(self) -> u64 {
         self.queued_observations
     }
+    #[must_use]
     pub const fn fetch_queue_full(self) -> u64 {
         self.fetch_queue_full
     }
+    #[must_use]
     pub const fn cancel_observation_queue_full(self) -> u64 {
         self.cancel_observation_queue_full
     }
     /// Returns blocking preflight requests failed because the queue was full.
+    #[must_use]
     pub const fn preflight_queue_full(self) -> u64 {
         self.preflight_queue_full
     }
     /// Returns completed observations dropped because the queue was full.
+    #[must_use]
     pub const fn observation_queue_full(self) -> u64 {
         self.observation_queue_full
     }
+    #[must_use]
     pub const fn receiver_disconnected(self) -> u64 {
         self.receiver_disconnected
     }
+    #[must_use]
     pub const fn closing_rejections(self) -> u64 {
         self.closing_rejections
     }
+    #[must_use]
     pub const fn invalid_snapshot_rejections(self) -> u64 {
         self.invalid_snapshot_rejections
     }
+    #[must_use]
     pub const fn panic_failures(self) -> u64 {
         self.panic_failures
     }
@@ -1347,6 +1456,7 @@ impl WindowsCallbackQueueMetrics {
 
 impl WindowsFetchDataFailure {
     /// Maps a product-neutral hydration failure to the closest CFAPI terminal classification.
+    #[must_use]
     pub fn from_hydration_error(error: &HydrationError) -> Self {
         match error {
             HydrationError::Cancelled => Self::Cancelled,
@@ -1379,11 +1489,13 @@ pub struct WindowsCancelFetchDataRequest {
 
 impl WindowsCancelFetchDataRequest {
     /// Returns the immutable callback snapshot.
+    #[must_use]
     pub const fn snapshot(&self) -> &WindowsCancelFetchDataSnapshot {
         &self.snapshot
     }
 
     /// Returns the accepted generation lease.
+    #[must_use]
     pub const fn lease(&self) -> &WindowsCallbackLease {
         &self.lease
     }
@@ -1409,6 +1521,7 @@ pub enum WindowsCallbackRequest {
 
 impl WindowsCallbackRequest {
     /// Returns common owned callback information.
+    #[must_use]
     pub const fn info(&self) -> &WindowsCallbackInfoSnapshot {
         match self {
             Self::FetchData(request) => request.snapshot.info(),
@@ -1419,12 +1532,17 @@ impl WindowsCallbackRequest {
     }
 
     /// Returns the generation that accepted this request.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.info().generation()
     }
 
     /// Binds a detached fetch snapshot to an exact generation lease for portable orchestration
     /// and contract tests. Detached requests never call CFAPI, including from `Drop`.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn detached_fetch_data(
         snapshot: WindowsFetchDataSnapshot,
         lease: WindowsCallbackLease,
@@ -1454,6 +1572,10 @@ impl WindowsCallbackRequest {
     }
 
     /// Binds a cancellation snapshot to the exact generation lease that accepted it.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn cancel_fetch_data(
         snapshot: WindowsCancelFetchDataSnapshot,
         lease: WindowsCallbackLease,
@@ -1467,6 +1589,10 @@ impl WindowsCallbackRequest {
 
     /// Binds a detached preflight snapshot to the generation that accepted it for portable
     /// orchestration and contract tests. Detached requests never acknowledge through CFAPI.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn detached_preflight(
         snapshot: WindowsPreflightSnapshot,
         lease: WindowsCallbackLease,
@@ -1496,6 +1622,10 @@ impl WindowsCallbackRequest {
     }
 
     /// Binds a completed notification to the generation that accepted it.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn observation(
         notification: WindowsObservedNotification,
         lease: WindowsCallbackLease,
@@ -1590,6 +1720,7 @@ pub struct WindowsConnectionSession {
 
 impl WindowsConnectionSession {
     /// Starts one accepting connection generation.
+    #[must_use]
     pub fn new(generation: SessionGeneration) -> Self {
         Self {
             inner: Arc::new(ConnectionSessionInner {
@@ -1604,21 +1735,25 @@ impl WindowsConnectionSession {
     }
 
     /// Returns the durable generation fence owned by this connection.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.inner.generation
     }
 
     /// Returns the current lifecycle state.
+    #[must_use]
     pub fn state(&self) -> SessionState {
         lock_lifecycle(&self.inner).state
     }
 
     /// Returns the number of accepted callback requests still owned by downstream work.
+    #[must_use]
     pub fn active_callbacks(&self) -> usize {
         lock_lifecycle(&self.inner).active_callbacks
     }
 
     /// Returns a point-in-time bounded callback ingress snapshot.
+    #[must_use]
     pub fn queue_metrics(&self) -> WindowsCallbackQueueMetrics {
         self.inner.queue_metrics.snapshot()
     }
@@ -1682,6 +1817,10 @@ impl WindowsConnectionSession {
     }
 
     /// Accepts one callback only while this exact generation is accepting new work.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn begin_callback(
         &self,
         callback_generation: SessionGeneration,
@@ -1712,6 +1851,7 @@ impl WindowsConnectionSession {
     /// Moves `Accepting -> Closing`, rejecting all later callback ingress.
     ///
     /// Returns `true` only for the first close request. Repeated calls are idempotent.
+    #[must_use]
     pub fn begin_closing(&self) -> bool {
         let mut lifecycle = lock_lifecycle(&self.inner);
         if lifecycle.state == SessionState::Accepting {
@@ -1726,6 +1866,10 @@ impl WindowsConnectionSession {
     ///
     /// The session closes immediately when no callback leases remain; otherwise the final lease
     /// release performs `Draining -> Closed`.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn mark_disconnected(&self) -> Result<()> {
         let mut lifecycle = lock_lifecycle(&self.inner);
         match lifecycle.state {
@@ -1772,6 +1916,7 @@ pub struct WindowsCallbackLease {
 
 impl WindowsCallbackLease {
     /// Returns the generation that accepted the callback.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.session.generation
     }
@@ -1782,6 +1927,7 @@ impl WindowsCallbackLease {
     }
 
     /// Checks whether this exact accepted callback may complete against `session`.
+    #[must_use]
     pub fn accepts_completion(&self, session: &WindowsConnectionSession) -> bool {
         !self.released
             && Arc::ptr_eq(&self.session, &session.inner)

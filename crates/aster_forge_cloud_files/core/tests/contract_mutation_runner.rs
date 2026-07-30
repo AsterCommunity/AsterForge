@@ -201,11 +201,11 @@ impl ScriptedMutationBackend {
 
     fn next_step(
         queue: &mut VecDeque<BackendStep>,
-        fallback: &Option<BackendStep>,
+        fallback: Option<&BackendStep>,
     ) -> BackendResult<MutationRemoteOutcome> {
         queue
             .pop_front()
-            .or_else(|| fallback.clone())
+            .or_else(|| fallback.cloned())
             .unwrap_or(BackendStep::Error(CloudBackendErrorKind::Internal))
             .execute()
     }
@@ -223,7 +223,7 @@ impl CloudMutationBackend for ScriptedMutationBackend {
             .expect("scripted backend mutex should not be poisoned");
         state.apply_calls += 1;
         let fallback = state.apply_fallback.clone();
-        Self::next_step(&mut state.apply, &fallback)
+        Self::next_step(&mut state.apply, fallback.as_ref())
     }
 
     async fn reconcile_mutation(
@@ -236,7 +236,7 @@ impl CloudMutationBackend for ScriptedMutationBackend {
             .expect("scripted backend mutex should not be poisoned");
         state.reconcile_calls += 1;
         let fallback = state.reconcile_fallback.clone();
-        Self::next_step(&mut state.reconcile, &fallback)
+        Self::next_step(&mut state.reconcile, fallback.as_ref())
     }
 }
 
@@ -741,6 +741,10 @@ async fn submit_reports_fenced_when_the_intent_generation_is_no_longer_active() 
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the contract compares fencing at each durable mutation recovery transition"
+)]
 async fn newer_generation_fences_unknown_known_and_platform_reconciled_transitions() {
     let fixture = SyntheticBackend::full();
 

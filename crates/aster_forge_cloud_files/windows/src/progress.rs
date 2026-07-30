@@ -13,6 +13,10 @@ pub struct WindowsFetchDataProgress {
 
 impl WindowsFetchDataProgress {
     /// Creates a progress sample. Zero-sized work is represented as `(0, 0)`.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(total: u64, completed: u64) -> Result<Self> {
         if completed > total {
             return Err(WindowsCloudFilesError::InvalidProviderProgress {
@@ -33,21 +37,28 @@ impl WindowsFetchDataProgress {
     }
 
     /// Returns the total number of bytes in the provider operation.
+    #[must_use]
     pub const fn total(self) -> u64 {
         self.total
     }
 
     /// Returns the number of bytes completed so far.
+    #[must_use]
     pub const fn completed(self) -> u64 {
         self.completed
     }
 
     /// Returns the signed values accepted by `CfReportProviderProgress`.
+    #[must_use]
     pub const fn as_cfapi(self) -> (i64, i64) {
-        (self.total as i64, self.completed as i64)
+        (self.total.cast_signed(), self.completed.cast_signed())
     }
 
     /// Validates a new sample against a previous sample for the same transfer.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn advance_from(self, previous: Self) -> Result<Self> {
         if self.total != previous.total {
             return Err(WindowsCloudFilesError::InvalidProviderProgress {

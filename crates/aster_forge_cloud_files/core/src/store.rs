@@ -26,21 +26,25 @@ pub struct RecoveryPage<T> {
 
 impl<T> RecoveryPage<T> {
     /// Creates a page from at most `limit` records and an explicit continuation flag.
+    #[must_use]
     pub fn new(items: Vec<T>, has_more: bool) -> Self {
         Self { items, has_more }
     }
 
     /// Returns the records in this page.
+    #[must_use]
     pub fn items(&self) -> &[T] {
         &self.items
     }
 
     /// Returns whether another page exists after this one.
+    #[must_use]
     pub const fn has_more(&self) -> bool {
         self.has_more
     }
 
     /// Consumes the page and returns its records.
+    #[must_use]
     pub fn into_items(self) -> Vec<T> {
         self.items
     }
@@ -77,11 +81,13 @@ impl CloudFilesStoreError {
     }
 
     /// Returns the stable error classification.
+    #[must_use]
     pub const fn kind(&self) -> CloudFilesStoreErrorKind {
         self.kind
     }
 
     /// Returns implementation diagnostic context. Product layers map user-visible text.
+    #[must_use]
     pub fn context(&self) -> &str {
         &self.context
     }
@@ -93,6 +99,10 @@ pub struct ChangeBatchId(String);
 
 impl ChangeBatchId {
     /// Creates a non-empty batch identity.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn new(value: impl Into<String>) -> crate::Result<Self> {
         let value = value.into();
         if value.is_empty() {
@@ -102,6 +112,7 @@ impl ChangeBatchId {
     }
 
     /// Returns the opaque batch identity.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -137,6 +148,7 @@ pub struct PersistedChangeBatch {
 
 impl PersistedChangeBatch {
     /// Creates the first durable form of a fetched change batch.
+    #[must_use]
     pub const fn new(
         id: ChangeBatchId,
         scope: CloudScope,
@@ -153,26 +165,31 @@ impl PersistedChangeBatch {
     }
 
     /// Returns the batch identity.
+    #[must_use]
     pub const fn id(&self) -> &ChangeBatchId {
         &self.id
     }
 
     /// Returns the namespace/root checkpoint scope.
+    #[must_use]
     pub const fn scope(&self) -> &CloudScope {
         &self.scope
     }
 
     /// Returns the active cursor from which this batch was fetched.
+    #[must_use]
     pub const fn base_cursor(&self) -> Option<&ChangeCursor> {
         self.base_cursor.as_ref()
     }
 
     /// Returns the durable backend batch.
+    #[must_use]
     pub const fn batch(&self) -> &ChangeBatch {
         &self.batch
     }
 
     /// Returns whether replay prerequisites are durable.
+    #[must_use]
     pub const fn state(&self) -> PersistedChangeBatchState {
         self.state
     }
@@ -197,6 +214,7 @@ pub struct ChangeCursorCheckpoint {
 
 impl ChangeCursorCheckpoint {
     /// Creates an empty checkpoint at the initial backend position.
+    #[must_use]
     pub const fn initial(scope: CloudScope) -> Self {
         Self {
             scope,
@@ -206,6 +224,7 @@ impl ChangeCursorCheckpoint {
     }
 
     /// Creates a checkpoint snapshot returned by a store implementation.
+    #[must_use]
     pub const fn new(
         scope: CloudScope,
         active_cursor: Option<ChangeCursor>,
@@ -219,16 +238,19 @@ impl ChangeCursorCheckpoint {
     }
 
     /// Returns the namespace/root scope.
+    #[must_use]
     pub const fn scope(&self) -> &CloudScope {
         &self.scope
     }
 
     /// Returns the cursor that is safe to use for the next backend fetch.
+    #[must_use]
     pub const fn active_cursor(&self) -> Option<&ChangeCursor> {
         self.active_cursor.as_ref()
     }
 
     /// Returns the batch that must be replayed or completed before another fetch.
+    #[must_use]
     pub const fn pending_batch(&self) -> Option<&PersistedChangeBatch> {
         self.pending_batch.as_ref()
     }

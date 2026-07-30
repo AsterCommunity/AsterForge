@@ -62,61 +62,73 @@ pub struct WindowsFetchDataWaiterMetrics {
 
 impl WindowsFetchDataWaiterMetrics {
     /// Returns the number of hydration waiters currently registered for native cancellation.
+    #[must_use]
     pub const fn active_waiters(self) -> usize {
         self.active_waiters
     }
 
     /// Returns the total number of waiters registered since this registry was created.
+    #[must_use]
     pub const fn registered_waiters(self) -> u64 {
         self.registered_waiters
     }
 
     /// Returns the total number of cancellation callbacks applied to this registry.
+    #[must_use]
     pub const fn cancellation_callbacks(self) -> u64 {
         self.cancellation_callbacks
     }
 
     /// Returns cancellation callbacks that matched no active waiter range.
+    #[must_use]
     pub const fn unmatched_cancellations(self) -> u64 {
         self.unmatched_cancellations
     }
 
     /// Returns active waiters whose complete logical range was covered by a cancellation.
+    #[must_use]
     pub const fn fully_matched_waiters(self) -> u64 {
         self.fully_matched_waiters
     }
 
     /// Returns active waiters retained because cancellation covered only part of their range.
+    #[must_use]
     pub const fn partially_matched_waiters(self) -> u64 {
         self.partially_matched_waiters
     }
 
     /// Returns waiter cancellations that won the core terminal race.
+    #[must_use]
     pub const fn cancelled_waiters(self) -> u64 {
         self.cancelled_waiters
     }
 
     /// Returns full-range cancellations repeated before the cancelled waiter unregistered.
+    #[must_use]
     pub const fn already_cancelled_waiters(self) -> u64 {
         self.already_cancelled_waiters
     }
 
     /// Returns full-range cancellations that lost to normal waiter completion.
+    #[must_use]
     pub const fn completion_races(self) -> u64 {
         self.completion_races
     }
 
     /// Returns waiters cancelled by the local callback watchdog.
+    #[must_use]
     pub const fn watchdog_timeouts(self) -> u64 {
         self.watchdog_timeouts
     }
 
     /// Returns provider progress samples accepted by the registry.
+    #[must_use]
     pub const fn progress_callbacks(self) -> u64 {
         self.progress_callbacks
     }
 
     /// Returns progress samples that refreshed at least one active waiter deadline.
+    #[must_use]
     pub const fn progress_updates(self) -> u64 {
         self.progress_updates
     }
@@ -142,16 +154,19 @@ pub struct WindowsFetchDataWatchdogOutcome {
 
 impl WindowsFetchDataWatchdogOutcome {
     /// Returns waiters whose cancellation won the core terminal race.
+    #[must_use]
     pub const fn cancelled(self) -> usize {
         self.cancelled
     }
 
     /// Returns waiters that were already cancelled before this poll.
+    #[must_use]
     pub const fn already_cancelled(self) -> usize {
         self.already_cancelled
     }
 
     /// Returns waiters that completed before the watchdog cancellation.
+    #[must_use]
     pub const fn already_completed(self) -> usize {
         self.already_completed
     }
@@ -159,31 +174,37 @@ impl WindowsFetchDataWatchdogOutcome {
 
 impl WindowsFetchDataCancellationOutcome {
     /// Returns waiters whose complete range was covered by the callback range.
+    #[must_use]
     pub const fn fully_matched(self) -> usize {
         self.fully_matched
     }
 
     /// Returns waiters retained because only part of their range was cancelled.
+    #[must_use]
     pub const fn partially_matched(self) -> usize {
         self.partially_matched
     }
 
     /// Returns full-range cancellations that won the core waiter terminal race.
+    #[must_use]
     pub const fn cancelled(self) -> usize {
         self.cancelled
     }
 
     /// Returns full-range cancellations already applied to the same active waiter.
+    #[must_use]
     pub const fn already_cancelled(self) -> usize {
         self.already_cancelled
     }
 
     /// Returns full-range cancellations that arrived after waiter completion won.
+    #[must_use]
     pub const fn already_completed(self) -> usize {
         self.already_completed
     }
 
     /// Returns whether any active waiter range overlapped this cancellation.
+    #[must_use]
     pub const fn matched(self) -> bool {
         self.fully_matched != 0 || self.partially_matched != 0
     }
@@ -202,11 +223,13 @@ pub struct WindowsFetchDataWaiterRegistry {
 
 impl WindowsFetchDataWaiterRegistry {
     /// Creates an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Creates a registry with a host-controlled watchdog configuration.
+    #[must_use]
     pub fn with_watchdog_config(config: WindowsFetchDataWatchdogConfig) -> Self {
         Self {
             state: Arc::new(Mutex::new(RegistryState {
@@ -217,11 +240,16 @@ impl WindowsFetchDataWaiterRegistry {
     }
 
     /// Returns a point-in-time counter snapshot.
+    #[must_use]
     pub fn metrics(&self) -> WindowsFetchDataWaiterMetrics {
         lock(&self.state).metrics
     }
 
     /// Applies one owned CFAPI cancellation snapshot to correlated active waiters.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn cancel(
         &self,
         snapshot: &WindowsCancelFetchDataSnapshot,
@@ -304,6 +332,10 @@ impl WindowsFetchDataWaiterRegistry {
 
     /// Applies provider progress to all active waiters with the same native correlation and
     /// refreshes their local watchdog deadline.
+    /// # Errors
+    ///
+    /// Returns an error when validation fails or an underlying backend, store, or platform
+    /// operation fails.
     pub fn report_progress(
         &self,
         snapshot: &WindowsCallbackInfoSnapshot,
@@ -344,6 +376,7 @@ impl WindowsFetchDataWaiterRegistry {
 
     /// Cancels pending waiters whose watchdog deadline has elapsed. The host owns the polling
     /// cadence; this method never starts a timer or blocks a native callback thread.
+    #[must_use]
     pub fn poll_watchdog(&self, now: Instant) -> WindowsFetchDataWatchdogOutcome {
         let mut targets = Vec::new();
         {
