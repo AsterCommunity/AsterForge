@@ -168,15 +168,26 @@ jobs:
         include:
           - package: aster_forge_cloud_files_core
             miri_flags: ''
+            miri_test_args: ''
           - package: aster_forge_cloud_files_linux
-            # The Linux memory-drive recovery contracts intentionally exercise durable filesystem
-            # persistence. Keep strict provenance enabled while allowing those host filesystem
-            # operations through Miri's isolation boundary.
+            # Keep strict provenance enabled while allowing durable filesystem operations through
+            # Miri's isolation boundary. The exhaustive memory-cloud-drive example remains covered
+            # by the Linux test job; under Miri its state-machine scenarios exceed the bounded job
+            # budget by a wide margin and obscure the lower-level memory-model signal.
             miri_flags: -Zmiri-strict-provenance -Zmiri-disable-isolation
+            miri_test_args: >-
+              --lib
+              --test backend_contract
+              --test create_contract
+              --test engine_contract
+              --test value_contract
+              --test writeback_contract
           - package: aster_forge_cloud_files_macos_bridge
             miri_flags: -Zmiri-strict-provenance
+            miri_test_args: ''
           - package: aster_forge_cloud_files_windows
             miri_flags: -Zmiri-strict-provenance
+            miri_test_args: ''
     steps:
       - uses: actions/checkout@v6
         with:
@@ -198,4 +209,7 @@ jobs:
       - name: Run Miri
         env:
           MIRIFLAGS: ${{ matrix.miri_flags }}
-        run: cargo +nightly-2026-04-12 miri test --locked -p ${{ matrix.package }}
+        run: >-
+          cargo +nightly-2026-04-12 miri test --locked
+          -p ${{ matrix.package }}
+          ${{ matrix.miri_test_args }}
