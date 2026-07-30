@@ -4,6 +4,11 @@
 
 这个 crate 不拥有产品文件业务。认证账号、workspace scope、权限、ORM entity、存储策略、quota、版本落库和审计展示仍然留在产品仓库。
 
+流式 Multi-Status 可通过 `DavCancellationToken` 和
+`multistatus_stream_response_with_cancellation` 把 transport body drop 传播给产品 backend。
+Forge 负责共享 cancellation 生命周期；产品负责选择执行时间上限，并在目录分页、属性、锁和
+repository await 边界检查同一个 token。
+
 ## Cargo 接入
 
 ```toml
@@ -262,6 +267,7 @@ Forge 负责：
 - `DavXmlElement` 只承担 DAV 持久化子树与 response composition；通用解析、安全限制、namespace 和 reader/writer 由 `aster_forge_xml` 承担。
 - DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
 - 产品中立 backend contracts：`DavFileSystem` / `DavMetaData` 负责单资源机械层，`DavDirectoryEnumerator` 负责 bounded page/cursor 枚举，`DavDownloadSource` 负责 full/range stream，`DavWriteSystem` 负责顺序提交，`DavRandomWriteSystem` 只负责显式随机写，`DavLockSystem` 负责锁持久化与冲突查询。
+- `DavLockSystem` 的 discovery、batch discovery 和 conflict lookup 都返回 typed backend failure；产品 adapter 不得把查询失败降级成空锁集合，Forge 会让 `If`、mutation guard 和 `lockdiscovery` fail closed。
 - 批量 dead-property 读取只向 backend 传递 `DavPath`；产品 adapter 自行解析数据库身份并执行批量查询。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。Actix 仍使用 `http 0.2` 而 Forge 公共模型使用 `http 1.x`，URI/header 跨版本转换保持显式边界。
 - Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。

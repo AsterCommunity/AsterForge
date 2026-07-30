@@ -5,13 +5,14 @@ use std::pin::Pin;
 use actix_web::http::{Method, StatusCode};
 use actix_web::{FromRequest, web};
 use aster_forge_webdav::{
-    DavBackendError, DavBackendErrorKind, DavBodyError, DavCapabilityContext,
+    DavBackendError, DavBackendErrorKind, DavBodyError, DavCancellationToken, DavCapabilityContext,
     DavCapabilityDeclaration, DavCapabilityProvider, DavCapabilityTarget,
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
     DavConditionalResource, DavExtensionPackage, DavExtensionSet, DavLockingCapability, DavMethod,
     DavMethodSet, DavMultiStatusItem, DavMultiStatusLimits, DavMultiStatusSourceError,
     DavNonDavProfile, DavPath, DavResourceState, DavResponse, DavResponseBody,
-    DavSearchCapabilities, DavWriteCapabilities, multistatus_stream_response, plan_capabilities,
+    DavSearchCapabilities, DavWriteCapabilities, multistatus_stream_response,
+    multistatus_stream_response_with_cancellation, plan_capabilities,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -405,4 +406,21 @@ async fn actix_capability_adapter_distinguishes_invalid_declarations_and_backend
     .await
     .expect_err("provider failure should map to a response");
     assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn actix_response_drop_propagates_multistatus_cancellation() {
+    let cancellation = DavCancellationToken::new();
+    let response = multistatus_stream_response_with_cancellation(
+        futures::stream::pending(),
+        DavMultiStatusLimits::default(),
+        cancellation.clone(),
+    )
+    .expect("stream response");
+    let response = aster_forge_webdav::actix::into_response(response);
+    assert!(!cancellation.is_cancelled());
+
+    drop(response);
+
+    assert!(cancellation.is_cancelled());
 }

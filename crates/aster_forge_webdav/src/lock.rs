@@ -53,7 +53,7 @@ pub async fn enforce_unlocked(
     request_scheme: &str,
     request_host: &str,
 ) -> Result<(), DavResponse> {
-    if let Some(lock) = unsubmitted_lock_conflicts(
+    let conflicts = unsubmitted_lock_conflicts(
         lock_system,
         path,
         deep,
@@ -63,9 +63,8 @@ pub async fn enforce_unlocked(
         request_host,
     )
     .await
-    .into_iter()
-    .next()
-    {
+    .map_err(|error| crate::backend_error_response(&error))?;
+    if let Some(lock) = conflicts.into_iter().next() {
         return Err(lock_conflict_response(prefix, &lock.path)
             .unwrap_or_else(|_| DavResponse::empty(StatusCode::INTERNAL_SERVER_ERROR)));
     }
@@ -73,6 +72,10 @@ pub async fn enforce_unlocked(
 }
 
 /// Returns conflicting locks whose tokens were not submitted for their corresponding lock root.
+///
+/// # Errors
+///
+/// Returns [`DavBackendError`] when the product lock backend cannot query conflicting locks.
 pub async fn unsubmitted_lock_conflicts(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -81,16 +84,31 @@ pub async fn unsubmitted_lock_conflicts(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Vec<crate::DavLock> {
-    let mut conflicts = lock_system.conflicting_locks(path, deep).await;
-    conflicts.retain(|lock| {
+) -> Result<Vec<crate::DavLock>, DavBackendError> {
+    let conflicts = lock_system.conflicting_locks(path, deep).await?;
+    let mut unsubmitted = Vec::new();
+    for (index, lock) in conflicts.iter().enumerate() {
+        if conflicts[..index]
+            .iter()
+            .any(|previous| previous.path == lock.path)
+        {
+            continue;
+        }
         let lock_href = href_for_dav_path(prefix, &lock.path);
         let submitted_tokens = if_header.map_or_else(Vec::new, |if_header| {
             submitted_lock_tokens(if_header, &lock_href, request_scheme, request_host)
         });
-        !submitted_tokens.iter().any(|token| token == &lock.token)
-    });
-    conflicts
+        let root_is_satisfied = conflicts.iter().any(|candidate| {
+            candidate.path == lock.path
+                && submitted_tokens
+                    .iter()
+                    .any(|token| token == &candidate.token)
+        });
+        if !root_is_satisfied {
+            unsubmitted.push(lock.clone());
+        }
+    }
+    Ok(unsubmitted)
 }
 
 /// Applies [`enforce_unlocked`] to the canonical parent of a mutation target.

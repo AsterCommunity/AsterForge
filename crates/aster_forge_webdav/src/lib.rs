@@ -105,7 +105,7 @@ pub use lock::{
 pub use multistatus::{
     DavMultiStatusError, DavMultiStatusErrorKind, DavMultiStatusLimits, DavMultiStatusProgress,
     DavMultiStatusSourceError, DavMultiStatusStream, DavMultiStatusWriter, dav_multistatus_bytes,
-    multistatus_stream_response,
+    multistatus_stream_response, multistatus_stream_response_with_cancellation,
 };
 pub use patch::{DavPatchPlan, DavPatchPlanError, patch_plan_error_response, plan_patch_request};
 pub use path::{
@@ -157,7 +157,7 @@ pub use response::{
     range_not_satisfiable_response,
 };
 pub use traversal::{
-    DavCancellation, DavDirectoryPageLimits, DavDirectoryPageState,
+    DavCancellation, DavCancellationToken, DavDirectoryPageLimits, DavDirectoryPageState,
     DavDirectoryPageValidationError, DavDirectoryReadError, DavNeverCancelled, DavTraversalBudget,
     DavTraversalError, DavTraversalErrorKind, DavTraversalLimits, DavTraversalProgress,
     DavValidatedDirectoryPage, read_next_directory_page, validate_directory_page,

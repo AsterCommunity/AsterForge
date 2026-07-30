@@ -411,20 +411,24 @@ pub trait DavLockSystem: Send + Sync {
         ignore_principal: bool,
         deep: bool,
         submitted_tokens: &[String],
-    ) -> LsFuture<'_, Result<(), DavLock>>;
-    fn discover(&self, path: &DavPath) -> LsFuture<'_, Vec<DavLock>>;
+    ) -> LsFuture<'_, Result<(), DavLockError>>;
+    fn discover(&self, path: &DavPath) -> LsFuture<'_, Result<Vec<DavLock>, DavBackendError>>;
     fn discover_many<'a>(
         &'a self,
         paths: &'a [DavPath],
-    ) -> LsFuture<'a, HashMap<DavPath, Vec<DavLock>>> {
+    ) -> LsFuture<'a, Result<HashMap<DavPath, Vec<DavLock>>, DavBackendError>> {
         Box::pin(async move {
             let mut result = HashMap::with_capacity(paths.len());
             for path in paths {
-                result.insert(path.clone(), self.discover(path).await);
+                result.insert(path.clone(), self.discover(path).await?);
             }
-            result
+            Ok(result)
         })
     }
-    fn conflicting_locks(&self, path: &DavPath, deep: bool) -> LsFuture<'_, Vec<DavLock>>;
+    fn conflicting_locks(
+        &self,
+        path: &DavPath,
+        deep: bool,
+    ) -> LsFuture<'_, Result<Vec<DavLock>, DavBackendError>>;
     fn delete(&self, path: &DavPath) -> LsFuture<'_, Result<(), DavLockError>>;
 }

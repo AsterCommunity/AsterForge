@@ -385,7 +385,7 @@ impl DavIfStateResolver for BackendIfStateResolver<'_> {
         let lock_tokens = self
             .lock_system
             .discover(path)
-            .await
+            .await?
             .into_iter()
             .map(|lock| lock.token)
             .collect();

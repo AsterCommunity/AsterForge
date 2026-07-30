@@ -2,6 +2,10 @@
 
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     DavBackendError, DavDirectoryEntry, DavDirectoryEnumerator, DavDirectoryPage,
@@ -12,6 +16,37 @@ use bytes::Bytes;
 /// Cancellation checkpoint controlled by the product or transport adapter.
 pub trait DavCancellation: Send + Sync {
     fn is_cancelled(&self) -> bool;
+}
+
+/// Cloneable cancellation source shared by a transport response and product backend work.
+///
+/// Dropping a clone does not cancel the operation. The owning transport or request lifecycle must
+/// call [`Self::cancel`] when the response body is abandoned or its execution budget expires.
+#[derive(Debug, Clone, Default)]
+pub struct DavCancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl DavCancellationToken {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl DavCancellation for DavCancellationToken {
+    fn is_cancelled(&self) -> bool {
+        self.is_cancelled()
+    }
 }
 
 /// Cancellation checkpoint used when the caller has no cancellation source.

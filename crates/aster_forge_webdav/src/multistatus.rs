@@ -14,8 +14,8 @@ use http::{HeaderValue, StatusCode};
 use crate::xml::write_element;
 use crate::xml_response::error_condition_parts;
 use crate::{
-    DavBackendError, DavErrorCondition, DavMultiStatusItem, DavPropStat, DavResponse,
-    DavResponseBody,
+    DavBackendError, DavCancellationToken, DavErrorCondition, DavMultiStatusItem, DavPropStat,
+    DavResponse, DavResponseBody,
 };
 
 const DAV_NAMESPACE: &str = "DAV:";
@@ -255,8 +255,39 @@ pub fn multistatus_stream_response<S>(
 where
     S: Stream<Item = Result<DavMultiStatusItem, DavMultiStatusSourceError>> + Send + 'static,
 {
+    multistatus_stream_response_inner(source, limits, None)
+}
+
+/// Creates a streaming 207 response that cancels shared product work when its body is dropped.
+///
+/// Products should pass clones of `cancellation` to directory enumeration and property/lock
+/// preload operations. A transport-side client disconnect drops the response body and flips the
+/// same token, allowing those operations to stop at their next cancellation boundary.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when limits are invalid or response headers cannot be encoded.
+pub fn multistatus_stream_response_with_cancellation<S>(
+    source: S,
+    limits: DavMultiStatusLimits,
+    cancellation: DavCancellationToken,
+) -> Result<DavResponse, DavMultiStatusError>
+where
+    S: Stream<Item = Result<DavMultiStatusItem, DavMultiStatusSourceError>> + Send + 'static,
+{
+    multistatus_stream_response_inner(source, limits, Some(cancellation))
+}
+
+fn multistatus_stream_response_inner<S>(
+    source: S,
+    limits: DavMultiStatusLimits,
+    cancellation: Option<DavCancellationToken>,
+) -> Result<DavResponse, DavMultiStatusError>
+where
+    S: Stream<Item = Result<DavMultiStatusItem, DavMultiStatusSourceError>> + Send + 'static,
+{
     limits.validate()?;
-    let stream = StreamingMultiStatus::new(Box::pin(source), limits);
+    let stream = StreamingMultiStatus::new(Box::pin(source), limits, cancellation);
     let mut response = DavResponse {
         status: StatusCode::MULTI_STATUS,
         headers: http::HeaderMap::new(),
@@ -282,6 +313,7 @@ struct StreamingMultiStatus {
     limits: DavMultiStatusLimits,
     progress: DavMultiStatusProgress,
     done: bool,
+    cancellation: Option<DavCancellationToken>,
 }
 
 impl StreamingMultiStatus {
@@ -294,6 +326,7 @@ impl StreamingMultiStatus {
             >,
         >,
         limits: DavMultiStatusLimits,
+        cancellation: Option<DavCancellationToken>,
     ) -> Self {
         Self {
             source,
@@ -302,6 +335,7 @@ impl StreamingMultiStatus {
             limits,
             progress: DavMultiStatusProgress::default(),
             done: false,
+            cancellation,
         }
     }
 
@@ -322,6 +356,14 @@ impl StreamingMultiStatus {
         self.pending.clear();
         self.writer = None;
         Poll::Ready(Some(Err(DavMultiStatusError::new(kind, self.progress))))
+    }
+}
+
+impl Drop for StreamingMultiStatus {
+    fn drop(&mut self) {
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
     }
 }
 

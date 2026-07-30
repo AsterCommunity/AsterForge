@@ -2,10 +2,11 @@ use std::io::{self, Write};
 use std::task::Poll;
 
 use aster_forge_webdav::{
-    DavBackendError, DavBackendErrorKind, DavErrorCondition, DavMultiStatusErrorKind,
-    DavMultiStatusItem, DavMultiStatusLimits, DavMultiStatusSourceError, DavMultiStatusWriter,
-    DavPropStat, DavResponseBody, DavXmlElement, DavXmlNode, dav_element, dav_multistatus_bytes,
-    multistatus_stream_response,
+    DavBackendError, DavBackendErrorKind, DavCancellationToken, DavErrorCondition,
+    DavMultiStatusErrorKind, DavMultiStatusItem, DavMultiStatusLimits, DavMultiStatusSourceError,
+    DavMultiStatusWriter, DavPropStat, DavResponseBody, DavXmlElement, DavXmlNode, dav_element,
+    dav_multistatus_bytes, multistatus_stream_response,
+    multistatus_stream_response_with_cancellation,
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream};
@@ -24,6 +25,72 @@ fn property_item(href: &str, property_count: usize) -> DavMultiStatusItem {
 
 fn status_item(href: &str, status: u16) -> DavMultiStatusItem {
     DavMultiStatusItem::status(href, status)
+}
+
+#[test]
+fn response_body_drop_cancels_shared_product_work() {
+    let cancellation = DavCancellationToken::new();
+    let response = multistatus_stream_response_with_cancellation(
+        stream::pending(),
+        DavMultiStatusLimits::default(),
+        cancellation.clone(),
+    )
+    .expect("stream response");
+    assert!(!cancellation.is_cancelled());
+
+    drop(response);
+
+    assert!(cancellation.is_cancelled());
+}
+
+#[test]
+fn cancellation_token_clones_share_state() {
+    let cancellation = DavCancellationToken::new();
+    let clone = cancellation.clone();
+
+    clone.cancel();
+
+    assert!(cancellation.is_cancelled());
+    assert!(clone.is_cancelled());
+}
+
+#[test]
+fn completed_or_failed_response_body_cancels_when_ownership_ends() {
+    futures::executor::block_on(async {
+        let completed_cancellation = DavCancellationToken::new();
+        let response = multistatus_stream_response_with_cancellation(
+            stream::iter([Ok(status_item("/dav/a", 204))]),
+            DavMultiStatusLimits::default(),
+            completed_cancellation.clone(),
+        )
+        .expect("stream response");
+        let DavResponseBody::MultiStatus(mut body) = response.body else {
+            panic!("expected Multi-Status stream");
+        };
+        while let Some(chunk) = body.next().await {
+            chunk.expect("completed response chunk");
+        }
+        assert!(!completed_cancellation.is_cancelled());
+        drop(body);
+        assert!(completed_cancellation.is_cancelled());
+
+        let failed_cancellation = DavCancellationToken::new();
+        let response = multistatus_stream_response_with_cancellation(
+            stream::iter([Err(DavMultiStatusSourceError::Backend(
+                DavBackendError::new(DavBackendErrorKind::Forbidden),
+            ))]),
+            DavMultiStatusLimits::default(),
+            failed_cancellation.clone(),
+        )
+        .expect("stream response");
+        let DavResponseBody::MultiStatus(mut body) = response.body else {
+            panic!("expected Multi-Status stream");
+        };
+        assert!(body.next().await.expect("source error").is_err());
+        assert!(!failed_cancellation.is_cancelled());
+        drop(body);
+        assert!(failed_cancellation.is_cancelled());
+    });
 }
 
 #[test]

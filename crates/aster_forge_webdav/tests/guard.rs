@@ -172,6 +172,8 @@ impl DavFileSystem for TestFileSystem {
 struct TestLockSystem {
     discovered: Vec<DavLock>,
     conflicts: Vec<DavLock>,
+    discovery_failure: Option<DavBackendErrorKind>,
+    conflict_failure: Option<DavBackendErrorKind>,
     conflict_calls: Mutex<Vec<(String, bool)>>,
 }
 
@@ -212,27 +214,37 @@ impl DavLockSystem for TestLockSystem {
         _ignore_principal: bool,
         _deep: bool,
         _submitted_tokens: &[String],
-    ) -> LsFuture<'_, Result<(), DavLock>> {
+    ) -> LsFuture<'_, Result<(), DavLockError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn discover(&self, path: &DavPath) -> LsFuture<'_, Vec<DavLock>> {
+    fn discover(&self, path: &DavPath) -> LsFuture<'_, Result<Vec<DavLock>, DavBackendError>> {
+        let failure = self.discovery_failure;
         let discovered = self
             .discovered
             .iter()
             .filter(|lock| lock.path.as_str() == path.as_str())
             .cloned()
             .collect();
-        Box::pin(async move { discovered })
+        Box::pin(async move {
+            failure.map_or_else(|| Ok(discovered), |kind| Err(DavBackendError::new(kind)))
+        })
     }
 
-    fn conflicting_locks(&self, path: &DavPath, deep: bool) -> LsFuture<'_, Vec<DavLock>> {
+    fn conflicting_locks(
+        &self,
+        path: &DavPath,
+        deep: bool,
+    ) -> LsFuture<'_, Result<Vec<DavLock>, DavBackendError>> {
         self.conflict_calls
             .lock()
             .expect("conflict call log should not be poisoned")
             .push((path.as_str().to_owned(), deep));
+        let failure = self.conflict_failure;
         let conflicts = self.conflicts.clone();
-        Box::pin(async move { conflicts })
+        Box::pin(async move {
+            failure.map_or_else(|| Ok(conflicts), |kind| Err(DavBackendError::new(kind)))
+        })
     }
 
     fn delete(&self, _path: &DavPath) -> LsFuture<'_, Result<(), DavLockError>> {
@@ -429,6 +441,26 @@ fn backend_if_resolver_preserves_failures_and_treats_missing_as_empty_state() {
         )
         .await
         .expect("a missing resource should contribute empty state");
+
+        let locks = TestLockSystem {
+            discovery_failure: Some(DavBackendErrorKind::Internal),
+            ..TestLockSystem::default()
+        };
+        let error = enforce_if_header_with_backends(
+            Some(&if_header("(Not <urn:uuid:missing>)")),
+            &TestFileSystem::default(),
+            &locks,
+            &path,
+            "/webdav",
+            "https",
+            "dav.example",
+        )
+        .await
+        .expect_err("lock discovery failure should remain a backend failure");
+        assert!(matches!(
+            error,
+            DavIfEvaluationError::Backend(error) if error.kind == DavBackendErrorKind::Internal
+        ));
     });
 }
 
@@ -561,13 +593,91 @@ fn conflict_filter_removes_only_tokens_submitted_for_each_lock_root() {
             "https",
             "dav.example",
         )
-        .await;
+        .await
+        .expect("lock lookup should succeed");
         assert_eq!(
             conflicts
                 .iter()
                 .map(|lock| lock.path.as_str())
                 .collect::<Vec<_>>(),
             ["/tree/b.txt", "/tree/c.txt"]
+        );
+    });
+}
+
+#[test]
+fn conflict_filter_requires_each_lock_root_but_accepts_one_shared_lock_token() {
+    futures::executor::block_on(async {
+        let target = DavPath::new("/tree/file.txt").expect("test path");
+        let lock_system = TestLockSystem {
+            conflicts: vec![
+                lock("/tree/", "urn:uuid:parent"),
+                lock("/tree/file.txt", "urn:uuid:shared-a"),
+                lock("/tree/file.txt", "urn:uuid:shared-b"),
+            ],
+            ..TestLockSystem::default()
+        };
+        let header = if_header(
+            "</webdav/tree/> (<urn:uuid:parent>) </webdav/tree/file.txt> (<urn:uuid:shared-b>)",
+        );
+
+        let conflicts = unsubmitted_lock_conflicts(
+            &lock_system,
+            &target,
+            false,
+            "/webdav",
+            Some(&header),
+            "https",
+            "dav.example",
+        )
+        .await
+        .expect("lock lookup should succeed");
+        assert!(conflicts.is_empty());
+
+        let child_only = if_header("</webdav/tree/file.txt> (<urn:uuid:shared-a>)");
+        let conflicts = unsubmitted_lock_conflicts(
+            &lock_system,
+            &target,
+            false,
+            "/webdav",
+            Some(&child_only),
+            "https",
+            "dav.example",
+        )
+        .await
+        .expect("lock lookup should succeed");
+        assert_eq!(
+            conflicts
+                .iter()
+                .map(|lock| lock.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/tree/"]
+        );
+    });
+}
+
+#[test]
+fn lock_guard_fails_closed_when_conflict_lookup_fails() {
+    futures::executor::block_on(async {
+        let lock_system = TestLockSystem {
+            conflict_failure: Some(DavBackendErrorKind::Internal),
+            ..TestLockSystem::default()
+        };
+        let response = enforce_unlocked(
+            &lock_system,
+            &DavPath::new("/tree/file.txt").expect("test path"),
+            false,
+            "/webdav",
+            None,
+            "https",
+            "dav.example",
+        )
+        .await
+        .expect_err("backend lock lookup failure must reject the mutation");
+        assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response.headers.get(http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
         );
     });
 }
