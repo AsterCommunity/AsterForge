@@ -99,6 +99,11 @@ pub struct ContainerStateLock {
 
 impl ContainerStateLock {
     /// Acquires the exclusive lock for `service` within `suite`, blocking until available.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the lock file cannot be opened or exclusively locked.
+    #[must_use]
     pub fn acquire(suite: &TestContainerSuite, service: &str) -> Self {
         let lock_path = suite.lock_path(service);
         let file = OpenOptions::new()
@@ -126,6 +131,11 @@ impl ContainerStateLock {
     }
 
     /// Loads the state file, tolerating a missing or empty file.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the state file cannot be read or contains invalid JSON.
+    #[must_use]
     pub fn load(&self) -> SharedContainerState {
         if !self.state_path.exists() {
             return SharedContainerState::default();
@@ -156,6 +166,10 @@ impl ContainerStateLock {
     }
 
     /// Persists the state file atomically enough for test purposes (write + flush).
+    ///
+    /// # Panics
+    ///
+    /// Panics when state serialization, file creation, writing, or flushing fails.
     pub fn save(&self, state: &SharedContainerState) {
         let json = serde_json::to_vec(state)
             .unwrap_or_else(|error| panic!("failed to serialize test container state: {error}"));
@@ -231,8 +245,7 @@ fn platform_process_is_running(pid: u32) -> bool {
         .arg("-0")
         .arg(pid.to_string())
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 #[cfg(not(unix))]

@@ -44,6 +44,7 @@ impl ValidationError {
     }
 
     /// Returns the validation failure message.
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }

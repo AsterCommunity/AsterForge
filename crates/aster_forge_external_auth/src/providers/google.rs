@@ -1,4 +1,4 @@
-//! Google OpenID Connect provider driver.
+//! Google `OpenID` Connect provider driver.
 //!
 //! Google sign-in is implemented as a fixed-issuer wrapper around the generic OIDC driver. The
 //! wrapper prevents manual endpoint drift while still allowing tests to inject a loopback issuer for
@@ -28,6 +28,7 @@ pub struct GoogleProviderDriver;
 
 impl GoogleProviderDriver {
     /// Creates a Google provider driver with the fixed Google Accounts issuer.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -130,7 +131,7 @@ mod tests {
             key: "google".to_string(),
             provider_kind: ExternalAuthProviderKind::Google,
             protocol: ExternalAuthProtocol::Oidc,
-            options: Default::default(),
+            options: crate::types::ExternalAuthProviderOptions::default(),
             issuer_url: None,
             authorization_url: Some("https://ignored.example.com/auth".to_string()),
             token_url: Some("https://ignored.example.com/token".to_string()),

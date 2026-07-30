@@ -17,6 +17,7 @@ pub struct TempFileGuard {
 
 impl TempFileGuard {
     /// Creates a guard that removes `path` on drop.
+    #[must_use]
     pub fn new(path: PathBuf, cleanup_label: &'static str) -> Self {
         Self {
             path,
@@ -25,6 +26,7 @@ impl TempFileGuard {
     }
 
     /// Returns the guarded path.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -55,6 +57,7 @@ pub struct TempDirGuard {
 
 impl TempDirGuard {
     /// Creates a guard that removes `path` recursively on drop.
+    #[must_use]
     pub fn new(path: PathBuf, cleanup_label: &'static str) -> Self {
         Self {
             path,
@@ -63,6 +66,7 @@ impl TempDirGuard {
     }
 
     /// Returns the guarded path.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

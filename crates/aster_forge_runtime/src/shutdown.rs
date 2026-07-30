@@ -25,6 +25,7 @@ pub enum TerminationSignal {
 
 impl TerminationSignal {
     /// Returns a stable label for logging and tests.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Interrupt => "SIGINT",
@@ -54,6 +55,7 @@ pub enum ShutdownPhaseStatus {
 
 impl ShutdownPhaseStatus {
     /// Returns whether this phase did not complete successfully.
+    #[must_use]
     pub const fn is_failure(&self) -> bool {
         !matches!(self, Self::Succeeded)
     }
@@ -79,11 +81,13 @@ pub struct ShutdownReport {
 
 impl ShutdownReport {
     /// Returns a report from phase entries.
+    #[must_use]
     pub fn new(phases: Vec<ShutdownPhaseReport>) -> Self {
         Self { phases }
     }
 
     /// Returns whether any phase failed or timed out.
+    #[must_use]
     pub fn has_failures(&self) -> bool {
         self.phases.iter().any(|phase| phase.status.is_failure())
     }
@@ -117,6 +121,7 @@ pub struct ShutdownCoordinator {
 
 impl ShutdownCoordinator {
     /// Creates an empty shutdown coordinator.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -185,17 +190,24 @@ impl ShutdownCoordinator {
     }
 
     /// Returns how many phases are registered.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.phases.len()
     }
 
     /// Returns whether no phases are registered.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.phases.is_empty()
     }
 }
 
 /// Waits until the process receives a termination signal.
+///
+/// # Errors
+///
+/// Returns an error when the platform signal listeners cannot be installed or all listener streams
+/// terminate before delivering a signal.
 pub async fn wait_for_termination_signal() -> Result<TerminationSignal, RuntimeSignalError> {
     let signal = wait_for_signal_impl().await?;
     tracing::info!(

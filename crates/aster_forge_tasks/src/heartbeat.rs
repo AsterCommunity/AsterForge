@@ -47,11 +47,11 @@ pub async fn run_task_heartbeat_loop<Store, LeaseExpiresFn>(
 
     loop {
         tokio::select! {
-            _ = stop_token.cancelled() => return,
+            () = stop_token.cancelled() => return,
             _ = heartbeat.tick() => {
                 let now = Utc::now();
                 let result = tokio::select! {
-                    _ = stop_token.cancelled() => return,
+                    () = stop_token.cancelled() => return,
                     result = store.touch_task_heartbeat(
                         lease_guard.lease(),
                         now,
@@ -85,6 +85,10 @@ where
 }
 
 /// Evaluates one persisted heartbeat result and updates the in-memory lease guard.
+///
+/// # Errors
+///
+/// Returns an error when the heartbeat loses its lease or the store operation fails.
 pub fn evaluate_heartbeat_result<Error>(
     lease_guard: &TaskLeaseGuard,
     result: std::result::Result<bool, Error>,
@@ -163,7 +167,7 @@ mod tests {
 
     #[test]
     fn heartbeat_result_records_successful_renewal() {
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         evaluate_heartbeat_result::<TaskCoreError>(&guard, Ok(true))
             .expect("heartbeat should renew");
@@ -173,7 +177,7 @@ mod tests {
 
     #[test]
     fn heartbeat_result_marks_lost_on_false_update() {
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         let error = evaluate_heartbeat_result::<TaskCoreError>(&guard, Ok(false))
             .expect_err("false update should lose lease");
@@ -188,7 +192,7 @@ mod tests {
 
     #[test]
     fn heartbeat_result_keeps_retrying_transient_error_before_timeout() {
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         evaluate_heartbeat_result(
             &guard,
@@ -218,7 +222,7 @@ mod tests {
             should_match: Arc::new(AtomicBool::new(true)),
         };
         let stop_token = CancellationToken::new();
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         let handle = tokio::spawn(run_task_heartbeat_loop(
             store,
@@ -244,7 +248,7 @@ mod tests {
             should_match: Arc::new(AtomicBool::new(true)),
         };
         let stop_token = CancellationToken::new();
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         let handle = spawn_task_heartbeat_with_interval(
             store,
@@ -269,7 +273,7 @@ mod tests {
             touches: touches.clone(),
             should_match: Arc::new(AtomicBool::new(false)),
         };
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         run_task_heartbeat_loop(
             store,

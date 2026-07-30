@@ -67,7 +67,9 @@ fn preserves_default_namespace_undeclaration() {
 
     assert_eq!(child.namespace(), None);
     assert_eq!(
-        child.get_child("leaf").and_then(|leaf| leaf.namespace()),
+        child
+            .get_child("leaf")
+            .and_then(aster_forge_xml::ElementRef::namespace),
         None
     );
     assert_eq!(child.raw_xml(), b"<child xmlns=\"\"><leaf/></child>");
@@ -87,7 +89,7 @@ fn preserves_webdav_dead_property_and_lock_owner_subtrees_exactly() {
     assert_eq!(color.text().as_deref(), Some("blue"));
     assert_eq!(
         owner.raw_xml(),
-        br#"<D:lockowner><D:href>mailto:a@example.test</D:href></D:lockowner>"#
+        br"<D:lockowner><D:href>mailto:a@example.test</D:href></D:lockowner>"
     );
 }
 
@@ -338,7 +340,7 @@ fn owned_reader_enforces_the_exact_input_size_boundary() {
 fn rejects_invalid_or_unbound_namespace_prefixes() {
     let policy = XmlSafetyPolicy::untrusted();
     for input in [
-        br#"<p:root/>"#.as_slice(),
+        br"<p:root/>".as_slice(),
         br#"<root p:id="1"/>"#,
         br#"<root xmlns:xml="urn:not-xml"/>"#,
         br#"<root xmlns:xmlns="urn:no"/>"#,

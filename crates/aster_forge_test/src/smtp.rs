@@ -19,6 +19,11 @@ pub struct SmtpTestContainer {
 
 impl SmtpTestContainer {
     /// Starts or reuses a Mailpit container for the test suite.
+    ///
+    /// # Panics
+    ///
+    /// Panics when shared state, container startup, port discovery, SMTP readiness, or HTTP API
+    /// readiness fails.
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "mailpit");
         let mut state = lock.load();
@@ -79,11 +84,16 @@ impl SmtpTestContainer {
     }
 
     /// Returns the SMTP endpoint host and port.
+    #[must_use]
     pub fn smtp_address(&self) -> SocketAddr {
         self.smtp_address
     }
 
     /// Deletes all messages currently stored by Mailpit.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the HTTP request fails or Mailpit returns a non-success status.
     pub async fn clear_messages(&self) {
         let response = self
             .client
@@ -99,6 +109,11 @@ impl SmtpTestContainer {
     }
 
     /// Returns the number of messages currently stored by Mailpit.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the HTTP request fails, the response is unsuccessful or invalid JSON, or the
+    /// response omits its numeric `total` field.
     pub async fn message_count(&self) -> u64 {
         let response = self
             .client

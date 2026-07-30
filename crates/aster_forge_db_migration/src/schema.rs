@@ -46,7 +46,7 @@ where
 
 /// Builds a non-null JSON-text column for a migration's final schema.
 ///
-/// MySQL TEXT defaults are omitted for compatibility; PostgreSQL and SQLite receive `{}`.
+/// `MySQL` TEXT defaults are omitted for compatibility; `PostgreSQL` and `SQLite` receive `{}`.
 pub fn json_text_column_for_final_schema<T: IntoIden>(
     manager: &SchemaManager<'_>,
     name: T,

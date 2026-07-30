@@ -1,4 +1,4 @@
-//! Shared SeaORM migration coordination and schema helpers for Aster products.
+//! Shared `SeaORM` migration coordination and schema helpers for Aster products.
 //!
 //! Products retain their migration lists, history compatibility policy, table definitions, and
 //! data backfills. This crate owns the reusable execution mechanics and migration-only helpers.

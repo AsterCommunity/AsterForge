@@ -156,12 +156,21 @@ impl RedisClient for RedisConnectionManager {
 
 impl RedisCache {
     /// Creates a Redis cache from a Redis URL and default TTL in seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CacheError`] when the URL is invalid or the initial Redis connection fails.
     pub async fn new(url: &str, default_ttl: u64) -> Result<Self> {
         let client = redis::Client::open(url)?;
         Self::from_client(client, default_ttl).await
     }
 
     /// Creates a Redis cache from a base URL and raw credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CacheError`] when credential injection or URL parsing fails, or Redis cannot be
+    /// reached during initialization.
     pub async fn from_credentials(
         base_url: &str,
         username: Option<&str>,
@@ -590,7 +599,7 @@ impl RedisAvailability {
     fn lock_unavailable_until(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
         self.unavailable_until
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -638,14 +647,14 @@ mod tests {
         fn insert(&self, key: &str, value: &[u8]) {
             self.entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(key.to_string(), value.to_vec());
         }
 
         fn contains_key(&self, key: &str) -> bool {
             self.entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .contains_key(key)
         }
 
@@ -706,7 +715,7 @@ mod tests {
             Ok(self
                 .entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(key)
                 .cloned())
         }
@@ -717,7 +726,7 @@ mod tests {
             Ok(self
                 .entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(key))
         }
 
@@ -726,7 +735,7 @@ mod tests {
             self.maybe_fail()?;
             self.entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(key.to_string(), value);
             Ok(())
         }
@@ -742,7 +751,7 @@ mod tests {
             let mut entries = self
                 .entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if entries.contains_key(key) {
                 Ok(None)
             } else {
@@ -756,7 +765,7 @@ mod tests {
             self.maybe_fail()?;
             self.entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(key);
             Ok(())
         }
@@ -766,17 +775,18 @@ mod tests {
             cursor: u64,
             pattern: &str,
         ) -> redis::RedisResult<(u64, Vec<String>)> {
+            const PAGE_SIZE: usize = 2;
+
             self.scan_calls.fetch_add(1, Ordering::SeqCst);
             self.maybe_fail()?;
             let prefix = pattern
                 .strip_suffix('*')
                 .expect("prefix invalidation should scan a trailing-star pattern");
-            const PAGE_SIZE: usize = 2;
             let mut keys = if cursor == 0 {
                 let mut keys: Vec<String> = self
                     .entries
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .keys()
                     .filter(|key| key.starts_with(prefix))
                     .cloned()
@@ -786,7 +796,7 @@ mod tests {
             } else {
                 self.scan_pages
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&cursor)
                     .unwrap_or_default()
             };
@@ -802,7 +812,7 @@ mod tests {
                 let next_cursor = self.next_scan_cursor.fetch_add(1, Ordering::SeqCst) + 1;
                 self.scan_pages
                     .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(next_cursor, remaining);
                 next_cursor
             };
@@ -815,7 +825,7 @@ mod tests {
             let mut entries = self
                 .entries
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for key in keys {
                 entries.remove(key);
             }

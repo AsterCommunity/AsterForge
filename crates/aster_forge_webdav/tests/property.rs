@@ -75,7 +75,7 @@ struct Values {
     unauthenticated: bool,
     sync_token: Option<String>,
     add_member: Option<String>,
-    extension_values: Vec<(DavLiveProperty, DavXmlElement)>,
+    extensions: Vec<(DavLiveProperty, DavXmlElement)>,
     dead: Vec<DavProp>,
 }
 
@@ -93,7 +93,7 @@ impl Default for Values {
             unauthenticated: false,
             sync_token: Some("https://dav.example/sync/42".to_owned()),
             add_member: Some("/documents;add-member/".to_owned()),
-            extension_values: vec![(
+            extensions: vec![(
                 DavLiveProperty::Comment,
                 dav_property_text_element(&dav_property("comment"), "project files"),
             )],
@@ -147,7 +147,7 @@ impl DavLivePropertyValueSnapshot for Values {
     }
 
     fn extension_value(&self, property: DavLiveProperty) -> Option<&DavXmlElement> {
-        self.extension_values
+        self.extensions
             .iter()
             .find_map(|(candidate, value)| (*candidate == property).then_some(value))
     }
@@ -477,6 +477,10 @@ fn propname_uses_dynamic_quota_and_metadata_definition_rules() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The test verifies QName preservation and namespace closure across one explicit-property response."
+)]
 fn explicit_properties_group_success_and_missing_with_requested_qnames() {
     let snapshot = live_snapshot();
     let mut extension = dav_property_text_element(&dav_property("comment"), "project files");
@@ -505,7 +509,7 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
             used_bytes: 400,
             available_bytes: None,
         }),
-        extension_values: vec![(DavLiveProperty::Comment, extension)],
+        extensions: vec![(DavLiveProperty::Comment, extension)],
         ..Values::default()
     };
     let item = build_live_propfind_item(
@@ -773,6 +777,11 @@ fn resource_type_and_optional_standard_values_follow_resource_state() {
 
 #[test]
 fn class_two_supported_lock_and_empty_namespace_search_grammar_are_rendered() {
+    static GRAMMARS: [DavSearchGrammar; 2] = [
+        DavSearchGrammar::BASICSEARCH,
+        DavSearchGrammar::new("urn:no-namespace", "", "query"),
+    ];
+
     let mut class2 = DavCapabilityDeclaration::new(
         DavResourceState::File,
         DavMethodSet::from_methods(&[
@@ -800,10 +809,6 @@ fn class_two_supported_lock_and_empty_namespace_search_grammar_are_rendered() {
     .expect("UTF-8 supported lock XML");
     assert!(xml.contains("lockentry"), "{xml}");
 
-    static GRAMMARS: [DavSearchGrammar; 2] = [
-        DavSearchGrammar::BASICSEARCH,
-        DavSearchGrammar::new("urn:no-namespace", "", "query"),
-    ];
     let mut search = DavCapabilityDeclaration::new(
         DavResourceState::Collection,
         DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Propfind]),

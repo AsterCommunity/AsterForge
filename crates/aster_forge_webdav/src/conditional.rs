@@ -1,4 +1,4 @@
-//! Method-aware HTTP and WebDAV conditional request planning.
+//! Method-aware HTTP and `WebDAV` conditional request planning.
 
 use std::time::SystemTime;
 
@@ -95,13 +95,13 @@ pub enum DavConditionalPlanError {
     InvalidRepresentation,
 }
 
-/// Failure while executing WebDAV `If` before HTTP conditional planning.
+/// Failure while executing `WebDAV` `If` before HTTP conditional planning.
 #[derive(Debug, thiserror::Error)]
 pub enum DavConditionalEvaluationError {
-    /// A request header was malformed or a WebDAV `If` condition failed.
+    /// A request header was malformed or a `WebDAV` `If` condition failed.
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
-    /// Resolving a WebDAV `If` resource failed in the product backend.
+    /// Resolving a `WebDAV` `If` resource failed in the product backend.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
     /// Product metadata could not be represented as HTTP validator headers.
@@ -114,6 +114,10 @@ pub enum DavConditionalEvaluationError {
 /// The order is `If-Match`, `If-Unmodified-Since`, `If-None-Match`, GET/HEAD
 /// `If-Modified-Since`, and finally GET range eligibility. `If-Match` suppresses
 /// `If-Unmodified-Since`; `If-None-Match` suppresses `If-Modified-Since`.
+///
+/// # Errors
+///
+/// Returns an error when validator syntax is invalid or a response header cannot be encoded.
 pub fn plan_http_conditionals(
     method: DavMethod,
     headers: &HeaderMap,
@@ -121,17 +125,14 @@ pub fn plan_http_conditionals(
 ) -> Result<DavConditionalPlan, DavConditionalPlanError> {
     let validator_headers = validator_headers(resource);
 
-    let if_match =
-        match http_validators::if_match_headers_match(headers, resource.exists, resource.etag) {
-            Ok(result) => result,
-            Err(_) => {
-                if http_validators::if_match_headers_match(headers, resource.exists, None).is_err()
-                {
-                    return Err(DavProtocolError::bad_request("Invalid If-Match header").into());
-                }
-                return Err(DavConditionalPlanError::InvalidRepresentation);
-            }
-        };
+    let Ok(if_match) =
+        http_validators::if_match_headers_match(headers, resource.exists, resource.etag)
+    else {
+        if http_validators::if_match_headers_match(headers, resource.exists, None).is_err() {
+            return Err(DavProtocolError::bad_request("Invalid If-Match header").into());
+        }
+        return Err(DavConditionalPlanError::InvalidRepresentation);
+    };
     if let Some(false) = if_match {
         return Ok(plan(
             DavConditionalOutcome::PreconditionFailed,
@@ -158,21 +159,14 @@ pub fn plan_http_conditionals(
         }
     }
 
-    let if_none_match =
-        match http_validators::if_none_match_headers_match(headers, resource.exists, resource.etag)
-        {
-            Ok(result) => result,
-            Err(_) => {
-                if http_validators::if_none_match_headers_match(headers, resource.exists, None)
-                    .is_err()
-                {
-                    return Err(
-                        DavProtocolError::bad_request("Invalid If-None-Match header").into(),
-                    );
-                }
-                return Err(DavConditionalPlanError::InvalidRepresentation);
-            }
-        };
+    let Ok(if_none_match) =
+        http_validators::if_none_match_headers_match(headers, resource.exists, resource.etag)
+    else {
+        if http_validators::if_none_match_headers_match(headers, resource.exists, None).is_err() {
+            return Err(DavProtocolError::bad_request("Invalid If-None-Match header").into());
+        }
+        return Err(DavConditionalPlanError::InvalidRepresentation);
+    };
     if let Some(true) = if_none_match {
         let outcome = if matches!(method, DavMethod::Get | DavMethod::Head) {
             DavConditionalOutcome::NotModified
@@ -208,15 +202,19 @@ pub fn plan_http_conditionals(
     ))
 }
 
-/// Enforces WebDAV `If` first, then applies the RFC 9110 HTTP conditional planner.
+/// Enforces `WebDAV` `If` first, then applies the RFC 9110 HTTP conditional planner.
 ///
-/// Tagged destination/resource conditions therefore fail with WebDAV `412` before the
+/// Tagged destination/resource conditions therefore fail with `WebDAV` `412` before the
 /// request-target HTTP conditions are considered. Product code still chooses the metadata
 /// snapshot passed to the HTTP planner.
 #[expect(
     clippy::too_many_arguments,
     reason = "The public conditional planner mirrors the RFC evaluation inputs explicitly."
 )]
+///
+/// # Errors
+///
+/// Returns an error when DAV `If` or HTTP conditional evaluation fails.
 pub async fn plan_conditionals(
     if_header: Option<&IfHeader>,
     resolver: &dyn DavIfStateResolver,
@@ -241,13 +239,17 @@ pub async fn plan_conditionals(
     plan_http_conditionals(method, headers, resource).map_err(map_plan_error)
 }
 
-/// Enforces WebDAV `If` through the canonical backend ports, then applies HTTP conditions.
+/// Enforces `WebDAV` `If` through the canonical backend ports, then applies HTTP conditions.
 ///
 /// This has the same WebDAV-first ordering as [`plan_conditionals`].
 #[expect(
     clippy::too_many_arguments,
     reason = "The backend-aware planner keeps filesystem and lock ports explicit at the boundary."
 )]
+///
+/// # Errors
+///
+/// Returns an error when backend state lookup or conditional evaluation fails.
 pub async fn plan_conditionals_with_backends(
     if_header: Option<&IfHeader>,
     filesystem: &dyn DavFileSystem,

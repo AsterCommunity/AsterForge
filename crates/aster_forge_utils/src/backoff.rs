@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 /// Calculates an uncapped exponential delay for a zero-based retry index.
+#[must_use]
 pub fn exponential_delay(initial_delay: Duration, retry_index: u32) -> Duration {
     let mut delay = initial_delay;
     let mut remaining = retry_index.min(127);
@@ -17,11 +18,13 @@ pub fn exponential_delay(initial_delay: Duration, retry_index: u32) -> Duration 
 }
 
 /// Applies a hard upper bound to a delay.
+#[must_use]
 pub fn cap_delay(delay: Duration, max_delay: Duration) -> Duration {
     delay.min(max_delay)
 }
 
 /// Applies an explicit percentage to a delay, saturating at `Duration::MAX`.
+#[must_use]
 pub fn apply_jitter(delay: Duration, percent: u16) -> Duration {
     let nanos = delay.as_nanos().saturating_mul(u128::from(percent));
     let nanos = nanos.checked_div(100).unwrap_or(0);
@@ -32,6 +35,7 @@ pub fn apply_jitter(delay: Duration, percent: u16) -> Duration {
 ///
 /// The bounds are inclusive and clamped to a practical percentage range. Callers that need
 /// deterministic behavior should use [`apply_jitter`] instead.
+#[must_use]
 pub fn randomized_jitter(delay: Duration, min_percent: u16, max_percent: u16) -> Duration {
     use rand::RngExt;
 
@@ -124,7 +128,7 @@ mod tests {
         );
         assert_eq!(
             super::randomized_jitter(Duration::from_millis(100), u16::MAX, u16::MAX),
-            Duration::from_millis(1_000)
+            Duration::from_secs(1)
         );
         assert_eq!(
             super::randomized_jitter(Duration::ZERO, 50, 150),

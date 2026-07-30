@@ -17,6 +17,10 @@ pub const DEFAULT_EXTERNAL_AUTH_URL_MAX_LEN: usize = 2048;
 pub const DEFAULT_EXTERNAL_AUTH_IDENTITY_NAMESPACE_MAX_LEN: usize = 512;
 
 /// Normalizes an application-owned provider key.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_provider_key(value: &str) -> Result<String> {
     let key = value.trim().to_ascii_lowercase();
     if key.len() < 2 || key.len() > 64 {
@@ -41,6 +45,10 @@ pub fn normalize_provider_key(value: &str) -> Result<String> {
 }
 
 /// Normalizes a required string field with a byte-length limit.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_required_field(value: &str, field: &str, max_len: usize) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -57,6 +65,10 @@ pub fn normalize_required_field(value: &str, field: &str, max_len: usize) -> Res
 }
 
 /// Normalizes an optional provider claim name.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_optional_claim(value: Option<String>, field: &str) -> Result<Option<String>> {
     match value {
         Some(value) => {
@@ -76,6 +88,10 @@ pub fn normalize_optional_claim(value: Option<String>, field: &str) -> Result<Op
 }
 
 /// Normalizes scopes with a caller-provided default.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_scopes_with_default(
     value: Option<&str>,
     default_scopes: &str,
@@ -102,6 +118,10 @@ pub fn normalize_scopes_with_default(
 }
 
 /// Normalizes scopes with Forge's default `openid email profile` value.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_scopes(value: Option<&str>, protocol: ExternalAuthProtocol) -> Result<String> {
     normalize_scopes_with_default(value, DEFAULT_SCOPES, protocol)
 }
@@ -144,6 +164,10 @@ fn normalize_optional_url(
 }
 
 /// Normalizes an icon URL that may be a root-relative path or HTTPS URL.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_icon_url_input(value: Option<String>, max_len: usize) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -180,6 +204,10 @@ pub fn normalize_icon_url_input(value: Option<String>, max_len: usize) -> Result
 }
 
 /// Normalizes an issuer URL.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_issuer_url_input(
     value: Option<String>,
     required: bool,
@@ -203,6 +231,10 @@ pub fn normalize_issuer_url_input(
 }
 
 /// Normalizes a manually configured provider endpoint.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_manual_endpoint_input(
     value: Option<String>,
     field: &str,
@@ -225,6 +257,10 @@ pub fn normalize_manual_endpoint_input(
 }
 
 /// Normalizes an allow-list of email domains into a stable JSON string.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_allowed_domains(value: Option<Vec<String>>) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -260,6 +296,10 @@ pub fn normalize_allowed_domains(value: Option<Vec<String>>) -> Result<Option<St
 }
 
 /// Parses a stored allow-list JSON string into domain entries.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn parse_allowed_domains(raw: Option<&str>) -> Result<Vec<String>> {
     let Some(raw) = raw else {
         return Ok(Vec::new());
@@ -276,6 +316,10 @@ pub fn parse_allowed_domains(raw: Option<&str>) -> Result<Vec<String>> {
 }
 
 /// Returns whether an email address is allowed by a stored allow-list JSON string.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn email_domain_allowed(allowed_domains: Option<&str>, email: &str) -> Result<bool> {
     let domains = parse_allowed_domains(allowed_domains)?;
     if domains.is_empty() {
@@ -289,16 +333,22 @@ pub fn email_domain_allowed(allowed_domains: Option<&str>, email: &str) -> Resul
 }
 
 /// Hashes an OAuth/OIDC state value before persistence.
+#[must_use]
 pub fn state_hash(state: &str) -> String {
     aster_forge_crypto::sha256_hex(state.as_bytes())
 }
 
 /// Hashes an external-auth flow token before persistence.
+#[must_use]
 pub fn token_hash(token: &str) -> String {
     aster_forge_crypto::sha256_hex(token.as_bytes())
 }
 
 /// Normalizes a post-login return path.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_return_path(value: Option<&str>, max_len: usize) -> Result<String> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok("/".to_string());
@@ -321,6 +371,10 @@ pub fn normalize_return_path(value: Option<&str>, max_len: usize) -> Result<Stri
 }
 
 /// Normalizes an external-auth flow token supplied by a client.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the provider input violates its format, length, or protocol contract.
 pub fn normalize_flow_token(value: &str, max_len: usize) -> Result<String> {
     let token = value.trim();
     if token.is_empty() {

@@ -1,4 +1,4 @@
-//! SeaORM repository helpers for offset pagination.
+//! `SeaORM` repository helpers for offset pagination.
 //!
 //! The helper executes the same select query for total count and page items, letting service code
 //! build filters once and reuse them consistently. It stays generic over entities and connections
@@ -8,7 +8,11 @@ use sea_orm::{ConnectionTrait, EntityTrait, PaginatorTrait, QuerySelect, Select}
 
 use crate::DbError;
 
-/// Fetches an offset page and total count from a SeaORM select query.
+/// Fetches an offset page and total count from a `SeaORM` select query.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn fetch_offset_page<C, Entity, Error>(
     db: &C,
     query: Select<Entity>,

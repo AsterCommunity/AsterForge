@@ -1,4 +1,4 @@
-//! RFC 8144 WebDAV preference selection from a validated capability snapshot.
+//! RFC 8144 `WebDAV` preference selection from a validated capability snapshot.
 
 use http::HeaderValue;
 use http::header::HeaderMap;

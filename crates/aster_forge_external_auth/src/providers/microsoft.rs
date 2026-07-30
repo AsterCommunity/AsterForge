@@ -38,6 +38,7 @@ pub struct MicrosoftProviderDriver;
 
 impl MicrosoftProviderDriver {
     /// Creates a Microsoft provider driver with fixed Microsoft OIDC defaults.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -74,7 +75,7 @@ impl ExternalAuthProviderDriver for MicrosoftProviderDriver {
     ) -> Result<ExternalAuthAuthorizationStart> {
         let provider = microsoft_oidc_config(provider)?;
         let client = build_microsoft_client(&provider, redirect_uri).await?;
-        start_authorization_with_oidc_client(&provider, client)
+        Ok(start_authorization_with_oidc_client(&provider, &client))
     }
 
     async fn exchange_callback(
@@ -98,6 +99,10 @@ impl ExternalAuthProviderDriver for MicrosoftProviderDriver {
 /// Empty input falls back to `common`. Non-URL input is interpreted as a tenant
 /// selector (`common`, `organizations`, `consumers`, or a tenant UUID), while a
 /// full URL must already point at `login.microsoftonline.com/{tenant}/v2.0`.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the Microsoft tenant or issuer input is invalid.
 pub fn normalize_microsoft_tenant_or_issuer_url(value: Option<String>) -> Result<Option<String>> {
     let Some(value) = value else {
         return Ok(Some(microsoft_issuer_url_for_tenant(
@@ -121,6 +126,10 @@ pub fn normalize_microsoft_tenant_or_issuer_url(value: Option<String>) -> Result
 ///
 /// Empty input returns the default `common` tenant. A full Microsoft issuer URL is accepted and
 /// reduced to its tenant segment. The result is always lowercase for tenant aliases and tenant IDs.
+///
+/// # Errors
+///
+/// Returns [`ExternalAuthError`] when the Microsoft tenant or issuer input is invalid.
 pub fn normalize_microsoft_tenant_input(value: Option<String>) -> Result<String> {
     let Some(value) = value else {
         return Ok(MICROSOFT_DEFAULT_TENANT.to_string());
@@ -383,7 +392,7 @@ fn append_well_known_openid_configuration(mut issuer: reqwest::Url) -> Result<re
     {
         let mut paths = issuer
             .path_segments_mut()
-            .map_err(|_| ExternalAuthError::validation_error("invalid Microsoft issuer URL"))?;
+            .map_err(|()| ExternalAuthError::validation_error("invalid Microsoft issuer URL"))?;
         paths.pop_if_empty();
         paths.push(".well-known");
         paths.push("openid-configuration");
@@ -595,7 +604,7 @@ mod tests {
             key: "microsoft".to_string(),
             provider_kind: ExternalAuthProviderKind::Microsoft,
             protocol: ExternalAuthProtocol::Oidc,
-            options: Default::default(),
+            options: crate::types::ExternalAuthProviderOptions::default(),
             issuer_url: None,
             authorization_url: Some("https://ignored.example.com/auth".to_string()),
             token_url: Some("https://ignored.example.com/token".to_string()),

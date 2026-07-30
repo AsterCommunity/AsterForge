@@ -1,7 +1,7 @@
-//! Database connection helpers and SQLite reader/writer pool setup.
+//! Database connection helpers and `SQLite` reader/writer pool setup.
 //!
-//! The module wraps SeaORM connection creation with retry behavior, optional metrics callbacks, and
-//! SQLite-specific pooling rules. SQLite writer connections are constrained so transaction
+//! The module wraps `SeaORM` connection creation with retry behavior, optional metrics callbacks, and
+//! SQLite-specific pooling rules. `SQLite` writer connections are constrained so transaction
 //! serialization is explicit, while read-only handles can still be split out when the URL supports
 //! it.
 
@@ -47,6 +47,7 @@ impl DatabaseUrl {
     }
 
     /// Returns the complete URL when this input uses compatibility mode.
+    #[must_use]
     pub fn as_url(&self) -> Option<&str> {
         match self {
             Self::Url(url) => Some(url),
@@ -75,7 +76,7 @@ impl DatabaseUrl {
                 password.as_deref(),
                 "database base URL",
             )
-            .map(|url| url.into())
+            .map(std::convert::Into::into)
             .map_err(|error| {
                 DbError::non_retryable(format!(
                     "invalid database connection configuration: {error}"
@@ -111,7 +112,7 @@ impl From<&str> for DatabaseUrl {
 pub struct DatabaseConfig {
     /// Database URL understood by SeaORM/sqlx.
     pub url: DatabaseUrl,
-    /// Maximum pool size for non-SQLite connections and SQLite reader pools.
+    /// Maximum pool size for non-SQLite connections and `SQLite` reader pools.
     pub pool_size: u32,
     /// Number of retries for connection establishment.
     pub retry_count: u32,
@@ -151,6 +152,7 @@ pub struct DbHandles {
 
 impl DbHandles {
     /// Creates writer/reader handles backed by the same connection.
+    #[must_use]
     pub fn single(db: DatabaseConnection) -> Self {
         Self {
             writer: db.clone(),
@@ -160,29 +162,36 @@ impl DbHandles {
     }
 
     /// Returns the writer connection.
+    #[must_use]
     pub fn writer(&self) -> &DatabaseConnection {
         &self.writer
     }
 
     /// Returns the reader connection.
+    #[must_use]
     pub fn reader(&self) -> &DatabaseConnection {
         &self.reader
     }
 
-    /// Returns whether SQLite writer and reader use separate pools.
+    /// Returns whether `SQLite` writer and reader use separate pools.
+    #[must_use]
     pub fn sqlite_read_write_split(&self) -> bool {
         self.sqlite_read_write_split
     }
 
     /// Closes the underlying database pools.
     ///
-    /// Split SQLite handles own two independent pools, so both reader and writer must be closed.
+    /// Split `SQLite` handles own two independent pools, so both reader and writer must be closed.
     /// Single-handle configurations clone the same pool into both fields and only close the writer
     /// once.
     ///
     /// Both pools are always asked to close, even when the reader close fails: an early return
-    /// would leak the writer pool (SQLite WAL/file handles) with no way to retry, because `close`
+    /// would leak the writer pool (`SQLite` WAL/file handles) with no way to retry, because `close`
     /// consumes the handles. The reader error, being the first failure, is the one returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn close(self) -> Result<()> {
         let reader_result = if self.sqlite_read_write_split {
             Some(self.reader.close().await)
@@ -206,6 +215,10 @@ fn first_close_error(
 }
 
 /// Connects to the configured database and installs a metrics callback.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn connect_with_metrics(
     cfg: &DatabaseConfig,
     metrics: SharedDbMetricsRecorder,
@@ -222,11 +235,19 @@ pub async fn connect_with_metrics(
 }
 
 /// Connects to the configured database without metrics.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn connect(cfg: &DatabaseConfig) -> Result<DatabaseConnection> {
     connect_with_metrics(cfg, Arc::new(NoopDbMetrics)).await
 }
 
 /// Creates reader/writer handles for an existing writer connection and metrics recorder.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn connect_reader_for_writer_with_metrics(
     cfg: &DatabaseConfig,
     writer: DatabaseConnection,
@@ -253,6 +274,10 @@ pub async fn connect_reader_for_writer_with_metrics(
 }
 
 /// Creates reader/writer handles for an existing writer connection without metrics.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn connect_reader_for_writer(
     cfg: &DatabaseConfig,
     writer: DatabaseConnection,

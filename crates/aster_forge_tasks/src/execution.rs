@@ -133,6 +133,10 @@ pub struct ClaimedTaskExecutionConfig<LeaseExpiresFn, RetryDelayFn> {
 }
 
 /// Runs a claimed task batch using the shared lifecycle and aggregates counters.
+///
+/// # Errors
+///
+/// Returns a store error when claimed-task processing or outcome persistence fails.
 pub async fn run_claimed_task_batch_with_store<
     Store,
     Task,
@@ -166,6 +170,14 @@ where
 }
 
 /// Runs one claimed task through heartbeat, processing, retry, and failure handling.
+///
+/// # Errors
+///
+/// Returns a store error when heartbeat, processing, or fenced outcome persistence fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Heartbeat shutdown, lease fencing, retry, and permanent failure form one claimed-task state transition."
+)]
 pub async fn process_claimed_task<Store, Task, Kind, LeaseExpiresFn, RetryDelayFn>(
     store: Store,
     task: Task,
@@ -364,7 +376,7 @@ mod tests {
             TestKind::Example
         }
 
-        fn payload_json(&self) -> &str {
+        fn payload_json(&self) -> &'static str {
             "{}"
         }
 
@@ -525,8 +537,8 @@ mod tests {
 
     fn config() -> TestExecutionConfig {
         ClaimedTaskExecutionConfig {
-            renewal_timeout: Duration::from_secs(60),
-            heartbeat_interval: Duration::from_secs(60),
+            renewal_timeout: Duration::from_mins(1),
+            heartbeat_interval: Duration::from_mins(1),
             lease_expires_at: |now| task_lease_expires_at(now, 60),
             retry_delay_secs: default_task_retry_delay_secs,
         }

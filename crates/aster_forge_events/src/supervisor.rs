@@ -21,6 +21,7 @@ pub enum EventConnectionState {
 
 impl EventConnectionState {
     /// Returns the stable low-cardinality label for this state.
+    #[must_use]
     pub const fn as_label(self) -> &'static str {
         match self {
             Self::Connected => "connected",
@@ -71,6 +72,7 @@ impl Default for EventReconnectPolicy {
 
 impl EventReconnectPolicy {
     /// Calculates the bounded jittered delay for a one-based reconnect attempt.
+    #[must_use]
     pub fn reconnect_delay(self, reconnect_attempt: u32) -> Duration {
         let raw = aster_forge_utils::backoff::exponential_delay(
             self.initial_delay,
@@ -122,6 +124,10 @@ pub trait EventSubscriptionSource: Send + Sync {
 ///
 /// Consumers handle updates sequentially. `Connected`/`Recovered` is therefore observed before
 /// the first item from that subscription, so products can reconcile authoritative state first.
+#[expect(
+    clippy::too_many_lines,
+    reason = "The supervisor keeps one explicit subscription and reconnect state machine in a single loop."
+)]
 pub async fn supervise_event_subscription<S>(
     source: Arc<S>,
     reconnect_policy: EventReconnectPolicy,

@@ -56,6 +56,7 @@ pub const SYSTEM_CONFIG_UPDATED_BY_COLUMN: &str = "updated_by";
 pub const SYSTEM_CONFIG_KEY_UNIQUE_INDEX: &str = "idx_system_config_key_unique";
 
 /// Builds the shared `system_config` table creation statement.
+#[must_use]
 pub fn create_system_config_table(backend: DatabaseBackend) -> TableCreateStatement {
     Table::create()
         .table(system_config_table())
@@ -129,6 +130,7 @@ pub fn create_system_config_table(backend: DatabaseBackend) -> TableCreateStatem
 }
 
 /// Builds the shared `system_config` table drop statement.
+#[must_use]
 pub fn drop_system_config_table() -> TableDropStatement {
     Table::drop()
         .table(system_config_table())
@@ -137,6 +139,7 @@ pub fn drop_system_config_table() -> TableDropStatement {
 }
 
 /// Builds the unique index for stable configuration keys.
+#[must_use]
 pub fn create_system_config_key_unique_index() -> IndexCreateStatement {
     Index::create()
         .name(SYSTEM_CONFIG_KEY_UNIQUE_INDEX)
@@ -216,7 +219,7 @@ fn utc_datetime_column(backend: DatabaseBackend, column: Alias) -> ColumnDef {
     definition
 }
 
-/// Runtime system configuration SeaORM model.
+/// Runtime system configuration `SeaORM` model.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "system_config")]
 pub struct Model {
@@ -273,7 +276,7 @@ impl RuntimeConfigRecord for Model {
 ///
 /// This keeps the product-neutral field mapping, sensitive-value redaction, and lossy historical
 /// value parsing in Forge while leaving product API envelopes, permissions, warning calculation,
-/// and OpenAPI schema ownership in each service.
+/// and `OpenAPI` schema ownership in each service.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresentedSystemConfig {
     /// Stable row id.
@@ -392,6 +395,7 @@ pub struct SystemConfigDbBinding {
 
 impl SystemConfigDbBinding {
     /// Creates a product binding from a config registry and deprecated key list.
+    #[must_use]
     pub const fn new(
         registry: &'static ConfigRegistry,
         deprecated_keys: &'static [&'static str],
@@ -403,11 +407,19 @@ impl SystemConfigDbBinding {
     }
 
     /// Lists all rows by stable id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_all<C: ConnectionTrait>(&self, db: &C) -> crate::Result<Vec<Model>> {
         find_all(db).await
     }
 
     /// Lists one id-cursor page by stable id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_cursor<C: ConnectionTrait>(
         &self,
         db: &C,
@@ -418,6 +430,10 @@ impl SystemConfigDbBinding {
     }
 
     /// Finds one row by key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_by_key<C: ConnectionTrait>(
         &self,
         db: &C,
@@ -427,6 +443,10 @@ impl SystemConfigDbBinding {
     }
 
     /// Lists visible custom rows ordered by key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_visible_custom<C: ConnectionTrait>(
         &self,
         db: &C,
@@ -436,11 +456,19 @@ impl SystemConfigDbBinding {
     }
 
     /// Locks one row by key where the database supports row locks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn lock_by_key<C: ConnectionTrait>(&self, db: &C, key: &str) -> crate::Result<()> {
         lock_by_key(db, key).await
     }
 
     /// Upserts one row using this binding's registry metadata for known system keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn upsert<C: ConnectionTrait>(
         &self,
         db: &C,
@@ -450,11 +478,19 @@ impl SystemConfigDbBinding {
     }
 
     /// Deletes a custom row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn delete_by_key<C: ConnectionTrait>(&self, db: &C, key: &str) -> crate::Result<()> {
         delete_by_key(db, key).await
     }
 
     /// Inserts one system value if no row exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn ensure_system_value_if_missing<C: ConnectionTrait>(
         &self,
         db: &C,
@@ -465,11 +501,19 @@ impl SystemConfigDbBinding {
     }
 
     /// Deletes deprecated system keys configured by the product.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn delete_deprecated_keys<C: ConnectionTrait>(&self, db: &C) -> crate::Result<u64> {
         delete_deprecated_keys(db, self.deprecated_keys).await
     }
 
     /// Ensures default rows exist and repairs metadata for existing system rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn ensure_defaults<C: ConnectionTrait>(&self, db: &C) -> crate::Result<usize> {
         ensure_defaults(db, self.registry, self.deprecated_keys).await
     }
@@ -498,6 +542,7 @@ pub struct SystemConfigDbStore {
 
 impl SystemConfigDbStore {
     /// Creates a store from a database connection and product config registry.
+    #[must_use]
     pub const fn new(
         db: DatabaseConnection,
         registry: &'static ConfigRegistry,
@@ -511,11 +556,19 @@ impl SystemConfigDbStore {
     }
 
     /// Lists all rows by stable id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_all(&self) -> crate::Result<Vec<Model>> {
         find_all(&self.db).await
     }
 
     /// Lists one id-cursor page by stable id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_cursor(
         &self,
         limit: u64,
@@ -525,11 +578,19 @@ impl SystemConfigDbStore {
     }
 
     /// Finds one row by key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_by_key(&self, key: &str) -> crate::Result<Option<Model>> {
         find_by_key(&self.db, key).await
     }
 
     /// Lists visible custom rows ordered by key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_visible_custom(
         &self,
         include_authenticated: bool,
@@ -538,21 +599,37 @@ impl SystemConfigDbStore {
     }
 
     /// Locks one row by key where the database supports row locks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn lock_by_key(&self, key: &str) -> crate::Result<()> {
         lock_by_key(&self.db, key).await
     }
 
     /// Upserts one row using registry metadata for known system keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn upsert(&self, request: SystemConfigUpsert<'_>) -> crate::Result<Model> {
         upsert(&self.db, self.registry, request).await
     }
 
     /// Deletes a custom row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn delete_by_key(&self, key: &str) -> crate::Result<()> {
         delete_by_key(&self.db, key).await
     }
 
     /// Inserts one system value if no row exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn ensure_system_value_if_missing(
         &self,
         key: &str,
@@ -562,17 +639,29 @@ impl SystemConfigDbStore {
     }
 
     /// Deletes deprecated system keys configured by the product.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn delete_deprecated_keys(&self) -> crate::Result<u64> {
         delete_deprecated_keys(&self.db, self.deprecated_keys).await
     }
 
     /// Ensures default rows exist and repairs metadata for existing system rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn ensure_defaults(&self) -> crate::Result<usize> {
         ensure_defaults(&self.db, self.registry, self.deprecated_keys).await
     }
 }
 
 /// Lists all rows by stable id order.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn find_all<C: ConnectionTrait>(db: &C) -> crate::Result<Vec<Model>> {
     Entity::find()
         .order_by_asc(Column::Id)
@@ -582,6 +671,10 @@ pub async fn find_all<C: ConnectionTrait>(db: &C) -> crate::Result<Vec<Model>> {
 }
 
 /// Lists one id-cursor page by stable id order.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn find_cursor<C: ConnectionTrait>(
     db: &C,
     limit: u64,
@@ -609,6 +702,10 @@ pub async fn find_cursor<C: ConnectionTrait>(
 }
 
 /// Finds one row by key.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn find_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Result<Option<Model>> {
     Entity::find()
         .filter(Column::Key.eq(key))
@@ -618,6 +715,10 @@ pub async fn find_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Result
 }
 
 /// Lists visible custom rows ordered by key.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn find_visible_custom<C: ConnectionTrait>(
     db: &C,
     include_authenticated: bool,
@@ -639,6 +740,10 @@ pub async fn find_visible_custom<C: ConnectionTrait>(
 }
 
 /// Locks one row by key where the database supports row locks.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn lock_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Result<()> {
     let query = Entity::find().filter(Column::Key.eq(key));
     let config = match db.get_database_backend() {
@@ -656,6 +761,10 @@ pub async fn lock_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Result
 }
 
 /// Upserts one row using registry metadata for known system keys.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn upsert<C: ConnectionTrait>(
     db: &C,
     registry: &'static ConfigRegistry,
@@ -664,11 +773,8 @@ pub async fn upsert<C: ConnectionTrait>(
     let now = Utc::now();
     let definition = registry.get(request.key);
     let is_custom_key = definition.is_none();
-    let active = definition
-        .map(|def| {
-            build_system_active_model(def, request.value.to_string(), now, request.updated_by)
-        })
-        .unwrap_or_else(|| {
+    let active = definition.map_or_else(
+        || {
             build_custom_active_model(
                 request.key,
                 request.value.to_string(),
@@ -676,7 +782,9 @@ pub async fn upsert<C: ConnectionTrait>(
                 now,
                 request.updated_by,
             )
-        });
+        },
+        |def| build_system_active_model(def, request.value.to_string(), now, request.updated_by),
+    );
     let inserted = insert_do_nothing(active, db, "system config upsert").await?;
 
     if !inserted {
@@ -699,6 +807,10 @@ pub async fn upsert<C: ConnectionTrait>(
 }
 
 /// Deletes a custom row.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn delete_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Result<()> {
     let existing = find_by_key(db, key)
         .await?
@@ -716,6 +828,10 @@ pub async fn delete_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Resu
 }
 
 /// Inserts one system value if no row exists.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn ensure_system_value_if_missing<C: ConnectionTrait>(
     db: &C,
     registry: &'static ConfigRegistry,
@@ -735,6 +851,10 @@ pub async fn ensure_system_value_if_missing<C: ConnectionTrait>(
 }
 
 /// Deletes deprecated system keys configured by the product.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn delete_deprecated_keys<C: ConnectionTrait>(
     db: &C,
     deprecated_keys: &'static [&'static str],
@@ -761,6 +881,10 @@ pub async fn delete_deprecated_keys<C: ConnectionTrait>(
 }
 
 /// Ensures default rows exist and repairs metadata for existing system rows.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn ensure_defaults<C: ConnectionTrait>(
     db: &C,
     registry: &'static ConfigRegistry,

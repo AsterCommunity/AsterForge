@@ -1,4 +1,4 @@
-//! Product adapter ports consumed by the WebDAV protocol layer.
+//! Product adapter ports consumed by the `WebDAV` protocol layer.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -14,7 +14,7 @@ use http::StatusCode;
 
 use crate::{DavPath, DavXmlElement};
 
-/// Stream used for product-independent WebDAV content transfer.
+/// Stream used for product-independent `WebDAV` content transfer.
 pub type DavContentStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, DavBackendError>> + Send + 'static>>;
 
@@ -109,7 +109,7 @@ impl From<FsError> for DavBackendError {
 pub type FsResult<T> = Result<T, FsError>;
 pub type FsFuture<'a, T> = Pin<Box<dyn Future<Output = FsResult<T>> + Send + 'a>>;
 
-/// WebDAV resource type.
+/// `WebDAV` resource type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DavResourceKind {
     File,
@@ -123,7 +123,7 @@ pub struct DavIfResourceState {
     pub lock_tokens: Vec<String>,
 }
 
-/// Product adapter used while evaluating WebDAV `If` conditions.
+/// Product adapter used while evaluating `WebDAV` `If` conditions.
 #[async_trait]
 pub trait DavIfStateResolver: Send + Sync {
     async fn resolve_if_state(&self, path: &DavPath)
@@ -144,12 +144,20 @@ pub struct DavWriteOptions {
 /// Protocol-visible resource metadata supplied by the product adapter.
 pub trait DavMetaData: Send + Sync {
     fn len(&self) -> u64;
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when the product adapter cannot read the metadata value.
     fn modified(&self) -> FsResult<SystemTime>;
     fn is_dir(&self) -> bool;
     fn etag(&self) -> Option<String>;
     fn content_type(&self) -> Option<&str> {
         None
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error when the product adapter cannot read the metadata value.
     fn created(&self) -> FsResult<SystemTime>;
     fn is_empty(&self) -> bool {
         self.len() == 0

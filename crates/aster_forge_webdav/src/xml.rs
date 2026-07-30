@@ -1,4 +1,4 @@
-//! WebDAV XML grammar and representation boundary.
+//! `WebDAV` XML grammar and representation boundary.
 //!
 //! The concrete XML implementation is intentionally private to this module. Products consume
 //! WebDAV-specific request models and [`DavXmlElement`] instead of depending on an XML crate.
@@ -13,7 +13,7 @@ use aster_forge_xml::{
 
 const DAV_NAMESPACE: &str = "DAV:";
 
-/// XML failure returned by the WebDAV grammar boundary.
+/// XML failure returned by the `WebDAV` grammar boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavXmlError {
     /// The document declares a DTD or entity.
@@ -50,7 +50,7 @@ impl From<XmlSafetyError> for DavXmlError {
     }
 }
 
-/// XML content owned by the WebDAV boundary.
+/// XML content owned by the `WebDAV` boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavXmlNode {
     /// Child element.
@@ -86,7 +86,7 @@ pub struct DavXmlElement {
 }
 
 impl DavXmlElement {
-    /// Creates an element from a lexical QName such as `D:href`.
+    /// Creates an element from a lexical `QName` such as `D:href`.
     #[must_use]
     pub fn new(name: &str) -> Self {
         let (prefix, local_name) = name
@@ -113,23 +113,37 @@ impl DavXmlElement {
     }
 
     /// Parses one bounded XML element.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavXmlError`] when the bounded XML element is unsafe, malformed, or invalid.
     pub fn parse(bytes: &[u8]) -> Result<Self, DavXmlError> {
         parse_element(bytes)
     }
 
     /// Parses one bounded XML element from a reader.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavXmlError`] when reader input is unsafe, malformed, or invalid XML.
     pub fn parse_reader(reader: impl Read) -> Result<Self, DavXmlError> {
         let options = webdav_parse_options();
         let document = OwnedDocument::from_reader_with_options(reader, &options)
-            .map_err(map_forge_xml_error)?;
+            .map_err(|error| map_forge_xml_error(&error))?;
         Ok(element_from_forge(document.root()))
     }
 
     /// Serializes the element as UTF-8 XML bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavXmlError`] when the element cannot be serialized as valid XML.
     pub fn to_bytes(&self) -> Result<Vec<u8>, DavXmlError> {
-        let mut writer = XmlStreamWriter::new(Vec::new()).map_err(map_forge_xml_error)?;
-        write_element(&mut writer, self, &BTreeMap::new()).map_err(map_forge_xml_error)?;
-        writer.finish().map_err(map_forge_xml_error)
+        let mut writer =
+            XmlStreamWriter::new(Vec::new()).map_err(|error| map_forge_xml_error(&error))?;
+        write_element(&mut writer, self, &BTreeMap::new())
+            .map_err(|error| map_forge_xml_error(&error))?;
+        writer.finish().map_err(|error| map_forge_xml_error(&error))
     }
 
     /// Iterates over direct child elements while ignoring text, comments, and CDATA.
@@ -215,6 +229,10 @@ pub struct DavLockRequestBody {
 }
 
 /// Parses a PROPFIND body. An absent body selects `allprop`.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the body is unsafe or violates PROPFIND grammar.
 pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlError> {
     if body.is_empty() {
         return Ok(DavPropfindRequest::AllProp {
@@ -272,6 +290,10 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
 }
 
 /// Parses an ordered PROPPATCH request.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the body is unsafe or violates PROPPATCH grammar.
 pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchRequest>, DavXmlError> {
     let document = parse_document(body)?;
     let root = document.root();
@@ -326,6 +348,10 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
 }
 
 /// Parses a LOCK creation body.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the body is unsafe or violates LOCK creation grammar.
 pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError> {
     let document = parse_document(body)?;
     let root = document.root();
@@ -404,7 +430,7 @@ fn parse_document(bytes: &[u8]) -> Result<BorrowedDocument<'_>, DavXmlError> {
     // The Forge parser applies the WebDAV safety policy while building its source-backed arena.
     // A separate validator pass here would scan every request twice.
     BorrowedDocument::parse_with_options(bytes, &webdav_parse_options())
-        .map_err(map_forge_xml_error)
+        .map_err(|error| map_forge_xml_error(&error))
 }
 
 fn is_dav_element<S: AsRef<[u8]>>(element: ElementRef<'_, S>, local_name: &str) -> bool {
@@ -469,9 +495,7 @@ fn requested_property<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavRequeste
     }
 }
 
-fn xml_lang_value<'document, S: AsRef<[u8]>>(
-    element: ElementRef<'document, S>,
-) -> Option<&'document str> {
+fn xml_lang_value<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> Option<&str> {
     element.attribute("xml:lang")
 }
 
@@ -483,9 +507,9 @@ fn webdav_parse_options() -> ParseOptions {
         .trim_whitespace(true)
 }
 
-fn map_forge_xml_error(error: ForgeXmlError) -> DavXmlError {
+fn map_forge_xml_error(error: &ForgeXmlError) -> DavXmlError {
     match error {
-        ForgeXmlError::Safety(error) => error.into(),
+        ForgeXmlError::Safety(error) => (*error).into(),
         ForgeXmlError::InvalidXml(_) | ForgeXmlError::InvalidData(_) | ForgeXmlError::Io(_) => {
             DavXmlError::Malformed
         }

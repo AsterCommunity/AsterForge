@@ -1,6 +1,6 @@
 //! Shared repository helpers for applying whitelisted sort options.
 //!
-//! The helpers accept a caller-provided whitelist of field names and SeaORM columns, then apply
+//! The helpers accept a caller-provided whitelist of field names and `SeaORM` columns, then apply
 //! ascending or descending ordering to a query. Keeping this logic shared avoids repeating unsafe
 //! ad-hoc string-to-column mapping in each repository.
 

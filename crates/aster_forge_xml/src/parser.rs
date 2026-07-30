@@ -33,6 +33,7 @@ pub struct XmlSafetyPolicy {
 
 impl XmlSafetyPolicy {
     /// A conservative policy suitable for network and storage protocol input.
+    #[must_use]
     pub const fn untrusted() -> Self {
         Self {
             max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
@@ -75,50 +76,60 @@ pub struct ParseOptions {
 }
 
 impl ParseOptions {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn safety_policy(mut self, policy: XmlSafetyPolicy) -> Self {
         self.safety = policy;
         self
     }
 
+    #[must_use]
     pub fn max_depth(mut self, value: usize) -> Self {
         self.safety.max_depth = value;
         self
     }
 
+    #[must_use]
     pub fn max_elements(mut self, value: usize) -> Self {
         self.safety.max_elements = value;
         self
     }
 
+    #[must_use]
     pub fn max_size(mut self, value: usize) -> Self {
         self.safety.max_input_bytes = value;
         self
     }
 
+    #[must_use]
     pub fn max_attributes_per_element(mut self, value: usize) -> Self {
         self.safety.max_attributes_per_element = value;
         self
     }
 
+    #[must_use]
     pub fn max_text_bytes(mut self, value: usize) -> Self {
         self.safety.max_text_bytes = value;
         self
     }
 
+    #[must_use]
     pub fn max_events(mut self, value: usize) -> Self {
         self.safety.max_events = value;
         self
     }
 
+    #[must_use]
     pub fn allow_dtd(mut self, allow: bool) -> Self {
         self.safety.reject_doctype = !allow;
         self
     }
 
+    #[must_use]
     pub fn trim_whitespace(mut self, trim: bool) -> Self {
         self.trim_whitespace = trim;
         self
@@ -126,25 +137,35 @@ impl ParseOptions {
 }
 
 /// Validates one complete XML document without constructing a DOM.
+///
+/// # Errors
+///
+/// Returns a safety error when `policy` is invalid or the document is malformed, exceeds a limit,
+/// uses forbidden DTD/entity features, or contains invalid encoding.
 pub fn validate_xml_input(bytes: &[u8], policy: XmlSafetyPolicy) -> Result<(), XmlSafetyError> {
     scan_xml(bytes, &ParseOptions::new().safety_policy(policy))
         .map(|_| ())
-        .map_err(safety_error)
+        .map_err(|error| safety_error(&error))
 }
 
 /// Returns the local name of a validated document root.
+///
+/// # Errors
+///
+/// Returns a safety error when `policy` is invalid, the document has no single valid root, exceeds
+/// a limit, uses forbidden DTD/entity features, or contains invalid encoding.
 pub fn xml_root_local_name(
     bytes: &[u8],
     policy: XmlSafetyPolicy,
 ) -> Result<String, XmlSafetyError> {
     scan_xml(bytes, &ParseOptions::new().safety_policy(policy))
-        .map_err(safety_error)?
+        .map_err(|error| safety_error(&error))?
         .ok_or(XmlSafetyError::Malformed)
 }
 
-fn safety_error(error: Error) -> XmlSafetyError {
+fn safety_error(error: &Error) -> XmlSafetyError {
     match error {
-        Error::Safety(error) => error,
+        Error::Safety(error) => *error,
         Error::InvalidXml(_) | Error::InvalidData(_) | Error::Io(_) => XmlSafetyError::Malformed,
     }
 }

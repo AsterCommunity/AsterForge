@@ -96,6 +96,10 @@ pub trait TaskClaimStore<Task, Kind: 'static, Lane>: Sync {
 }
 
 /// Claims due tasks for a single lane using a product storage adapter.
+///
+/// # Errors
+///
+/// Returns the store error when the due-task query or fenced claim operation fails.
 pub async fn claim_due_for_lane<Store, Task, Kind, Lane, LaneFn>(
     store: &Store,
     lane_config: TaskLaneConfig<Kind, Lane>,
@@ -189,12 +193,14 @@ where
 }
 
 /// Returns remaining lane capacity after subtracting currently active tasks.
+#[must_use]
 pub fn available_lane_capacity(limit: usize, active: u64) -> usize {
     let active = usize::try_from(active).unwrap_or(usize::MAX);
     limit.saturating_sub(active)
 }
 
 /// Converts a lane limit into the `u64` shape used by database query limits.
+#[must_use]
 pub fn claim_limit_to_u64(limit: usize) -> u64 {
     u64::try_from(limit).unwrap_or(u64::MAX)
 }
@@ -223,6 +229,10 @@ where
 /// If one or more lanes fail, the first error is returned after all lanes have completed. This
 /// mirrors the existing Yggdrasil and Drive behavior: independent lanes are allowed to finish, then
 /// the dispatch pass reports the first lane failure to the caller.
+///
+/// # Errors
+///
+/// Returns the dispatcher error from the first lane that does not complete successfully.
 pub async fn dispatch_lanes<Kind, Lane, Error, F, Fut>(
     lane_configs: Vec<TaskLaneConfig<Kind, Lane>>,
     lane_parallelism: usize,
@@ -263,6 +273,10 @@ where
 ///
 /// The batch is sorted before execution so products can preserve stable created-at/id ordering
 /// while still allowing individual task futures to finish out of order.
+///
+/// # Errors
+///
+/// Returns the handler error from a claimed task that does not complete successfully.
 pub async fn run_claimed_task_batch<T, SortKey, Error, SortFn, HandlerFn, HandlerFut>(
     mut claimed_tasks: Vec<T>,
     sort_key: SortFn,
@@ -304,6 +318,10 @@ where
 /// Product crates provide the real dispatch function and processing-count query. The helper keeps
 /// the shared bounded retry loop and aggregate statistics in Forge while leaving storage and status
 /// semantics outside this crate.
+///
+/// # Errors
+///
+/// Returns an error when dispatching or counting remaining work fails.
 pub async fn drain_dispatcher<DispatchFn, DispatchFut, CountFn, CountFut, Error>(
     max_rounds: usize,
     processing_poll_interval: Duration,
@@ -368,6 +386,7 @@ impl DispatchStats {
     }
 
     /// Returns whether any dispatch activity happened.
+    #[must_use]
     pub const fn has_activity(&self) -> bool {
         self.claimed > 0 || self.succeeded > 0 || self.retried > 0 || self.failed > 0
     }
@@ -393,6 +412,7 @@ pub struct TaskDispatchOutcome {
 
 impl TaskDispatchOutcome {
     /// Creates a successful task outcome.
+    #[must_use]
     pub const fn succeeded() -> Self {
         Self {
             succeeded: 1,
@@ -402,6 +422,7 @@ impl TaskDispatchOutcome {
     }
 
     /// Creates a retried task outcome.
+    #[must_use]
     pub const fn retried() -> Self {
         Self {
             succeeded: 0,
@@ -411,6 +432,7 @@ impl TaskDispatchOutcome {
     }
 
     /// Creates a permanently failed task outcome.
+    #[must_use]
     pub const fn failed() -> Self {
         Self {
             succeeded: 0,
@@ -468,7 +490,7 @@ mod tests {
             self.kind
         }
 
-        fn payload_json(&self) -> &str {
+        fn payload_json(&self) -> &'static str {
             "{}"
         }
 

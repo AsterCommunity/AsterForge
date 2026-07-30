@@ -13,6 +13,7 @@ use ipnet::IpNet;
 ///
 /// `X-Forwarded-For` is trusted only when `peer` is covered by the trusted proxy list. Invalid
 /// trusted proxy entries are skipped by `aster_forge_utils::net::parse_trusted_proxies`.
+#[must_use]
 pub fn real_ip_from_headers(
     headers: &HeaderMap,
     peer: IpAddr,
@@ -23,6 +24,7 @@ pub fn real_ip_from_headers(
 }
 
 /// Resolves the client IP from Actix headers, a direct peer IP, and parsed trusted proxy entries.
+#[must_use]
 pub fn real_ip_from_trusted_headers(
     headers: &HeaderMap,
     peer: IpAddr,

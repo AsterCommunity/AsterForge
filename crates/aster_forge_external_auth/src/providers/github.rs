@@ -1,6 +1,6 @@
 //! GitHub OAuth App provider driver.
 //!
-//! GitHub sign-in mostly follows OAuth2 authorization code flow, but email verification requires a
+//! GitHub sign-in mostly follows `OAuth2` authorization code flow, but email verification requires a
 //! second call to the user emails API. This driver applies GitHub's fixed endpoints and maps the
 //! verified primary email into the normalized external-auth profile.
 
@@ -43,6 +43,7 @@ struct GitHubEmail {
 
 impl GitHubProviderDriver {
     /// Creates a GitHub provider driver with fixed GitHub OAuth endpoints.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -271,7 +272,7 @@ mod tests {
             key: "github".to_string(),
             provider_kind: ExternalAuthProviderKind::GitHub,
             protocol: ExternalAuthProtocol::OAuth2,
-            options: Default::default(),
+            options: crate::types::ExternalAuthProviderOptions::default(),
             issuer_url: None,
             authorization_url: None,
             token_url: None,

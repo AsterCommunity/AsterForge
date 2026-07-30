@@ -286,6 +286,10 @@ fn stream_emits_bounded_chunks_and_valid_empty_or_populated_documents() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The test exercises pending, root, closing-tag, and post-item output boundaries as one stream matrix."
+)]
 fn stream_preserves_pending_and_output_limit_boundaries() {
     futures::executor::block_on(async {
         let mut first_poll = true;

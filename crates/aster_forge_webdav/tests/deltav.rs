@@ -112,7 +112,7 @@ fn report_selector_accepts_only_snapshot_discovered_dav_report_types() {
         namespaced.to_string(),
         r#"unknown WebDAV REPORT type "version-tree" in namespace Some("urn:extension")"#
     );
-    let unqualified = plan_report_request(&snapshot, br#"<version-tree/>"#)
+    let unqualified = plan_report_request(&snapshot, br"<version-tree/>")
         .expect_err("an unqualified root is not a DAV REPORT type");
     assert_eq!(
         unqualified.to_string(),

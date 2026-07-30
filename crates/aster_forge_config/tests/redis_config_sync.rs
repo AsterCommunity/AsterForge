@@ -24,7 +24,7 @@ async fn wait_for_connection_state(
         loop {
             if observations
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .iter()
                 .any(|observation| observation.state == expected)
             {
@@ -44,7 +44,7 @@ async fn wait_for_connection_ready(
         loop {
             let ready = observations
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .iter()
                 .any(|observation| {
                     matches!(
@@ -65,7 +65,7 @@ async fn wait_for_connection_ready(
 fn clear_observations(observations: &Arc<Mutex<Vec<ConfigSyncConnectionObservation>>>) {
     observations
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clear();
 }
 
@@ -94,7 +94,7 @@ async fn raw_reserved_password_delivers_config_reload() {
     let connection_observer = move |observation| {
         worker_observations
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(observation);
     };
     let shutdown = CancellationToken::new();
@@ -158,7 +158,7 @@ async fn config_runtime_reconciles_and_delivers_after_redis_recovery() {
     let connection_observer = move |observation| {
         worker_observations
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(observation);
     };
     let (reload_tx, mut reload_rx) = mpsc::unbounded_channel();

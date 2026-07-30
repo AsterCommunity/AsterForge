@@ -12,6 +12,10 @@ use serde::Serialize;
 use std::fmt;
 
 /// Static metadata that describes a provider driver's capabilities and configuration needs.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These booleans are independent provider capabilities and configuration requirements exposed to registry consumers."
+)]
 #[derive(Clone, Debug)]
 pub struct ExternalAuthProviderDescriptor {
     /// Provider kind handled by the driver.
@@ -45,7 +49,7 @@ pub struct ExternalAuthProviderDescriptor {
 /// Runtime configuration used by provider drivers.
 ///
 /// The value is intentionally independent from persistence. Application crates can keep their own
-/// schema, encrypted secret handling, OpenAPI shape, and migration behavior, then construct this
+/// schema, encrypted secret handling, `OpenAPI` shape, and migration behavior, then construct this
 /// config immediately before invoking a provider driver.
 #[derive(Clone)]
 pub struct ExternalAuthProviderConfig {
@@ -61,11 +65,11 @@ pub struct ExternalAuthProviderConfig {
     pub options: ExternalAuthProviderOptions,
     /// Issuer URL for OIDC-style providers.
     pub issuer_url: Option<String>,
-    /// Authorization endpoint for manual OAuth2 providers.
+    /// Authorization endpoint for manual `OAuth2` providers.
     pub authorization_url: Option<String>,
-    /// Token endpoint for manual OAuth2 providers.
+    /// Token endpoint for manual `OAuth2` providers.
     pub token_url: Option<String>,
-    /// Userinfo endpoint for manual OAuth2 providers.
+    /// Userinfo endpoint for manual `OAuth2` providers.
     pub userinfo_url: Option<String>,
     /// OAuth/OIDC client id.
     pub client_id: String,
@@ -123,6 +127,10 @@ impl fmt::Debug for ExternalAuthProviderConfig {
 
 impl ExternalAuthProviderConfig {
     /// Returns a non-empty issuer URL or a validation error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider configuration has no issuer URL.
     pub fn require_issuer_url(&self) -> Result<&str> {
         self.issuer_url
             .as_deref()

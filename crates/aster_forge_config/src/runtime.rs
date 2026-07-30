@@ -47,7 +47,7 @@ pub struct StoredConfig {
 ///
 /// Product crates can implement this trait for their database entity model when
 /// they need the runtime cache to preserve product-only columns such as audit
-/// metadata, timestamps, namespaces, or SeaORM enum wrappers. Forge only needs
+/// metadata, timestamps, namespaces, or `SeaORM` enum wrappers. Forge only needs
 /// a stable key, a storage string, and the restart boundary to provide common
 /// snapshot behavior.
 pub trait RuntimeConfigRecord: Clone + PartialEq {
@@ -102,6 +102,7 @@ where
     T: RuntimeConfigRecord,
 {
     /// Creates a snapshot from stored rows, keyed by config key.
+    #[must_use]
     pub fn from_configs(configs: Vec<T>) -> Self {
         Self {
             values: configs
@@ -112,6 +113,7 @@ where
     }
 
     /// Returns the stored model for `key`.
+    #[must_use]
     pub fn get_model(&self, key: &str) -> Option<&T> {
         self.values.get(key)
     }
@@ -122,17 +124,20 @@ where
     }
 
     /// Parses a bool-like storage string for `key`.
+    #[must_use]
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         let value = self.get(key)?;
         parse_bool_like_value(value)
     }
 
     /// Parses an i64 storage string for `key`.
+    #[must_use]
     pub fn get_i64(&self, key: &str) -> Option<i64> {
         self.get(key)?.trim().parse().ok()
     }
 
     /// Parses a u64 storage string for `key`.
+    #[must_use]
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         self.get(key)?.trim().parse().ok()
     }
@@ -140,26 +145,29 @@ where
     /// Returns a string value or `default`.
     pub fn get_string_or(&self, key: &str, default: &str) -> String {
         self.get(key)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| default.to_string())
+            .map_or_else(|| default.to_string(), ToOwned::to_owned)
     }
 
     /// Returns a bool value or `default`.
+    #[must_use]
     pub fn get_bool_or(&self, key: &str, default: bool) -> bool {
         self.get_bool(key).unwrap_or(default)
     }
 
     /// Returns an i64 value or `default`.
+    #[must_use]
     pub fn get_i64_or(&self, key: &str, default: i64) -> i64 {
         self.get_i64(key).unwrap_or(default)
     }
 
     /// Returns a u64 value or `default`.
+    #[must_use]
     pub fn get_u64_or(&self, key: &str, default: u64) -> u64 {
         self.get_u64(key).unwrap_or(default)
     }
 
     /// Returns all values.
+    #[must_use]
     pub fn values(&self) -> &HashMap<String, T> {
         &self.values
     }
@@ -182,6 +190,7 @@ pub struct AsyncConfigSnapshot {
 
 impl AsyncConfigSnapshot {
     /// Creates a snapshot from stored rows, keyed by config key.
+    #[must_use]
     pub fn from_configs(configs: Vec<StoredConfig>) -> Self {
         Self {
             values: configs
@@ -192,27 +201,32 @@ impl AsyncConfigSnapshot {
     }
 
     /// Returns the stored model for `key`.
+    #[must_use]
     pub fn get_model(&self, key: &str) -> Option<&StoredConfig> {
         self.values.get(key)
     }
 
     /// Returns the storage string for `key`.
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.get_model(key).map(|config| config.value.as_str())
     }
 
     /// Parses a bool-like storage string for `key`.
+    #[must_use]
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         let value = self.get(key)?;
         parse_bool_like_value(value)
     }
 
     /// Parses an i64 storage string for `key`.
+    #[must_use]
     pub fn get_i64(&self, key: &str) -> Option<i64> {
         self.get(key)?.trim().parse().ok()
     }
 
     /// Parses a u64 storage string for `key`.
+    #[must_use]
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         self.get(key)?.trim().parse().ok()
     }
@@ -220,26 +234,29 @@ impl AsyncConfigSnapshot {
     /// Returns a string value or `default`.
     pub fn get_string_or(&self, key: &str, default: &str) -> String {
         self.get(key)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| default.to_string())
+            .map_or_else(|| default.to_string(), ToOwned::to_owned)
     }
 
     /// Returns a bool value or `default`.
+    #[must_use]
     pub fn get_bool_or(&self, key: &str, default: bool) -> bool {
         self.get_bool(key).unwrap_or(default)
     }
 
     /// Returns an i64 value or `default`.
+    #[must_use]
     pub fn get_i64_or(&self, key: &str, default: i64) -> i64 {
         self.get_i64(key).unwrap_or(default)
     }
 
     /// Returns a u64 value or `default`.
+    #[must_use]
     pub fn get_u64_or(&self, key: &str, default: u64) -> u64 {
         self.get_u64(key).unwrap_or(default)
     }
 
     /// Returns all values.
+    #[must_use]
     pub fn values(&self) -> &HashMap<String, StoredConfig> {
         &self.values
     }
@@ -276,6 +293,7 @@ where
     T: RuntimeConfigRecord,
 {
     /// Creates an empty synchronous runtime cache.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             snapshot: StdRwLock::new(SyncConfigSnapshot::default()),
@@ -400,6 +418,7 @@ pub struct AsyncRuntimeConfig {
 
 impl AsyncRuntimeConfig {
     /// Creates an empty async runtime cache.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             snapshot: RwLock::new(AsyncConfigSnapshot::default()),
@@ -412,6 +431,10 @@ impl AsyncRuntimeConfig {
     /// exists (value and flags stay until restart), mirroring [`Self::apply`];
     /// the diff does not report those keys as changed. Removals are applied
     /// immediately, matching [`Self::remove`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the backing store cannot load the latest runtime snapshot.
     pub async fn reload<S>(&self, store: &S) -> Result<Vec<RuntimeConfigChange>>
     where
         S: AsyncConfigStore + ?Sized,
@@ -527,6 +550,7 @@ where
 }
 
 /// Parses a bool-like runtime configuration value.
+#[must_use]
 pub fn parse_bool_like_value(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
@@ -536,6 +560,7 @@ pub fn parse_bool_like_value(value: &str) -> Option<bool> {
 }
 
 /// Parses a strict `true`/`false` runtime configuration value.
+#[must_use]
 pub fn parse_strict_bool_value(value: &str) -> Option<bool> {
     match value.trim() {
         "true" => Some(true),
@@ -545,47 +570,58 @@ pub fn parse_strict_bool_value(value: &str) -> Option<bool> {
 }
 
 /// Parses a positive `u64` runtime configuration value.
+#[must_use]
 pub fn parse_positive_u64(value: &str) -> Option<u64> {
     let parsed = value.trim().parse::<u64>().ok()?;
     (parsed > 0).then_some(parsed)
 }
 
 /// Parses a positive `u32` runtime configuration value.
+#[must_use]
 pub fn parse_positive_u32(value: &str) -> Option<u32> {
     let parsed = value.trim().parse::<u32>().ok()?;
     (parsed > 0).then_some(parsed)
 }
 
 /// Parses a non-negative `u64` runtime configuration value.
+#[must_use]
 pub fn parse_non_negative_u64(value: &str) -> Option<u64> {
     value.trim().parse::<u64>().ok()
 }
 
 /// Parses a `u64` runtime configuration value within an inclusive range.
+#[must_use]
 pub fn parse_bounded_u64(value: &str, min: u64, max: u64) -> Option<u64> {
     let parsed = value.trim().parse::<u64>().ok()?;
     (min..=max).contains(&parsed).then_some(parsed)
 }
 
 /// Parses a `u8` runtime configuration value within an inclusive range.
+#[must_use]
 pub fn parse_bounded_u8(value: &str, min: u8, max: u8) -> Option<u8> {
     let parsed = value.trim().parse::<u8>().ok()?;
     (min..=max).contains(&parsed).then_some(parsed)
 }
 
 /// Parses a positive `i32` runtime configuration value.
+#[must_use]
 pub fn parse_positive_i32(value: &str) -> Option<i32> {
     let parsed = value.trim().parse::<i32>().ok()?;
     (parsed > 0).then_some(parsed)
 }
 
 /// Parses a finite `f32` runtime configuration value.
+#[must_use]
 pub fn parse_finite_f32(value: &str) -> Option<f32> {
     let parsed = value.trim().parse::<f32>().ok()?;
     parsed.is_finite().then_some(parsed)
 }
 
 /// Normalizes a positive integer runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_positive_u64_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_positive_u64(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be a positive integer"))
@@ -594,6 +630,10 @@ pub fn normalize_positive_u64_config_value(key: &str, value: &str) -> Result<Str
 }
 
 /// Normalizes a non-negative integer runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_non_negative_u64_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_non_negative_u64(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be a non-negative integer"))
@@ -602,6 +642,10 @@ pub fn normalize_non_negative_u64_config_value(key: &str, value: &str) -> Result
 }
 
 /// Normalizes a bounded `u64` runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_bounded_u64_config_value(
     key: &str,
     value: &str,
@@ -618,6 +662,10 @@ pub fn normalize_bounded_u64_config_value(
 ///
 /// Accepted input forms match [`parse_bool_like_value`]. The stored value is
 /// always the canonical string `true` or `false`.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_bool_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_bool_like_value(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be 'true' or 'false'"))
@@ -626,6 +674,10 @@ pub fn normalize_bool_config_value(key: &str, value: &str) -> Result<String> {
 }
 
 /// Normalizes a strict `true`/`false` runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_strict_bool_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_strict_bool_value(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be 'true' or 'false'"))
@@ -634,6 +686,10 @@ pub fn normalize_strict_bool_config_value(key: &str, value: &str) -> Result<Stri
 }
 
 /// Normalizes a positive `u32` runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_positive_u32_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_positive_u32(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be a positive integer"))
@@ -642,6 +698,10 @@ pub fn normalize_positive_u32_config_value(key: &str, value: &str) -> Result<Str
 }
 
 /// Normalizes a bounded `u8` runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_bounded_u8_config_value(
     key: &str,
     value: &str,
@@ -655,6 +715,10 @@ pub fn normalize_bounded_u8_config_value(
 }
 
 /// Normalizes a finite `f32` runtime configuration value for storage.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_finite_f32_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_finite_f32(value)
         .ok_or_else(|| ConfigCoreError::invalid_value(format!("{key} must be a finite number")))?;
@@ -667,13 +731,14 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_positive_u64(&raw) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_positive_u64(&raw) {
+                value
+            } else {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -684,13 +749,14 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_positive_u32(&raw) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_positive_u32(&raw) {
+                value
+            } else {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -701,13 +767,14 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_non_negative_u64(&raw) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_non_negative_u64(&raw) {
+                value
+            } else {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -718,9 +785,10 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_bounded_u64(&raw, min, max) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_bounded_u64(&raw, min, max) {
+                value
+            } else {
                 tracing::warn!(
                     key,
                     value = %raw,
@@ -730,7 +798,7 @@ where
                 );
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -741,9 +809,10 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_bounded_u8(&raw, min, max) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_bounded_u8(&raw, min, max) {
+                value
+            } else {
                 tracing::warn!(
                     key,
                     value = %raw,
@@ -753,7 +822,7 @@ where
                 );
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -764,13 +833,14 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_positive_i32(&raw) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_positive_i32(&raw) {
+                value
+            } else {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -781,13 +851,14 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_finite_f32(&raw) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_finite_f32(&raw) {
+                value
+            } else {
                 tracing::warn!(key, value = %raw, "invalid runtime config; using default");
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -798,13 +869,14 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     match lookup.get_config_value(key) {
-        Some(raw) => match parse_bool_like_value(&raw) {
-            Some(value) => value,
-            None => {
+        Some(raw) => {
+            if let Some(value) = parse_bool_like_value(&raw) {
+                value
+            } else {
                 tracing::warn!(key, value = %raw, "invalid runtime boolean config; using default");
                 default
             }
-        },
+        }
         None => default,
     }
 }
@@ -815,12 +887,11 @@ where
     L: ConfigValueLookup + ?Sized,
 {
     let default_u64 = u64::try_from(default).unwrap_or(u64::MAX);
-    match usize::try_from(read_positive_u64(lookup, key, default_u64)) {
-        Ok(value) => value,
-        Err(_) => {
-            tracing::warn!(key, "{key} exceeds usize; using default");
-            default
-        }
+    if let Ok(value) = usize::try_from(read_positive_u64(lookup, key, default_u64)) {
+        value
+    } else {
+        tracing::warn!(key, "{key} exceeds usize; using default");
+        default
     }
 }
 
@@ -1080,8 +1151,14 @@ mod tests {
         assert!(read_bool(&lookup, "bool", false));
         assert!(read_bool(&lookup, "bad", true));
         assert_eq!(read_positive_i32(&lookup, "too_large_i32", 3), 3);
-        assert_eq!(read_finite_f32(&lookup, "finite", 1.0), 2.5);
-        assert_eq!(read_finite_f32(&lookup, "nan", 1.0), 1.0);
+        assert_eq!(
+            read_finite_f32(&lookup, "finite", 1.0).to_bits(),
+            2.5_f32.to_bits()
+        );
+        assert_eq!(
+            read_finite_f32(&lookup, "nan", 1.0).to_bits(),
+            1.0_f32.to_bits()
+        );
         assert_eq!(read_positive_usize(&lookup, "positive", 1), 5);
     }
 

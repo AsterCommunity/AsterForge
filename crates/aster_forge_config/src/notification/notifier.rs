@@ -34,6 +34,10 @@ impl ConfigNotification {
     }
 
     /// Waits for the next notification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the notifier subscription cannot receive or decode the next event.
     pub async fn recv(&mut self) -> Result<ConfigChangeEvent> {
         match &mut self.receiver {
             ConfigNotificationReceiver::InMemory(receiver) => receiver
@@ -78,6 +82,7 @@ pub struct InMemoryConfigNotifier {
 
 impl InMemoryConfigNotifier {
     /// Creates a notifier with the given broadcast channel capacity.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity.max(1));
         Self { sender }
@@ -126,6 +131,10 @@ mod redis_transport {
         }
 
         /// Creates a Redis notifier from a Redis connection URL.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ConfigError`] when the Redis endpoint, credentials, or notifier connection is invalid.
         pub fn from_url(url: &str, channel: impl Into<String>) -> Result<Self> {
             let bus = aster_forge_events::RedisEventBus::from_url(url, channel)
                 .map_err(|error| ConfigCoreError::notification(error.to_string()))?;
@@ -133,6 +142,10 @@ mod redis_transport {
         }
 
         /// Creates a Redis notifier from a base URL and raw credentials.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ConfigError`] when the Redis endpoint, credentials, or notifier connection is invalid.
         pub fn from_credentials(
             base_url: &str,
             username: Option<&str>,

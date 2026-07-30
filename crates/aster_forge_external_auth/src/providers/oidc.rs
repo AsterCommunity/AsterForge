@@ -1,4 +1,4 @@
-//! Generic OpenID Connect provider driver.
+//! Generic `OpenID` Connect provider driver.
 //!
 //! The driver uses OIDC discovery, PKCE, nonce validation, and ID-token verification through the
 //! `openidconnect` crate. Dedicated OIDC providers can reuse its client-building and profile
@@ -39,12 +39,13 @@ pub(super) type OidcClient = CoreClient<
     EndpointMaybeSet,
 >;
 
-/// Generic OpenID Connect provider driver.
+/// Generic `OpenID` Connect provider driver.
 #[derive(Default)]
 pub struct OidcProviderDriver;
 
 impl OidcProviderDriver {
-    /// Creates a generic OpenID Connect provider driver.
+    /// Creates a generic `OpenID` Connect provider driver.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -80,7 +81,7 @@ impl ExternalAuthProviderDriver for OidcProviderDriver {
         redirect_uri: &str,
     ) -> Result<ExternalAuthAuthorizationStart> {
         let client = build_client(provider, redirect_uri).await?;
-        start_authorization_with_oidc_client(provider, client)
+        Ok(start_authorization_with_oidc_client(provider, &client))
     }
 
     async fn exchange_callback(
@@ -175,8 +176,8 @@ impl ExternalAuthProviderDriver for OidcProviderDriver {
 
 pub(super) fn start_authorization_with_oidc_client(
     provider: &ExternalAuthProviderConfig,
-    client: OidcClient,
-) -> Result<ExternalAuthAuthorizationStart> {
+    client: &OidcClient,
+) -> ExternalAuthAuthorizationStart {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let mut request = client
@@ -194,12 +195,12 @@ pub(super) fn start_authorization_with_oidc_client(
     }
 
     let (authorization_url, csrf_state, nonce) = request.url();
-    Ok(ExternalAuthAuthorizationStart {
+    ExternalAuthAuthorizationStart {
         authorization_url: authorization_url.to_string(),
         state: csrf_state.secret().clone(),
         nonce: Some(nonce.secret().clone()),
         pkce_verifier: Some(pkce_verifier.secret().clone()),
-    })
+    }
 }
 
 pub(super) fn oidc_http_client(provider: &ExternalAuthProviderConfig) -> Result<OidcHttpClient> {

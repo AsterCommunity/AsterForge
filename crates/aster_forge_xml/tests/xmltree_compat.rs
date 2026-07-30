@@ -134,7 +134,7 @@ fn forge_arena_borrows_plain_values_from_the_source() {
 
 #[test]
 fn forge_and_xmltree_preserve_the_same_ordered_node_kinds() {
-    let source = br#"<root>before<child/><![CDATA[raw]]><!--note--><?work now?>after</root>"#;
+    let source = br"<root>before<child/><![CDATA[raw]]><!--note--><?work now?>after</root>";
     let forge = BorrowedDocument::parse(source.as_slice()).expect("Forge fixture");
     let xmltree = xmltree::Element::parse(source.as_slice()).expect("xmltree fixture");
 
@@ -179,11 +179,11 @@ fn forge_and_xmltree_resolve_element_namespaces_consistently() {
 #[test]
 fn forge_matches_xmltree_for_the_supported_parse_contract() {
     for source in [
-        br#"<root/>"#.as_slice(),
+        br"<root/>".as_slice(),
         br#"<root id="7" enabled="true">plain &amp; escaped</root>"#,
         br#"<root>before<child key="value"/>after</root>"#,
         br#"<D:root xmlns:D="DAV:"><D:item><leaf xmlns="urn:leaf"/></D:item></D:root>"#,
-        br#"<root><![CDATA[<raw>]]><!--note--><?work now?></root>"#,
+        br"<root><![CDATA[<raw>]]><!--note--><?work now?></root>",
         "<root>中文 日本語 한국어</root>".as_bytes(),
     ] {
         let forge = BorrowedDocument::parse(source).expect("Forge fixture");

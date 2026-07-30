@@ -33,6 +33,7 @@ pub struct DatabaseRuntimeComponent {
 
 impl DatabaseRuntimeComponent {
     /// Creates a database runtime component from prepared handles.
+    #[must_use]
     pub const fn new(db_handles: DbHandles) -> Self {
         Self {
             db_handles,
@@ -41,6 +42,7 @@ impl DatabaseRuntimeComponent {
     }
 
     /// Declares components that must shut down before database handles close.
+    #[must_use]
     pub const fn depends_on_all(mut self, dependencies: &'static [&'static str]) -> Self {
         self.dependencies = dependencies;
         self
@@ -61,6 +63,7 @@ pub struct DatabaseHealthComponent {
 
 impl DatabaseHealthComponent {
     /// Creates a database health component from a prepared connection.
+    #[must_use]
     pub const fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
@@ -73,6 +76,7 @@ impl RuntimeComponentBundle for DatabaseHealthComponent {
 }
 
 /// Creates the database runtime component used by product entrypoints.
+#[must_use]
 pub fn database_component(
     db_handles: DbHandles,
 ) -> RuntimeComponentBundleRegistration<DatabaseRuntimeComponent> {
@@ -80,6 +84,7 @@ pub fn database_component(
 }
 
 /// Creates the database runtime component with shutdown dependencies.
+#[must_use]
 pub fn database_component_after(
     db_handles: DbHandles,
     dependencies: &'static [&'static str],
@@ -88,6 +93,7 @@ pub fn database_component_after(
 }
 
 /// Creates the standard database health component.
+#[must_use]
 pub fn database_health_component(
     db: DatabaseConnection,
 ) -> RuntimeComponentBundleRegistration<DatabaseHealthComponent> {
@@ -133,6 +139,7 @@ fn register_database_health_check(registry: &mut RuntimeComponentRegistry, db: D
 }
 
 /// Returns the standard database health check options.
+#[must_use]
 pub fn database_health_options() -> HealthCheckOptions {
     HealthCheckOptions::required(Some(DATABASE_HEALTH_CHECK_TIMEOUT))
         .with_scopes(HealthCheckScopes::readiness_and_diagnostics())
@@ -156,6 +163,10 @@ pub async fn check_database_component(db: &DatabaseConnection) -> HealthComponen
 }
 
 /// Pings the database connection used by the standard health check.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn ping_database(db: &DatabaseConnection) -> crate::Result<()> {
     tracing::debug!("pinging database health check");
     db.ping().await.map_err(crate::DbError::from)

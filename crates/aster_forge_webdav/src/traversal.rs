@@ -1,7 +1,7 @@
 //! Bounded directory paging and recursive traversal resource accounting.
 
 use std::collections::HashSet;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 
 use crate::{
     DavBackendError, DavDirectoryEntry, DavDirectoryEnumerator, DavDirectoryPage,
@@ -33,6 +33,10 @@ pub struct DavDirectoryPageLimits {
 
 impl DavDirectoryPageLimits {
     /// Creates non-zero directory page limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavDirectoryReadError`] when either directory-page limit is zero.
     pub const fn new(
         maximum_entries: usize,
         maximum_pages: usize,
@@ -68,9 +72,13 @@ pub enum DavDirectoryPageValidationError {
 }
 
 /// Validates product page bounds, ordering and cursor progress before protocol consumption.
-pub fn validate_directory_page<E, C>(
+///
+/// # Errors
+///
+/// Returns an error when limits, ordering, entries, or cursor progress are invalid.
+pub fn validate_directory_page<E, C, S>(
     current_cursor: Option<&C>,
-    seen_cursors: &HashSet<C>,
+    seen_cursors: &HashSet<C, S>,
     previous_stable_key: Option<&[u8]>,
     maximum_entries: usize,
     page: &DavDirectoryPage<E, C>,
@@ -78,6 +86,7 @@ pub fn validate_directory_page<E, C>(
 where
     E: DavDirectoryEntry,
     C: Eq + Hash,
+    S: BuildHasher,
 {
     if maximum_entries == 0 {
         return Err(DavDirectoryPageValidationError::InvalidLimit);
@@ -204,6 +213,10 @@ pub enum DavDirectoryReadError {
 /// moved into the state only after the page passes all validation. An invalid product page poisons
 /// the state so subsequent calls return the same validation error without repeating the backend
 /// request.
+///
+/// # Errors
+///
+/// Returns an error on cancellation, backend failure, exhausted limits, or an invalid page.
 pub async fn read_next_directory_page<E, C>(
     enumerator: &E,
     path: &DavPath,
@@ -344,6 +357,10 @@ pub struct DavTraversalBudget {
 }
 
 impl DavTraversalBudget {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavTraversalError`] when any required traversal limit is zero.
     pub fn new(limits: DavTraversalLimits) -> Result<Self, DavTraversalError> {
         if limits.maximum_visited_resources == 0
             || limits.maximum_queued_work_items == 0
@@ -365,6 +382,10 @@ impl DavTraversalBudget {
         self.progress
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavTraversalError`] when cancellation has been requested.
     pub fn checkpoint(&self, cancellation: &impl DavCancellation) -> Result<(), DavTraversalError> {
         if cancellation.is_cancelled() {
             Err(self.error(DavTraversalErrorKind::Cancelled))
@@ -373,6 +394,10 @@ impl DavTraversalBudget {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavTraversalError`] when depth or visited-resource limits are exceeded.
     pub fn visit(&mut self, depth: usize) -> Result<(), DavTraversalError> {
         if self
             .limits
@@ -389,6 +414,10 @@ impl DavTraversalBudget {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavTraversalError`] when the queued-work counter would exceed its limit.
     pub fn reserve_work(&mut self, additional: usize) -> Result<(), DavTraversalError> {
         let Some(queued) = self.progress.queued_work_items.checked_add(additional) else {
             return Err(self.error(DavTraversalErrorKind::QueuedWorkLimitExceeded));
@@ -404,6 +433,10 @@ impl DavTraversalBudget {
         self.progress.queued_work_items = self.progress.queued_work_items.saturating_sub(1);
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavTraversalError`] when the failure counter would exceed its limit.
     pub fn record_failure(&mut self) -> Result<(), DavTraversalError> {
         self.progress.failures =
             checked_increment(self.progress.failures, self.limits.maximum_failures)

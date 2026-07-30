@@ -46,6 +46,7 @@ pub struct BackgroundTaskRuntimeDefinitionsComponentFromShutdown<
 
 impl BackgroundTaskRuntimeComponent {
     /// Creates a background task runtime component from spawned task handles.
+    #[must_use]
     pub const fn new(background_tasks: BackgroundTasks) -> Self {
         Self { background_tasks }
     }
@@ -129,6 +130,7 @@ where
 }
 
 /// Creates the background task runtime component used by product entrypoints.
+#[must_use]
 pub fn background_task_component(
     background_tasks: BackgroundTasks,
 ) -> RuntimeComponentBundleRegistration<BackgroundTaskRuntimeComponent> {
@@ -225,6 +227,7 @@ fn register_background_task_definitions<Kind, PresentationCode>(
 #[cfg(test)]
 mod tests {
     use aster_forge_runtime::{RuntimeComponentBundle, RuntimeComponentKind};
+    use tokio_util::sync::CancellationToken;
 
     use super::{
         BACKGROUND_TASKS_COMPONENT, BACKGROUND_TASKS_SHUTDOWN_PHASE,
@@ -297,7 +300,7 @@ mod tests {
                 "test_service",
                 RuntimeComponentKind::Core,
                 async {},
-                Default::default(),
+                CancellationToken::default(),
                 || async {},
             ))
             .component(background_task_component_from_shutdown(move |shutdown| {

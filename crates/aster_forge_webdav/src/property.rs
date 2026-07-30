@@ -1,4 +1,4 @@
-//! WebDAV property selection and propstat composition.
+//! `WebDAV` property selection and propstat composition.
 
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -57,6 +57,10 @@ pub enum DavCurrentPrincipal<'a> {
 
 /// Value groups that a product adapter should fetch in one batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag independently selects one protocol value group for a single batch fetch."
+)]
 pub struct DavLivePropertyRequirements {
     pub metadata: bool,
     pub locks: bool,
@@ -103,7 +107,7 @@ pub trait DavLivePropertyValueSnapshot: Send {
         None
     }
 
-    /// Supplies complex ACL, DeltaV, ordering, redirect, or binding property XML by typed ID.
+    /// Supplies complex ACL, `DeltaV`, ordering, redirect, or binding property XML by typed ID.
     fn extension_value(&self, _property: DavLiveProperty) -> Option<&DavXmlElement> {
         None
     }
@@ -124,7 +128,7 @@ pub trait DavLivePropertyProvider: Send + Sync {
     ) -> Result<Self::Values, DavBackendError>;
 }
 
-/// Failure while rendering authoritative product values as WebDAV live properties.
+/// Failure while rendering authoritative product values as `WebDAV` live properties.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavLivePropertyError {
     #[error("invalid representation for WebDAV live property {property:?}")]
@@ -182,6 +186,10 @@ pub fn live_property_requirements(
 }
 
 /// Fetches one product snapshot and composes a capability-driven PROPFIND item.
+///
+/// # Errors
+///
+/// Returns an error when the provider fails or required live-property values are missing.
 pub async fn build_live_propfind_item_with_provider<P: DavLivePropertyProvider>(
     provider: &P,
     path: &DavPath,
@@ -195,6 +203,10 @@ pub async fn build_live_propfind_item_with_provider<P: DavLivePropertyProvider>(
 }
 
 /// Composes one PROPFIND item from the validated capability and one product value snapshot.
+///
+/// # Errors
+///
+/// Returns [`DavLivePropertyError`] when required metadata or property values are invalid.
 pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
     href: String,
     snapshot: &DavCapabilitySnapshot,
@@ -937,6 +949,10 @@ pub fn build_proppatch_item(
 }
 
 /// Builds the 207 XML response for PROPFIND or PROPPATCH items.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when the property response exceeds default limits.
 pub fn property_multistatus_response(
     items: Vec<DavMultiStatusItem>,
 ) -> Result<DavResponse, DavMultiStatusError> {
@@ -944,6 +960,10 @@ pub fn property_multistatus_response(
 }
 
 /// Builds a bounded 207 XML response with product-configured Multi-Status limits.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when the property response exceeds supplied limits.
 pub fn property_multistatus_response_with_limits(
     items: Vec<DavMultiStatusItem>,
     limits: DavMultiStatusLimits,
@@ -960,20 +980,32 @@ pub fn property_multistatus_response_with_limits(
 }
 
 /// Maps PROPFIND XML failures to their protocol response.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the PROPFIND error response cannot be encoded.
 pub fn propfind_xml_error_response(error: DavXmlError) -> Result<DavResponse, DavXmlError> {
     xml_request_error_response(error, "Invalid PROPFIND body")
 }
 
 /// Maps PROPPATCH XML failures to their protocol response.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the PROPPATCH error response cannot be encoded.
 pub fn proppatch_xml_error_response(error: DavXmlError) -> Result<DavResponse, DavXmlError> {
     xml_request_error_response(error, "Invalid PROPPATCH body")
 }
 
 /// Builds the RFC 4918 finite-depth precondition response.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the finite-depth error response cannot be encoded.
 pub fn propfind_finite_depth_response() -> Result<DavResponse, DavXmlError> {
     xml_document_response(
         StatusCode::FORBIDDEN,
-        dav_error_element(&DavErrorCondition::PropfindFiniteDepth),
+        &dav_error_element(&DavErrorCondition::PropfindFiniteDepth),
     )
 }
 

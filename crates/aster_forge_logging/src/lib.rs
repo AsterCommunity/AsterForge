@@ -95,6 +95,7 @@ pub struct LoggingInitResult {
 /// the configured level instead of being silently ignored. Installing a second global subscriber
 /// (embedded runtimes, shared test processes) keeps the existing subscriber and warns rather than
 /// panicking.
+#[must_use]
 pub fn init_logging(config: &LoggingConfig) -> LoggingInitResult {
     let (writer, warning) = build_writer(config);
     let (non_blocking_writer, guard) = tracing_appender::non_blocking(writer);
@@ -181,8 +182,7 @@ fn build_file_writer(file: &str) -> (Box<dyn Write + Send + Sync>, Option<String
         Err(error) => (
             Box::new(std::io::stdout()),
             Some(format!(
-                "Failed to open log file '{}': {}. Falling back to stdout.",
-                file, error
+                "Failed to open log file '{file}': {error}. Falling back to stdout."
             )),
         ),
     }

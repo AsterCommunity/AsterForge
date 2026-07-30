@@ -2,7 +2,7 @@
 //!
 //! This crate turns filenames, MIME hints, and extension filter strings into stable high-level
 //! categories used by API filtering and UI grouping. It intentionally avoids product-specific enum
-//! derives so services can map categories into their own database or OpenAPI representations.
+//! derives so services can map categories into their own database or `OpenAPI` representations.
 #![cfg_attr(
     not(test),
     deny(
@@ -50,6 +50,7 @@ impl FileClassificationError {
     }
 
     /// Returns the stored error message.
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -96,6 +97,7 @@ pub enum FileCategory {
 
 impl FileCategory {
     /// Returns the lowercase stable string representation.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Image => "image",
@@ -227,6 +229,7 @@ pub struct FileClassification {
 }
 
 /// Classifies a file from its name and MIME type.
+#[must_use]
 pub fn classify_file(name: &str, mime_type: &str) -> FileClassification {
     let extension = extension_from_name(name).unwrap_or_default();
     let compound_extension = compound_extension_from_name(name);
@@ -241,6 +244,11 @@ pub fn classify_file(name: &str, mime_type: &str) -> FileClassification {
 }
 
 /// Normalizes one extension filter value.
+///
+/// # Errors
+///
+/// Returns an error when the normalized extension is empty, exceeds [`MAX_EXTENSION_LEN`], has
+/// invalid dot placement, or contains unsupported characters.
 pub fn normalize_extension_filter(raw: &str) -> Result<String> {
     let normalized = raw.trim().trim_start_matches('.').to_ascii_lowercase();
     if normalized.is_empty() {
@@ -269,6 +277,11 @@ pub fn normalize_extension_filter(raw: &str) -> Result<String> {
 }
 
 /// Parses a comma-separated list of extension filters.
+///
+/// # Errors
+///
+/// Returns an error when any entry is invalid or the distinct normalized list exceeds
+/// [`MAX_EXTENSION_FILTERS`].
 pub fn parse_extension_filters(raw: &str) -> Result<Vec<String>> {
     let mut extensions = Vec::new();
     for part in raw.split(',') {
@@ -287,6 +300,10 @@ pub fn parse_extension_filters(raw: &str) -> Result<Vec<String>> {
 }
 
 /// Parses a file category from its lowercase string representation.
+///
+/// # Errors
+///
+/// Returns an error when `raw` is not one of the stable [`FileCategory`] string values.
 pub fn parse_file_category(raw: &str) -> Result<FileCategory> {
     FileCategory::from_str(raw.trim()).map_err(|()| {
         FileClassificationError::new(
@@ -300,6 +317,7 @@ pub fn parse_file_category(raw: &str) -> Result<FileCategory> {
 /// Only ASCII-alphanumeric candidates count as extensions; path-like input
 /// (`"dir.ext/file"`) or names whose suffix contains spaces/punctuation return
 /// `None`, because the extracted value can be persisted and shown in UIs.
+#[must_use]
 pub fn extension_from_name(name: &str) -> Option<String> {
     let trimmed = name.trim();
     let dot = trimmed.rfind('.')?;
@@ -317,6 +335,7 @@ pub fn extension_from_name(name: &str) -> Option<String> {
 }
 
 /// Extracts a recognized compound extension from a file name.
+#[must_use]
 pub fn compound_extension_from_name(name: &str) -> Option<String> {
     let normalized = name.trim().to_ascii_lowercase();
     COMPOUND_EXTENSIONS

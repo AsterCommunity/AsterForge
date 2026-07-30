@@ -201,7 +201,7 @@ async fn test_redis_backend_with_invalid_url_falls_back_to_memory() {
 #[cfg(feature = "redis")]
 #[tokio::test]
 async fn test_redis_backend_with_invalid_url_can_return_the_construction_error() {
-    let error = match create_cache_with_policy(
+    let Err(error) = create_cache_with_policy(
         &CacheConfig {
             backend: "redis".to_string(),
             endpoint: "not a redis url".into(),
@@ -210,9 +210,8 @@ async fn test_redis_backend_with_invalid_url_can_return_the_construction_error()
         CacheBackendFailurePolicy::ReturnError,
     )
     .await
-    {
-        Ok(_) => panic!("explicit error policy should preserve Redis construction failure"),
-        Err(error) => error,
+    else {
+        panic!("explicit error policy should preserve Redis construction failure");
     };
 
     assert!(error.to_string().contains("redis cache connection"));

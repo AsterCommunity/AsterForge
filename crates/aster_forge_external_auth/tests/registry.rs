@@ -1,6 +1,6 @@
 //! Integration coverage for the external-auth provider registry contract.
 //!
-//! These tests mirror the public contract assertions AsterDrive keeps around its provider-kind
+//! These tests mirror the public contract assertions `AsterDrive` keeps around its provider-kind
 //! administration API and storage connector registry: feature-enabled built-ins must expose stable
 //! descriptors, external registrations must not silently replace existing providers, and product
 //! provider configs must be gated before a runtime driver is used.
@@ -149,6 +149,11 @@ fn feature_enabled_builtin_kinds() -> Vec<ExternalAuthProviderKind> {
     feature = "oidc",
     feature = "qq"
 ))]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "This test fixture mirrors the independent capability flags on ExternalAuthProviderDescriptor."
+)]
+#[derive(Clone, Copy)]
 struct DescriptorExpectation {
     kind: ExternalAuthProviderKind,
     protocol: ExternalAuthProtocol,
@@ -237,6 +242,10 @@ fn builtin_registry_covers_feature_enabled_provider_descriptors() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keeping every feature-gated built-in provider in one contract matrix makes descriptor drift visible in a single test."
+)]
 fn builtin_descriptors_match_drive_provider_kind_contract() {
     let registry = ExternalAuthProviderRegistry::new();
     let _ = &registry;

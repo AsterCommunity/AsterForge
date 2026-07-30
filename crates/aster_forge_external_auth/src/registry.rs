@@ -44,6 +44,7 @@ impl ExternalAuthProviderRegistry {
     /// This is useful for applications that want a fully explicit provider list, tests that need
     /// deterministic registration behavior across Cargo feature sets, or plugin hosts that build a
     /// registry from externally supplied drivers.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             drivers: HashMap::new(),
@@ -51,6 +52,7 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Creates a registry populated with all feature-enabled built-in drivers.
+    #[must_use]
     pub fn new() -> Self {
         #[cfg(not(any(
             feature = "oidc",
@@ -92,6 +94,10 @@ impl ExternalAuthProviderRegistry {
     /// driver it wants to expose, and returns any setup error. Built-in drivers are registered
     /// before the callback runs, so external systems cannot accidentally replace them through the
     /// non-replacing add API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when an external registration callback fails.
     pub fn with_external_registrations<F>(configure: F) -> Result<Self>
     where
         F: FnOnce(&mut Self) -> Result<()>,
@@ -106,6 +112,10 @@ impl ExternalAuthProviderRegistry {
     /// Use this for product-specific or plugin-provided drivers. Duplicate provider kinds return a
     /// configuration error instead of replacing the existing driver, which keeps built-in behavior
     /// stable when external systems are enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider kind is already present in the builder.
     pub fn add<D>(&mut self, driver: D) -> Result<()>
     where
         D: ExternalAuthProviderDriver + 'static,
@@ -114,9 +124,13 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Adds an already shared driver if its provider kind is not already registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider kind is already present in the builder.
     pub fn add_arc(&mut self, driver: Arc<dyn ExternalAuthProviderDriver>) -> Result<()> {
         let kind = driver.kind();
-        Self::validate_driver_descriptor(kind, driver.descriptor())?;
+        Self::validate_driver_descriptor(kind, &driver.descriptor())?;
         if self.drivers.contains_key(&kind) {
             return Err(ExternalAuthError::config_error(format!(
                 "external auth provider driver '{}' is already registered",
@@ -131,6 +145,10 @@ impl ExternalAuthProviderRegistry {
     ///
     /// Use this only when replacement is intentional, such as tests or product-level overrides.
     /// The driver must still report a descriptor for the same provider kind that it registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider kind is already registered.
     pub fn register<D>(&mut self, driver: D) -> Result<()>
     where
         D: ExternalAuthProviderDriver + 'static,
@@ -139,9 +157,13 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Registers or replaces an already shared driver for its provider kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider kind is already registered.
     pub fn register_arc(&mut self, driver: Arc<dyn ExternalAuthProviderDriver>) -> Result<()> {
         let kind = driver.kind();
-        Self::validate_driver_descriptor(kind, driver.descriptor())?;
+        Self::validate_driver_descriptor(kind, &driver.descriptor())?;
         self.drivers.insert(kind, driver);
         Ok(())
     }
@@ -152,11 +174,13 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Returns whether a driver for `kind` is registered.
+    #[must_use]
     pub fn contains(&self, kind: ExternalAuthProviderKind) -> bool {
         self.drivers.contains_key(&kind)
     }
 
     /// Returns registered provider descriptors sorted by provider kind.
+    #[must_use]
     pub fn descriptors(&self) -> Vec<ExternalAuthProviderDescriptor> {
         let mut descriptors = self
             .drivers
@@ -168,6 +192,10 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Returns the descriptor for a registered provider kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider kind is unsupported or unregistered.
     pub fn descriptor_for(
         &self,
         kind: ExternalAuthProviderKind,
@@ -179,6 +207,10 @@ impl ExternalAuthProviderRegistry {
     ///
     /// This is useful for service-layer guards that need to reject disabled provider kinds without
     /// constructing a login flow or exposing the underlying driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider kind is not available.
     pub fn ensure_provider_supported(&self, kind: ExternalAuthProviderKind) -> Result<()> {
         if self.contains(kind) {
             return Ok(());
@@ -195,6 +227,10 @@ impl ExternalAuthProviderRegistry {
     /// checks that the provider kind is enabled and that the stored protocol matches the driver's
     /// declared protocol. It returns the descriptor so callers can keep using the capability data
     /// without another registry lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the provider is unsupported or its config is invalid.
     pub fn validate_provider_config(
         &self,
         provider: &ExternalAuthProviderConfig,
@@ -216,6 +252,10 @@ impl ExternalAuthProviderRegistry {
     /// Product services should prefer this method when starting authorization, exchanging a
     /// callback, or testing a provider because it applies the same registry-level gates for every
     /// flow.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when validation fails or no driver is registered.
     pub fn driver_for_provider(
         &self,
         provider: &ExternalAuthProviderConfig,
@@ -225,6 +265,10 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Returns a registered driver by provider kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when no driver is registered for the provider kind.
     pub fn get_driver(
         &self,
         kind: ExternalAuthProviderKind,
@@ -238,13 +282,17 @@ impl ExternalAuthProviderRegistry {
     }
 
     /// Returns the OIDC driver from this registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] when the OIDC driver is not enabled or registered.
     pub fn oidc(&self) -> Result<Arc<dyn ExternalAuthProviderDriver>> {
         self.get_driver(ExternalAuthProviderKind::Oidc)
     }
 
     fn validate_driver_descriptor(
         kind: ExternalAuthProviderKind,
-        descriptor: ExternalAuthProviderDescriptor,
+        descriptor: &ExternalAuthProviderDescriptor,
     ) -> Result<()> {
         if descriptor.kind == kind {
             return Ok(());
@@ -577,8 +625,8 @@ mod tests {
 
     #[test]
     fn default_registry_is_singleton() {
-        let first = default_registry() as *const ExternalAuthProviderRegistry;
-        let second = default_registry() as *const ExternalAuthProviderRegistry;
+        let first = std::ptr::from_ref::<ExternalAuthProviderRegistry>(default_registry());
+        let second = std::ptr::from_ref::<ExternalAuthProviderRegistry>(default_registry());
 
         assert_eq!(first, second);
     }

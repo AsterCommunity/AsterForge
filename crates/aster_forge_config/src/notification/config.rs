@@ -90,7 +90,7 @@ impl std::fmt::Debug for ConfigSyncEndpoint {
 ///
 /// The field names describe a generic broker contract instead of a Redis-only
 /// shape. Current services can map `backend = "redis"` to Redis pub/sub, while
-/// future RabbitMQ, NATS, or other transports can reuse the same product config
+/// future `RabbitMQ`, NATS, or other transports can reuse the same product config
 /// surface and add backend-specific interpretation behind the notifier factory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigSyncConfig {
@@ -118,16 +118,19 @@ impl Default for ConfigSyncConfig {
 
 impl ConfigSyncConfig {
     /// Returns the default disabled backend name.
+    #[must_use]
     pub fn default_backend() -> String {
         CONFIG_SYNC_BACKEND_DISABLED.to_string()
     }
 
     /// Returns the default logical reload topic.
+    #[must_use]
     pub fn default_topic() -> String {
         "aster.config_reload".to_string()
     }
 
     /// Returns whether cross-process sync is enabled.
+    #[must_use]
     pub fn enabled(&self) -> bool {
         !matches!(
             self.backend.trim().to_ascii_lowercase().as_str(),
@@ -137,6 +140,7 @@ impl ConfigSyncConfig {
 }
 
 /// Returns the conventional config-sync topic for a product namespace.
+#[must_use]
 pub fn default_config_sync_topic(namespace: &str) -> String {
     format!("{}.config_reload", namespace.trim())
 }
@@ -146,6 +150,10 @@ pub fn default_config_sync_topic(namespace: &str) -> String {
 /// This common backend factory owns backend dispatch, runtime ID generation, and
 /// transport-specific topic mapping. Product crates only pass their namespace
 /// and provide their reload callback to [`ConfigSyncRuntime::run_reload_subscription`].
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the sync backend, endpoint, topic, credentials, or runtime id is invalid.
 pub fn build_config_sync_runtime(
     config: &ConfigSyncConfig,
     namespace: &str,
@@ -161,6 +169,10 @@ pub fn build_config_sync_runtime(
 ///
 /// Products normally use [`build_config_sync_runtime`]. This variant is useful when the product
 /// already has a stable process identity or when tests need deterministic self-origin filtering.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the sync backend, endpoint, topic, credentials, or runtime id is invalid.
 pub fn build_config_sync_runtime_with_runtime_id(
     config: &ConfigSyncConfig,
     namespace: &str,

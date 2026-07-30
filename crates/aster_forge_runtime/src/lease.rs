@@ -31,6 +31,7 @@ pub const DEFAULT_RUNTIME_LEASE_RETRY_INTERVAL: Duration = Duration::from_secs(5
 /// deployment node. A fresh value on every process start prevents an old stuck
 /// process and a newly restarted process from being treated as the same lease
 /// owner.
+#[must_use]
 pub fn new_runtime_lease_owner_id() -> String {
     aster_forge_utils::id::new_runtime_id()
 }
@@ -63,18 +64,21 @@ impl RuntimeLeaseConfig {
     }
 
     /// Sets the lease TTL.
+    #[must_use]
     pub const fn ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
         self
     }
 
     /// Sets the owner renewal interval.
+    #[must_use]
     pub const fn renew_interval(mut self, renew_interval: Duration) -> Self {
         self.renew_interval = renew_interval;
         self
     }
 
     /// Sets the standby acquisition retry interval.
+    #[must_use]
     pub const fn standby_retry_interval(mut self, standby_retry_interval: Duration) -> Self {
         self.standby_retry_interval = standby_retry_interval;
         self
@@ -154,6 +158,7 @@ pub enum RuntimeLeaseAcquire {
 
 impl RuntimeLeaseAcquire {
     /// Returns whether the caller acquired ownership.
+    #[must_use]
     pub const fn acquired(&self) -> bool {
         matches!(self, Self::Acquired)
     }
@@ -271,7 +276,7 @@ async fn run_owned_runtime_lease<Store, StartFn, Workload, StopFn, StopFut>(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_token.cancelled() => {
+            () = shutdown_token.cancelled() => {
                 workload_token.cancel();
                 stop_workload(workload).await;
                 if let Err(error) = store.release(&config.lease_id, &config.owner_id).await {
@@ -284,7 +289,7 @@ async fn run_owned_runtime_lease<Store, StartFn, Workload, StopFn, StopFut>(
                 }
                 return;
             }
-            _ = tokio::time::sleep(renew_interval) => {}
+            () = tokio::time::sleep(renew_interval) => {}
         }
 
         let now = Utc::now();
@@ -332,8 +337,8 @@ async fn run_owned_runtime_lease<Store, StartFn, Workload, StopFn, StopFut>(
 async fn sleep_or_shutdown(duration: Duration, shutdown_token: &CancellationToken) {
     tokio::select! {
         biased;
-        _ = shutdown_token.cancelled() => {}
-        _ = tokio::time::sleep(duration) => {}
+        () = shutdown_token.cancelled() => {}
+        () = tokio::time::sleep(duration) => {}
     }
 }
 
@@ -381,7 +386,7 @@ mod tests {
 
         // Normal TTLs still add exactly.
         let config =
-            RuntimeLeaseConfig::new("test.background", "node-a").ttl(Duration::from_secs(60));
+            RuntimeLeaseConfig::new("test.background", "node-a").ttl(Duration::from_mins(1));
         assert_eq!(config.expires_at(now), now + chrono::Duration::seconds(60));
     }
 
@@ -579,7 +584,7 @@ mod tests {
             RuntimeLeaseConfig::new("test.background", "node-a")
                 .ttl(Duration::from_secs(5))
                 .renew_interval(Duration::from_millis(10))
-                .standby_retry_interval(Duration::from_secs(60)),
+                .standby_retry_interval(Duration::from_mins(1)),
             shutdown.clone(),
             {
                 let started = started.clone();

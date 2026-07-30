@@ -13,11 +13,13 @@ pub enum TaskRetryClass {
 
 impl TaskRetryClass {
     /// Returns whether the class permits automatic retry.
+    #[must_use]
     pub const fn should_auto_retry(self) -> bool {
         matches!(self, Self::Auto)
     }
 
     /// Returns whether the class permits manual retry.
+    #[must_use]
     pub const fn can_manual_retry(self) -> bool {
         matches!(self, Self::Auto | Self::Manual)
     }
@@ -28,6 +30,7 @@ impl TaskRetryClass {
 /// The delay is intentionally short for the first two attempts and then backs off to a stable
 /// five-minute retry interval. Product crates can pass a custom delay function into the execution
 /// runner when a task subsystem needs a different retry cadence.
+#[must_use]
 pub const fn default_task_retry_delay_secs(attempt_count: i32) -> i64 {
     match attempt_count {
         1 => 5,

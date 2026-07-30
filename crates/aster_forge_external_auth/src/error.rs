@@ -70,6 +70,10 @@ impl From<aster_forge_validation::ValidationError> for ExternalAuthError {
 /// Extension trait for mapping lower-level errors into external auth errors with context.
 pub trait MapExternalAuthErr<T> {
     /// Maps an error into [`ExternalAuthError`] by passing a context string to `error_fn`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalAuthError`] after mapping any source error produced by the callback.
     fn map_external_auth_err_ctx(
         self,
         context: impl Into<String>,

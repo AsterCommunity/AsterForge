@@ -122,6 +122,10 @@ fn default_config_reload_reconnect_policy() -> ConfigReloadReconnectPolicy {
 /// The loop is supervised like [`run_config_reload_supervisor`] with a no-op
 /// reconcile: subscription failures, stream endings, and broadcast lag trigger
 /// a bounded reconnect instead of exiting.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_worker<N, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -144,6 +148,10 @@ where
 }
 
 /// Runs a reload subscription loop and reports low-cardinality observations.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_worker_with_observer<N, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -183,6 +191,10 @@ where
 /// initial, 30 s cap, jittered; the failure counter resets after a subscription
 /// stays stable for 30 s), then followed by a fresh subscription and reconcile.
 /// The loop only returns when `shutdown` is cancelled.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_supervisor<N, R, RFut, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -204,6 +216,10 @@ where
 }
 
 /// Runs a reconnecting reload subscription and reports reload and connection observations.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_supervisor_with_observers<N, R, RFut, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,

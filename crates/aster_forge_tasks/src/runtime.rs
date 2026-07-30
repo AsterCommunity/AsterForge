@@ -43,6 +43,7 @@ pub struct BackgroundTaskDispatchIteration {
 
 impl BackgroundTaskDispatchIteration {
     /// Creates an idle dispatch iteration.
+    #[must_use]
     pub const fn idle() -> Self {
         Self {
             has_activity: false,
@@ -51,6 +52,7 @@ impl BackgroundTaskDispatchIteration {
     }
 
     /// Creates a dispatch iteration that claimed or completed work.
+    #[must_use]
     pub const fn active() -> Self {
         Self {
             has_activity: true,
@@ -59,6 +61,7 @@ impl BackgroundTaskDispatchIteration {
     }
 
     /// Creates a dispatch iteration that failed.
+    #[must_use]
     pub const fn failed() -> Self {
         Self {
             has_activity: false,
@@ -67,11 +70,13 @@ impl BackgroundTaskDispatchIteration {
     }
 
     /// Returns whether the iteration performed task work.
+    #[must_use]
     pub const fn has_activity(self) -> bool {
         self.has_activity
     }
 
     /// Returns whether the iteration failed.
+    #[must_use]
     pub const fn failed_to_dispatch(self) -> bool {
         self.failed
     }
@@ -86,6 +91,7 @@ pub struct BackgroundTaskDispatchBackoff {
 
 impl BackgroundTaskDispatchBackoff {
     /// Creates a dispatch backoff state using the current runtime intervals.
+    #[must_use]
     pub fn new(base_interval: Duration, max_interval: Duration) -> Self {
         Self {
             idle_interval: effective_dispatch_base_interval(base_interval, max_interval),
@@ -94,6 +100,7 @@ impl BackgroundTaskDispatchBackoff {
     }
 
     /// Returns the sleep duration for the next dispatch loop wait.
+    #[must_use]
     pub fn sleep_duration(&self, base_interval: Duration, max_interval: Duration) -> Duration {
         let base_interval = effective_dispatch_base_interval(base_interval, max_interval);
         let max_interval = effective_dispatch_max_interval(base_interval, max_interval);
@@ -141,16 +148,19 @@ pub struct BackgroundTasks {
 
 impl BackgroundTasks {
     /// Creates a task collection with a fresh shutdown token and the default shutdown grace.
+    #[must_use]
     pub fn new() -> Self {
         Self::with_shutdown_token(CancellationToken::new())
     }
 
     /// Creates a task collection using an externally owned shutdown token.
+    #[must_use]
     pub fn with_shutdown_token(shutdown_token: CancellationToken) -> Self {
         Self::with_shutdown_token_and_grace(shutdown_token, BACKGROUND_TASK_SHUTDOWN_GRACE)
     }
 
     /// Creates a task collection using an externally owned token and custom shutdown grace.
+    #[must_use]
     pub fn with_shutdown_token_and_grace(
         shutdown_token: CancellationToken,
         shutdown_grace: Duration,
@@ -163,6 +173,7 @@ impl BackgroundTasks {
     }
 
     /// Returns a clone of the shutdown token observed by all workers in this collection.
+    #[must_use]
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown_token.clone()
     }
@@ -211,12 +222,11 @@ async fn drain_task_handles(handles: &mut JoinSet<()>) -> usize {
     let mut panicked = 0;
     while let Some(result) = handles.join_next().await {
         match result {
-            Ok(()) => {}
             Err(error) if error.is_panic() => {
                 panicked += 1;
                 tracing::error!(%error, "background task worker panicked");
             }
-            Err(_) => {}
+            Ok(()) | Err(_) => {}
         }
     }
     panicked
@@ -358,8 +368,8 @@ pub async fn run_periodic_task<
         let sleep_duration = periodic_sleep_duration(interval_fn(&state), jitter_cap);
         tokio::select! {
             biased;
-            _ = shutdown_token.cancelled() => break,
-            _ = tokio::time::sleep(sleep_duration) => {}
+            () = shutdown_token.cancelled() => break,
+            () = tokio::time::sleep(sleep_duration) => {}
         }
 
         if shutdown_token.is_cancelled() {
@@ -466,9 +476,9 @@ pub async fn run_dispatch_worker<State, BaseFn, MaxFn, WakeFn, WakeFut, Dispatch
             backoff.sleep_duration(base_interval_fn(&state), max_interval_fn(&state));
         let trigger = tokio::select! {
             biased;
-            _ = shutdown_token.cancelled() => break,
-            _ = wakeup(state.clone()) => BackgroundTaskDispatchTrigger::Wakeup,
-            _ = tokio::time::sleep(sleep_duration) => BackgroundTaskDispatchTrigger::Timer,
+            () = shutdown_token.cancelled() => break,
+            () = wakeup(state.clone()) => BackgroundTaskDispatchTrigger::Wakeup,
+            () = tokio::time::sleep(sleep_duration) => BackgroundTaskDispatchTrigger::Timer,
         };
 
         if shutdown_token.is_cancelled() {
@@ -495,6 +505,7 @@ pub async fn run_dispatch_worker<State, BaseFn, MaxFn, WakeFn, WakeFut, Dispatch
 /// sub-second intervals pass through untouched: they are a deliberate caller
 /// choice (fast tests, high-frequency in-memory polls), not the accident this
 /// floor guards against.
+#[must_use]
 pub fn periodic_sleep_duration(base_interval: Duration, jitter_cap: Option<Duration>) -> Duration {
     let base_interval = if base_interval.is_zero() {
         Duration::from_secs(1)
@@ -517,6 +528,7 @@ pub fn periodic_sleep_duration(base_interval: Duration, jitter_cap: Option<Durat
 }
 
 /// Returns the effective jitter cap for one periodic interval.
+#[must_use]
 pub fn effective_jitter_cap(base_interval: Duration, jitter_cap: Duration) -> Duration {
     let bounded_ms =
         u128_to_u64_saturating(base_interval.as_millis().min(u128::from(u64::MAX))) / 10;
@@ -524,6 +536,7 @@ pub fn effective_jitter_cap(base_interval: Duration, jitter_cap: Duration) -> Du
 }
 
 /// Returns the effective dispatch base interval, enforcing a one-second minimum.
+#[must_use]
 pub fn effective_dispatch_base_interval(
     base_interval: Duration,
     _max_interval: Duration,
@@ -535,6 +548,7 @@ pub fn effective_dispatch_base_interval(
 }
 
 /// Returns the effective maximum dispatch interval.
+#[must_use]
 pub fn effective_dispatch_max_interval(
     base_interval: Duration,
     max_interval: Duration,
@@ -588,8 +602,12 @@ mod tests {
         Failed(String),
     }
 
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "The periodic task interval callback receives shared state by reference; this fixture uses unit state."
+    )]
     fn test_interval(_: &()) -> Duration {
-        Duration::from_secs(60)
+        Duration::from_mins(1)
     }
 
     #[test]
@@ -649,7 +667,7 @@ mod tests {
 
     #[test]
     fn periodic_sleep_duration_uses_requested_cap_when_it_is_smaller() {
-        let base = Duration::from_secs(3600);
+        let base = Duration::from_hours(1);
         let cap = Duration::from_secs(30);
 
         for _ in 0..64 {
@@ -911,8 +929,8 @@ mod tests {
             "dispatch",
             shutdown_token.clone(),
             state.clone(),
-            |_| Duration::from_secs(60),
-            |_| Duration::from_secs(120),
+            |_| Duration::from_mins(1),
+            |_| Duration::from_mins(2),
             |state: State| async move {
                 state.notify.notified().await;
             },
@@ -996,7 +1014,7 @@ mod tests {
     #[test]
     fn background_task_dispatch_backoff_resets_on_wakeup_and_activity() {
         let base = Duration::from_secs(5);
-        let max = Duration::from_secs(60);
+        let max = Duration::from_mins(1);
         let mut backoff = BackgroundTaskDispatchBackoff::new(base, max);
 
         backoff.record_iteration(
@@ -1041,7 +1059,7 @@ mod tests {
     #[test]
     fn background_task_dispatch_backoff_never_polls_faster_than_normal_after_error() {
         let base = Duration::from_secs(30);
-        let max = Duration::from_secs(120);
+        let max = Duration::from_mins(2);
         let mut backoff = BackgroundTaskDispatchBackoff::new(base, max);
 
         backoff.record_iteration(
@@ -1071,6 +1089,6 @@ mod tests {
             base,
             max,
         );
-        assert_eq!(backoff.sleep_duration(base, max), Duration::from_secs(60));
+        assert_eq!(backoff.sleep_duration(base, max), Duration::from_mins(1));
     }
 }

@@ -1,4 +1,4 @@
-//! Resource-aware WebDAV capability declarations and validated discovery snapshots.
+//! Resource-aware `WebDAV` capability declarations and validated discovery snapshots.
 
 use std::marker::PhantomData;
 
@@ -140,7 +140,7 @@ pub struct DavSearchCapabilities {
 ///
 /// RFC 5323 explicitly states that the DASL coded-URL does not necessarily correspond to the XML
 /// element namespace and local name. Keeping all three fields prevents discovery responses from
-/// guessing an XML QName from a URI.
+/// guessing an XML `QName` from a URI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavSearchGrammar {
     /// Absolute-URI rendered inside angle brackets in the `DASL` response header.
@@ -791,6 +791,10 @@ impl DavCapabilitySnapshot {
     }
 
     /// Selects body handling from the same snapshot used by dispatch and discovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavMethodGateError`] when the capability snapshot disallows the method.
     pub fn body_policy(
         &self,
         method: DavMethod,
@@ -850,6 +854,10 @@ impl DavCapabilitySnapshot {
 }
 
 /// Builds and validates a capability snapshot from product-owned runtime facts.
+///
+/// # Errors
+///
+/// Returns [`DavCapabilityPlanError`] when the declaration violates capability rules.
 pub fn plan_capabilities(
     mut declaration: DavCapabilityDeclaration,
 ) -> Result<DavCapabilitySnapshot, DavCapabilityPlanError> {
@@ -911,6 +919,10 @@ pub trait DavCapabilityProvider: Send + Sync {
 }
 
 /// Resolves product facts and enforces the static profile maximum before planning.
+///
+/// # Errors
+///
+/// Returns an error when provider lookup fails or its declaration exceeds the static profile.
 pub async fn plan_capabilities_with_provider<Provider: DavCapabilityProvider>(
     provider: &Provider,
     target: &DavCapabilityTarget,

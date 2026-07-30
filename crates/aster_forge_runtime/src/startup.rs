@@ -35,6 +35,10 @@ pub enum RuntimeTempDirError {
 /// services use the same `_runtime` namespace under their configured temporary root. Products keep
 /// ownership of when the directory is cleaned and how IO errors are mapped into their own error
 /// types.
+///
+/// # Errors
+///
+/// Returns an I/O error when the runtime temporary directory cannot be created.
 pub async fn ensure_runtime_temp_dir(temp_root: &str) -> std::io::Result<String> {
     let runtime_temp_dir = aster_forge_utils::paths::runtime_temp_dir(temp_root);
     tokio::fs::create_dir_all(&runtime_temp_dir).await?;
@@ -46,6 +50,11 @@ pub async fn ensure_runtime_temp_dir(temp_root: &str) -> std::io::Result<String>
 /// The returned [`aster_forge_utils::raii::TempDirGuard`] removes the created directory on drop.
 /// This helper is intended for one operation, such as image rendering, archive extraction, or
 /// temporary external command output. It should not guard the shared `_runtime` root itself.
+///
+/// # Errors
+///
+/// Returns an error when `scope` is not one safe path segment or either temporary directory cannot
+/// be created.
 pub async fn create_runtime_temp_dir_guard(
     temp_root: &str,
     scope: &str,
@@ -101,11 +110,13 @@ pub enum StartupPhaseStatus {
 
 impl StartupPhaseStatus {
     /// Returns whether this phase completed successfully.
+    #[must_use]
     pub const fn is_success(&self) -> bool {
         matches!(self, Self::Succeeded)
     }
 
     /// Returns whether this phase reported an error.
+    #[must_use]
     pub const fn is_failure(&self) -> bool {
         !self.is_success()
     }
@@ -145,6 +156,10 @@ pub struct StartupPhaseOutcome<T> {
 /// This helper is useful for startup steps that construct resources such as database handles,
 /// runtime config snapshots, cache backends, driver registries, or application state. The product
 /// error type is preserved while Forge still provides shared tracing and phase reporting.
+///
+/// # Errors
+///
+/// Returns the product-owned error produced by `phase`.
 pub async fn run_required_startup_phase<F, Fut, T, E>(
     name: &'static str,
     phase: F,
@@ -225,11 +240,13 @@ where
 
 impl StartupReport {
     /// Returns a report from phase entries.
+    #[must_use]
     pub fn new(phases: Vec<StartupPhaseReport>) -> Self {
         Self { phases }
     }
 
     /// Returns whether startup was aborted by a required phase failure.
+    #[must_use]
     pub fn aborted(&self) -> bool {
         self.phases.iter().any(|phase| {
             matches!(
@@ -240,6 +257,7 @@ impl StartupReport {
     }
 
     /// Returns whether any phase reported an error.
+    #[must_use]
     pub fn has_failures(&self) -> bool {
         self.phases.iter().any(|phase| phase.status.is_failure())
     }
@@ -263,6 +281,7 @@ pub struct StartupCoordinator {
 
 impl StartupCoordinator {
     /// Creates an empty startup coordinator.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -357,11 +376,13 @@ impl StartupCoordinator {
     }
 
     /// Returns how many phases are registered.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.phases.len()
     }
 
     /// Returns whether no phases are registered.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.phases.is_empty()
     }
@@ -433,11 +454,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_runtime_temp_dir_guard_rejects_path_like_scope() {
-        let error = match create_runtime_temp_dir_guard("target/tmp", "../bad", "test").await {
-            Ok(_) => {
-                panic!("path-like scope should be rejected");
-            }
-            Err(error) => error,
+        let Err(error) = create_runtime_temp_dir_guard("target/tmp", "../bad", "test").await else {
+            panic!("path-like scope should be rejected");
         };
 
         assert!(matches!(error, RuntimeTempDirError::InvalidScope { .. }));

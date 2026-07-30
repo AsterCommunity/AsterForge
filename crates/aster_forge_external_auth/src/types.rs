@@ -26,10 +26,10 @@ pub const EXTERNAL_AUTH_TYPE_STORAGE_LEN: u32 = 32;
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalAuthProviderKind {
-    /// Generic OpenID Connect provider using discovery.
+    /// Generic `OpenID` Connect provider using discovery.
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "oidc"))]
     Oidc,
-    /// Generic OAuth2 authorization-code provider with manually configured endpoints.
+    /// Generic `OAuth2` authorization-code provider with manually configured endpoints.
     #[serde(rename = "generic_oauth2", alias = "oauth2")]
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "generic_oauth2"))]
     GenericOAuth2,
@@ -37,15 +37,15 @@ pub enum ExternalAuthProviderKind {
     #[serde(rename = "github")]
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "github"))]
     GitHub,
-    /// Google OpenID Connect sign-in.
+    /// Google `OpenID` Connect sign-in.
     #[serde(rename = "google")]
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "google"))]
     Google,
-    /// Microsoft Entra ID / Microsoft Account OpenID Connect sign-in.
+    /// Microsoft Entra ID / Microsoft Account `OpenID` Connect sign-in.
     #[serde(rename = "microsoft")]
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "microsoft"))]
     Microsoft,
-    /// QQ Connect OAuth2 sign-in.
+    /// QQ Connect `OAuth2` sign-in.
     #[serde(rename = "qq")]
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "qq"))]
     Qq,
@@ -63,6 +63,7 @@ impl ExternalAuthProviderKind {
     ];
 
     /// Returns the stable serialized provider kind.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Oidc => "oidc",
@@ -75,6 +76,7 @@ impl ExternalAuthProviderKind {
     }
 
     /// Parses a provider kind from a persisted or API-facing string.
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "oidc" => Some(Self::Oidc),
@@ -88,11 +90,11 @@ impl ExternalAuthProviderKind {
     }
 
     /// Returns the default protocol used by this provider kind.
+    #[must_use]
     pub fn default_protocol(self) -> ExternalAuthProtocol {
         match self {
-            Self::Oidc => ExternalAuthProtocol::Oidc,
             Self::GenericOAuth2 | Self::GitHub | Self::Qq => ExternalAuthProtocol::OAuth2,
-            Self::Google | Self::Microsoft => ExternalAuthProtocol::Oidc,
+            Self::Oidc | Self::Google | Self::Microsoft => ExternalAuthProtocol::Oidc,
         }
     }
 }
@@ -127,10 +129,10 @@ impl AsRef<str> for ExternalAuthProviderKind {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalAuthProtocol {
-    /// OpenID Connect over OAuth2 authorization code flow.
+    /// `OpenID` Connect over `OAuth2` authorization code flow.
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "oidc"))]
     Oidc,
-    /// OAuth2 authorization code flow without ID token validation.
+    /// `OAuth2` authorization code flow without ID token validation.
     #[serde(rename = "oauth2")]
     #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "oauth2"))]
     OAuth2,
@@ -138,6 +140,7 @@ pub enum ExternalAuthProtocol {
 
 impl ExternalAuthProtocol {
     /// Returns the stable serialized protocol tag.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Oidc => "oidc",
@@ -157,6 +160,7 @@ pub struct ExternalAuthProviderOptions {
 
 impl ExternalAuthProviderOptions {
     /// Returns a copy with empty connector-specific options removed and strings canonicalized.
+    #[must_use]
     pub fn normalized(mut self) -> Self {
         if let Some(microsoft) = self.microsoft.take() {
             self.microsoft = microsoft.normalized();
@@ -188,6 +192,7 @@ impl MicrosoftExternalAuthProviderOptions {
 }
 
 /// Parses provider options JSON and falls back to empty options for invalid input.
+#[must_use]
 pub fn parse_external_auth_provider_options(options: &str) -> ExternalAuthProviderOptions {
     serde_json::from_str::<ExternalAuthProviderOptions>(options)
         .unwrap_or_else(|error| {
@@ -200,6 +205,10 @@ pub fn parse_external_auth_provider_options(options: &str) -> ExternalAuthProvid
 }
 
 /// Serializes normalized provider options to JSON for application-owned storage.
+///
+/// # Errors
+///
+/// Returns [`serde_json::Error`] when provider options cannot be serialized as JSON.
 pub fn serialize_external_auth_provider_options(
     options: &ExternalAuthProviderOptions,
 ) -> std::result::Result<String, serde_json::Error> {

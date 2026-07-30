@@ -10,6 +10,7 @@
 /// This is intentionally not a grapheme-cluster count. Product validation rules that need
 /// user-perceived characters should use a dedicated Unicode segmentation policy at the product
 /// boundary.
+#[must_use]
 pub fn char_count(value: &str) -> usize {
     value.chars().count()
 }
@@ -18,6 +19,7 @@ pub fn char_count(value: &str) -> usize {
 ///
 /// If `value` is already within the limit it is returned unchanged as an owned string. A zero limit
 /// always returns an empty string.
+#[must_use]
 pub fn truncate_utf8_to_max_bytes(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();

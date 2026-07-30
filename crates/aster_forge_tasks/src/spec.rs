@@ -68,6 +68,10 @@ where
 }
 
 /// Serializes a typed task payload.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the typed payload cannot be serialized as JSON.
 pub fn serialize_payload<S, State, Task, Config, Context, Error>(
     payload: &S::Payload,
 ) -> Result<String>
@@ -81,6 +85,10 @@ where
 }
 
 /// Serializes a typed task result.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the typed result cannot be serialized as JSON.
 pub fn serialize_result<S, State, Task, Config, Context, Error>(
     result: &S::Result,
 ) -> Result<String>
@@ -94,6 +102,10 @@ where
 }
 
 /// Decodes a task payload as the typed payload for `S`.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the stored payload is absent or cannot be decoded.
 pub fn decode_payload_as<S, State, Task, Config, Context, Error>(task: &Task) -> Result<S::Payload>
 where
     S: BackgroundTaskSpec<State, Task, Config, Context, Error>,
@@ -118,6 +130,10 @@ where
 }
 
 /// Decodes a task result as the typed result for `S`.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when a stored result cannot be decoded.
 pub fn decode_result_as<S, State, Task, Config, Context, Error>(
     task: &Task,
 ) -> Result<Option<S::Result>>
@@ -173,9 +189,17 @@ pub trait ErasedBackgroundTaskSpec<
     fn max_attempts(&self, runtime_config: &Config) -> i32;
 
     /// Decodes the product task payload envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when the erased task payload cannot be decoded.
     fn decode_payload(&self, task: &Task) -> Result<PayloadEnvelope>;
 
     /// Decodes the product task result envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when the erased task result cannot be decoded.
     fn decode_result(&self, task: &Task) -> Result<Option<ResultEnvelope>>;
 
     /// Classifies a task failure for retry behavior.
@@ -195,6 +219,7 @@ pub struct TaskSpecAdapter<S>(std::marker::PhantomData<S>);
 
 impl<S> TaskSpecAdapter<S> {
     /// Creates a task spec adapter.
+    #[must_use]
     pub const fn new() -> Self {
         Self(std::marker::PhantomData)
     }

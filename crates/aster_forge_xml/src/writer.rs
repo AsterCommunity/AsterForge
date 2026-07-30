@@ -23,6 +23,7 @@ pub struct XmlWriteOptions {
 }
 
 impl XmlWriteOptions {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
@@ -32,21 +33,25 @@ impl XmlWriteOptions {
         }
     }
 
+    #[must_use]
     pub const fn max_output_bytes(mut self, value: usize) -> Self {
         self.max_output_bytes = value;
         self
     }
 
+    #[must_use]
     pub const fn max_depth(mut self, value: usize) -> Self {
         self.max_depth = value;
         self
     }
 
+    #[must_use]
     pub const fn max_attributes_per_element(mut self, value: usize) -> Self {
         self.max_attributes_per_element = value;
         self
     }
 
+    #[must_use]
     pub const fn write_document_declaration(mut self, value: bool) -> Self {
         self.write_document_declaration = value;
         self
@@ -76,6 +81,7 @@ pub struct XmlWriteAttribute<'a> {
 }
 
 impl<'a> XmlWriteAttribute<'a> {
+    #[must_use]
     pub const fn new(name: &'a str, value: &'a str) -> Self {
         Self { name, value }
     }
@@ -106,10 +112,21 @@ pub struct XmlStreamWriter<W: Write> {
 }
 
 impl<W: Write> XmlStreamWriter<W> {
+    /// Creates a writer with default bounded output options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if initial writer setup or declaration output fails.
     pub fn new(inner: W) -> Result<Self, Error> {
         Self::with_options(inner, XmlWriteOptions::default())
     }
 
+    /// Creates a writer with explicit output options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any option limit is zero or the optional XML declaration cannot be
+    /// written within the configured output bound.
     pub fn with_options(inner: W, options: XmlWriteOptions) -> Result<Self, Error> {
         options.validate()?;
         let mut output = Self {
@@ -129,6 +146,12 @@ impl<W: Write> XmlStreamWriter<W> {
         Ok(output)
     }
 
+    /// Starts a non-empty element with attributes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid names, attributes, namespace bindings, document state, depth or
+    /// attribute limits, output overflow, or sink I/O failure.
     pub fn start_element<'a, I, A>(&mut self, name: &str, attributes: I) -> Result<(), Error>
     where
         I: IntoIterator<Item = A>,
@@ -137,6 +160,12 @@ impl<W: Write> XmlStreamWriter<W> {
         self.write_element(name, attributes, false)
     }
 
+    /// Writes an empty element with attributes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid names, attributes, namespace bindings, document state, depth or
+    /// attribute limits, output overflow, or sink I/O failure.
     pub fn empty_element<'a, I, A>(&mut self, name: &str, attributes: I) -> Result<(), Error>
     where
         I: IntoIterator<Item = A>,
@@ -145,14 +174,29 @@ impl<W: Write> XmlStreamWriter<W> {
         self.write_element(name, attributes, true)
     }
 
+    /// Starts a non-empty element without attributes.
+    ///
+    /// # Errors
+    ///
+    /// Returns any validation, state, safety-limit, or I/O error from [`Self::start_element`].
     pub fn start(&mut self, name: &str) -> Result<(), Error> {
         self.start_element(name, std::iter::empty::<XmlWriteAttribute<'_>>())
     }
 
+    /// Writes an empty element without attributes.
+    ///
+    /// # Errors
+    ///
+    /// Returns any validation, state, safety-limit, or I/O error from [`Self::empty_element`].
     pub fn empty(&mut self, name: &str) -> Result<(), Error> {
         self.empty_element(name, std::iter::empty::<XmlWriteAttribute<'_>>())
     }
 
+    /// Ends the innermost open element.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no element is open, the output bound is exceeded, or the sink fails.
     pub fn end_element(&mut self) -> Result<(), Error> {
         if self.depth == 0 {
             return Err(Error::InvalidData(
@@ -174,6 +218,12 @@ impl<W: Write> XmlStreamWriter<W> {
         Ok(())
     }
 
+    /// Writes escaped XML character data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid XML characters, non-whitespace text outside the root, output
+    /// overflow, or sink I/O failure.
     pub fn text(&mut self, value: &str) -> Result<(), Error> {
         validate_xml_text(value)?;
         if self.depth == 0 && !value.chars().all(char::is_whitespace) {
@@ -184,6 +234,12 @@ impl<W: Write> XmlStreamWriter<W> {
         self.write_event(Event::Text(BytesText::new(value)))
     }
 
+    /// Writes one CDATA section.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid XML characters, CDATA outside the root, a `]]>` terminator in
+    /// the value, output overflow, or sink I/O failure.
     pub fn cdata(&mut self, value: &str) -> Result<(), Error> {
         validate_xml_text(value)?;
         if self.depth == 0 {
@@ -197,6 +253,12 @@ impl<W: Write> XmlStreamWriter<W> {
         self.write_event(Event::CData(BytesCData::new(value)))
     }
 
+    /// Writes one XML comment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid XML characters or hyphen sequences, output overflow, or sink
+    /// I/O failure.
     pub fn comment(&mut self, value: &str) -> Result<(), Error> {
         validate_xml_text(value)?;
         if value.contains("--") || value.ends_with('-') {
@@ -207,6 +269,12 @@ impl<W: Write> XmlStreamWriter<W> {
         self.write_event(Event::Comment(BytesText::from_escaped(value)))
     }
 
+    /// Writes one processing instruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid or reserved target, invalid content characters or `?>`
+    /// sequence, output overflow, or sink I/O failure.
     pub fn processing_instruction(
         &mut self,
         target: &str,
@@ -241,6 +309,12 @@ impl<W: Write> XmlStreamWriter<W> {
     }
 
     /// Embeds one already validated, self-contained XML root below the current element.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no parent element is open, the subtree would inherit an incompatible
+    /// default namespace, exceeds writer depth or attribute limits, exceeds the output bound, or the
+    /// sink fails.
     pub fn validated_subtree(&mut self, subtree: &ValidatedXml) -> Result<(), Error> {
         if self.depth == 0 {
             return Err(Error::InvalidData(
@@ -297,6 +371,12 @@ impl<W: Write> XmlStreamWriter<W> {
         &mut self.writer.get_mut().inner
     }
 
+    /// Finishes a complete XML document and returns its output sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when elements remain open, no complete root was written, the output limit
+    /// was exceeded, or flushing the sink fails.
     pub fn finish(mut self) -> Result<W, Error> {
         if self.depth != 0 {
             return Err(Error::InvalidData(

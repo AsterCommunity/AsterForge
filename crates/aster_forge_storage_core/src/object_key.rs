@@ -13,6 +13,10 @@ const INVALID_RELATIVE_KEY_MESSAGE: &str = "object key must be a safe relative s
 /// Empty/root-like input is represented as `"."`, so callers can distinguish the scoped root from
 /// a real object named with an empty string. Backslashes are treated as separators to prevent
 /// Windows-style escape attempts from bypassing `..` checks.
+///
+/// # Errors
+///
+/// Returns [`StorageCoreError::InvalidObjectKey`] when the key contains a parent-directory segment.
 pub fn normalize_relative_key(value: &str) -> Result<String> {
     let value = value.trim_start_matches('/').replace('\\', "/");
     if value.is_empty() {
@@ -44,6 +48,11 @@ pub fn normalize_relative_key(value: &str) -> Result<String> {
 /// Use this for concrete object operations such as get, put, delete, exists,
 /// and metadata. It accepts leading slashes and Windows separators but rejects
 /// empty/root-like values and parent-directory escape attempts.
+///
+/// # Errors
+///
+/// Returns [`StorageCoreError::InvalidObjectKey`] when the value targets the storage namespace
+/// root or contains a parent-directory segment.
 pub fn normalize_object_key(value: &str) -> Result<String> {
     let key = normalize_relative_key(value.trim())?;
     if key == "." {
@@ -58,6 +67,11 @@ pub fn normalize_object_key(value: &str) -> Result<String> {
 ///
 /// Empty and root-like inputs map to an empty prefix. Concrete object keys
 /// should use [`normalize_object_key`] instead.
+///
+/// # Errors
+///
+/// Returns [`StorageCoreError::InvalidObjectKey`] when the prefix contains a parent-directory
+/// segment.
 pub fn normalize_object_prefix(value: &str) -> Result<String> {
     let prefix = normalize_relative_key(value.trim())?;
     if prefix == "." {
@@ -71,6 +85,7 @@ pub fn normalize_object_prefix(value: &str) -> Result<String> {
 ///
 /// This deliberately only trims trailing slashes from the prefix. Existing S3 policies may have
 /// been configured with a leading slash, and preserving that keeps object placement stable.
+#[must_use]
 pub fn join_key_prefix(prefix: &str, key: &str) -> String {
     let prefix = prefix.trim_end_matches('/');
     let key = key.trim_start_matches('/');
@@ -85,6 +100,7 @@ pub fn join_key_prefix(prefix: &str, key: &str) -> String {
 }
 
 /// Strip `prefix` from `key` only when the prefix matches a complete slash-separated segment.
+#[must_use]
 pub fn strip_key_prefix<'a>(prefix: &str, key: &'a str) -> Option<&'a str> {
     let prefix = prefix.trim_end_matches('/');
     if prefix.is_empty() {

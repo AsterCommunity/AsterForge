@@ -4,7 +4,7 @@ use sea_orm_migration::sea_query::{
     Alias, IntoIndexColumn, PostgresQueryBuilder, extension::postgres::Extension,
 };
 
-/// SQLite FTS5 virtual table and synchronization-trigger names used by one migration.
+/// `SQLite` FTS5 virtual table and synchronization-trigger names used by one migration.
 pub struct SqliteFtsConfig<'a> {
     pub virtual_table: &'a str,
     pub source_table: &'a str,
@@ -14,7 +14,11 @@ pub struct SqliteFtsConfig<'a> {
     pub update_trigger: &'a str,
 }
 
-/// Builds the SQLite FTS5 table, backfill, and synchronization trigger statements.
+/// Builds the `SQLite` FTS5 table, backfill, and synchronization trigger statements.
+///
+/// # Errors
+///
+/// Returns an error when the configuration contains an invalid identifier or no indexed columns.
 pub fn sqlite_fts_up_statements(config: &SqliteFtsConfig<'_>) -> Result<Vec<String>, DbErr> {
     validate_sqlite_fts_config(config)?;
     let column_list = config.columns.join(", ");
@@ -67,7 +71,11 @@ pub fn sqlite_fts_up_statements(config: &SqliteFtsConfig<'_>) -> Result<Vec<Stri
     ])
 }
 
-/// Builds the SQLite statements that remove FTS synchronization and the virtual table.
+/// Builds the `SQLite` statements that remove FTS synchronization and the virtual table.
+///
+/// # Errors
+///
+/// Returns an error when the configuration contains an invalid identifier or no indexed columns.
 pub fn sqlite_fts_down_statements(config: &SqliteFtsConfig<'_>) -> Result<Vec<String>, DbErr> {
     validate_sqlite_fts_config(config)?;
     Ok(vec![
@@ -78,7 +86,11 @@ pub fn sqlite_fts_down_statements(config: &SqliteFtsConfig<'_>) -> Result<Vec<St
     ])
 }
 
-/// Executes generated SQLite migration statements in order with caller-provided error context.
+/// Executes generated `SQLite` migration statements in order with caller-provided error context.
+///
+/// # Errors
+///
+/// Returns an error containing `error_context` when any generated SQL statement fails.
 pub async fn execute_sqlite_statements(
     manager: &SchemaManager<'_>,
     statements: impl IntoIterator<Item = String>,
@@ -93,7 +105,11 @@ pub async fn execute_sqlite_statements(
     Ok(())
 }
 
-/// Creates a PostgreSQL extension when it is not already installed.
+/// Creates a `PostgreSQL` extension when it is not already installed.
+///
+/// # Errors
+///
+/// Returns an error when the generated extension statement fails.
 pub async fn ensure_postgres_extension(
     manager: &SchemaManager<'_>,
     extension_name: &str,
@@ -106,7 +122,8 @@ pub async fn ensure_postgres_extension(
     Ok(())
 }
 
-/// Builds a PostgreSQL GIN trigram index statement.
+/// Builds a `PostgreSQL` GIN trigram index statement.
+#[must_use]
 pub fn postgres_trigram_index(
     index_name: &str,
     table_name: &str,
@@ -125,12 +142,18 @@ pub fn postgres_trigram_index(
         .to_owned()
 }
 
-/// Builds a portable `DROP INDEX IF EXISTS` statement for PostgreSQL migrations.
+/// Builds a portable `DROP INDEX IF EXISTS` statement for `PostgreSQL` migrations.
+#[must_use]
 pub fn postgres_drop_index(index_name: &str) -> IndexDropStatement {
     Index::drop().if_exists().name(index_name).to_owned()
 }
 
-/// Builds MySQL's ngram-backed full-text index statement.
+/// Builds `MySQL`'s ngram-backed full-text index statement.
+///
+/// # Errors
+///
+/// Returns an error when the index, table, or column identifiers are invalid, or when `columns` is
+/// empty.
 pub fn mysql_fulltext_index_sql(
     index_name: &str,
     table_name: &str,

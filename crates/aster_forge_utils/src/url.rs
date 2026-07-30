@@ -23,6 +23,7 @@ pub struct HttpBaseUrlOptions {
 
 impl HttpBaseUrlOptions {
     /// Creates options for a required base URL without query or fragment components.
+    #[must_use]
     pub const fn required_without_query_fragment() -> Self {
         Self {
             allow_empty: false,
@@ -31,6 +32,7 @@ impl HttpBaseUrlOptions {
     }
 
     /// Creates options for an optional base URL without query or fragment components.
+    #[must_use]
     pub const fn optional_without_query_fragment() -> Self {
         Self {
             allow_empty: true,
@@ -40,6 +42,7 @@ impl HttpBaseUrlOptions {
 }
 
 /// Returns whether `url` uses `http` or `https`.
+#[must_use]
 pub fn has_http_scheme(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
@@ -49,6 +52,10 @@ pub fn has_http_scheme(url: &Url) -> bool {
 /// The parser requires an absolute URL. The `context` is included verbatim in the error message so
 /// callers can name the field or operation that supplied the value, then map [`UtilsError`] into
 /// their own validation or configuration error category at the application boundary.
+///
+/// # Errors
+///
+/// Returns an error when `value` is not an absolute URL accepted by [`Url::parse`].
 pub fn parse_url(value: &str, context: &str) -> Result<Url> {
     Url::parse(value).map_err(|error| UtilsError::invalid_value(format!("{context}: {error}")))
 }
@@ -63,6 +70,10 @@ pub fn is_https_or_loopback_http(url: &Url) -> bool {
 }
 
 /// Parses an absolute URL and maps parser failures into [`UtilsError`].
+///
+/// # Errors
+///
+/// Returns an error when `value` is not an absolute URL accepted by [`Url::parse`].
 pub fn parse_absolute_url(value: &str, label: &str) -> Result<Url> {
     Url::parse(value).map_err(|error| {
         UtilsError::invalid_value(format!("{label} must be an absolute URL: {error}"))
@@ -78,6 +89,11 @@ pub fn parse_absolute_url(value: &str, label: &str) -> Result<Url> {
 ///
 /// The returned URL contains credentials. Callers must keep it out of logs, debug output, health
 /// details, and error context.
+///
+/// # Errors
+///
+/// Returns an error when `base_url` is invalid, has no authority host, cannot be a base URL,
+/// already contains userinfo, or does not support the requested username or password components.
 pub fn url_with_credentials(
     base_url: &str,
     username: Option<&str>,
@@ -126,6 +142,11 @@ pub fn url_with_credentials(
 ///
 /// Paths, queries, and fragments are preserved. This is intended for ordinary
 /// navigation or redirect targets rather than base URLs used for path joining.
+///
+/// # Errors
+///
+/// Returns an error when the value is empty, is not an absolute URL, does not use HTTP(S), or has
+/// no host.
 pub fn parse_http_url(value: &str, label: &str) -> Result<Url> {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -148,6 +169,11 @@ pub fn parse_http_url(value: &str, label: &str) -> Result<Url> {
 /// Surrounding whitespace and trailing slashes are removed before parsing. The URL must be absolute,
 /// use `http` or `https`, and include a host. When `options.forbid_query_fragment` is set, query
 /// strings and fragments are rejected so callers can safely append paths.
+///
+/// # Errors
+///
+/// Returns an error when a required value is empty, the URL is invalid or lacks an HTTP(S) host,
+/// or query and fragment components are present while forbidden by `options`.
 pub fn normalize_http_base_url(
     value: &str,
     label: &str,
@@ -186,6 +212,11 @@ pub fn normalize_http_base_url(
 ///
 /// The returned value is lowercase `scheme://authority`. Paths other than `/`, query strings,
 /// fragments, and userinfo are rejected. When `allow_wildcard` is true, `*` is returned unchanged.
+///
+/// # Errors
+///
+/// Returns an error when the origin is empty, malformed, lacks an HTTP(S) scheme or authority, or
+/// contains userinfo, a query, or a non-root path.
 pub fn normalize_origin(origin: &str, allow_wildcard: bool) -> Result<String> {
     normalize_origin_with_additional_schemes(origin, allow_wildcard, &[])
 }
@@ -194,6 +225,11 @@ pub fn normalize_origin(origin: &str, allow_wildcard: bool) -> Result<String> {
 ///
 /// Additional schemes only affect syntax validation. Callers must still apply their own exact
 /// origin allowlist; accepting a scheme here does not authorize every origin using that scheme.
+///
+/// # Errors
+///
+/// Returns an error when the origin is empty or malformed, its scheme is not HTTP(S) or listed in
+/// `additional_schemes`, it has no authority, or it contains userinfo, a query, or a non-root path.
 pub fn normalize_origin_with_additional_schemes(
     origin: &str,
     allow_wildcard: bool,
@@ -259,6 +295,10 @@ pub fn normalize_origin_with_additional_schemes(
 /// Empty input is rejected because a public-site URL configuration value should either be absent
 /// at the product layer or contain an explicit JSON array. Empty strings inside the array are
 /// ignored so operators can clean up accidental blank entries without blocking the whole value.
+///
+/// # Errors
+///
+/// Returns an error when the input is empty or is not a JSON array of strings.
 pub fn parse_public_site_origin_entries(value: &str) -> Result<Vec<String>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -284,6 +324,10 @@ pub fn parse_public_site_origin_entries(value: &str) -> Result<Vec<String>> {
 ///
 /// Public-site origins intentionally reject wildcards because they are used for selecting concrete
 /// callback, CSRF, and frontend URLs.
+///
+/// # Errors
+///
+/// Returns an error for wildcard input or any origin rejected by [`normalize_origin`].
 pub fn normalize_public_site_origin(origin: &str) -> Result<String> {
     if origin.trim() == "*" {
         return Err(UtilsError::invalid_value(
@@ -299,6 +343,11 @@ pub fn normalize_public_site_origin(origin: &str) -> Result<String> {
 }
 
 /// Parses, normalizes, and de-duplicates configured public site origins while preserving order.
+///
+/// # Errors
+///
+/// Returns an error when the value is not a JSON string array or any non-blank entry is not a valid
+/// concrete public-site origin.
 pub fn parse_public_site_origins(value: &str) -> Result<Vec<String>> {
     let mut origins = Vec::new();
     for origin in parse_public_site_origin_entries(value)? {
@@ -312,6 +361,11 @@ pub fn parse_public_site_origins(value: &str) -> Result<Vec<String>> {
 }
 
 /// Normalizes a public-site URL config value into canonical JSON.
+///
+/// # Errors
+///
+/// Returns an error when origin parsing or normalization fails, or when the normalized origin list
+/// cannot be serialized.
 pub fn normalize_public_site_origins_config_value(value: &str) -> Result<String> {
     let origins = parse_public_site_origins(value)?;
     serde_json::to_string(&origins).map_err(|error| {
@@ -358,6 +412,7 @@ where
 
 /// Selects the configured public-site origin that matches the current request, falling back to the
 /// first configured origin.
+#[must_use]
 pub fn public_site_origin_for_request(
     origins: &[String],
     scheme: &str,
@@ -378,6 +433,7 @@ pub fn public_site_origin_for_request(
 }
 
 /// Joins an origin and an application path.
+#[must_use]
 pub fn join_origin_and_path(base: &str, path: &str) -> String {
     let normalized_path = if path.starts_with('/') {
         path.to_string()

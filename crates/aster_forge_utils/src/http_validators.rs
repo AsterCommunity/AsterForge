@@ -23,11 +23,17 @@ pub enum HttpValidatorError {
 
 /// Formats a system time as an IMF-fixdate HTTP date.
 #[deprecated(note = "use try_format_http_date to validate the supported HTTP-date range")]
+#[must_use]
 pub fn format_http_date(time: SystemTime) -> String {
     httpdate::fmt_http_date(time)
 }
 
 /// Validates that a system time is representable as an HTTP date without formatting it.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidHttpDate`] for times before the Unix epoch or after the
+/// maximum date supported by the HTTP-date representation.
 pub fn validate_http_date(time: SystemTime) -> Result<(), HttpValidatorError> {
     let duration = time
         .duration_since(UNIX_EPOCH)
@@ -39,6 +45,11 @@ pub fn validate_http_date(time: SystemTime) -> Result<(), HttpValidatorError> {
 }
 
 /// Formats a system time when it is representable by the HTTP-date implementation.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidHttpDate`] when `time` is outside the supported HTTP-date
+/// range.
 pub fn try_format_http_date(time: SystemTime) -> Result<String, HttpValidatorError> {
     validate_http_date(time)?;
     Ok(httpdate::fmt_http_date(time))
@@ -48,6 +59,11 @@ pub fn try_format_http_date(time: SystemTime) -> Result<String, HttpValidatorErr
 ///
 /// Already rendered strong and weak entity-tags are borrowed. The wildcard is a conditional
 /// request token rather than an entity-tag and is therefore rejected.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidEtagList`] when `value` is a wildcard or cannot be rendered
+/// as one valid entity-tag.
 pub fn try_format_entity_tag(value: &str) -> Result<Cow<'_, str>, HttpValidatorError> {
     let value = value.trim();
     if value == "*" {
@@ -65,11 +81,16 @@ pub fn try_format_entity_tag(value: &str) -> Result<Cow<'_, str>, HttpValidatorE
 }
 
 /// Parses an HTTP date into system time.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidHttpDate`] when `value` is not a valid HTTP date.
 pub fn parse_http_date(value: &str) -> Result<SystemTime, HttpValidatorError> {
     httpdate::parse_http_date(value).map_err(|_| HttpValidatorError::InvalidHttpDate)
 }
 
 /// Returns whole seconds relative to the Unix epoch, preserving pre-epoch ordering.
+#[must_use]
 pub fn http_date_epoch_seconds(time: SystemTime) -> i128 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => i128::from(duration.as_secs()),
@@ -78,6 +99,11 @@ pub fn http_date_epoch_seconds(time: SystemTime) -> i128 {
 }
 
 /// Applies the strong comparison required by `If-Match`.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidEtagList`] when the condition or current entity-tag is
+/// malformed or the condition exceeds the parser's element limit.
 pub fn if_match_header_matches(
     raw: &str,
     resource_exists: bool,
@@ -93,6 +119,11 @@ pub fn if_match_header_matches(
 }
 
 /// Applies `If-Match` to all field lines in an HTTP header map.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidEtagList`] when the combined condition or current
+/// entity-tag is malformed or the condition exceeds the parser's element limit.
 pub fn if_match_headers_match(
     headers: &HeaderMap,
     resource_exists: bool,
@@ -115,6 +146,11 @@ pub fn if_match_headers_match(
 ///
 /// The wildcard is a valid `If-Match` condition but is not itself an entity-tag, so it returns
 /// `Some(false)`. Malformed lists use the same parser and limits as conditional evaluation.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidEtagList`] when the combined `If-Match` value is malformed
+/// or exceeds the parser's element limit.
 pub fn if_match_headers_have_strong_tag(
     headers: &HeaderMap,
 ) -> Result<Option<bool>, HttpValidatorError> {
@@ -144,6 +180,11 @@ fn strong_candidates_match(
 }
 
 /// Applies the weak comparison required by `If-None-Match`.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidEtagList`] when the condition or current entity-tag is
+/// malformed or the condition exceeds the parser's element limit.
 pub fn if_none_match_header_matches(
     raw: &str,
     resource_exists: bool,
@@ -159,6 +200,11 @@ pub fn if_none_match_header_matches(
 }
 
 /// Applies `If-None-Match` to all field lines in an HTTP header map.
+///
+/// # Errors
+///
+/// Returns [`HttpValidatorError::InvalidEtagList`] when the combined condition or current
+/// entity-tag is malformed or the condition exceeds the parser's element limit.
 pub fn if_none_match_headers_match(
     headers: &HeaderMap,
     resource_exists: bool,
@@ -276,7 +322,7 @@ fn parse_entity_tag_bytes(value: &[u8]) -> Result<ETag, HttpValidatorError> {
 fn combined_header_bytes(headers: &HeaderMap, name: http::header::HeaderName) -> Option<Vec<u8>> {
     let mut combined = Vec::new();
     let mut present = false;
-    for value in headers.get_all(name).iter() {
+    for value in &headers.get_all(name) {
         if present {
             combined.push(b',');
         }
@@ -479,7 +525,7 @@ mod tests {
 
     #[test]
     fn malformed_etag_lists_are_invalid() {
-        for raw in [r#"etag-1"#, r#"*, "etag-1""#, r#""unterminated"#] {
+        for raw in [r"etag-1", r#"*, "etag-1""#, r#""unterminated"#] {
             assert_eq!(
                 if_none_match_header_matches(raw, true, Some(r#""etag-1""#)),
                 Err(HttpValidatorError::InvalidEtagList),

@@ -14,6 +14,7 @@ pub const REFERRER_POLICY_VALUE: &str = "strict-origin-when-cross-origin";
 pub const X_CONTENT_TYPE_OPTIONS_VALUE: &str = "nosniff";
 
 /// Builds the default security headers middleware.
+#[must_use]
 pub fn default_headers() -> DefaultHeaders {
     DefaultHeaders::new()
         .add(("X-Frame-Options", X_FRAME_OPTIONS_VALUE))

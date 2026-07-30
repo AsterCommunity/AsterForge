@@ -26,6 +26,7 @@ pub struct AuditLogBufferConfig {
 
 impl AuditLogBufferConfig {
     /// Creates an audit-log buffering policy.
+    #[must_use]
     pub const fn new(
         queue_capacity: usize,
         batch_size: usize,
@@ -58,11 +59,13 @@ pub struct AuditLogManager {
 
 impl AuditLogManager {
     /// Creates a manager with the default buffering policy.
+    #[must_use]
     pub fn new(db: DatabaseConnection) -> Self {
         Self::with_config(db, AuditLogBufferConfig::default())
     }
 
     /// Creates a manager with a caller-provided buffering policy.
+    #[must_use]
     pub fn with_config(db: DatabaseConnection, config: AuditLogBufferConfig) -> Self {
         let batch_size = config.batch_size.max(1);
         let batch_db = db.clone();
@@ -251,9 +254,11 @@ mod tests {
     async fn flushes_threshold_batch() {
         let db = test_db().await;
         let manager = test_manager(db.clone(), Duration::from_secs(5));
+        let batch_size = i64::try_from(DEFAULT_AUDIT_LOG_BATCH_SIZE)
+            .expect("the fixed audit batch size should fit in i64");
 
-        for index in 0..DEFAULT_AUDIT_LOG_BATCH_SIZE {
-            manager.record(audit_request(index as i64)).await;
+        for index in 0..batch_size {
+            manager.record(audit_request(index)).await;
         }
 
         wait_for_audit_log_count(&db, DEFAULT_AUDIT_LOG_BATCH_SIZE as u64).await;
@@ -331,9 +336,11 @@ mod tests {
         let db = test_db().await;
         let manager = Arc::new(test_manager(db.clone(), Duration::from_secs(5)));
         let flush_guard = manager.writer.lock_flush_for_test().await;
+        let queue_capacity = i64::try_from(DEFAULT_AUDIT_LOG_QUEUE_CAPACITY)
+            .expect("the fixed audit queue capacity should fit in i64");
 
-        for index in 0..DEFAULT_AUDIT_LOG_QUEUE_CAPACITY {
-            manager.record(audit_request(index as i64)).await;
+        for index in 0..queue_capacity {
+            manager.record(audit_request(index)).await;
         }
         manager.record(audit_request(10_000)).await;
 
@@ -349,13 +356,13 @@ mod tests {
         let db = test_db().await;
         let manager = Arc::new(test_manager(db.clone(), Duration::from_millis(20)));
         let flush_guard = manager.writer.lock_flush_for_test().await;
+        let batch_size = i64::try_from(DEFAULT_AUDIT_LOG_BATCH_SIZE)
+            .expect("the fixed audit batch size should fit in i64");
 
-        for index in 0..DEFAULT_AUDIT_LOG_BATCH_SIZE {
-            manager.record(audit_request(index as i64)).await;
+        for index in 0..batch_size {
+            manager.record(audit_request(index)).await;
         }
-        manager
-            .record(audit_request(DEFAULT_AUDIT_LOG_BATCH_SIZE as i64))
-            .await;
+        manager.record(audit_request(batch_size)).await;
         assert_eq!(audit_log_count(&db).await, 0);
 
         drop(flush_guard);

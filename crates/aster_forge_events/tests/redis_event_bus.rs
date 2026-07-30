@@ -37,7 +37,7 @@ async fn wait_for_state(
         loop {
             let found = observations
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .iter()
                 .any(|observation| observation.state == expected);
             if found {
@@ -55,7 +55,7 @@ async fn wait_for_ready(observations: &Arc<Mutex<Vec<EventConnectionObservation>
         loop {
             let ready = observations
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .iter()
                 .any(|observation| {
                     matches!(
@@ -113,7 +113,7 @@ async fn raw_reserved_password_publishes_and_subscribes() {
 fn clear_observations(observations: &Arc<Mutex<Vec<EventConnectionObservation>>>) {
     observations
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clear();
 }
 
@@ -130,7 +130,7 @@ async fn redis_event_bus_recovers_and_delivers_after_outage() {
     let observer = move |observation| {
         observer_values
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(observation);
     };
     let (payload_tx, mut payload_rx) = mpsc::unbounded_channel();
@@ -204,7 +204,7 @@ async fn shutdown_interrupts_reconnect_backoff() {
     let observer = move |observation| {
         observer_values
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(observation);
     };
     let shutdown = CancellationToken::new();

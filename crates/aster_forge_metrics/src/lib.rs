@@ -42,11 +42,11 @@ const _: () = assert!(
 /// Normalized database backend label used by infrastructure metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbMetricBackend {
-    /// SQLite backend.
+    /// `SQLite` backend.
     Sqlite,
-    /// MySQL backend.
+    /// `MySQL` backend.
     MySql,
-    /// PostgreSQL backend.
+    /// `PostgreSQL` backend.
     Postgres,
     /// A backend not recognized by this shared metrics surface.
     Other,
@@ -54,6 +54,7 @@ pub enum DbMetricBackend {
 
 impl DbMetricBackend {
     /// Returns the stable label used for metrics exporters.
+    #[must_use]
     pub const fn as_label(self) -> &'static str {
         match self {
             Self::Sqlite => "sqlite",
@@ -81,7 +82,7 @@ pub enum DbQueryKind {
     Transaction,
     /// Data definition statement.
     Ddl,
-    /// SQLite PRAGMA statement.
+    /// `SQLite` PRAGMA statement.
     Pragma,
     /// Query kind that could not be classified cheaply.
     Other,
@@ -89,6 +90,7 @@ pub enum DbQueryKind {
 
 impl DbQueryKind {
     /// Returns the stable label used for metrics exporters.
+    #[must_use]
     pub const fn as_label(self) -> &'static str {
         match self {
             Self::Select => "select",
@@ -122,6 +124,7 @@ pub struct DbQueryMetric {
 
 impl DbQueryMetric {
     /// Creates a database query metric.
+    #[must_use]
     pub const fn new(
         backend: DbMetricBackend,
         kind: DbQueryKind,
@@ -137,6 +140,7 @@ impl DbQueryMetric {
     }
 
     /// Returns the stable status label.
+    #[must_use]
     pub const fn status_label(&self) -> &'static str {
         if self.failed { "error" } else { "ok" }
     }
@@ -261,11 +265,13 @@ impl DbMetricsRecorder for NoopMetrics {
 
 impl NoopMetrics {
     /// Creates a noop recorder.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
 
     /// Creates a shared noop recorder.
+    #[must_use]
     pub fn arc() -> SharedMetricsRecorder {
         Arc::new(Self::new())
     }
@@ -304,6 +310,7 @@ where
 /// Product entrypoints should prefer this helper over selecting a concrete backend directly. If no
 /// backend feature is enabled, or if backend initialization fails, the returned recorder is
 /// [`NoopMetrics`].
+#[must_use]
 pub fn init_configured_or_noop() -> SharedMetricsRecorder {
     #[cfg(feature = "backend-prometheus")]
     {
@@ -328,7 +335,7 @@ pub enum MetricKind {
 }
 
 /// Static metric descriptor registered by a subsystem.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetricDescriptor {
     /// Owning subsystem name.
     pub subsystem: &'static str,
@@ -346,6 +353,7 @@ pub struct MetricDescriptor {
 
 impl MetricDescriptor {
     /// Creates a descriptor for a counter metric.
+    #[must_use]
     pub const fn counter(
         subsystem: &'static str,
         name: &'static str,
@@ -363,6 +371,7 @@ impl MetricDescriptor {
     }
 
     /// Creates a descriptor for a gauge metric.
+    #[must_use]
     pub const fn gauge(
         subsystem: &'static str,
         name: &'static str,
@@ -380,6 +389,7 @@ impl MetricDescriptor {
     }
 
     /// Creates a descriptor for a histogram metric.
+    #[must_use]
     pub const fn histogram(
         subsystem: &'static str,
         name: &'static str,
@@ -397,6 +407,7 @@ impl MetricDescriptor {
     }
 
     /// Creates a descriptor for a histogram metric with explicit buckets.
+    #[must_use]
     pub const fn histogram_with_buckets(
         subsystem: &'static str,
         name: &'static str,
@@ -439,11 +450,16 @@ pub struct MetricCatalog {
 
 impl MetricCatalog {
     /// Creates an empty catalog.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Registers one metric descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetricCatalogError`] when another descriptor has the same subsystem and name.
     pub fn register(&mut self, descriptor: MetricDescriptor) -> Result<()> {
         if self.descriptors.iter().any(|existing| {
             existing.subsystem == descriptor.subsystem && existing.name == descriptor.name
@@ -459,6 +475,7 @@ impl MetricCatalog {
     }
 
     /// Returns all descriptors in registration order.
+    #[must_use]
     pub fn descriptors(&self) -> &[MetricDescriptor] {
         &self.descriptors
     }
@@ -480,10 +497,18 @@ pub trait MetricsSubsystem {
     fn name(&self) -> &'static str;
 
     /// Registers metric descriptors owned by this subsystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetricCatalogError`] when the subsystem registers a duplicate metric.
     fn register_metrics(&self, catalog: &mut MetricCatalog) -> Result<()>;
 }
 
 /// Registers every subsystem into one catalog.
+///
+/// # Errors
+///
+/// Returns [`MetricCatalogError`] when any subsystem registers a duplicate metric.
 pub fn register_subsystems(
     catalog: &mut MetricCatalog,
     subsystems: &[&dyn MetricsSubsystem],

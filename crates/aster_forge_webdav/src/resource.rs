@@ -40,6 +40,10 @@ pub enum DavMutationPlanError {
 }
 
 /// Rejects collection creation for the DAV root resource.
+///
+/// # Errors
+///
+/// Returns [`DavMutationPlanError`] when the collection target or parent state is invalid.
 pub fn validate_collection_create_target(path: &str) -> Result<(), DavMutationPlanError> {
     if resource_identity_path(path) == "/" {
         Err(DavMutationPlanError::MethodNotAllowed)
@@ -52,6 +56,10 @@ pub fn validate_collection_create_target(path: &str) -> Result<(), DavMutationPl
 ///
 /// The DAV mount root is an implicit collection and does not require a backend lookup. A target
 /// without a parent identifies the mount root itself and is rejected for mutation.
+///
+/// # Errors
+///
+/// Returns a protocol response when parent metadata lookup fails or the parent is unsuitable.
 pub async fn enforce_parent_collection(
     filesystem: &dyn DavFileSystem,
     target: &DavPath,
@@ -64,13 +72,10 @@ pub async fn enforce_parent_collection(
     if parent == "/" {
         return Ok(());
     }
-    let parent = match DavPath::new(&parent) {
-        Ok(parent) => parent,
-        Err(_) => {
-            return Err(mutation_plan_error_response(
-                DavMutationPlanError::BadRequest,
-            ));
-        }
+    let Ok(parent) = DavPath::new(&parent) else {
+        return Err(mutation_plan_error_response(
+            DavMutationPlanError::BadRequest,
+        ));
     };
     match filesystem.metadata(&parent).await {
         Ok(metadata) if metadata.is_dir() => Ok(()),
@@ -131,6 +136,10 @@ impl DavMutationFailure {
 }
 
 /// Enforces collection DELETE Depth after product metadata resolution.
+///
+/// # Errors
+///
+/// Returns [`DavMutationPlanError`] when DELETE targets the mount root or has invalid state.
 pub fn validate_delete_target(
     kind: DavResourceKind,
     depth: Depth,
@@ -143,6 +152,10 @@ pub fn validate_delete_target(
 }
 
 /// Plans COPY/MOVE resource-shape behavior after product metadata resolution.
+///
+/// # Errors
+///
+/// Returns [`DavMutationPlanError`] when source and destination relationships are invalid.
 pub fn plan_copy_move_request(
     method: DavCopyMoveMethod,
     depth: Depth,
@@ -197,6 +210,10 @@ pub fn mutation_plan_error_response(error: DavMutationPlanError) -> DavResponse 
 }
 
 /// Builds the successful MKCOL response.
+///
+/// # Errors
+///
+/// Returns [`DavMutationResponseError`] when `Content-Location` cannot be encoded.
 pub fn collection_created_response(
     prefix: &str,
     path: &DavPath,
@@ -266,6 +283,10 @@ pub fn mutation_success_response(destination_existed: bool) -> DavResponse {
 }
 
 /// Builds a 207 response for typed recursive mutation failures.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when the failure response exceeds default limits.
 pub fn mutation_multistatus_response(
     prefix: &str,
     failures: &[DavMutationFailure],
@@ -274,6 +295,10 @@ pub fn mutation_multistatus_response(
 }
 
 /// Builds a bounded 207 response for typed recursive mutation failures.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when the failure response exceeds supplied limits.
 pub fn mutation_multistatus_response_with_limits(
     prefix: &str,
     failures: &[DavMutationFailure],

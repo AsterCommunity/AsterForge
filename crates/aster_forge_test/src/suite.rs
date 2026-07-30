@@ -22,6 +22,11 @@ impl TestContainerSuite {
     ///
     /// The name becomes part of container names and lock file paths, so it must be non-empty
     /// ASCII alphanumeric or `-`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `name` is invalid or the suite state directory cannot be created.
+    #[must_use]
     pub fn new(name: &str) -> Self {
         assert!(
             !name.is_empty()
@@ -45,16 +50,19 @@ impl TestContainerSuite {
     }
 
     /// Returns the suite name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the directory holding lock files and state JSON for this suite.
+    #[must_use]
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
     }
 
     /// Returns the shared container name for a service.
+    #[must_use]
     pub fn container_name(&self, service: &str) -> String {
         format!("aster-test-{}-{}-{service}", self.name, self.instance)
     }

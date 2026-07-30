@@ -203,6 +203,7 @@ impl<T> ShutdownResourceComponent<T> {
     }
 
     /// Declares components that must shut down before this resource.
+    #[must_use]
     pub const fn depends_on_all(mut self, dependencies: &'static [&'static str]) -> Self {
         self.dependencies = dependencies;
         self
@@ -393,6 +394,7 @@ pub struct AsterRuntime<S> {
 
 impl AsterRuntime<()> {
     /// Creates a runtime builder.
+    #[must_use]
     pub fn builder() -> AsterRuntimeBuilder<()> {
         AsterRuntimeBuilder::new()
     }
@@ -408,6 +410,10 @@ where
     /// best-effort before the startup error is returned, so components that already
     /// completed startup (connection pools, spawned workers, buffered writers) get
     /// a chance to release their resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns a startup report error when a required startup phase aborts.
     pub async fn run(mut self) -> Result<S::Output, AsterRuntimeError> {
         let startup_report = self.registry.startup().await;
         if startup_report.aborted() {
@@ -473,6 +479,7 @@ impl<S> AsterRuntimeBuilder<S> {
     }
 
     /// Registers a product hook that runs after the service future stops and before components.
+    #[must_use]
     pub fn before_shutdown<F, Fut>(mut self, before_shutdown: F) -> Self
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -483,6 +490,11 @@ impl<S> AsterRuntimeBuilder<S> {
     }
 
     /// Builds the runtime runner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when component assembly previously failed, no service was registered, or
+    /// the component dependency graph is invalid.
     pub fn build(self) -> Result<AsterRuntime<S>, AsterRuntimeError> {
         if let Some(error) = self.assembly_error {
             return Err(error);
@@ -515,6 +527,10 @@ where
     S: Future,
 {
     /// Builds and runs the runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error produced while building the runtime or running required startup phases.
     pub async fn run(self) -> Result<S::Output, AsterRuntimeError> {
         self.build()?.run().await
     }
@@ -552,6 +568,8 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
+    use tokio_util::sync::CancellationToken;
+
     use super::{AsterRuntime, AsterRuntimeError, RuntimeServiceComponent, ServiceLifecycle};
     use crate::{RuntimeComponentBundle, RuntimeComponentKind, RuntimeComponentRegistry};
 
@@ -560,17 +578,20 @@ mod tests {
         let after_stop_ran = Arc::new(AtomicBool::new(false));
         let observed_after_stop = Arc::clone(&after_stop_ran);
 
-        let result = ServiceLifecycle::new(async { Ok::<_, &'static str>(42) }, Default::default())
-            .run(
-                || async {},
-                move || {
-                    let observed_after_stop = Arc::clone(&observed_after_stop);
-                    async move {
-                        observed_after_stop.store(true, Ordering::SeqCst);
-                    }
-                },
-            )
-            .await;
+        let result = ServiceLifecycle::new(
+            async { Ok::<_, &'static str>(42) },
+            CancellationToken::default(),
+        )
+        .run(
+            || async {},
+            move || {
+                let observed_after_stop = Arc::clone(&observed_after_stop);
+                async move {
+                    observed_after_stop.store(true, Ordering::SeqCst);
+                }
+            },
+        )
+        .await;
 
         assert_eq!(result, Ok(42));
         assert!(after_stop_ran.load(Ordering::SeqCst));
@@ -609,7 +630,7 @@ mod tests {
                 "http",
                 RuntimeComponentKind::Core,
                 async { Ok::<_, &'static str>(7) },
-                Default::default(),
+                CancellationToken::default(),
                 || async {},
             ))
             .before_shutdown(move || {
@@ -640,7 +661,7 @@ mod tests {
                 "http",
                 RuntimeComponentKind::Core,
                 std::future::pending::<()>(),
-                Default::default(),
+                CancellationToken::default(),
                 || async {},
             ))
             .component(crate::runtime_component(
@@ -750,14 +771,14 @@ mod tests {
                 "http",
                 RuntimeComponentKind::Core,
                 async {},
-                Default::default(),
+                CancellationToken::default(),
                 || async {},
             ))
             .component(RuntimeServiceComponent::new(
                 "worker",
                 RuntimeComponentKind::Core,
                 async {},
-                Default::default(),
+                CancellationToken::default(),
                 || async {},
             ))
             .build();
@@ -772,7 +793,7 @@ mod tests {
                 "http",
                 RuntimeComponentKind::Core,
                 async {},
-                Default::default(),
+                CancellationToken::default(),
                 || async {},
             ))
             .component(crate::runtime_component(

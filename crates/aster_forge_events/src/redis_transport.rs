@@ -64,6 +64,10 @@ pub struct RedisEventSubscription {
 
 impl RedisEventBus {
     /// Creates a bus from a Redis URL and logical topic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the topic is blank or the Redis client rejects `url`.
     pub fn from_url(url: &str, topic: impl Into<String>) -> Result<Self, RedisEventBusError> {
         let topic = topic.into();
         if topic.trim().is_empty() {
@@ -82,6 +86,11 @@ impl RedisEventBus {
     ///
     /// The base URL must not contain userinfo. `username = None` with a password creates the
     /// password-only URL form used by Redis deployments without ACL usernames.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the topic is blank, the base URL or credential combination is
+    /// invalid, or the Redis client rejects the resulting URL.
     pub fn from_credentials(
         base_url: &str,
         username: Option<&str>,
@@ -119,17 +128,23 @@ impl RedisEventBus {
     }
 
     /// Overrides the reconnect policy.
+    #[must_use]
     pub fn with_reconnect_policy(mut self, policy: RedisEventReconnectPolicy) -> Self {
         self.reconnect_policy = policy;
         self
     }
 
     /// Returns the configured logical topic.
+    #[must_use]
     pub fn topic(&self) -> &str {
         &self.topic
     }
 
     /// Publishes one opaque payload. Payload interpretation belongs to the product layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a Redis connection cannot be opened or the publish command fails.
     pub async fn publish(&self, payload: impl Into<String>) -> Result<(), RedisEventBusError> {
         let mut connection = self
             .client
@@ -144,6 +159,11 @@ impl RedisEventBus {
     }
 
     /// Opens one Redis subscription attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Pub/Sub connection cannot be opened or the topic subscription
+    /// command fails.
     pub async fn subscribe(&self) -> Result<RedisEventSubscription, RedisEventBusError> {
         let mut pubsub = self
             .client
@@ -200,6 +220,10 @@ impl RedisEventBus {
 
 impl RedisEventSubscription {
     /// Receives one raw payload. Redis payload conversion failures are logged and skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RedisEventBusError::StreamEnded`] when the active Pub/Sub stream terminates.
     pub async fn receive(&mut self) -> Result<String, RedisEventBusError> {
         loop {
             let mut stream = self.pubsub.on_message();

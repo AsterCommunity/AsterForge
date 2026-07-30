@@ -64,6 +64,7 @@ pub trait MailSender: Send + Sync {
 }
 
 /// Creates an in-memory sender for tests and local service wiring.
+#[must_use]
 pub fn memory_sender() -> Arc<dyn MailSender> {
     Arc::new(MemoryMailSender::default())
 }
@@ -229,6 +230,10 @@ where
 
 /// Sends a rendered message through a sender using the provided runtime settings for the sender
 /// envelope.
+///
+/// # Errors
+///
+/// Returns [`MailDeliveryError`] when settings are incomplete, the message is invalid, or delivery fails.
 pub async fn send_rendered_with(
     mail_sender: &Arc<dyn MailSender>,
     settings: &MailRuntimeSettings,

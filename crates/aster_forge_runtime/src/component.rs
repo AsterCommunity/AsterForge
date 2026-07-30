@@ -68,6 +68,7 @@ pub enum RuntimeComponentKind {
 
 impl RuntimeComponentKind {
     /// Returns a stable lowercase wire value.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Core => "core",
@@ -179,6 +180,7 @@ pub struct RuntimeComponentRegistry {
 
 impl RuntimeComponentRegistry {
     /// Creates an empty component registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -305,16 +307,15 @@ impl RuntimeComponentRegistry {
 
     /// Returns a builder for `name`, creating the component when needed.
     pub fn component(&mut self, name: &'static str) -> RuntimeComponentBuilder<'_> {
-        let index = match self
+        let index = if let Some(index) = self
             .components
             .iter()
             .position(|component| component.name == name)
         {
-            Some(index) => index,
-            None => {
-                self.components.push(RuntimeComponentDescriptor::new(name));
-                self.components.len() - 1
-            }
+            index
+        } else {
+            self.components.push(RuntimeComponentDescriptor::new(name));
+            self.components.len() - 1
         };
 
         RuntimeComponentBuilder {
@@ -324,11 +325,13 @@ impl RuntimeComponentRegistry {
     }
 
     /// Returns registered component descriptors in registration order.
+    #[must_use]
     pub fn descriptors(&self) -> &[RuntimeComponentDescriptor] {
         &self.components
     }
 
     /// Returns one descriptor by component name.
+    #[must_use]
     pub fn descriptor(&self, name: &str) -> Option<&RuntimeComponentDescriptor> {
         self.components
             .iter()
@@ -336,6 +339,7 @@ impl RuntimeComponentRegistry {
     }
 
     /// Returns the underlying health registry.
+    #[must_use]
     pub const fn health_registry(&self) -> &HealthCheckRegistry {
         &self.health
     }
@@ -356,6 +360,10 @@ impl RuntimeComponentRegistry {
     }
 
     /// Validates that the component dependency graph is resolvable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a dependency is missing or the component graph contains a cycle.
     pub fn validate(&self) -> Result<(), RuntimeComponentGraphError> {
         let descriptor_by_name = self
             .components
@@ -377,7 +385,7 @@ impl RuntimeComponentRegistry {
         let mut visiting = Vec::new();
         let mut visited = HashSet::new();
         for component in &self.components {
-            self.validate_component_dependencies(
+            Self::validate_component_dependencies(
                 component.name,
                 &descriptor_by_name,
                 &mut visiting,
@@ -389,7 +397,6 @@ impl RuntimeComponentRegistry {
     }
 
     fn validate_component_dependencies(
-        &self,
         component_name: &'static str,
         descriptor_by_name: &HashMap<&'static str, &RuntimeComponentDescriptor>,
         visiting: &mut Vec<&'static str>,
@@ -412,7 +419,7 @@ impl RuntimeComponentRegistry {
         visiting.push(component_name);
         if let Some(descriptor) = descriptor_by_name.get(component_name) {
             for dependency in &descriptor.dependencies {
-                self.validate_component_dependencies(
+                Self::validate_component_dependencies(
                     dependency,
                     descriptor_by_name,
                     visiting,
@@ -504,7 +511,7 @@ impl RuntimeComponentRegistry {
         let mut ordered = Vec::with_capacity(self.shutdown.len());
 
         for phase in &self.shutdown {
-            self.push_shutdown_component_order(
+            Self::push_shutdown_component_order(
                 phase.component_name,
                 &phase_indices_by_component,
                 &descriptor_by_name,
@@ -518,7 +525,6 @@ impl RuntimeComponentRegistry {
     }
 
     fn push_shutdown_component_order(
-        &self,
         component_name: &'static str,
         phase_indices_by_component: &HashMap<&'static str, Vec<usize>>,
         descriptor_by_name: &HashMap<&'static str, &RuntimeComponentDescriptor>,
@@ -540,7 +546,7 @@ impl RuntimeComponentRegistry {
         if let Some(descriptor) = descriptor_by_name.get(component_name) {
             for dependency in &descriptor.dependencies {
                 if phase_indices_by_component.contains_key(dependency) {
-                    self.push_shutdown_component_order(
+                    Self::push_shutdown_component_order(
                         dependency,
                         phase_indices_by_component,
                         descriptor_by_name,
@@ -562,11 +568,13 @@ impl RuntimeComponentRegistry {
     }
 
     /// Returns how many components are registered.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.components.len()
     }
 
     /// Returns whether no components are registered.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.components.is_empty()
     }

@@ -380,7 +380,7 @@ fn http_dates_compare_at_one_second_resolution_and_validate_metadata_only_when_n
     let after_http_date_range = DavConditionalResource {
         exists: true,
         etag: Some("invalid\netag"),
-        last_modified: Some(UNIX_EPOCH + Duration::from_secs(253_402_300_800)),
+        last_modified: Some(UNIX_EPOCH + Duration::from_hours(70_389_528)),
     };
     let plan = plan_http_conditionals(DavMethod::Get, &HeaderMap::new(), after_http_date_range)
         .expect("unconditional requests skip all unrenderable validators");

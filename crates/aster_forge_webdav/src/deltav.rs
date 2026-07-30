@@ -1,4 +1,4 @@
-//! Product-neutral DeltaV request planning and response composition.
+//! Product-neutral `DeltaV` request planning and response composition.
 
 use http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderValue, StatusCode};
@@ -13,7 +13,7 @@ use crate::{
 /// Failure while selecting a REPORT type through a capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavReportPlanError {
-    /// The REPORT body is not safe, well-formed WebDAV XML.
+    /// The REPORT body is not safe, well-formed `WebDAV` XML.
     #[error(transparent)]
     Xml(#[from] DavXmlError),
     /// The REPORT root is not a standard type known to Forge.
@@ -29,7 +29,7 @@ pub enum DavReportPlanError {
 
 /// Product-owned mapping for REPORT selection errors that are not XML syntax failures.
 pub trait DavReportErrorResponsePolicy {
-    /// Maps an unknown REPORT QName; `None` means the request root had no namespace.
+    /// Maps an unknown REPORT `QName`; `None` means the request root had no namespace.
     ///
     /// Both values come from the request, so the product decides whether to echo them to clients.
     fn unknown_type(&self, namespace: Option<&str>, name: &str) -> DavResponse;
@@ -39,6 +39,10 @@ pub trait DavReportErrorResponsePolicy {
 }
 
 /// Parses and gates a REPORT body through the same snapshot used for discovery and dispatch.
+///
+/// # Errors
+///
+/// Returns an error when REPORT XML is invalid or the snapshot does not advertise its type.
 pub fn plan_report_request(
     snapshot: &DavCapabilitySnapshot,
     body: &[u8],
@@ -61,11 +65,19 @@ pub fn plan_report_request(
 }
 
 /// Validates the optional RFC 3253 `DAV:version-control` request body.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the request body is not valid VERSION-CONTROL XML.
 pub fn validate_version_control_request(body: &[u8]) -> Result<(), DavXmlError> {
     parse_version_control_request(body)
 }
 
 /// Builds the protocol response for a REPORT grammar selection failure.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the DAV error body cannot be encoded.
 pub fn report_plan_error_response<P: DavReportErrorResponsePolicy>(
     error: &DavReportPlanError,
     policy: &P,
@@ -80,6 +92,10 @@ pub fn report_plan_error_response<P: DavReportErrorResponsePolicy>(
 }
 
 /// Builds the protocol response for an invalid VERSION-CONTROL XML request body.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the DAV error body cannot be encoded.
 pub fn version_control_request_error_response(
     error: DavXmlError,
 ) -> Result<DavResponse, DavXmlError> {
@@ -95,14 +111,22 @@ pub fn version_tree_non_file_response() -> DavResponse {
     )
 }
 
-/// Builds a complete 207 DeltaV version-tree response.
+/// Builds a complete 207 `DeltaV` version-tree response.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when the version response exceeds default limits.
 pub fn version_tree_response(
     versions: Vec<DavVersionXml>,
 ) -> Result<DavResponse, DavMultiStatusError> {
     version_tree_response_with_limits(versions, DavMultiStatusLimits::default())
 }
 
-/// Builds a bounded complete 207 DeltaV version-tree response.
+/// Builds a bounded complete 207 `DeltaV` version-tree response.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when the version response exceeds the supplied limits.
 pub fn version_tree_response_with_limits(
     versions: Vec<DavVersionXml>,
     limits: DavMultiStatusLimits,
@@ -148,7 +172,7 @@ fn xml_request_error_response(error: DavXmlError) -> Result<DavResponse, DavXmlE
     match error {
         DavXmlError::ExternalEntity => xml_response(
             StatusCode::FORBIDDEN,
-            dav_error_element(&DavErrorCondition::NoExternalEntities),
+            &dav_error_element(&DavErrorCondition::NoExternalEntities),
         ),
         DavXmlError::TooLarge => Ok(text_response(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -162,7 +186,7 @@ fn xml_request_error_response(error: DavXmlError) -> Result<DavResponse, DavXmlE
 
 fn xml_response(
     status: StatusCode,
-    root: crate::DavXmlElement,
+    root: &crate::DavXmlElement,
 ) -> Result<DavResponse, DavXmlError> {
     let mut response = DavResponse::bytes(status, root.to_bytes()?);
     response.headers.insert(

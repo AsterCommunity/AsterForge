@@ -9,6 +9,10 @@ fn finish(writer: XmlStreamWriter<Vec<u8>>) -> Vec<u8> {
     writer.finish().expect("writer should finish")
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The assertion helper intentionally accepts temporary writer Results directly."
+)]
 fn assert_invalid_data(result: Result<(), Error>) {
     assert!(matches!(result, Err(Error::InvalidData(_))));
 }
@@ -314,22 +318,23 @@ impl Write for AlwaysFails {
     }
 }
 
+struct FlushFails(Vec<u8>);
+
+impl Write for FlushFails {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::other("flush failure"))
+    }
+}
+
 #[test]
 fn preserves_underlying_io_failures() {
     let mut writer = XmlStreamWriter::new(AlwaysFails).expect("writer construction");
     assert!(matches!(writer.empty("root"), Err(Error::Io(_))));
-
-    struct FlushFails(Vec<u8>);
-    impl Write for FlushFails {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.0.extend_from_slice(buffer);
-            Ok(buffer.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Err(io::Error::other("flush failure"))
-        }
-    }
 
     let mut writer = XmlStreamWriter::new(FlushFails(Vec::new())).expect("writer");
     writer.empty("root").expect("root");

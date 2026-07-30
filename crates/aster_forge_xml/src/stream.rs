@@ -25,18 +25,22 @@ pub struct StreamName<'a> {
 }
 
 impl<'a> StreamName<'a> {
+    #[must_use]
     pub fn qualified(self) -> &'a str {
         self.qualified
     }
 
+    #[must_use]
     pub fn local(self) -> &'a str {
         self.local
     }
 
+    #[must_use]
     pub fn namespace(self) -> Option<&'a str> {
         self.namespace
     }
 
+    #[must_use]
     pub fn matches(self, local: &str, namespace: Option<&str>) -> bool {
         self.local == local && self.namespace == namespace
     }
@@ -52,6 +56,11 @@ pub struct StreamStart<'a> {
 }
 
 impl StreamStart<'_> {
+    /// Resolves the start element's qualified, local, and namespace names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the encoded element name is not valid UTF-8.
     pub fn name(&self) -> Result<StreamName<'_>, Error> {
         let qualified = utf8(self.raw.name().into_inner())?;
         let local = utf8(self.raw.local_name().into_inner())?;
@@ -62,6 +71,7 @@ impl StreamStart<'_> {
         })
     }
 
+    #[must_use]
     pub fn attributes(&self) -> StreamAttributes<'_> {
         StreamAttributes {
             inner: self.raw.attributes(),
@@ -73,6 +83,12 @@ impl StreamStart<'_> {
         }
     }
 
+    /// Returns a matching attribute by qualified name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an attribute is malformed or its name, namespace, or value cannot be
+    /// decoded.
     pub fn attribute(&self, qualified_name: &str) -> Result<Option<Cow<'_, str>>, Error> {
         for attribute in self.attributes() {
             let attribute = attribute?;
@@ -83,6 +99,12 @@ impl StreamStart<'_> {
         Ok(None)
     }
 
+    /// Returns a matching attribute by local name and namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an attribute is malformed or its name, namespace, or value cannot be
+    /// decoded.
     pub fn attribute_ns(
         &self,
         local: &str,
@@ -147,6 +169,11 @@ pub struct StreamAttribute<'a> {
 }
 
 impl<'a> StreamAttribute<'a> {
+    /// Resolves the attribute's qualified, local, and namespace names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the encoded name is invalid or its namespace cannot be resolved.
     pub fn name(&self) -> Result<StreamName<'_>, Error> {
         let qualified = utf8(self.raw.key.into_inner())?;
         let local = utf8(self.raw.key.local_name().into_inner())?;
@@ -161,6 +188,11 @@ impl<'a> StreamAttribute<'a> {
         })
     }
 
+    /// Decodes and normalizes the attribute value without consuming the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the attribute value has invalid encoding or entity syntax.
     pub fn value(&self) -> Result<Cow<'_, str>, Error> {
         if let Some(value) = self.cached_value {
             return Ok(Cow::Borrowed(value));
@@ -170,6 +202,11 @@ impl<'a> StreamAttribute<'a> {
             .map_err(|error| Error::InvalidXml(error.to_string()))
     }
 
+    /// Decodes and normalizes the attribute value while consuming the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the attribute value has invalid encoding or entity syntax.
     pub fn into_value(self) -> Result<Cow<'a, str>, Error> {
         if let Some(value) = self.cached_value {
             return Ok(Cow::Borrowed(value));
@@ -188,6 +225,11 @@ pub struct StreamEnd<'a> {
 }
 
 impl StreamEnd<'_> {
+    /// Resolves the end element's qualified, local, and namespace names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the encoded element name is not valid UTF-8.
     pub fn name(&self) -> Result<StreamName<'_>, Error> {
         let qualified = utf8(self.raw.name().into_inner())?;
         let local = utf8(self.raw.local_name().into_inner())?;
@@ -205,6 +247,7 @@ pub struct StreamText<'a> {
 }
 
 impl StreamText<'_> {
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
@@ -216,6 +259,7 @@ pub struct StreamCData<'a> {
 }
 
 impl StreamCData<'_> {
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
@@ -227,6 +271,7 @@ pub struct StreamComment<'a> {
 }
 
 impl StreamComment<'_> {
+    #[must_use]
     pub fn value(&self) -> &str {
         &self.value
     }
@@ -238,10 +283,20 @@ pub struct StreamProcessingInstruction<'a> {
 }
 
 impl StreamProcessingInstruction<'_> {
+    /// Returns the processing-instruction target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target is not valid UTF-8.
     pub fn target(&self) -> Result<&str, Error> {
         utf8(self.raw.target())
     }
 
+    /// Returns trimmed processing-instruction content when present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the content is not valid UTF-8.
     pub fn content(&self) -> Result<Option<&str>, Error> {
         let content = utf8(self.raw.content())?
             .trim_start_matches(|character: char| character.is_ascii_whitespace());
@@ -263,6 +318,10 @@ pub enum XmlStreamEvent<'a> {
     Eof,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "These independent flags encode XML root, current-event, and terminal reader state."
+)]
 struct StreamState {
     policy: XmlSafetyPolicy,
     max_input_bytes_u64: u64,
@@ -291,6 +350,11 @@ struct CachedAttributeValue {
 }
 
 impl<R: BufRead> XmlStreamReader<R> {
+    /// Creates a bounded streaming reader.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `policy` contains a zero limit.
     pub fn new(reader: R, policy: XmlSafetyPolicy) -> Result<Self, Error> {
         policy.validate()?;
         let read_limit = policy.max_input_bytes.saturating_add(1);
@@ -322,6 +386,16 @@ impl<R: BufRead> XmlStreamReader<R> {
         })
     }
 
+    /// Reads and validates the next XML event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for underlying I/O failures, malformed or invalidly encoded XML, forbidden
+    /// document constructs, or any configured safety-limit violation.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The event match keeps reader state transitions adjacent to each XML event kind."
+    )]
     pub fn read_event(&mut self) -> Result<XmlStreamEvent<'_>, Error> {
         if self.state.finished {
             return Ok(XmlStreamEvent::Eof);
@@ -443,6 +517,11 @@ impl<R: BufRead> XmlStreamReader<R> {
     }
 
     /// Reads direct text and CDATA until the end of the current start element.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no current start element is available, a nested element is found, or
+    /// event reading or XML validation fails.
     pub fn read_text_current(&mut self) -> Result<String, Error> {
         self.require_current_start()?;
         self.state.current_start_available = false;
@@ -466,6 +545,11 @@ impl<R: BufRead> XmlStreamReader<R> {
     }
 
     /// Skips the current start element and all descendants with constant retained memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no current start element is available, nesting overflows, the document
+    /// ends early, or event reading or XML validation fails.
     pub fn skip_current(&mut self) -> Result<(), Error> {
         self.require_current_start()?;
         self.state.current_start_available = false;
@@ -484,6 +568,12 @@ impl<R: BufRead> XmlStreamReader<R> {
     }
 
     /// Materializes only the current subtree as a validated owned XML value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no current start element is available, `max_bytes` is zero, namespace
+    /// synthesis or event decoding fails, the subtree exceeds its output bound, or the captured XML
+    /// fails validation.
     pub fn capture_current(&mut self, max_bytes: usize) -> Result<ValidatedXml, Error> {
         self.require_current_start()?;
         if max_bytes == 0 {
@@ -541,7 +631,7 @@ impl<R: BufRead> XmlStreamReader<R> {
                     nested -= 1;
                 }
                 XmlStreamEvent::Text(text) => {
-                    write_capture_event(&mut writer, Event::Text(BytesText::new(text.value())))?
+                    write_capture_event(&mut writer, Event::Text(BytesText::new(text.value())))?;
                 }
                 XmlStreamEvent::CData(cdata) => {
                     write_capture_event(&mut writer, Event::CData(BytesCData::new(cdata.value())))?;

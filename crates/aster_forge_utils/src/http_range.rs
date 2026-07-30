@@ -38,6 +38,11 @@ impl HttpByteRangeSet {
 
 impl HttpByteRange {
     /// Creates a resolved byte range and validates it against the representation length.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpRangeError::EmptyRepresentation`] for a zero-sized representation and
+    /// [`HttpRangeError::Unsatisfiable`] when the bounds are reversed or exceed the representation.
     pub fn new(start: u64, end: u64, total_size: u64) -> Result<Self, HttpRangeError> {
         if total_size == 0 {
             return Err(HttpRangeError::EmptyRepresentation);
@@ -106,6 +111,11 @@ pub enum HttpRangeError {
 /// Multiple ranges are reported separately so callers can choose whether to reject them or
 /// implement multipart responses. End bounds beyond the representation are clamped as required
 /// by HTTP range semantics.
+///
+/// # Errors
+///
+/// Returns an error when the unit, syntax, or numeric bounds are invalid; when more than one range
+/// is requested; or when no requested bytes are satisfiable for the representation.
 pub fn parse_single_byte_range(
     raw: &str,
     total_size: u64,
@@ -127,6 +137,12 @@ pub fn parse_single_byte_range(
 /// must be syntactically valid, while individually unsatisfiable specs are removed as long as at
 /// least one requested range remains satisfiable. End bounds beyond the current representation are
 /// clamped and suffix ranges larger than the representation select it all.
+///
+/// # Errors
+///
+/// Returns an error when the raw header exceeds `maximum_raw_bytes`, the range-set exceeds
+/// `maximum_specs`, the unit or syntax is invalid, a bound is not an unsigned integer, or no range
+/// is satisfiable for the current representation.
 pub fn parse_byte_ranges(
     raw: &str,
     total_size: u64,

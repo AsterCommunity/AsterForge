@@ -34,16 +34,22 @@ pub struct CopyNameTemplate {
 }
 
 /// Normalizes a name to Unicode NFC.
+#[must_use]
 pub fn normalize_name(name: &str) -> String {
     name.nfc().collect()
 }
 
 /// Counts Unicode scalar values in a string.
+#[must_use]
 pub fn char_count(value: &str) -> usize {
     value.chars().count()
 }
 
 /// Normalizes a file or folder name and validates the normalized result.
+///
+/// # Errors
+///
+/// Returns an error when the normalized name violates the shared cross-platform filename rules.
 pub fn normalize_validate_name(name: &str) -> Result<String> {
     let normalized = normalize_name(name);
     validate_normalized_name(&normalized)?;
@@ -51,6 +57,11 @@ pub fn normalize_validate_name(name: &str) -> Result<String> {
 }
 
 /// Validates a file or folder name after Unicode normalization.
+///
+/// # Errors
+///
+/// Returns an error for empty or overlong names, dot components, reserved Windows device names,
+/// forbidden or control characters, surrounding whitespace, or a trailing dot.
 pub fn validate_name(name: &str) -> Result<()> {
     let normalized = normalize_name(name);
     validate_normalized_name(&normalized)
@@ -101,6 +112,11 @@ fn is_windows_reserved_name(name: &str) -> bool {
 /// not a path supplied by a caller. This keeps the helper from panicking on short or non-UTF-8
 /// boundary inputs and prevents accidental nested paths from bypassing the intended sharding
 /// layout.
+///
+/// # Errors
+///
+/// Returns an error when `blob_key` has fewer than four ASCII bytes, is non-ASCII, contains a
+/// control character, or contains a path separator.
 pub fn storage_path_from_blob_key(blob_key: &str) -> Result<String> {
     validate_blob_key_for_storage_path(blob_key)?;
 
@@ -131,6 +147,7 @@ fn validate_blob_key_for_storage_path(blob_key: &str) -> Result<()> {
 }
 
 /// Parses a name into the template used to generate copy names.
+#[must_use]
 pub fn copy_name_template(name: &str) -> CopyNameTemplate {
     let (stem, ext) = match name.rfind('.') {
         Some(dot) if dot > 0 => (&name[..dot], Some(name[dot..].to_string())),
@@ -167,11 +184,13 @@ pub fn copy_name_template(name: &str) -> CopyNameTemplate {
 }
 
 /// Formats a copy name using the default filename length limit.
+#[must_use]
 pub fn format_copy_name(template: &CopyNameTemplate, copy_number: u32) -> String {
     format_copy_name_with_limit(template, copy_number, MAX_FILENAME_LEN)
 }
 
 /// Formats a copy name while keeping the result within `max_len` UTF-8 bytes.
+#[must_use]
 pub fn format_copy_name_with_limit(
     template: &CopyNameTemplate,
     copy_number: u32,
@@ -190,6 +209,7 @@ pub fn format_copy_name_with_limit(
 }
 
 /// Truncates a string to at most `max_len` bytes without splitting a UTF-8 code point.
+#[must_use]
 pub fn truncate_utf8_to_max_bytes(value: &str, max_len: usize) -> String {
     if value.len() <= max_len {
         return value.to_string();
@@ -226,6 +246,7 @@ fn bounded_copy_extension(ext: &str, suffix_len: usize, max_len: usize) -> Strin
 }
 
 /// Returns the next copy name for a file or folder.
+#[must_use]
 pub fn next_copy_name(name: &str) -> String {
     let template = copy_name_template(name);
     format_copy_name(&template, template.next_copy_number)

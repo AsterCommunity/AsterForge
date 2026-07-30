@@ -927,8 +927,8 @@ async fn reload_supervisor_shutdown_interrupts_reconnect_backoff() {
     let worker_shutdown = shutdown.clone();
     let worker_observer = observer.clone();
     let policy = ConfigReloadReconnectPolicy {
-        initial_delay: Duration::from_secs(60),
-        max_delay: Duration::from_secs(60),
+        initial_delay: Duration::from_mins(1),
+        max_delay: Duration::from_mins(1),
         stable_reset_after: Duration::from_secs(30),
         jitter_min_percent: 50,
         jitter_max_percent: 100,

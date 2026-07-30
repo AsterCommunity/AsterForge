@@ -247,7 +247,7 @@ fn lock(path: &str, token: &str) -> DavLock {
         principal: None,
         owner: None,
         timeout_at: None,
-        timeout: Some(Duration::from_secs(60)),
+        timeout: Some(Duration::from_mins(1)),
         shared: false,
         deep: true,
     }
@@ -625,6 +625,10 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The test keeps the existing, missing, collection, and backend-failure lock targets in one matrix."
+)]
 fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
     futures::executor::block_on(async {
         let existing = TestFileSystem {

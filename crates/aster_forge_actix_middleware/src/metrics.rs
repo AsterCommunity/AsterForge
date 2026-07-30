@@ -96,8 +96,9 @@ fn request_metrics(req: &ServiceRequest) -> SharedMetricsRecorder {
     }
 
     req.app_data::<web::Data<SharedMetricsRecorder>>()
-        .map(|data| data.get_ref().clone())
-        .unwrap_or_else(aster_forge_metrics::NoopMetrics::arc)
+        .map_or_else(aster_forge_metrics::NoopMetrics::arc, |data| {
+            data.get_ref().clone()
+        })
 }
 
 fn route_label(req: &ServiceRequest) -> String {

@@ -4,7 +4,7 @@
 //! action wire value, target entity metadata, optional detail JSON, request
 //! metadata, and creation timestamp. Products still own typed action enums,
 //! detail schemas, presentation, retention policy, and authorization. This
-//! module keeps the common SeaORM table contract, index builders, and simple
+//! module keeps the common `SeaORM` table contract, index builders, and simple
 //! write/count/delete helpers in one place.
 
 use chrono::{DateTime, Utc};
@@ -67,6 +67,7 @@ const AUDIT_LOG_IP_ADDRESS_MAX_BYTES: usize = 128;
 const AUDIT_LOG_USER_AGENT_MAX_BYTES: usize = 512;
 
 /// Builds the shared `audit_logs` table creation statement.
+#[must_use]
 pub fn create_audit_logs_table(backend: DatabaseBackend) -> TableCreateStatement {
     Table::create()
         .table(audit_logs_table())
@@ -116,6 +117,7 @@ pub fn create_audit_logs_table(backend: DatabaseBackend) -> TableCreateStatement
 }
 
 /// Builds the shared `audit_logs` table drop statement.
+#[must_use]
 pub fn drop_audit_logs_table() -> TableDropStatement {
     Table::drop()
         .table(audit_logs_table())
@@ -124,6 +126,7 @@ pub fn drop_audit_logs_table() -> TableDropStatement {
 }
 
 /// Builds the created-at index.
+#[must_use]
 pub fn create_audit_logs_created_at_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_CREATED_AT_INDEX)
@@ -134,6 +137,7 @@ pub fn create_audit_logs_created_at_index() -> IndexCreateStatement {
 }
 
 /// Builds the action index.
+#[must_use]
 pub fn create_audit_logs_action_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_ACTION_INDEX)
@@ -144,6 +148,7 @@ pub fn create_audit_logs_action_index() -> IndexCreateStatement {
 }
 
 /// Builds the user id index.
+#[must_use]
 pub fn create_audit_logs_user_id_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_USER_ID_INDEX)
@@ -154,6 +159,7 @@ pub fn create_audit_logs_user_id_index() -> IndexCreateStatement {
 }
 
 /// Builds the action/created/user activity index.
+#[must_use]
 pub fn create_audit_logs_action_created_user_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_ACTION_CREATED_USER_INDEX)
@@ -166,6 +172,7 @@ pub fn create_audit_logs_action_created_user_index() -> IndexCreateStatement {
 }
 
 /// Builds the created-at/id cursor index.
+#[must_use]
 pub fn create_audit_logs_created_id_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_CREATED_ID_INDEX)
@@ -177,6 +184,7 @@ pub fn create_audit_logs_created_id_index() -> IndexCreateStatement {
 }
 
 /// Builds the user/created-at/id cursor index.
+#[must_use]
 pub fn create_audit_logs_user_created_id_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_USER_CREATED_ID_INDEX)
@@ -189,6 +197,7 @@ pub fn create_audit_logs_user_created_id_index() -> IndexCreateStatement {
 }
 
 /// Builds the action/created-at/id cursor index.
+#[must_use]
 pub fn create_audit_logs_action_created_id_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_ACTION_CREATED_ID_INDEX)
@@ -201,6 +210,7 @@ pub fn create_audit_logs_action_created_id_index() -> IndexCreateStatement {
 }
 
 /// Builds the entity-type/created-at/id cursor index.
+#[must_use]
 pub fn create_audit_logs_entity_type_created_id_index() -> IndexCreateStatement {
     Index::create()
         .name(AUDIT_LOG_ENTITY_TYPE_CREATED_ID_INDEX)
@@ -213,6 +223,7 @@ pub fn create_audit_logs_entity_type_created_id_index() -> IndexCreateStatement 
 }
 
 /// Returns the base index builders used by the current shared schema.
+#[must_use]
 pub fn create_audit_logs_base_indexes() -> [IndexCreateStatement; 3] {
     [
         create_audit_logs_created_at_index(),
@@ -222,6 +233,7 @@ pub fn create_audit_logs_base_indexes() -> [IndexCreateStatement; 3] {
 }
 
 /// Returns the optional activity/query index builders used by admin views.
+#[must_use]
 pub fn create_audit_logs_query_indexes() -> [IndexCreateStatement; 5] {
     [
         create_audit_logs_action_created_user_index(),
@@ -289,7 +301,7 @@ fn utc_datetime_column(backend: DatabaseBackend, column: Alias) -> ColumnDef {
     definition
 }
 
-/// SeaORM model for `audit_logs` with product-neutral string action values.
+/// `SeaORM` model for `audit_logs` with product-neutral string action values.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "audit_logs")]
 pub struct Model {
@@ -398,11 +410,15 @@ impl AuditLogCursorSlice {
 }
 
 impl AuditLogCreate {
-    /// Converts the request into a validated SeaORM active model.
+    /// Converts the request into a validated `SeaORM` active model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub fn into_active_model(self) -> crate::Result<ActiveModel> {
         validate_create(&self)?;
         Ok(ActiveModel {
-            id: Default::default(),
+            id: sea_orm::ActiveValue::default(),
             user_id: Set(self.user_id),
             action: Set(self.action),
             entity_type: Set(self.entity_type),
@@ -423,27 +439,44 @@ pub struct AuditLogDbStore {
 }
 
 impl AuditLogDbStore {
-    /// Creates an audit log store from a SeaORM database connection.
+    /// Creates an audit log store from a `SeaORM` database connection.
+    #[must_use]
     pub const fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 
     /// Inserts one audit log row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn create(&self, request: AuditLogCreate) -> crate::Result<Model> {
         create_audit_log_row(&self.db, request).await
     }
 
     /// Inserts multiple already-built audit log active models.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn create_many(&self, models: Vec<ActiveModel>) -> crate::Result<()> {
         create_audit_log_rows(&self.db, models).await
     }
 
     /// Inserts multiple audit log create requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn create_many_requests(&self, requests: Vec<AuditLogCreate>) -> crate::Result<()> {
         create_audit_log_requests(&self.db, requests).await
     }
 
     /// Counts rows created in `[start, end)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn count_created_between(
         &self,
         start: DateTime<Utc>,
@@ -453,6 +486,10 @@ impl AuditLogDbStore {
     }
 
     /// Counts rows for any of the supplied action wire values in `[start, end)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn count_created_between_with_actions(
         &self,
         start: DateTime<Utc>,
@@ -463,11 +500,19 @@ impl AuditLogDbStore {
     }
 
     /// Deletes rows created before the supplied cutoff.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn delete_before(&self, before: DateTime<Utc>) -> crate::Result<u64> {
         delete_audit_logs_before(&self.db, before).await
     }
 
     /// Finds audit logs with shared cursor filtering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn find_with_filters_cursor(
         &self,
         query: AuditLogQuery<'_>,
@@ -476,6 +521,10 @@ impl AuditLogDbStore {
     }
 
     /// Counts distinct positive user ids for any supplied action wire value in `[start, end)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn count_distinct_users_created_between_with_actions(
         &self,
         start: DateTime<Utc>,
@@ -487,7 +536,11 @@ impl AuditLogDbStore {
     }
 }
 
-/// Inserts one audit log row using any SeaORM connection or transaction.
+/// Inserts one audit log row using any `SeaORM` connection or transaction.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn create_audit_log_row<C>(db: &C, request: AuditLogCreate) -> crate::Result<Model>
 where
     C: ConnectionTrait,
@@ -500,6 +553,10 @@ where
 }
 
 /// Inserts many validated audit log create requests.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn create_audit_log_requests<C>(
     db: &C,
     requests: Vec<AuditLogCreate>,
@@ -518,6 +575,10 @@ where
 }
 
 /// Inserts many audit log active models.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn create_audit_log_rows<C>(db: &C, models: Vec<ActiveModel>) -> crate::Result<()>
 where
     C: ConnectionTrait,
@@ -533,6 +594,10 @@ where
 }
 
 /// Counts audit log rows created in `[start, end)`.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn count_audit_logs_created_between<C>(
     db: &C,
     start: DateTime<Utc>,
@@ -550,6 +615,10 @@ where
 }
 
 /// Counts audit log rows for any of the supplied action wire values in `[start, end)`.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn count_audit_logs_created_between_with_actions<C>(
     db: &C,
     start: DateTime<Utc>,
@@ -572,6 +641,10 @@ where
 }
 
 /// Counts distinct positive user ids for any supplied action wire value in `[start, end)`.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn count_distinct_audit_log_users_created_between_with_actions<C>(
     db: &C,
     start: DateTime<Utc>,
@@ -605,6 +678,10 @@ where
 }
 
 /// Finds audit logs with shared cursor filtering.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn find_audit_logs_with_filters_cursor<C>(
     db: &C,
     query: AuditLogQuery<'_>,
@@ -660,6 +737,10 @@ where
 }
 
 /// Deletes audit log rows created before the supplied cutoff.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn delete_audit_logs_before<C>(db: &C, before: DateTime<Utc>) -> crate::Result<u64>
 where
     C: ConnectionTrait,
@@ -989,7 +1070,7 @@ mod tests {
         store
             .create_many(vec![
                 ActiveModel {
-                    id: Default::default(),
+                    id: sea_orm::ActiveValue::default(),
                     user_id: Set(1),
                     action: Set("a".to_string()),
                     entity_type: Set("system".to_string()),
@@ -1001,7 +1082,7 @@ mod tests {
                     created_at: Set(now),
                 },
                 ActiveModel {
-                    id: Default::default(),
+                    id: sea_orm::ActiveValue::default(),
                     user_id: Set(2),
                     action: Set("b".to_string()),
                     entity_type: Set("system".to_string()),

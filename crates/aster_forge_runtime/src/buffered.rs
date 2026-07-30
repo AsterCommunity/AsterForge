@@ -35,6 +35,7 @@ pub struct BufferedBatchConfig {
 
 impl BufferedBatchConfig {
     /// Creates a buffering policy.
+    #[must_use]
     pub fn new(
         queue_capacity: usize,
         batch_size: usize,
@@ -236,8 +237,8 @@ where
             let delayed_flush_after = writer.config.delayed_flush_after;
             tokio::select! {
                 biased;
-                _ = writer.shutdown_token.cancelled() => return,
-                _ = tokio::time::sleep(delayed_flush_after) => {}
+                () = writer.shutdown_token.cancelled() => return,
+                () = tokio::time::sleep(delayed_flush_after) => {}
             }
 
             {

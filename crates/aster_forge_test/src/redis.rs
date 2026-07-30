@@ -15,7 +15,7 @@ use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunne
 /// Handle to the suite's shared Redis container.
 pub struct RedisTestContainer {
     url: String,
-    _container: ContainerAsync<GenericImage>,
+    container: ContainerAsync<GenericImage>,
     _lease: ContainerLease,
 }
 
@@ -30,6 +30,11 @@ pub struct AuthenticatedRedisTestContainer {
 
 impl AuthenticatedRedisTestContainer {
     /// Starts an isolated Redis server that requires `password`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the container or port cannot be created, the credential URL is invalid, or
+    /// Redis does not become ready before the timeout.
     pub async fn start(password: &str) -> Self {
         let container = GenericImage::new("redis", "7-alpine")
             .with_exposed_port(IntoContainerPort::tcp(6379))
@@ -60,6 +65,7 @@ impl AuthenticatedRedisTestContainer {
     }
 
     /// Returns the Redis base URL without userinfo.
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -67,6 +73,11 @@ impl AuthenticatedRedisTestContainer {
 
 impl RedisTestContainer {
     /// Starts (or reuses) the shared Redis container and waits for it to accept connections.
+    ///
+    /// # Panics
+    ///
+    /// Panics when shared state, port reservation, container startup, endpoint construction, or
+    /// Redis readiness fails.
     pub async fn start(suite: &TestContainerSuite) -> Self {
         // Keep the host port fixed across stop/start. Docker assigns a new ephemeral port to a
         // container whose mapping leaves HostPort empty, stranding already-running processes on
@@ -102,27 +113,36 @@ impl RedisTestContainer {
 
         Self {
             url,
-            _container: container,
+            container,
             _lease: ContainerLease::new(suite.clone(), "redis-fixed"),
         }
     }
 
     /// Returns the Redis URL, for example `redis://127.0.0.1:6379/0`.
+    #[must_use]
     pub fn url(&self) -> &str {
         &self.url
     }
 
     /// Stops Redis immediately to simulate a broker outage.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the container runtime fails to stop Redis.
     pub async fn stop(&self) {
-        self._container
+        self.container
             .stop_with_timeout(Some(0))
             .await
             .expect("failed to stop Redis test container");
     }
 
     /// Restarts a previously stopped Redis container.
+    ///
+    /// # Panics
+    ///
+    /// Panics when restart, client construction, or the Redis readiness check fails.
     pub async fn restart(&self) {
-        self._container
+        self.container
             .start()
             .await
             .expect("failed to restart Redis test container");

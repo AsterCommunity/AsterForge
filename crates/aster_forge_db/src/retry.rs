@@ -36,6 +36,7 @@ pub struct RetryConfig {
 impl RetryConfig {
     /// Profile for connection setup and acquisition: the peer may need time to recover,
     /// so back off slowly (3 retries, 100ms base, 5s cap).
+    #[must_use]
     pub fn connection() -> Self {
         Self {
             max_retries: 3,
@@ -46,6 +47,7 @@ impl RetryConfig {
 
     /// Profile for deadlock/serialization-failure retries: lock-wait windows are short,
     /// so retry quickly (3 retries, 5ms base, 50ms cap).
+    #[must_use]
     pub fn deadlock() -> Self {
         Self {
             max_retries: 3,
@@ -62,7 +64,7 @@ impl Default for RetryConfig {
     }
 }
 
-/// Returns whether a SeaORM error represents a transient database failure.
+/// Returns whether a `SeaORM` error represents a transient database failure.
 ///
 /// Connection acquisition and connection failures are always retryable: they happen before
 /// the statement ran, so retrying cannot duplicate work. Query and execution failures are
@@ -79,7 +81,7 @@ pub fn is_retryable_sea_orm_error(error: &sea_orm::DbErr) -> bool {
     }
 }
 
-/// Executes a SeaORM operation with shared transient-error classification and backoff.
+/// Executes a `SeaORM` operation with shared transient-error classification and backoff.
 ///
 /// This is a statement-level escape hatch for idempotent single statements only (reads,
 /// upserts, deletes by key). **Never use it around a multi-statement transaction**: a
@@ -87,6 +89,10 @@ pub fn is_retryable_sea_orm_error(error: &sea_orm::DbErr) -> bool {
 /// afterwards executes them in autocommit mode, producing partial writes. Transactions
 /// belong in [`crate::transaction::with_transaction_retry`], which retries the entire
 /// callback and classifies commit outcomes.
+///
+/// # Errors
+///
+/// Returns an error when retry orchestration or the database operation fails.
 pub async fn with_sea_orm_retry<F, Fut, T>(
     operation_name: &str,
     config: RetryConfig,
@@ -118,11 +124,15 @@ where
     }
 }
 
-/// Executes a SeaORM operation with retry and a timeout applied to every attempt.
+/// Executes a `SeaORM` operation with retry and a timeout applied to every attempt.
 ///
 /// Same classification and boundary rules as [`with_sea_orm_retry`]; a timed-out attempt
 /// is retried regardless of error classification because the operation produced no outcome.
 /// Only wrap work that stays safe when a timed-out attempt keeps running in the background.
+///
+/// # Errors
+///
+/// Returns an error when retry orchestration or the database operation fails.
 pub async fn with_sea_orm_retry_timeout<F, Fut, T>(
     operation_name: &str,
     config: RetryConfig,
@@ -177,6 +187,10 @@ where
 }
 
 /// Execute an async operation with exponential backoff retry
+///
+/// # Errors
+///
+/// Returns an error when retry orchestration or the database operation fails.
 pub async fn with_retry<F, Fut, T>(config: &RetryConfig, operation: F) -> Result<T>
 where
     F: Fn() -> Fut,

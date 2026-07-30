@@ -1,4 +1,4 @@
-//! Optional Actix transport adapter for the WebDAV protocol model.
+//! Optional Actix transport adapter for the `WebDAV` protocol model.
 
 use actix_web::http::{StatusCode as ActixStatusCode, header as actix_header};
 use actix_web::{HttpRequest, HttpResponse};
@@ -14,7 +14,7 @@ use crate::{
     DavRequestOrigin, DavRequestTarget, DavResponse, DavResponseBody, IfHeader,
 };
 
-/// Request body prepared according to the selected WebDAV method contract.
+/// Request body prepared according to the selected `WebDAV` method contract.
 pub enum DavPreparedBody {
     None,
     Xml(Vec<u8>),
@@ -42,6 +42,10 @@ impl DavPreparedBody {
 }
 
 /// Parses an Actix request into the transport-neutral request head.
+///
+/// # Errors
+///
+/// Returns [`DavProtocolError`] when the URI, mount path, origin, or headers are invalid.
 pub fn request_head(
     request: &HttpRequest,
     mount_path: &str,
@@ -55,6 +59,10 @@ pub fn request_head(
 }
 
 /// Parses the request target before resolving whether the HTTP method is known to Forge.
+///
+/// # Errors
+///
+/// Returns [`DavProtocolError`] when the URI, origin, or mount-relative target is invalid.
 pub fn request_target<'a>(
     request: &HttpRequest,
     mount_path: &'a str,
@@ -73,6 +81,10 @@ pub fn request_target<'a>(
 }
 
 /// Resolves the product declaration and maps the validated capability snapshot to Actix.
+///
+/// # Errors
+///
+/// Returns an error response when provider lookup or capability validation fails.
 pub async fn capability_snapshot<Provider: DavCapabilityProvider>(
     provider: &Provider,
     target: &DavCapabilityTarget,
@@ -84,6 +96,10 @@ pub async fn capability_snapshot<Provider: DavCapabilityProvider>(
 }
 
 /// Applies the resource-aware dispatch gate to an Actix request method.
+///
+/// # Errors
+///
+/// Returns a 405 response when the snapshot does not allow the request method.
 pub fn gate_request_method(
     request: &HttpRequest,
     snapshot: &DavCapabilitySnapshot,
@@ -127,16 +143,28 @@ where
 
 /// Maps a transport-neutral protocol error into its Actix response.
 #[must_use]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "The owned error signature composes directly with Result::map_err at the Actix boundary."
+)]
 pub fn protocol_error_response(error: DavProtocolError) -> HttpResponse {
     into_response(crate::protocol_error_response(&error))
 }
 
 /// Copies Actix headers into the transport-neutral map and maps malformed input to a response.
+///
+/// # Errors
+///
+/// Returns an error response when an Actix header cannot be represented by `http` 1.x.
 pub fn converted_headers(source: &actix_header::HeaderMap) -> Result<HeaderMap, HttpResponse> {
     convert_header_map(source).map_err(protocol_error_response)
 }
 
-/// Resolves and enforces a parsed WebDAV `If` header through the canonical backend ports.
+/// Resolves and enforces a parsed `WebDAV` `If` header through the canonical backend ports.
+///
+/// # Errors
+///
+/// Returns an error response when DAV `If` evaluation or backend access fails.
 pub async fn enforce_if_header_with_backends(
     if_header: Option<&IfHeader>,
     filesystem: &dyn DavFileSystem,
@@ -166,6 +194,10 @@ pub async fn enforce_if_header_with_backends(
 }
 
 /// Enforces resource lock submission and maps the protocol response to Actix.
+///
+/// # Errors
+///
+/// Returns an error response when a conflicting lock exists or lock lookup fails.
 pub async fn enforce_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -189,6 +221,10 @@ pub async fn enforce_unlocked(
 }
 
 /// Enforces lock submission for the canonical parent and maps the response to Actix.
+///
+/// # Errors
+///
+/// Returns an error response when the parent is locked or lock lookup fails.
 pub async fn enforce_parent_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -210,6 +246,10 @@ pub async fn enforce_parent_unlocked(
 }
 
 /// Converts Actix headers and runs the method-aware conditional request planner.
+///
+/// # Errors
+///
+/// Returns an error response when header conversion or conditional planning fails.
 pub fn plan_http_conditionals(
     headers: &actix_header::HeaderMap,
     method: DavMethod,
@@ -221,6 +261,10 @@ pub fn plan_http_conditionals(
 }
 
 /// Copies Actix header types into the transport-neutral `http` 1.x map.
+///
+/// # Errors
+///
+/// Returns [`DavProtocolError`] when a header name or value cannot be converted.
 pub fn convert_header_map(source: &actix_header::HeaderMap) -> Result<HeaderMap, DavProtocolError> {
     let mut headers = HeaderMap::with_capacity(source.len());
     for (name, value) in source {
@@ -234,6 +278,10 @@ pub fn convert_header_map(source: &actix_header::HeaderMap) -> Result<HeaderMap,
 }
 
 /// Rejects the first non-empty request body chunk without buffering the remaining payload.
+///
+/// # Errors
+///
+/// Returns [`DavBodyError`] when payload reading fails or the body is not empty.
 pub async fn ensure_empty_body(payload: &mut actix_web::web::Payload) -> Result<(), DavBodyError> {
     while let Some(chunk) = payload.next().await {
         let chunk = chunk.map_err(|_| DavBodyError::ReadFailed)?;
@@ -245,6 +293,10 @@ pub async fn ensure_empty_body(payload: &mut actix_web::web::Payload) -> Result<
 }
 
 /// Collects a bounded request body for parsing by the protocol or product layer.
+///
+/// # Errors
+///
+/// Returns [`DavBodyError`] when reading fails or the configured maximum is exceeded.
 pub async fn collect_bounded_body(
     payload: &mut actix_web::web::Payload,
     maximum: usize,
@@ -265,6 +317,10 @@ pub async fn collect_bounded_body(
 }
 
 /// Applies an already planned body policy while leaving streaming bodies untouched.
+///
+/// # Errors
+///
+/// Returns [`DavBodyError`] when the planned body policy cannot be satisfied.
 pub async fn prepare_request_body(
     policy: DavBodyPolicy,
     payload: &mut actix_web::web::Payload,

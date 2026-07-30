@@ -212,7 +212,7 @@ impl<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
             lease_id: lease_id.into(),
             lease_store,
             schedule_store,
-            claim_ttl: Duration::from_secs(120),
+            claim_ttl: Duration::from_mins(2),
             lease_ttl: aster_forge_runtime::DEFAULT_RUNTIME_LEASE_TTL,
             lease_renew_interval: Duration::from_secs(10),
             lease_standby_retry_interval: aster_forge_runtime::DEFAULT_RUNTIME_LEASE_RETRY_INTERVAL,
@@ -225,24 +225,28 @@ impl<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
     }
 
     /// Sets the scheduled task claim TTL.
+    #[must_use]
     pub const fn claim_ttl(mut self, claim_ttl: Duration) -> Self {
         self.claim_ttl = claim_ttl;
         self
     }
 
     /// Sets the runtime lease TTL.
+    #[must_use]
     pub const fn lease_ttl(mut self, lease_ttl: Duration) -> Self {
         self.lease_ttl = lease_ttl;
         self
     }
 
     /// Sets the runtime lease renewal interval for the active owner.
+    #[must_use]
     pub const fn lease_renew_interval(mut self, lease_renew_interval: Duration) -> Self {
         self.lease_renew_interval = lease_renew_interval;
         self
     }
 
     /// Sets the standby retry interval while another process owns the lease.
+    #[must_use]
     pub const fn lease_standby_retry_interval(
         mut self,
         lease_standby_retry_interval: Duration,
@@ -337,8 +341,8 @@ pub struct ScheduledRuntimeTaskGroup<'a, Name, State, Store, PanicFn, RecordFn, 
     _outcome: std::marker::PhantomData<Outcome>,
 }
 
-impl<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
-    ScheduledRuntimeTaskGroup<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+impl<Name, State, Store, PanicFn, RecordFn, Outcome>
+    ScheduledRuntimeTaskGroup<'_, Name, State, Store, PanicFn, RecordFn, Outcome>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -363,8 +367,8 @@ where
     }
 }
 
-impl<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
-    ScheduledRuntimeTaskGroup<'a, Name, State, Store, PanicFn, RecordFn, Outcome>
+impl<Name, State, Store, PanicFn, RecordFn, Outcome>
+    ScheduledRuntimeTaskGroup<'_, Name, State, Store, PanicFn, RecordFn, Outcome>
 where
     Name: RegisteredRuntimeTaskKind + Send + Sync + 'static,
     State: Clone + Send + Sync + 'static,
@@ -553,8 +557,8 @@ pub async fn run_scheduled_periodic_task<
             periodic_sleep_duration((task.interval_fn)(&task.state), task.jitter_cap);
         tokio::select! {
             biased;
-            _ = task.shutdown_token.cancelled() => break,
-            _ = tokio::time::sleep(sleep_duration) => {}
+            () = task.shutdown_token.cancelled() => break,
+            () = tokio::time::sleep(sleep_duration) => {}
         }
 
         if task.shutdown_token.is_cancelled() {
@@ -572,6 +576,7 @@ pub async fn run_scheduled_periodic_task<
 /// Renewing three times per TTL window means two consecutive missed ticks still
 /// leave one renewal before expiry. The floor keeps `tokio::time::interval`
 /// away from a zero period for pathological TTLs.
+#[must_use]
 pub fn scheduled_claim_renew_interval(claim_ttl: Duration) -> Duration {
     (claim_ttl / 3).max(Duration::from_millis(10))
 }
@@ -597,7 +602,7 @@ pub async fn run_scheduled_claim_renewal_loop<Store>(
 
     loop {
         tokio::select! {
-            _ = stop_token.cancelled() => return,
+            () = stop_token.cancelled() => return,
             _ = ticker.tick() => {
                 let renewal = ScheduledTaskClaimRenewal {
                     claim: &claim,
@@ -605,7 +610,7 @@ pub async fn run_scheduled_claim_renewal_loop<Store>(
                     claim_ttl,
                 };
                 let result = tokio::select! {
-                    _ = stop_token.cancelled() => return,
+                    () = stop_token.cancelled() => return,
                     result = store.renew_scheduled_task_claim(renewal) => result,
                 };
 
@@ -631,6 +636,10 @@ pub async fn run_scheduled_claim_renewal_loop<Store>(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Catalog ensure, fenced claim, renewal, panic capture, recording, and completion form one scheduled iteration."
+)]
 async fn run_scheduled_periodic_iteration<
     Name,
     State,
@@ -791,6 +800,7 @@ async fn run_scheduled_periodic_iteration<
 }
 
 /// Computes the next run timestamp after a completed scheduled task firing.
+#[must_use]
 pub fn next_scheduled_run_at(
     finished_at: DateTime<Utc>,
     interval: Duration,
@@ -826,8 +836,12 @@ mod tests {
         renewal_script: Arc<Mutex<std::collections::VecDeque<Result<bool, String>>>>,
     }
 
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "The scheduled task interval callback receives shared state by reference; this fixture uses unit state."
+    )]
     fn test_interval(_: &()) -> std::time::Duration {
-        std::time::Duration::from_secs(60)
+        std::time::Duration::from_mins(1)
     }
 
     #[derive(Clone)]
@@ -1188,7 +1202,7 @@ mod tests {
     fn next_scheduled_run_at_adds_interval() {
         let finished_at = Utc.with_ymd_and_hms(2026, 6, 26, 1, 2, 3).unwrap();
         assert_eq!(
-            next_scheduled_run_at(finished_at, std::time::Duration::from_secs(60)),
+            next_scheduled_run_at(finished_at, std::time::Duration::from_mins(1)),
             Some(Utc.with_ymd_and_hms(2026, 6, 26, 1, 3, 3).unwrap())
         );
     }
@@ -1209,7 +1223,7 @@ mod tests {
     #[test]
     fn claim_renew_interval_is_one_third_of_ttl_with_floor() {
         assert_eq!(
-            scheduled_claim_renew_interval(std::time::Duration::from_secs(120)),
+            scheduled_claim_renew_interval(std::time::Duration::from_mins(2)),
             std::time::Duration::from_secs(40)
         );
         assert_eq!(

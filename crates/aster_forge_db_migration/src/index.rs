@@ -3,8 +3,12 @@ use sea_orm_migration::sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statem
 
 /// Drops an index when it exists across all supported database backends.
 ///
-/// MySQL does not support `DROP INDEX IF EXISTS`, so this helper checks
+/// `MySQL` does not support `DROP INDEX IF EXISTS`, so this helper checks
 /// `information_schema.statistics` before issuing the backend-specific drop.
+///
+/// # Errors
+///
+/// Returns an error when the `MySQL` existence query or backend index-drop statement fails.
 pub async fn drop_index_if_exists<C>(
     db: &C,
     table_name: &str,
@@ -23,9 +27,14 @@ where
     Ok(())
 }
 
-/// Renames a MySQL index when the source exists and the target does not.
+/// Renames a `MySQL` index when the source exists and the target does not.
 ///
 /// Calling it repeatedly is safe.
+///
+/// # Errors
+///
+/// Returns an error for invalid identifiers, a non-`MySQL` connection, a failed existence query,
+/// or a failed `ALTER TABLE` statement.
 pub async fn rename_mysql_index_if_exists<C>(
     db: &C,
     table_name: &str,
@@ -70,7 +79,7 @@ fn drop_index_for_backend(
     if backend != DatabaseBackend::MySql {
         statement.if_exists();
     }
-    statement.to_owned()
+    statement.clone()
 }
 
 async fn mysql_index_exists<C>(db: &C, table_name: &str, index_name: &str) -> Result<bool, DbErr>

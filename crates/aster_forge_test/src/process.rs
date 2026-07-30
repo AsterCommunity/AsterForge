@@ -10,6 +10,11 @@ use std::time::{Duration, Instant};
 use crate::temp::TestTempDir;
 
 /// Reserves an ephemeral loopback port and releases it for a child process to bind.
+///
+/// # Panics
+///
+/// Panics when a loopback listener cannot be bound or its local address cannot be queried.
+#[must_use]
 pub fn available_loopback_port() -> u16 {
     TcpListener::bind(("127.0.0.1", 0))
         .expect("failed to reserve local test port")
@@ -32,6 +37,11 @@ impl TestProcess {
     ///
     /// Callers own product-specific arguments and environment variables. This helper owns only
     /// process lifecycle and diagnostics.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixture name is invalid, its temporary directory or log files cannot be
+    /// created, or the child process cannot be spawned.
     pub fn spawn(name: &str, command: &mut Command) -> Self {
         assert_valid_process_name(name);
         let runtime_dir = TestTempDir::new(&format!("process-{name}"));
@@ -60,11 +70,13 @@ impl TestProcess {
     }
 
     /// Returns the fixture name used in diagnostics.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the isolated working directory.
+    #[must_use]
     pub fn runtime_dir(&self) -> &Path {
         self.runtime_dir.path()
     }
@@ -79,6 +91,10 @@ impl TestProcess {
     }
 
     /// Sends SIGTERM and waits for the child to exit within `timeout`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the signal command fails, SIGTERM is rejected, or child status cannot be read.
     #[cfg(unix)]
     pub fn terminate_gracefully(&mut self, timeout: Duration) -> bool {
         let Some(child) = self.child.as_mut() else {
@@ -111,6 +127,10 @@ impl TestProcess {
     }
 
     /// Panics with captured logs when the child has exited unexpectedly.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixture has stopped, child status cannot be queried, or the child exited.
     pub fn assert_running(&mut self) {
         let Some(child) = self.child.as_mut() else {
             panic!("test process {} has already stopped", self.name);
@@ -128,6 +148,7 @@ impl TestProcess {
     }
 
     /// Returns the tail of stdout and stderr for failure reporting.
+    #[must_use]
     pub fn diagnostics(&self) -> String {
         format!(
             "--- {} stdout ---\n{}\n--- {} stderr ---\n{}",

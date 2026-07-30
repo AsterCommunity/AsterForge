@@ -4,7 +4,7 @@
 //! serialization, retry classification, erased task-spec adapters, registry generation, runtime
 //! worker loops, lease guards, heartbeat loops, lane claiming, dispatch aggregation, drain loops,
 //! and task artifact temporary-directory helpers. It deliberately does not own database entities,
-//! SeaORM repositories, product task kind enums, runtime configuration, metrics labels, or concrete
+//! `SeaORM` repositories, product task kind enums, runtime configuration, metrics labels, or concrete
 //! task implementations. Product crates keep those boundaries and register their specs and storage
 //! adapters explicitly.
 #![cfg_attr(

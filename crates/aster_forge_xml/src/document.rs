@@ -173,12 +173,11 @@ impl<'a> ArenaView<'a> {
     }
 
     fn resolve_namespace(self, scope: Option<ScopeId>, prefix: &str) -> Option<&'a str> {
-        match self.checked_resolve_namespace(scope, prefix) {
-            Ok(namespace) => namespace,
-            Err(()) => {
-                debug_assert!(false, "invalid internal XML namespace reference");
-                None
-            }
+        if let Ok(namespace) = self.checked_resolve_namespace(scope, prefix) {
+            namespace
+        } else {
+            debug_assert!(false, "invalid internal XML namespace reference");
+            None
         }
     }
 
@@ -231,11 +230,21 @@ pub type OwnedDocument = XmlDocument<Arc<[u8]>>;
 
 impl<S: AsRef<[u8]>> XmlDocument<S> {
     /// Parses a complete XML document with the default bounded policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source violates the default safety policy, is malformed, or
+    /// contains invalid XML data or encoding.
     pub fn parse(source: S) -> Result<Self, Error> {
         Self::parse_with_options(source, &ParseOptions::default())
     }
 
     /// Parses a complete XML document into a flat arena.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `options` is invalid, the source exceeds a configured limit, or the
+    /// XML is malformed or has invalid data or encoding.
     pub fn parse_with_options(source: S, options: &ParseOptions) -> Result<Self, Error> {
         options.safety.validate()?;
         if source.as_ref().len() > options.safety.max_input_bytes {
@@ -305,6 +314,11 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
         self.owned_values.len()
     }
 
+    /// Writes the exact original document bytes to `writer`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the destination rejects the write.
     pub fn write_original<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         writer.write_all(self.source())?;
         Ok(())
@@ -337,11 +351,21 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
 
 impl XmlDocument<Arc<[u8]>> {
     /// Reads and parses a complete document with the default bounded policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when reading fails or the input violates the default XML safety and
+    /// well-formedness contract.
     pub fn from_reader<R: Read>(reader: R) -> Result<Self, Error> {
         Self::from_reader_with_options(reader, &ParseOptions::default())
     }
 
     /// Reads at most one byte beyond the configured limit before parsing an owned document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `options` is invalid, reading fails, the input exceeds the byte limit,
+    /// or the XML violates a configured safety or well-formedness rule.
     pub fn from_reader_with_options<R: Read>(
         reader: R,
         options: &ParseOptions,
@@ -364,10 +388,21 @@ impl XmlDocument<Arc<[u8]>> {
 pub struct ValidatedXml(Arc<OwnedDocument>);
 
 impl ValidatedXml {
+    /// Validates and owns XML bytes under the default untrusted-input policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bytes violate the default XML safety or well-formedness contract.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Result<Self, Error> {
         Self::with_policy(bytes, XmlSafetyPolicy::untrusted())
     }
 
+    /// Validates and owns XML bytes under `policy`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `policy` is invalid or the bytes violate a configured safety or
+    /// well-formedness rule.
     pub fn with_policy(
         bytes: impl Into<Arc<[u8]>>,
         policy: XmlSafetyPolicy,
@@ -378,15 +413,23 @@ impl ValidatedXml {
         Ok(Self(Arc::new(document)))
     }
 
+    /// Reads, validates, and owns XML under the default untrusted-input policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when reading fails or the input violates the default XML safety or
+    /// well-formedness contract.
     pub fn from_reader<R: Read>(reader: R) -> Result<Self, Error> {
         let document = OwnedDocument::from_reader(reader)?;
         Ok(Self(Arc::new(document)))
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.source()
     }
 
+    #[must_use]
     pub fn document(&self) -> &OwnedDocument {
         &self.0
     }
@@ -407,10 +450,12 @@ impl<S> Clone for ElementRef<'_, S> {
 }
 
 impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
+    #[must_use]
     pub fn id(self) -> NodeId {
         self.id
     }
 
+    #[must_use]
     pub fn parent(self) -> Option<ElementRef<'document, S>> {
         self.document.nodes[self.id.index()]
             .parent
@@ -420,6 +465,7 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
             })
     }
 
+    #[must_use]
     pub fn qualified_name(self) -> &'document str {
         let Some(data) = self.document.element_data(self.id) else {
             return "";
@@ -427,20 +473,24 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         self.document.value(data.qualified_name)
     }
 
+    #[must_use]
     pub fn prefix(self) -> Option<&'document str> {
         split_qualified_name(self.qualified_name()).0
     }
 
+    #[must_use]
     pub fn name(self) -> &'document str {
         split_qualified_name(self.qualified_name()).1
     }
 
+    #[must_use]
     pub fn namespace(self) -> Option<&'document str> {
         let data = self.document.element_data(self.id)?;
         self.document
             .resolve_namespace(data.namespace_scope, self.prefix().unwrap_or(""))
     }
 
+    #[must_use]
     pub fn raw_xml(self) -> &'document [u8] {
         let Some(data) = self.document.element_data(self.id) else {
             return &[];
@@ -451,6 +501,7 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         &self.document.source()[range]
     }
 
+    #[must_use]
     pub fn attributes(self) -> Attributes<'document, S> {
         let range = self
             .document
@@ -476,6 +527,7 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
             .map(AttributeRef::value)
     }
 
+    #[must_use]
     pub fn children(self) -> Children<'document, S> {
         Children {
             document: self.document,
@@ -483,25 +535,30 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         }
     }
 
+    #[must_use]
     pub fn child_elements(self) -> ChildElements<'document, S> {
         ChildElements {
             children: self.children(),
         }
     }
 
+    #[must_use]
     pub fn get_child(self, name: &str) -> Option<ElementRef<'document, S>> {
         self.child_elements().find(|element| element.name() == name)
     }
 
+    #[must_use]
     pub fn get_child_ns(self, name: &str, namespace: &str) -> Option<ElementRef<'document, S>> {
         self.child_elements()
             .find(|element| element.name() == name && element.namespace() == Some(namespace))
     }
 
+    #[must_use]
     pub fn descendants(self) -> DescendantElements<'document, S> {
         DescendantElements { stack: vec![self] }
     }
 
+    #[must_use]
     pub fn text(self) -> Option<Cow<'document, str>> {
         let mut values = self.children().filter_map(|node| match node {
             NodeRef::Text(text) | NodeRef::CData(text) => Some(text),
@@ -642,20 +699,23 @@ impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
         self.element.document
     }
 
+    #[must_use]
     pub fn qualified_name(self) -> &'document str {
         self.data()
-            .map(|data| self.document().value(data.qualified_name))
-            .unwrap_or("")
+            .map_or("", |data| self.document().value(data.qualified_name))
     }
 
+    #[must_use]
     pub fn prefix(self) -> Option<&'document str> {
         split_qualified_name(self.qualified_name()).0
     }
 
+    #[must_use]
     pub fn name(self) -> &'document str {
         split_qualified_name(self.qualified_name()).1
     }
 
+    #[must_use]
     pub fn namespace(self) -> Option<&'document str> {
         let prefix = self.prefix()?;
         let scope = self
@@ -665,10 +725,10 @@ impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
         self.document().resolve_namespace(scope, prefix)
     }
 
+    #[must_use]
     pub fn value(self) -> &'document str {
         self.data()
-            .map(|data| self.document().value(data.value))
-            .unwrap_or("")
+            .map_or("", |data| self.document().value(data.value))
     }
 }
 
@@ -729,10 +789,10 @@ impl<'a> DocumentBuilder<'a> {
             }
             match event {
                 Event::Start(start) => {
-                    self.start_element(&reader, &start, event_start, event_end)?
+                    self.start_element(&reader, &start, event_start, event_end)?;
                 }
                 Event::Empty(start) => {
-                    self.empty_element(&reader, &start, event_start, event_end)?
+                    self.empty_element(&reader, &start, event_start, event_end)?;
                 }
                 Event::End(_) => self.end_element(event_end)?,
                 Event::Text(text) => {
@@ -839,6 +899,10 @@ impl<'a> DocumentBuilder<'a> {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Element construction keeps namespace scopes, attributes, source spans, and arena links atomic."
+    )]
     fn build_element(
         &mut self,
         reader: &Reader<&[u8]>,
@@ -1097,6 +1161,7 @@ fn stored_index(value: u32, label: &str) -> usize {
 
 #[cfg(test)]
 mod layout_tests {
+    use std::fmt::Write as _;
     use std::mem::size_of_val;
 
     use super::*;
@@ -1156,10 +1221,11 @@ mod layout_tests {
         const RESPONSES: usize = 10_000;
         let mut source = String::from("<D:multistatus xmlns:D=\"DAV:\">");
         for index in 0..RESPONSES {
-            source.push_str(&format!(
+            let _ = write!(
+                source,
                 "<D:response><D:href>/files/{index}</D:href><D:propstat><D:prop><D:displayname>file-{index}</D:displayname><D:getcontentlength>{}</D:getcontentlength><D:getetag>&quot;etag-{index}&quot;</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>",
                 index * 1024
-            ));
+            );
         }
         source.push_str("</D:multistatus>");
         let input_bytes = source.len();

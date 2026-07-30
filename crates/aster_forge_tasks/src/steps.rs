@@ -74,6 +74,7 @@ fn new_task_step(spec: TaskStepSpec, status: TaskStepStatus, detail: Option<&str
 }
 
 /// Creates initial task step state from static specs.
+#[must_use]
 pub fn initial_task_steps_from_specs(specs: &[TaskStepSpec]) -> Vec<TaskStepInfo> {
     specs
         .iter()
@@ -107,6 +108,10 @@ fn find_task_step_mut<'a>(
 }
 
 /// Marks a task step active.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the step key or progress transition is invalid.
 pub fn set_task_step_active(
     steps: &mut [TaskStepInfo],
     key: &str,
@@ -129,6 +134,10 @@ pub fn set_task_step_active(
 }
 
 /// Marks a task step succeeded.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the step key or progress transition is invalid.
 pub fn set_task_step_succeeded(
     steps: &mut [TaskStepInfo],
     key: &str,
@@ -153,6 +162,10 @@ pub fn set_task_step_succeeded(
 }
 
 /// Marks a task step skipped.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the step key is unknown or the transition is invalid.
 pub fn set_task_step_skipped(
     steps: &mut [TaskStepInfo],
     key: &str,

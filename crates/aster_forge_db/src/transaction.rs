@@ -56,28 +56,40 @@ impl Drop for RollbackGuard {
 /// Begins and returns a transaction so the caller can commit or roll it back.
 ///
 /// This centralizes `begin` error mapping.
+///
+/// # Errors
+///
+/// Returns an error when transaction setup, execution, or finalization fails.
 pub async fn begin<C: sea_orm::TransactionTrait>(db: &C) -> Result<C::Transaction> {
     db.begin()
         .await
-        .map_err(|error| database_operation_with_context(error, "begin transaction"))
+        .map_err(|error| database_operation_with_context(&error, "begin transaction"))
 }
 
 /// Commits a transaction and maps errors consistently.
+///
+/// # Errors
+///
+/// Returns an error when transaction setup, execution, or finalization fails.
 pub async fn commit<T: sea_orm::TransactionSession>(txn: T) -> Result<()> {
     txn.commit()
         .await
-        .map_err(|error| database_operation_with_context(error, "commit transaction"))
+        .map_err(|error| database_operation_with_context(&error, "commit transaction"))
 }
 
 /// Rolls back a transaction and maps errors consistently.
+///
+/// # Errors
+///
+/// Returns an error when transaction setup, execution, or finalization fails.
 pub async fn rollback<T: sea_orm::TransactionSession>(txn: T) -> Result<()> {
     txn.rollback()
         .await
-        .map_err(|error| database_operation_with_context(error, "rollback transaction"))
+        .map_err(|error| database_operation_with_context(&error, "rollback transaction"))
 }
 
-fn database_operation_with_context(error: sea_orm::DbErr, context: &str) -> DbError {
-    let kind = database_error_kind(&error);
+fn database_operation_with_context(error: &sea_orm::DbErr, context: &str) -> DbError {
+    let kind = database_error_kind(error);
     let message = format!("{context}: {error}");
     match kind {
         Some(kind) => DbError::database_operation_classified(message, kind),
@@ -137,6 +149,10 @@ fn commit_outcome_known_rolled_back(kind: Option<crate::DatabaseErrorKind>) -> b
 ///
 /// Use [`crate::retry::RetryConfig::deadlock`] as the config profile: deadlock and
 /// serialization conflicts resolve inside short lock-wait windows, so the fast profile fits.
+///
+/// # Errors
+///
+/// Returns an error when transaction setup, execution, or finalization fails.
 pub async fn with_transaction_retry<C, F, T, E, P>(
     db: &C,
     config: &crate::retry::RetryConfig,
@@ -157,7 +173,7 @@ where
         let txn = match db.begin().await {
             Ok(txn) => txn,
             Err(error) => {
-                let error = E::from(database_operation_with_context(error, "begin transaction"));
+                let error = E::from(database_operation_with_context(&error, "begin transaction"));
                 if attempt < config.max_retries && should_retry(&error) {
                     tokio::time::sleep(transaction_delay(config, attempt)).await;
                     attempt += 1;
@@ -188,7 +204,6 @@ where
                         CommitFailureAction::Retry => {
                             tokio::time::sleep(transaction_delay(config, attempt)).await;
                             attempt += 1;
-                            continue;
                         }
                         CommitFailureAction::ReturnKnownFailure => return Err(classified_error),
                         CommitFailureAction::ReturnOutcomeUnknown => {
@@ -223,6 +238,10 @@ where
 ///
 /// The callback may return a product-specific error type. Forge-created transaction boundary
 /// errors are converted through `E: From<DbError>`, while callback errors are preserved unchanged.
+///
+/// # Errors
+///
+/// Returns an error when transaction setup, execution, or finalization fails.
 pub async fn with_transaction<C, F, T, E>(db: &C, operation: F) -> std::result::Result<T, E>
 where
     C: sea_orm::TransactionTrait,

@@ -16,6 +16,7 @@ pub struct BloomConfig {
 
 impl BloomConfig {
     /// Creates a Bloom-filter configuration.
+    #[must_use]
     pub const fn new(expected_items: usize, false_positive_rate: f64) -> Self {
         Self {
             expected_items,
@@ -46,6 +47,11 @@ pub struct BloomFilter {
 
 impl BloomFilter {
     /// Creates a Bloom filter from the expected item count and false-positive rate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BloomError::InvalidConfiguration`] when the item count or false-positive rate is
+    /// rejected by the underlying Bloom filter.
     pub fn new(config: BloomConfig) -> Result<Self, BloomError> {
         Ok(Self {
             inner: RwLock::new(build_filter(config)?),
@@ -80,6 +86,11 @@ impl BloomFilter {
     }
 
     /// Replaces the current filter with an empty filter using new sizing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BloomError::InvalidConfiguration`] for invalid sizing, or
+    /// [`BloomError::RebuildInProgress`] while an atomic rebuild is active.
     pub fn clear(&self, config: BloomConfig) -> Result<(), BloomError> {
         let replacement = build_filter(config)?;
         let rebuild_buffer = self.rebuild_buffer.lock();
@@ -95,6 +106,11 @@ impl BloomFilter {
     /// Feed streamed batches into the returned session and call
     /// [`BloomRebuild::commit`] after the source has completed. Dropping the
     /// session leaves the previous filter active and stops buffering inserts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BloomError::InvalidConfiguration`] for invalid sizing, or
+    /// [`BloomError::RebuildInProgress`] when another rebuild already owns the session.
     pub fn start_rebuild(
         self: &Arc<Self>,
         config: BloomConfig,
@@ -134,6 +150,7 @@ impl BloomRebuild {
 
     /// Atomically installs the rebuilt filter and returns the number of keys
     /// loaded from the source plus concurrent inserts captured during rebuild.
+    #[must_use]
     pub fn commit(mut self) -> usize {
         let Some(mut replacement) = self.replacement.take() else {
             return self.loaded;

@@ -7,6 +7,11 @@
 use crate::{Result, ValidationError};
 
 /// Validates a normalized email address using Aster's lightweight email rules.
+///
+/// # Errors
+///
+/// Returns an error when the address exceeds 254 bytes, does not contain exactly one `@`, has an
+/// empty local or domain part, or has no dot in its domain.
 pub fn validate_email(email: &str) -> Result<()> {
     if email.len() > 254 {
         return Err(ValidationError::new("email is too long"));
@@ -27,6 +32,10 @@ pub fn validate_email(email: &str) -> Result<()> {
 }
 
 /// Trims and lowercases an email address, then validates it.
+///
+/// # Errors
+///
+/// Returns an error when the normalized address fails [`validate_email`].
 pub fn normalize_email(email: &str) -> Result<String> {
     let normalized = email.trim().to_ascii_lowercase();
     validate_email(&normalized)?;
@@ -34,6 +43,10 @@ pub fn normalize_email(email: &str) -> Result<String> {
 }
 
 /// Returns the lowercased domain portion of an email address.
+///
+/// # Errors
+///
+/// Returns an error when `email` cannot be normalized as a valid address or has no `@` separator.
 pub fn email_domain(email: &str) -> Result<String> {
     let normalized = normalize_email(email)?;
     normalized

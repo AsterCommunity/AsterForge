@@ -46,11 +46,13 @@ pub struct RuntimeCorsPolicy {
 
 impl RuntimeCorsPolicy {
     /// Returns whether requests should be actively checked.
+    #[must_use]
     pub fn enforces_requests(&self) -> bool {
         self.enabled && !matches!(self.allowed_origins, CorsAllowedOrigins::None)
     }
 
     /// Returns whether a normalized origin is allowed.
+    #[must_use]
     pub fn allows_origin(&self, origin: &str) -> bool {
         match &self.allowed_origins {
             CorsAllowedOrigins::None => false,
@@ -60,6 +62,7 @@ impl RuntimeCorsPolicy {
     }
 
     /// Returns whether responses should use `Access-Control-Allow-Origin: *`.
+    #[must_use]
     pub fn sends_wildcard_origin(&self) -> bool {
         matches!(self.allowed_origins, CorsAllowedOrigins::Any) && !self.allow_credentials
     }
@@ -91,11 +94,13 @@ impl CorsMiddlewareError {
     }
 
     /// Returns the failure category.
+    #[must_use]
     pub const fn kind(&self) -> CorsMiddlewareErrorKind {
         self.kind
     }
 
     /// Returns the diagnostic message.
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -136,18 +141,21 @@ impl RuntimeCorsConfig {
     }
 
     /// Sets preflight-allowed methods.
+    #[must_use]
     pub fn allowed_methods(mut self, methods: impl IntoIterator<Item = &'static str>) -> Self {
         self.allowed_methods = methods.into_iter().collect();
         self
     }
 
     /// Sets preflight-allowed request headers.
+    #[must_use]
     pub fn allowed_headers(mut self, headers: impl IntoIterator<Item = &'static str>) -> Self {
         self.allowed_headers = headers.into_iter().collect();
         self
     }
 
     /// Sets response headers exposed to browser JavaScript.
+    #[must_use]
     pub fn exposed_headers(mut self, headers: impl IntoIterator<Item = &'static str>) -> Self {
         self.exposed_headers = headers.into_iter().collect();
         self
@@ -157,6 +165,7 @@ impl RuntimeCorsConfig {
     ///
     /// This does not authorize a scheme by itself. The normalized full origin must still match
     /// [`RuntimeCorsPolicy::allowed_origins`].
+    #[must_use]
     pub fn additional_origin_schemes(
         mut self,
         schemes: impl IntoIterator<Item = &'static str>,
@@ -187,6 +196,7 @@ pub struct RuntimeCors {
 
 impl RuntimeCors {
     /// Creates runtime CORS middleware from a product configuration.
+    #[must_use]
     pub fn new(config: RuntimeCorsConfig) -> Self {
         Self { config }
     }

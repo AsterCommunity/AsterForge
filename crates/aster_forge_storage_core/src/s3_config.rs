@@ -25,6 +25,12 @@ pub enum S3ConfigError {
 }
 
 /// Normalizes and validates an S3-compatible endpoint and bucket pair.
+///
+/// # Errors
+///
+/// Returns [`S3ConfigError::MissingBucket`] when the trimmed bucket is empty, or
+/// [`S3ConfigError::InvalidEndpoint`] when a non-empty endpoint is malformed, lacks an HTTP(S)
+/// scheme or hostname, or contains a query string or fragment.
 pub fn normalize_s3_endpoint_and_bucket(
     endpoint: &str,
     bucket: &str,

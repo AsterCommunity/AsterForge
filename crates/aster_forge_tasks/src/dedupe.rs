@@ -20,6 +20,10 @@ pub struct TaskDedupeKey(String);
 
 impl TaskDedupeKey {
     /// Validates a product-provided dedupe key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when the key is empty or exceeds the persisted length limit.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.trim().is_empty() {
@@ -36,17 +40,23 @@ impl TaskDedupeKey {
     }
 
     /// Returns the validated key string.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Consumes the key and returns the owned string.
+    #[must_use]
     pub fn into_string(self) -> String {
         self.0
     }
 }
 
 /// Builds a stable dedupe key for one scheduled task firing.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the namespace is empty or the resulting key is too long.
 pub fn scheduled_task_dedupe_key(
     namespace: &str,
     task_name: &str,

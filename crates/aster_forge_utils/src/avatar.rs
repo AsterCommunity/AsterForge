@@ -8,6 +8,7 @@
 use md5::{Digest, Md5};
 
 /// Returns the lowercase MD5 hash used by Gravatar for `email`.
+#[must_use]
 pub fn gravatar_hash(email: &str) -> String {
     let normalized = email.trim().to_lowercase();
     let mut hasher = Md5::new();
@@ -16,6 +17,7 @@ pub fn gravatar_hash(email: &str) -> String {
 }
 
 /// Builds a Gravatar URL with Aster's default public query parameters.
+#[must_use]
 pub fn gravatar_url(email: &str, size: u32, base_url: &str) -> String {
     let hash = gravatar_hash(email);
     let base = base_url.trim_end_matches('/');

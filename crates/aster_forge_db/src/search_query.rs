@@ -1,8 +1,8 @@
 //! Shared search-query expression helpers.
 //!
-//! The helpers in this module build small SeaQuery expressions for common
+//! The helpers in this module build small `SeaQuery` expressions for common
 //! search behavior used by Aster repositories: escaped `LIKE` patterns,
-//! case-insensitive substring checks, SQLite FTS phrase queries, and MySQL
+//! case-insensitive substring checks, `SQLite` FTS phrase queries, and `MySQL`
 //! boolean-mode phrase queries. They do not depend on product entities and leave
 //! database-specific query composition to the caller.
 
@@ -13,10 +13,11 @@ use sea_orm::sea_query::{
 
 /// Escapes the escape character itself and the wildcard characters for SQL `LIKE` queries.
 ///
-/// The pattern assumes `\` as the escape character. MySQL and PostgreSQL use it by default,
-/// but SQLite has no default escape character, so callers building their own condition must
+/// The pattern assumes `\` as the escape character. `MySQL` and `PostgreSQL` use it by default,
+/// but `SQLite` has no default escape character, so callers building their own condition must
 /// pair the pattern with `ESCAPE '\'` (e.g. via [`sea_orm::sea_query::LikeExpr::escape`])
 /// for the pattern to mean the same thing on every backend.
+#[must_use]
 pub fn escape_like_query(query: &str) -> String {
     query
         .replace('\\', "\\\\")
@@ -26,8 +27,8 @@ pub fn escape_like_query(query: &str) -> String {
 
 /// Builds a case-insensitive `LIKE '%query%'` condition for a column.
 ///
-/// The condition declares `ESCAPE '\'` explicitly so SQLite applies the same escape
-/// semantics as MySQL and PostgreSQL instead of treating backslashes as literal text.
+/// The condition declares `ESCAPE '\'` explicitly so `SQLite` applies the same escape
+/// semantics as `MySQL` and `PostgreSQL` instead of treating backslashes as literal text.
 pub fn lower_like_condition(column: impl IntoColumnRef + Copy, query: &str) -> SimpleExpr {
     let mut pattern = String::with_capacity(query.len() + 2);
     pattern.push('%');
@@ -43,7 +44,8 @@ pub fn lower_like_condition(column: impl IntoColumnRef + Copy, query: &str) -> S
     Expr::expr(Func::lower(Expr::col(column))).like(LikeExpr::new(pattern).escape('\\'))
 }
 
-/// Builds a quoted SQLite FTS phrase query when the input is long enough.
+/// Builds a quoted `SQLite` FTS phrase query when the input is long enough.
+#[must_use]
 pub fn sqlite_match_query(query: &str) -> Option<String> {
     if query.chars().count() < 3 {
         return None;
@@ -52,7 +54,8 @@ pub fn sqlite_match_query(query: &str) -> Option<String> {
     Some(format!("\"{}\"", query.replace('"', "\"\"")))
 }
 
-/// Builds a quoted MySQL boolean-mode phrase query when the input is safe.
+/// Builds a quoted `MySQL` boolean-mode phrase query when the input is safe.
+#[must_use]
 pub fn mysql_boolean_mode_query(query: &str) -> Option<String> {
     if query.chars().count() < 3 || query.chars().any(|ch| !ch.is_alphanumeric()) {
         return None;
@@ -62,7 +65,7 @@ pub fn mysql_boolean_mode_query(query: &str) -> Option<String> {
     Some(format!("\"{escaped}\""))
 }
 
-/// Builds a SQLite FTS subquery condition matching row ids from an FTS table.
+/// Builds a `SQLite` FTS subquery condition matching row ids from an FTS table.
 pub fn sqlite_fts_match_condition(
     id_column: impl IntoColumnRef + Copy,
     fts_table: &str,
@@ -90,7 +93,7 @@ mod tests {
     struct NameColumn;
 
     impl sea_orm::sea_query::Iden for NameColumn {
-        fn unquoted(&self) -> &str {
+        fn unquoted(&self) -> &'static str {
             "name"
         }
     }

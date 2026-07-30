@@ -7,6 +7,7 @@
 //! error.
 
 /// Parses common boolean spellings such as `true`, `1`, `yes`, and `on`.
+#[must_use]
 pub fn parse_bool_like(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),

@@ -95,6 +95,11 @@ unsafe impl GlobalAlloc for TrackingAlloc {
 
 /// Returns current and peak tracked allocations in MiB for system-allocator builds.
 #[cfg(not(feature = "jemalloc"))]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Allocator metrics are approximate diagnostics reported as f64 MiB values."
+)]
+#[must_use]
 pub fn stats() -> (f64, f64) {
     let allocated = ALLOCATED.load(Ordering::Relaxed) as f64 / 1_048_576.0;
     let peak = PEAK.load(Ordering::Relaxed) as f64 / 1_048_576.0;
@@ -103,6 +108,11 @@ pub fn stats() -> (f64, f64) {
 
 /// Returns current allocated and resident memory in MiB for jemalloc stats builds.
 #[cfg(feature = "jemalloc-stats")]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Allocator metrics are approximate diagnostics reported as f64 MiB values."
+)]
+#[must_use]
 pub fn stats() -> (f64, f64) {
     if let Err(error) = tikv_jemalloc_ctl::epoch::advance() {
         tracing::warn!(error = %error, "failed to refresh jemalloc stats epoch");

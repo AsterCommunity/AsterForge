@@ -1,4 +1,4 @@
-//! Transport-neutral WebDAV request head parsing.
+//! Transport-neutral `WebDAV` request head parsing.
 
 use http::{HeaderMap, Method, Uri};
 
@@ -10,7 +10,7 @@ use crate::protocol::{
     parse_propfind_depth, strip_mount_prefix,
 };
 
-/// WebDAV method recognized by the protocol layer.
+/// `WebDAV` method recognized by the protocol layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavMethod {
     Options,
@@ -335,7 +335,7 @@ impl DavMethodSet {
 }
 
 /// Iterator over methods in canonical protocol order.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DavMethodSetIter {
     set: DavMethodSet,
     index: usize,
@@ -371,7 +371,7 @@ pub struct DavRequestTarget<'a> {
     pub mount_path: &'a str,
 }
 
-/// Parsed, body-independent WebDAV request data.
+/// Parsed, body-independent `WebDAV` request data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavRequestHead {
     pub method: DavMethod,
@@ -385,6 +385,10 @@ pub struct DavRequestHead {
 
 impl DavRequestHead {
     /// Parses a mount-relative target before method dispatch or product code runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavProtocolError`] when the URI, mount-relative path, or request origin is invalid.
     pub fn parse_target<'a>(
         uri: &Uri,
         mount_path: &'a str,
@@ -403,6 +407,10 @@ impl DavRequestHead {
     }
 
     /// Parses method-specific protocol headers after the target has been resolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavProtocolError`] when the target, destination, or method headers are invalid.
     pub fn parse_known_method(
         method: DavMethod,
         request_target: &DavRequestTarget<'_>,

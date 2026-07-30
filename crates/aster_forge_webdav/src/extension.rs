@@ -1,4 +1,4 @@
-//! Typed WebDAV RFC extension packages and their static discovery descriptors.
+//! Typed `WebDAV` RFC extension packages and their static discovery descriptors.
 
 use crate::capability::DavResourceState;
 use crate::request::{DavMethod, DavMethodSet};
@@ -152,7 +152,7 @@ impl DavExtensionSet {
 }
 
 /// Iterator over packages in canonical order.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DavExtensionSetIter {
     set: DavExtensionSet,
     index: usize,

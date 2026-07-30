@@ -109,7 +109,7 @@ fn lockdiscovery_covers_owner_timeout_scope_depth_token_and_root() {
         DavLockXml {
             token: "urn:uuid:a b".to_owned(),
             owner: Some(owner),
-            timeout: Some(Duration::from_secs(120)),
+            timeout: Some(Duration::from_mins(2)),
             shared: false,
             deep: true,
             root_href: "/webdav/a%20b".to_owned(),

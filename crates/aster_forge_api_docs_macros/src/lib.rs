@@ -1,8 +1,8 @@
-//! OpenAPI attribute macros shared by Aster services.
+//! `OpenAPI` attribute macros shared by Aster services.
 //!
 //! The crate keeps route annotations lightweight in production builds while preserving
 //! `utoipa::path` metadata when the `openapi` feature is enabled for debug builds. This lets
-//! application code keep a single annotation path without pulling OpenAPI generation into normal
+//! application code keep a single annotation path without pulling `OpenAPI` generation into normal
 //! release binaries.
 #![cfg_attr(
     not(test),
@@ -24,7 +24,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 
 #[cfg(all(feature = "openapi", debug_assertions))]
-/// Expands to `#[utoipa::path(...)]` when OpenAPI generation is enabled for debug builds.
+/// Expands to `#[utoipa::path(...)]` when `OpenAPI` generation is enabled for debug builds.
 #[proc_macro_attribute]
 pub fn path(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = proc_macro2::TokenStream::from(attr);

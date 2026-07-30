@@ -73,7 +73,10 @@ fn completed_event_copies_only_protocol_routing_data() {
     assert_eq!(event.operation, DavOperation::Copy);
     assert_eq!(event.source.as_str(), "/source.txt");
     assert_eq!(
-        event.destination.as_ref().map(|path| path.as_str()),
+        event
+            .destination
+            .as_ref()
+            .map(aster_forge_webdav::DavPath::as_str),
         Some("/destination.txt")
     );
     assert_eq!(

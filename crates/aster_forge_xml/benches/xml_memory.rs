@@ -118,6 +118,10 @@ fn finish_measurement() -> AllocationSnapshot {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "The benchmark child keeps every parser and writer mode in one allocation-measurement dispatch table."
+)]
 fn run_child(mode: &str, fixture_name: &str) {
     let input = memory_fixtures()
         .into_iter()

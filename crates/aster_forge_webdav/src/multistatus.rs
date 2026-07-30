@@ -143,14 +143,18 @@ pub struct DavMultiStatusWriter<W: Write> {
 }
 
 impl<W: Write> DavMultiStatusWriter<W> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavMultiStatusError`] when limits are zero or the XML prologue exceeds them.
     pub fn new(inner: W, limits: DavMultiStatusLimits) -> Result<Self, DavMultiStatusError> {
         limits.validate()?;
         let options = XmlWriteOptions::new().max_output_bytes(limits.maximum_output_bytes);
         let tracking = TrackingWriter::new(inner);
         let mut writer = XmlStreamWriter::with_options(tracking, options)
-            .map_err(|error| map_writer_error(error, DavMultiStatusProgress::default()))?;
+            .map_err(|error| map_writer_error(&error, DavMultiStatusProgress::default()))?;
         if let Err(error) = writer.start_element("D:multistatus", [("xmlns:D", DAV_NAMESPACE)]) {
-            return Err(map_writer_error(error, writer_progress(&writer, 0)));
+            return Err(map_writer_error(&error, writer_progress(&writer, 0)));
         }
         let mut inherited_namespaces = BTreeMap::new();
         inherited_namespaces.insert("D".to_owned(), DAV_NAMESPACE.to_owned());
@@ -162,6 +166,10 @@ impl<W: Write> DavMultiStatusWriter<W> {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavMultiStatusError`] when an item or cumulative output exceeds a limit.
     pub fn append(&mut self, item: DavMultiStatusItem) -> Result<(), DavMultiStatusError> {
         let next_items = self
             .emitted_items
@@ -175,7 +183,7 @@ impl<W: Write> DavMultiStatusWriter<W> {
 
         if let Err(error) = write_response_item(&mut self.writer, &self.inherited_namespaces, item)
         {
-            return Err(map_writer_error(error, self.progress()));
+            return Err(map_writer_error(&error, self.progress()));
         }
         self.emitted_items = next_items;
         Ok(())
@@ -195,15 +203,19 @@ impl<W: Write> DavMultiStatusWriter<W> {
         &mut self.writer.get_mut().inner
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavMultiStatusError`] when no item was written or the closing XML exceeds limits.
     pub fn finish(mut self) -> Result<W, DavMultiStatusError> {
         if let Err(error) = self.writer.end_element() {
-            return Err(map_writer_error(error, self.progress()));
+            return Err(map_writer_error(&error, self.progress()));
         }
         let progress = self.progress();
         self.writer
             .finish()
             .map(|tracking| tracking.inner)
-            .map_err(|error| map_writer_error(error, progress))
+            .map_err(|error| map_writer_error(&error, progress))
     }
 
     fn progress(&self) -> DavMultiStatusProgress {
@@ -216,6 +228,10 @@ impl<W: Write> DavMultiStatusWriter<W> {
 }
 
 /// Serializes a complete bounded Multi-Status document through the incremental writer contract.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when an item is invalid or any output limit is exceeded.
 pub fn dav_multistatus_bytes(
     items: impl IntoIterator<Item = DavMultiStatusItem>,
     limits: DavMultiStatusLimits,
@@ -228,6 +244,10 @@ pub fn dav_multistatus_bytes(
 }
 
 /// Creates a transport-neutral streaming 207 response from a product-owned item stream.
+///
+/// # Errors
+///
+/// Returns [`DavMultiStatusError`] when limits are invalid or response headers cannot be encoded.
 pub fn multistatus_stream_response<S>(
     source: S,
     limits: DavMultiStatusLimits,
@@ -417,7 +437,7 @@ fn write_response_item<W: Write>(
 ) -> Result<(), ForgeXmlError> {
     writer.start("D:response")?;
     write_text_element(writer, "D:href", &item.href)?;
-    for propstat in item.propstats {
+    for propstat in &item.propstats {
         write_propstat(writer, inherited_namespaces, propstat)?;
     }
     if let Some(status) = item.status {
@@ -432,7 +452,7 @@ fn write_response_item<W: Write>(
 fn write_propstat<W: Write>(
     writer: &mut XmlStreamWriter<TrackingWriter<W>>,
     inherited_namespaces: &BTreeMap<String, String>,
-    propstat: DavPropStat,
+    propstat: &DavPropStat,
 ) -> Result<(), ForgeXmlError> {
     writer.start("D:propstat")?;
     writer.start("D:prop")?;
@@ -496,7 +516,10 @@ fn writer_progress<W: Write>(
     }
 }
 
-fn map_writer_error(error: ForgeXmlError, progress: DavMultiStatusProgress) -> DavMultiStatusError {
+fn map_writer_error(
+    error: &ForgeXmlError,
+    progress: DavMultiStatusProgress,
+) -> DavMultiStatusError {
     let kind = match error {
         ForgeXmlError::Safety(XmlSafetyError::OutputTooLarge) => {
             DavMultiStatusErrorKind::OutputLimitExceeded

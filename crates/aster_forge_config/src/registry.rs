@@ -6,6 +6,7 @@
 //! inventing its own copy of the same definition list.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::BuildHasher;
 
 use crate::{
     ConfigCoreError, ConfigSource, ConfigValue, ConfigValueType, ConfigVisibility, Result,
@@ -22,7 +23,7 @@ pub trait ConfigValueLookup {
     fn get_config_value(&self, key: &str) -> Option<String>;
 }
 
-impl ConfigValueLookup for HashMap<String, String> {
+impl<S: BuildHasher> ConfigValueLookup for HashMap<String, String, S> {
     fn get_config_value(&self, key: &str) -> Option<String> {
         self.get(key).cloned()
     }
@@ -88,6 +89,7 @@ impl ConfigDefinition {
     /// dependency validator. This helper keeps static definition lists compact
     /// while still requiring each product to spell out the storage key, type,
     /// default, category, and descriptions that define its public contract.
+    #[must_use]
     pub const fn private_system() -> Self {
         Self {
             key: "",
@@ -137,16 +139,19 @@ pub struct ConfigRegistry {
 
 impl ConfigRegistry {
     /// Creates a registry from a static definition slice.
+    #[must_use]
     pub const fn new(definitions: &'static [ConfigDefinition]) -> Self {
         Self { definitions }
     }
 
     /// Returns all registered definitions.
+    #[must_use]
     pub const fn definitions(&self) -> &'static [ConfigDefinition] {
         self.definitions
     }
 
     /// Returns the definition for `key`.
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&'static ConfigDefinition> {
         self.definitions
             .iter()
@@ -154,17 +159,26 @@ impl ConfigRegistry {
     }
 
     /// Returns whether `key` is registered.
+    #[must_use]
     pub fn contains_key(&self, key: &str) -> bool {
         self.get(key).is_some()
     }
 
     /// Returns the definition for `key` or an unknown-key error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the requested configuration key is not registered.
     pub fn require(&self, key: &str) -> Result<&'static ConfigDefinition> {
         self.get(key)
             .ok_or_else(|| ConfigCoreError::UnknownKey(key.to_string()))
     }
 
     /// Validates that keys are non-empty and unique.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the registry contains duplicate configuration keys.
     pub fn validate_unique_keys(&self) -> Result<()> {
         let mut seen = BTreeSet::new();
         for definition in self.definitions {
@@ -184,6 +198,10 @@ impl ConfigRegistry {
     }
 
     /// Validates that all categories belong to `allowed_categories`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when a definition category violates registry constraints.
     pub fn validate_categories(&self, allowed_categories: &[&str]) -> Result<()> {
         for definition in self.definitions {
             if !allowed_categories.contains(&definition.category) {
@@ -197,6 +215,10 @@ impl ConfigRegistry {
     }
 
     /// Validates a storage string for a known key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the stored value or a dependency rule is invalid.
     pub fn validate_value(&self, key: &str, value: &str) -> Result<()> {
         let definition = self.require(key)?;
         validate_storage_value(definition.value_type, value)
@@ -207,6 +229,10 @@ impl ConfigRegistry {
     /// The input is expected to already match the structural storage shape for
     /// the definition's value type, for example a JSON string array for
     /// `string_array`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the definition normalizer rejects the value.
     pub fn normalize_value(
         &self,
         lookup: &dyn ConfigValueLookup,
@@ -230,6 +256,10 @@ impl ConfigRegistry {
     }
 
     /// Converts an API-facing value into normalized storage for a known key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the typed value cannot be normalized for storage.
     pub fn value_to_normalized_storage(
         &self,
         lookup: &dyn ConfigValueLookup,
@@ -246,6 +276,10 @@ impl ConfigRegistry {
     /// Registered keys use their declared [`ConfigValueType`] and run through the full registry
     /// normalization pipeline. Custom keys are treated as scalar strings by default, leaving their
     /// visibility, permissions, and persistence policy to the product crate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the key is unknown or its typed value is invalid.
     pub fn value_to_storage_for_key(
         &self,
         lookup: &dyn ConfigValueLookup,
@@ -262,6 +296,7 @@ impl ConfigRegistry {
     }
 
     /// Applies definition metadata to a system-owned stored row.
+    #[must_use]
     pub fn apply_definition(&self, mut config: StoredConfig) -> StoredConfig {
         if config.source != ConfigSource::System {
             return config;
@@ -285,6 +320,10 @@ impl ConfigRegistry {
     /// Defaults are normalized in registry order. If a normalizer or
     /// dependency validator consults another config key, that dependency should
     /// appear earlier in the registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when definitions are duplicated or a default value is invalid.
     pub fn default_seed_records(&self) -> Result<Vec<ConfigSeedRecord>> {
         let mut lookup = BTreeMap::<String, String>::new();
         let mut rows = Vec::with_capacity(self.definitions.len());
@@ -327,6 +366,10 @@ mod tests {
         "true".to_string()
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "This test normalizer must match the fallible ConfigNormalizer function-pointer contract."
+    )]
     fn trim_value(
         _lookup: &dyn ConfigValueLookup,
         _key: &str,

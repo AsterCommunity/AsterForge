@@ -74,6 +74,7 @@ pub enum MailTemplateCode {
 
 impl MailTemplateCode {
     /// Returns the stable persisted template code.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RegisterActivation => "register_activation",
@@ -99,6 +100,7 @@ impl StoredMailPayload {
     pub const CLEARED_JSON: &str = "{}";
 
     /// Creates the cleared payload marker.
+    #[must_use]
     pub fn cleared() -> Self {
         Self(Self::CLEARED_JSON.to_string())
     }
@@ -151,6 +153,7 @@ pub enum MailOutboxStatus {
 
 impl MailOutboxStatus {
     /// Returns whether the status is terminal.
+    #[must_use]
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Sent | Self::Failed)
     }
@@ -179,6 +182,7 @@ impl DispatchStats {
     }
 
     /// Returns whether the dispatch pass did any visible work.
+    #[must_use]
     pub const fn is_empty(self) -> bool {
         self.claimed == 0 && self.sent == 0 && self.retried == 0 && self.failed == 0
     }
@@ -205,6 +209,7 @@ pub struct MailOutboxDispatchContext {
 
 impl MailOutboxDispatchContext {
     /// Returns the attempt count after the current delivery attempt.
+    #[must_use]
     pub const fn delivery_attempt_count(&self) -> i32 {
         self.attempt_count + 1
     }
@@ -213,7 +218,7 @@ impl MailOutboxDispatchContext {
 /// Minimal row metadata needed by the shared outbox dispatcher.
 ///
 /// Product crates keep their concrete database model and implement this trait on it so Forge can
-/// log and apply retry policy without knowing SeaORM entities or product-specific columns.
+/// log and apply retry policy without knowing `SeaORM` entities or product-specific columns.
 pub trait MailOutboxDispatchRow {
     /// Stable row id.
     fn id(&self) -> i64;
@@ -261,6 +266,7 @@ pub struct MailOutboxDispatchConfig {
 
 impl MailOutboxDispatchConfig {
     /// Creates a dispatch config.
+    #[must_use]
     pub const fn new(
         batch_size: u64,
         processing_stale_secs: i64,
@@ -309,6 +315,7 @@ pub enum MailOutboxDeliveryFailureDecision {
 
 impl MailOutboxRetryPolicy {
     /// Creates a retry policy.
+    #[must_use]
     pub const fn new(max_attempts: i32, max_error_len: usize) -> Self {
         Self {
             max_attempts,
@@ -317,16 +324,19 @@ impl MailOutboxRetryPolicy {
     }
 
     /// Returns whether `attempt_count` should permanently fail.
+    #[must_use]
     pub const fn should_permanently_fail(&self, attempt_count: i32) -> bool {
         attempt_count >= self.max_attempts
     }
 
     /// Returns the delay before the next delivery retry.
+    #[must_use]
     pub const fn retry_delay_secs(&self, attempt_count: i32) -> i64 {
         retry_delay_secs(attempt_count)
     }
 
     /// Truncates a delivery error according to this policy.
+    #[must_use]
     pub fn truncate_error(&self, error: &str) -> String {
         truncate_error(error, self.max_error_len)
     }
@@ -357,6 +367,7 @@ impl MailOutboxRetryPolicy {
 }
 
 /// Returns the default mail delivery retry delay for an attempt count.
+#[must_use]
 pub const fn retry_delay_secs(attempt_count: i32) -> i64 {
     match attempt_count {
         1 => 5,
@@ -369,6 +380,7 @@ pub const fn retry_delay_secs(attempt_count: i32) -> i64 {
 }
 
 /// Truncates an error string without splitting UTF-8 code points.
+#[must_use]
 pub fn truncate_error(error: &str, max_len: usize) -> String {
     error.chars().take(max_len).collect()
 }
@@ -379,8 +391,13 @@ pub fn truncate_error(error: &str, max_len: usize) -> String {
 /// repository calls, template rendering, mail auditing, and error types.
 #[expect(
     clippy::too_many_arguments,
-    reason = "The dispatcher accepts explicit product-owned persistence, rendering, audit, and retry callbacks."
+    clippy::too_many_lines,
+    reason = "The dispatcher keeps claim, delivery, outcome persistence, retry, and audit callbacks in one fenced dispatch transaction."
 )]
+///
+/// # Errors
+///
+/// Returns the product callback error when listing, claiming, delivery, or outcome persistence fails.
 pub async fn dispatch_mail_outbox<
     R,
     E,
@@ -559,6 +576,10 @@ where
 }
 
 /// Runs mail outbox dispatch passes until no rows are claimed or the configured drain limit is hit.
+///
+/// # Errors
+///
+/// Returns the dispatcher error from a drain round that does not complete successfully.
 pub async fn drain_mail_outbox<E, Dispatch, DispatchFut>(
     config: &MailOutboxDispatchConfig,
     mut dispatch: Dispatch,
@@ -597,6 +618,10 @@ where
 /// accepted a message but the database row still says `Processing`. The caller
 /// provides the actual persistence function so repositories, transactions,
 /// timestamps, and product errors stay in the product crate.
+///
+/// # Errors
+///
+/// Returns the final persistence error after every configured mark-sent retry fails.
 pub async fn retry_mark_sent<F, Fut, E>(
     id: i64,
     retry_delays_ms: &[u64],

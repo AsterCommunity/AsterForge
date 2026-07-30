@@ -39,6 +39,10 @@ pub enum DavPatchPlanError {
 }
 
 /// Selects a declared patch document format and applies its conditional request contract.
+///
+/// # Errors
+///
+/// Returns [`DavPatchPlanError`] when PATCH is unavailable or its media type is invalid.
 pub fn plan_patch_request(
     snapshot: &DavCapabilitySnapshot,
     headers: &HeaderMap,

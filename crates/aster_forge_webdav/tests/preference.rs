@@ -238,6 +238,10 @@ fn return_representation_is_limited_to_state_changing_representation_methods() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test is one complete RFC 8144 depth-noroot method and rendering matrix."
+)]
 fn depth_noroot_requires_depth_one_or_infinity_and_renders_canonically() {
     let snapshot = snapshot(
         DavResourceState::Collection,

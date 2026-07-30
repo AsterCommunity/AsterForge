@@ -68,7 +68,7 @@ pub use value::{
 /// Product crates normally wrap this macro in their own module that names
 /// product-specific keys and default functions. Keeping registration declarative
 /// makes it easier for services to hand the same registry to default
-/// initialization, validation, OpenAPI presentation, and admin UI metadata.
+/// initialization, validation, `OpenAPI` presentation, and admin UI metadata.
 #[macro_export]
 macro_rules! define_config_registry {
     ($vis:vis static $name:ident = [$($definition:expr),* $(,)?];) => {

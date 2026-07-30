@@ -1,4 +1,4 @@
-//! Product-neutral WebDAV XML response grammar.
+//! Product-neutral `WebDAV` XML response grammar.
 
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ pub struct DavPropStat {
     pub properties: Vec<DavXmlElement>,
 }
 
-/// WebDAV precondition or postcondition carried inside `<D:error>`.
+/// `WebDAV` precondition or postcondition carried inside `<D:error>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavErrorCondition {
     /// RFC 4918 `no-external-entities` precondition.
@@ -43,7 +43,7 @@ pub struct DavMultiStatusItem {
     pub status: Option<u16>,
     /// Property status groups, used by PROPFIND and PROPPATCH.
     pub propstats: Vec<DavPropStat>,
-    /// Optional WebDAV condition accompanying the resource status.
+    /// Optional `WebDAV` condition accompanying the resource status.
     pub error: Option<DavErrorCondition>,
 }
 
@@ -70,7 +70,7 @@ impl DavMultiStatusItem {
         }
     }
 
-    /// Attaches a WebDAV error condition.
+    /// Attaches a `WebDAV` error condition.
     #[must_use]
     pub fn with_error(mut self, error: DavErrorCondition) -> Self {
         self.error = Some(error);
@@ -95,7 +95,7 @@ pub struct DavLockXml {
     pub root_href: String,
 }
 
-/// One version entry in a DeltaV version-tree response.
+/// One version entry in a `DeltaV` version-tree response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavVersionXml {
     /// Encoded version href.
@@ -148,7 +148,7 @@ pub fn dav_property_child_element(
     property_element(name, Some(DavXmlNode::Element(child)))
 }
 
-/// Reconstructs a persisted dead property under the requested lexical QName.
+/// Reconstructs a persisted dead property under the requested lexical `QName`.
 ///
 /// Matching validated XML contributes its attributes and children. Legacy malformed or
 /// mismatched values are emitted as escaped text instead of response markup.
@@ -238,7 +238,11 @@ pub fn dav_lock_response_element(locks: &[DavLockXml]) -> DavXmlElement {
     prop
 }
 
-/// Creates a complete bounded DeltaV version-tree Multi-Status document.
+/// Creates a complete bounded `DeltaV` version-tree Multi-Status document.
+///
+/// # Errors
+///
+/// Returns an error when the bounded Multi-Status document cannot be encoded.
 pub fn dav_version_multistatus_bytes(
     versions: Vec<DavVersionXml>,
     limits: DavMultiStatusLimits,

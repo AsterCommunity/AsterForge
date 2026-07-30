@@ -62,16 +62,19 @@ impl TaskCoreError {
     }
 
     /// Returns whether this error means the current worker lost its lease.
+    #[must_use]
     pub const fn is_task_lease_lost(&self) -> bool {
         matches!(self, Self::LeaseLost { .. })
     }
 
     /// Returns whether this error means the current worker's lease renewal timed out.
+    #[must_use]
     pub const fn is_task_lease_renewal_timed_out(&self) -> bool {
         matches!(self, Self::LeaseRenewalTimedOut { .. })
     }
 
     /// Returns whether this error means the current worker should stop for shutdown.
+    #[must_use]
     pub const fn is_task_worker_shutdown_requested(&self) -> bool {
         matches!(self, Self::WorkerShutdownRequested { .. })
     }

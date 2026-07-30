@@ -14,6 +14,11 @@ use crate::{Result, ValidationError};
 /// The value is trimmed, byte-length limited, and rejected when it contains
 /// control characters. Empty values are allowed so product configuration can use
 /// an empty string as a "reset to default" signal.
+///
+/// # Errors
+///
+/// Returns an error when the trimmed value exceeds `max_len` bytes or contains a Unicode control
+/// character.
 pub fn normalize_bounded_display_text(
     field_name: &str,
     value: &str,
@@ -34,6 +39,7 @@ pub fn normalize_bounded_display_text(
 }
 
 /// Removes Unicode control characters from a display string.
+#[must_use]
 pub fn strip_control_chars(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_control()).collect()
 }
@@ -43,6 +49,7 @@ pub fn strip_control_chars(value: &str) -> String {
 /// This helper is intended for runtime reads where invalid persisted values
 /// should not break public pages. It first strips control characters, then
 /// applies the same length and trimming rules as [`normalize_bounded_display_text`].
+#[must_use]
 pub fn display_text_or_default(
     value: Option<String>,
     default: &str,
@@ -63,6 +70,11 @@ pub fn display_text_or_default(
 /// accepted when they are either a leading-slash path or an absolute `http(s)`
 /// URL. The predicate intentionally mirrors the historical Aster branding
 /// behavior so existing product configuration keeps the same storage semantics.
+///
+/// # Errors
+///
+/// Returns an error when the trimmed value exceeds `max_len` bytes, contains whitespace, or is
+/// neither a root-relative path nor an absolute HTTP(S) URL.
 pub fn normalize_public_asset_url(field_name: &str, value: &str, max_len: usize) -> Result<String> {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -87,11 +99,13 @@ pub fn normalize_public_asset_url(field_name: &str, value: &str, max_len: usize)
 }
 
 /// Returns whether a value is accepted by [`normalize_public_asset_url`].
+#[must_use]
 pub fn is_public_asset_url(value: &str) -> bool {
     value.starts_with('/') || value.starts_with("https://") || value.starts_with("http://")
 }
 
 /// Returns a public asset URL or a product default.
+#[must_use]
 pub fn public_asset_url_or_default(value: Option<String>, default: &str) -> String {
     value
         .map(|value| value.trim().to_string())

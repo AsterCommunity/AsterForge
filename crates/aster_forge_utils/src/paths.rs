@@ -19,6 +19,7 @@ const DEFAULT_DATA_DIR_NAME: &str = "data";
 /// The helper is designed for runtime paths stored in configuration or database records. It keeps a
 /// leading slash from `root`, trims trailing slashes from `root`, and trims leading/trailing slashes
 /// from `leaf`.
+#[must_use]
 pub fn join_path(root: &str, leaf: &str) -> String {
     let root_had_leading_slash = root.starts_with('/');
     let root = root.trim_end_matches('/');
@@ -50,6 +51,7 @@ pub fn join_path(root: &str, leaf: &str) -> String {
 /// `.` components are dropped. `..` removes the previous normal component when possible, but it is
 /// preserved when removing it would cross an unknown relative root. Absolute roots and platform
 /// prefixes are retained.
+#[must_use]
 pub fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
 
@@ -60,7 +62,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
                 Some(Component::Normal(_)) => {
                     normalized.pop();
                 }
-                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                Some(Component::RootDir | Component::Prefix(_)) => {}
                 _ => normalized.push(component.as_os_str()),
             },
             Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
@@ -80,6 +82,10 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 ///
 /// The returned path is relative to the normalized `base_dir`. If `resolved` points outside
 /// `base_dir`, the function rejects it instead of returning a path with leading `..` segments.
+///
+/// # Errors
+///
+/// Returns an error when the normalized `resolved` path is outside the normalized `base_dir`.
 pub fn render_runtime_relative_path(base_dir: &Path, resolved: &Path) -> Result<String> {
     let normalized_base_dir = normalize_path(base_dir);
     let normalized_resolved = normalize_path(resolved);
@@ -108,6 +114,10 @@ fn is_data_prefixed_relative_path(path: &Path) -> bool {
 /// Relative values starting with `data` are anchored at `base_dir`; all other relative values are
 /// anchored at `config_dir`, then rendered relative to `base_dir`. Values resolving outside
 /// `base_dir` are rejected.
+///
+/// # Errors
+///
+/// Returns an error when a relative value resolves outside `base_dir`.
 pub fn resolve_config_relative_path(
     base_dir: &Path,
     config_dir: &Path,
@@ -139,6 +149,10 @@ pub fn resolve_config_relative_path(
 /// Non-sqlite URLs, `sqlite::memory:`, `sqlite://`, and `sqlite://:memory:` are returned unchanged.
 /// For file-backed sqlite URLs, the embedded path is resolved with
 /// [`resolve_config_relative_path`] and the original query string is retained.
+///
+/// # Errors
+///
+/// Returns an error when a relative file-backed `SQLite` path resolves outside `base_dir`.
 pub fn resolve_config_relative_sqlite_url(
     base_dir: &Path,
     config_dir: &Path,
@@ -176,26 +190,31 @@ pub fn resolve_config_relative_sqlite_url(
 }
 
 /// Returns the path to a temporary file under `temp_dir`.
+#[must_use]
 pub fn temp_file_path(temp_dir: &str, name: &str) -> String {
     join_path(temp_dir, name)
 }
 
 /// Returns the namespaced runtime temporary directory under `temp_root`.
+#[must_use]
 pub fn runtime_temp_dir(temp_root: &str) -> String {
     join_path(temp_root, "_runtime")
 }
 
 /// Returns a runtime temporary file path under the `_runtime` namespace.
+#[must_use]
 pub fn runtime_temp_file_path(temp_root: &str, name: &str) -> String {
     join_path(&runtime_temp_dir(temp_root), name)
 }
 
 /// Returns the temporary directory for a multipart upload session.
+#[must_use]
 pub fn upload_temp_dir(upload_temp_root: &str, upload_id: &str) -> String {
     join_path(upload_temp_root, upload_id)
 }
 
 /// Returns the temporary path for one uploaded chunk.
+#[must_use]
 pub fn upload_chunk_path(upload_temp_root: &str, upload_id: &str, chunk_number: i32) -> String {
     join_path(
         &upload_temp_dir(upload_temp_root, upload_id),
@@ -204,11 +223,13 @@ pub fn upload_chunk_path(upload_temp_root: &str, upload_id: &str, chunk_number: 
 }
 
 /// Returns the assembled-file temporary path for a multipart upload session.
+#[must_use]
 pub fn upload_assembled_path(upload_temp_root: &str, upload_id: &str) -> String {
     join_path(&upload_temp_dir(upload_temp_root, upload_id), "_assembled")
 }
 
 /// Returns the temporary directory for a background task.
+#[must_use]
 pub fn task_temp_dir(temp_root: &str, task_id: i64) -> String {
     join_path(temp_root, &format!("tasks/{task_id}"))
 }
@@ -217,6 +238,7 @@ pub fn task_temp_dir(temp_root: &str, task_id: i64) -> String {
 ///
 /// The processing token keeps artifacts from separate leases isolated when an old worker wakes up
 /// after a newer lease has already started.
+#[must_use]
 pub fn task_token_temp_dir(temp_root: &str, task_id: i64, processing_token: i64) -> String {
     join_path(
         &task_temp_dir(temp_root, task_id),

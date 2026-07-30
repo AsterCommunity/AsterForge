@@ -45,26 +45,34 @@ where
     }
 
     /// Publishes one event to process-local subscribers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the event when the local broadcast channel has no active receivers.
     pub fn publish_local(&self, event: T) -> Result<usize, broadcast::error::SendError<T>> {
         self.local.send(event)
     }
 
     /// Subscribes to future process-local events.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<T> {
         self.local.subscribe()
     }
 
     /// Returns the number of active process-local subscribers.
+    #[must_use]
     pub fn local_subscriber_count(&self) -> usize {
         self.local.receiver_count()
     }
 
     /// Returns whether a shared transport is configured.
+    #[must_use]
     pub fn has_transport(&self) -> bool {
         self.transport.is_some()
     }
 
     /// Returns the shared transport, if configured.
+    #[must_use]
     pub fn transport(&self) -> Option<Arc<R>> {
         self.transport.clone()
     }

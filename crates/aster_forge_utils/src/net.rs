@@ -10,6 +10,7 @@ use std::net::{IpAddr, SocketAddr};
 use ipnet::IpNet;
 
 /// Returns whether `host` is localhost or a loopback IP address.
+#[must_use]
 pub fn is_loopback_host(host: &str) -> bool {
     let trimmed = host.trim();
     let host = trimmed
@@ -28,6 +29,7 @@ pub fn is_loopback_host(host: &str) -> bool {
 /// Invalid entries are skipped after emitting a warning. This mirrors the fail-open-at-startup
 /// behavior used by the application repositories: one bad optional proxy entry should not prevent
 /// the service from starting, but it also must not become trusted.
+#[must_use]
 pub fn parse_trusted_proxies(trusted_proxies: &[String]) -> Vec<IpNet> {
     trusted_proxies
         .iter()
@@ -42,6 +44,7 @@ pub fn parse_trusted_proxies(trusted_proxies: &[String]) -> Vec<IpNet> {
 }
 
 /// Returns whether `ip` is covered by the trusted proxy list.
+#[must_use]
 pub fn is_trusted_proxy(ip: IpAddr, trusted: &[IpNet]) -> bool {
     trusted.iter().any(|net| net.contains(&ip))
 }

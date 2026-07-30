@@ -197,6 +197,7 @@ impl CacheConfig {
     }
 
     /// Returns the normalized backend name used by construction, validation, and health checks.
+    #[must_use]
     pub fn normalized_backend(&self) -> Cow<'_, str> {
         let backend = self.backend.trim();
         if backend.eq_ignore_ascii_case("memory") {
@@ -310,6 +311,11 @@ impl CacheExt for dyn CacheBackend {
 }
 
 /// Creates a cache backend with an explicit construction-failure policy.
+///
+/// # Errors
+///
+/// Returns [`CacheError`] when the requested backend is unsupported or Redis initialization fails
+/// and [`CacheBackendFailurePolicy::ReturnError`] is selected.
 #[cfg(feature = "memory")]
 pub async fn create_cache_with_policy(
     config: &CacheConfig,
@@ -473,7 +479,7 @@ mod tests {
     #[cfg(feature = "memory")]
     #[tokio::test]
     async fn explicit_error_policy_rejects_unknown_backend() {
-        let error = match super::create_cache_with_policy(
+        let Err(error) = super::create_cache_with_policy(
             &CacheConfig {
                 backend: "unknown".to_string(),
                 ..CacheConfig::default()
@@ -481,9 +487,8 @@ mod tests {
             CacheBackendFailurePolicy::ReturnError,
         )
         .await
-        {
-            Ok(_) => panic!("unknown backend should be returned to explicit callers"),
-            Err(error) => error,
+        else {
+            panic!("unknown backend should be returned to explicit callers");
         };
 
         assert!(
@@ -496,7 +501,7 @@ mod tests {
     #[cfg(feature = "redis")]
     #[tokio::test]
     async fn explicit_error_policy_returns_redis_construction_error() {
-        let error = match super::create_cache_with_policy(
+        let Err(error) = super::create_cache_with_policy(
             &CacheConfig {
                 backend: "redis".to_string(),
                 endpoint: "not a redis url".into(),
@@ -505,9 +510,8 @@ mod tests {
             CacheBackendFailurePolicy::ReturnError,
         )
         .await
-        {
-            Ok(_) => panic!("invalid Redis endpoint should be returned to explicit callers"),
-            Err(error) => error,
+        else {
+            panic!("invalid Redis endpoint should be returned to explicit callers");
         };
 
         assert!(error.to_string().contains("redis cache connection"));

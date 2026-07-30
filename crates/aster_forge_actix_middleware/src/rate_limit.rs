@@ -70,6 +70,7 @@ impl TrustedProxyIpKeyExtractor {
     /// Entries may be CIDR ranges or single IP addresses. Invalid entries are
     /// skipped by `aster_forge_utils::net::parse_trusted_proxies` after logging
     /// a warning.
+    #[must_use]
     pub fn new(trusted_proxies: &[String]) -> Self {
         Self {
             trusted: aster_forge_utils::net::parse_trusted_proxies(trusted_proxies),
@@ -78,6 +79,7 @@ impl TrustedProxyIpKeyExtractor {
     }
 
     /// Builds an extractor from an already parsed trusted proxy list.
+    #[must_use]
     pub fn from_trusted(trusted: Vec<IpNet>) -> Self {
         Self {
             trusted,
@@ -90,6 +92,7 @@ impl TrustedProxyIpKeyExtractor {
     /// The factory receives the retry delay in whole seconds and the response builder created by
     /// `actix-governor`. Products can use this to preserve their response envelope and error code
     /// without reimplementing trusted-proxy extraction.
+    #[must_use]
     pub fn with_rejection_response<F>(mut self, factory: F) -> Self
     where
         F: Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static,
@@ -99,11 +102,13 @@ impl TrustedProxyIpKeyExtractor {
     }
 
     /// Returns whether the provided IP is trusted as a proxy.
+    #[must_use]
     pub fn is_trusted(&self, ip: IpAddr) -> bool {
         aster_forge_utils::net::is_trusted_proxy(ip, &self.trusted)
     }
 
     /// Resolves the client IP for a request and direct peer IP.
+    #[must_use]
     pub fn real_ip(&self, req: &ServiceRequest, peer: IpAddr) -> IpAddr {
         crate::client_ip::real_ip_from_trusted_headers(req.headers(), peer, &self.trusted)
     }
@@ -116,8 +121,7 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
         let peer = req
             .peer_addr()
-            .map(|socket| socket.ip())
-            .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+            .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |socket| socket.ip());
         Ok(self.real_ip(req, peer))
     }
 
@@ -140,6 +144,7 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
 ///
 /// Sub-second waits round up to one second so clients never see a zero delay
 /// that invites an immediate retry.
+#[must_use]
 pub fn retry_after_seconds(not_until: &NotUntil<QuantaInstant>) -> u64 {
     not_until
         .wait_time_from(DefaultClock::default().now())
@@ -151,6 +156,10 @@ pub fn retry_after_seconds(not_until: &NotUntil<QuantaInstant>) -> u64 {
 ///
 /// The inputs are non-zero to match the application config model and avoid
 /// runtime builder failures.
+///
+/// # Panics
+///
+/// Panics if `actix-governor` rejects a quota whose period and burst size are both non-zero.
 #[expect(
     clippy::expect_used,
     reason = "non-zero quota fields make actix-governor finish() infallible"
@@ -169,6 +178,10 @@ pub fn build_ip_governor_config(
 }
 
 /// Builds an Actix governor config with a product-provided rejection response.
+///
+/// # Panics
+///
+/// Panics if `actix-governor` rejects a quota whose period and burst size are both non-zero.
 #[expect(
     clippy::expect_used,
     reason = "non-zero quota fields make actix-governor finish() infallible"
@@ -207,6 +220,7 @@ pub struct NormalizedStringRateLimiter {
 
 impl NormalizedStringRateLimiter {
     /// Builds a limiter from a non-zero quota and enabled flag.
+    #[must_use]
     pub fn new(enabled: bool, seconds_per_request: NonZeroU64, burst_size: NonZeroU32) -> Self {
         Self {
             enabled,
@@ -215,6 +229,7 @@ impl NormalizedStringRateLimiter {
     }
 
     /// Checks a raw key after trimming whitespace and lowercasing it.
+    #[must_use]
     pub fn check(&self, raw_key: &str) -> Option<RateLimitRejection> {
         if !self.enabled {
             return None;
@@ -224,7 +239,7 @@ impl NormalizedStringRateLimiter {
         self.limiter
             .check_key(&key)
             .err()
-            .map(RateLimitRejection::from_not_until)
+            .map(|not_until| RateLimitRejection::from_not_until(&not_until))
     }
 }
 
@@ -235,13 +250,14 @@ pub struct RateLimitRejection {
 }
 
 impl RateLimitRejection {
-    fn from_not_until(not_until: NotUntil<QuantaInstant>) -> Self {
+    fn from_not_until(not_until: &NotUntil<QuantaInstant>) -> Self {
         Self {
-            retry_after_seconds: retry_after_seconds(&not_until),
+            retry_after_seconds: retry_after_seconds(not_until),
         }
     }
 
     /// Returns how many seconds clients should wait before retrying.
+    #[must_use]
     pub const fn retry_after_seconds(self) -> u64 {
         self.retry_after_seconds
     }

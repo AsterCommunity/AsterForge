@@ -2,7 +2,7 @@
 //!
 //! Scheduled task rows persist product runtime schedules across process restarts and coordinate
 //! due-work claims across service instances. `aster_forge_tasks` owns the public scheduling DTOs
-//! and runner trait; this module only supplies the SeaORM table contract and store implementation.
+//! and runner trait; this module only supplies the `SeaORM` table contract and store implementation.
 //! Product crates still own task names, intervals, execution bodies, and outcome records.
 
 use std::time::Duration;
@@ -59,6 +59,7 @@ const SCHEDULED_TASK_DISPLAY_NAME_MAX_LEN: usize = 191;
 const SCHEDULED_TASK_OWNER_ID_MAX_LEN: usize = 191;
 
 /// Builds the shared `scheduled_tasks` table creation statement.
+#[must_use]
 pub fn create_scheduled_tasks_table(backend: DatabaseBackend) -> TableCreateStatement {
     Table::create()
         .table(scheduled_tasks_table())
@@ -99,6 +100,7 @@ pub fn create_scheduled_tasks_table(backend: DatabaseBackend) -> TableCreateStat
 }
 
 /// Builds the shared `scheduled_tasks` table drop statement.
+#[must_use]
 pub fn drop_scheduled_tasks_table() -> TableDropStatement {
     Table::drop()
         .table(scheduled_tasks_table())
@@ -107,6 +109,7 @@ pub fn drop_scheduled_tasks_table() -> TableDropStatement {
 }
 
 /// Builds the unique index for one scheduled task per namespace/name pair.
+#[must_use]
 pub fn create_scheduled_tasks_namespace_name_unique_index() -> IndexCreateStatement {
     Index::create()
         .name(SCHEDULED_TASK_NAMESPACE_NAME_UNIQUE_INDEX)
@@ -119,6 +122,7 @@ pub fn create_scheduled_tasks_namespace_name_unique_index() -> IndexCreateStatem
 }
 
 /// Builds the due-time index used by scheduled task claim checks.
+#[must_use]
 pub fn create_scheduled_tasks_next_run_index() -> IndexCreateStatement {
     Index::create()
         .name(SCHEDULED_TASK_NEXT_RUN_INDEX)
@@ -189,7 +193,7 @@ fn utc_datetime_column(backend: DatabaseBackend, column: Alias) -> ColumnDef {
     definition
 }
 
-/// SeaORM model for `scheduled_tasks`.
+/// `SeaORM` model for `scheduled_tasks`.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "scheduled_tasks")]
 pub struct Model {
@@ -263,17 +267,26 @@ impl aster_forge_tasks::ScheduledTaskStore for ScheduledTaskDbStore {
 }
 
 impl ScheduledTaskDbStore {
-    /// Creates a scheduled task store from a SeaORM database connection.
+    /// Creates a scheduled task store from a `SeaORM` database connection.
+    #[must_use]
     pub const fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 
     /// Ensures one product scheduled task is present in the catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn ensure_task(&self, entry: ScheduledTaskCatalogEntry<'_>) -> crate::Result<Model> {
         ensure_task(&self.db, entry).await
     }
 
     /// Attempts to claim one due scheduled task firing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn claim_due(
         &self,
         request: ScheduledTaskClaimRequest<'_>,
@@ -282,11 +295,19 @@ impl ScheduledTaskDbStore {
     }
 
     /// Renews an owned claim while the task body is still running.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn renew_claim(&self, renewal: ScheduledTaskClaimRenewal<'_>) -> crate::Result<bool> {
         renew_claim(&self.db, renewal).await
     }
 
     /// Completes a claimed firing and advances the next due timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn complete_claim(&self, completion: ScheduledTaskCompletion) -> crate::Result<bool> {
         complete_claim(&self.db, completion).await
     }

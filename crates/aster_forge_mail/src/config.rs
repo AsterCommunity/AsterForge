@@ -48,6 +48,7 @@ pub struct MailRuntimeSettings {
 
 impl MailRuntimeSettings {
     /// Returns whether the minimum outbound mail settings are configured.
+    #[must_use]
     pub fn is_configured(&self) -> bool {
         !self.smtp_host.trim().is_empty() && !self.from_address.trim().is_empty()
     }
@@ -56,6 +57,7 @@ impl MailRuntimeSettings {
     ///
     /// The SMTP auth fields are intentionally all-or-nothing so products do not
     /// accidentally attempt passwordless auth or send a password without a user.
+    #[must_use]
     pub fn is_ready_for_delivery(&self) -> bool {
         self.is_configured()
             && self.smtp_username.trim().is_empty() == self.smtp_password.trim().is_empty()
@@ -77,6 +79,7 @@ impl MailConfigError {
     }
 
     /// Returns the validation failure message.
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -94,6 +97,7 @@ impl Error for MailConfigError {}
 pub type MailConfigResult<T> = std::result::Result<T, MailConfigError>;
 
 /// Parses an SMTP port from a storage string.
+#[must_use]
 pub fn parse_smtp_port(value: &str) -> Option<u16> {
     value.trim().parse::<u16>().ok().filter(|port| *port > 0)
 }
@@ -102,6 +106,10 @@ pub fn parse_smtp_port(value: &str) -> Option<u16> {
 ///
 /// Empty values are allowed so products can represent "mail is not configured"
 /// without introducing product-specific sentinel values.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_smtp_host_config_value(value: &str) -> MailConfigResult<String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -114,6 +122,10 @@ pub fn normalize_smtp_host_config_value(value: &str) -> MailConfigResult<String>
 }
 
 /// Normalizes an SMTP port value.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_smtp_port_config_value(value: &str) -> MailConfigResult<String> {
     let Some(port) = parse_smtp_port(value) else {
         return Err(MailConfigError::new(
@@ -127,6 +139,10 @@ pub fn normalize_smtp_port_config_value(value: &str) -> MailConfigResult<String>
 ///
 /// Empty values are allowed so products can leave outbound mail disabled until
 /// an operator configures both SMTP host and sender address.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_mail_address_config_value(value: &str) -> MailConfigResult<String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -136,6 +152,10 @@ pub fn normalize_mail_address_config_value(value: &str) -> MailConfigResult<Stri
 }
 
 /// Normalizes a sender display name value.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_mail_name_config_value(value: &str) -> MailConfigResult<String> {
     let normalized = value.trim();
     if normalized.len() > 128 {
@@ -147,6 +167,10 @@ pub fn normalize_mail_name_config_value(value: &str) -> MailConfigResult<String>
 }
 
 /// Normalizes a bool-like mail security config value.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_mail_security_config_value(value: &str) -> MailConfigResult<String> {
     match parse_bool_like(value) {
         Some(value) => Ok(if value { "true" } else { "false" }.to_string()),
@@ -157,6 +181,10 @@ pub fn normalize_mail_security_config_value(value: &str) -> MailConfigResult<Str
 }
 
 /// Normalizes a mail template subject.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_mail_template_subject_config_value(
     key: &str,
     value: &str,
@@ -177,6 +205,10 @@ pub fn normalize_mail_template_subject_config_value(
 }
 
 /// Normalizes a mail template HTML body.
+///
+/// # Errors
+///
+/// Returns [`MailConfigError`] when the supplied value violates the corresponding mail setting contract.
 pub fn normalize_mail_template_body_config_value(
     key: &str,
     value: &str,

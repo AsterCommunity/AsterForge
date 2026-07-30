@@ -4,7 +4,7 @@
 //! bounded limit query parsing, limit/offset pagination, cursor-page response shapes, cursor
 //! validation helpers, overfetch trimming, and simple sort-order serialization. It deliberately
 //! avoids depending on any concrete web framework or product entity so handlers can adapt it to
-//! Axum, Actix, OpenAPI generation, or test-only fixtures.
+//! Axum, Actix, `OpenAPI` generation, or test-only fixtures.
 #![cfg_attr(
     not(test),
     deny(
@@ -51,6 +51,7 @@ impl ApiError {
     }
 
     /// Returns the stored error message.
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -71,11 +72,13 @@ pub struct LimitOffsetQuery {
 
 impl LimitOffsetQuery {
     /// Returns the requested limit clamped to `[1, max]`, or `default` when absent.
+    #[must_use]
     pub fn limit_or(&self, default: u64, max: u64) -> u64 {
-        self.limit.map(|v| v.clamp(1, max)).unwrap_or(default)
+        self.limit.map_or(default, |v| v.clamp(1, max))
     }
 
     /// Returns the requested offset, or zero when absent.
+    #[must_use]
     pub fn offset(&self) -> u64 {
         self.offset.unwrap_or(0)
     }
@@ -94,13 +97,13 @@ pub struct LimitQuery {
 
 impl LimitQuery {
     /// Returns the requested limit clamped to `[1, max]`, or `default` when absent.
+    #[must_use]
     pub fn limit_or(&self, default: u64, max: u64) -> u64 {
-        self.limit
-            .map(|value| value.clamp(1, max))
-            .unwrap_or(default)
+        self.limit.map_or(default, |value| value.clamp(1, max))
     }
 
     /// Returns the requested limit clamped against the crate's default cursor limits.
+    #[must_use]
     pub fn limit(&self) -> u64 {
         self.limit_or(DEFAULT_PAGE_LIMIT, MAX_PAGE_SIZE)
     }
@@ -159,6 +162,10 @@ impl<T> NullablePatch<T> {
 ///
 /// Use this with `#[serde(default, deserialize_with = "...")]` on `Option<NullablePatch<T>>`
 /// fields when the surrounding DTO needs to distinguish omitted fields from explicit nulls.
+///
+/// # Errors
+///
+/// Returns the deserializer's error when the present value cannot be deserialized as `T`.
 pub fn deserialize_nullable_patch_option<'de, D, T>(
     deserializer: D,
 ) -> std::result::Result<Option<NullablePatch<T>>, D::Error>
@@ -223,6 +230,7 @@ pub struct OffsetPage<T: Serialize + ApiSchema> {
 
 impl<T: Serialize + ApiSchema> OffsetPage<T> {
     /// Creates a new offset page.
+    #[must_use]
     pub fn new(items: Vec<T>, total: u64, limit: u64, offset: u64) -> Self {
         Self {
             items,
@@ -324,6 +332,10 @@ pub struct DateTimeStringCursor {
 }
 
 /// Loads an offset page by clamping `limit`, invoking `fetch`, and wrapping the result.
+///
+/// # Errors
+///
+/// Returns the error produced by `fetch`.
 pub async fn load_offset_page<T, F, Fut>(
     limit: u64,
     offset: u64,
@@ -341,6 +353,10 @@ where
 }
 
 /// Validates a timestamp plus numeric id cursor pair.
+///
+/// # Errors
+///
+/// Returns an error when only one cursor component is present or the id is not positive.
 pub fn parse_datetime_id_cursor(
     value: Option<DateTime<Utc>>,
     id: Option<i64>,
@@ -359,6 +375,10 @@ pub fn parse_datetime_id_cursor(
 }
 
 /// Validates a timestamp plus string id cursor pair.
+///
+/// # Errors
+///
+/// Returns an error when only one cursor component is present or the string id is blank.
 pub fn parse_datetime_string_cursor(
     value: Option<DateTime<Utc>>,
     id: Option<String>,
@@ -377,6 +397,10 @@ pub fn parse_datetime_string_cursor(
 }
 
 /// Validates an optional positive numeric id cursor.
+///
+/// # Errors
+///
+/// Returns an error when the supplied id is zero or negative.
 pub fn parse_id_cursor(id: Option<i64>, value_name: &str) -> Result<Option<i64>> {
     match id {
         None => Ok(None),
@@ -388,6 +412,11 @@ pub fn parse_id_cursor(id: Option<i64>, value_name: &str) -> Result<Option<i64>>
 }
 
 /// Validates a string value plus numeric id cursor pair.
+///
+/// # Errors
+///
+/// Returns an error when the tuple is incomplete, the string value is blank, or the id is not
+/// positive.
 pub fn parse_string_id_cursor(
     value: Option<String>,
     id: Option<i64>,
@@ -409,6 +438,10 @@ pub fn parse_string_id_cursor(
 }
 
 /// Validates a sort-order, name, and numeric id cursor tuple.
+///
+/// # Errors
+///
+/// Returns an error when the tuple is incomplete, the name is blank, or the id is not positive.
 pub fn parse_sort_order_name_id_cursor(
     sort_order: Option<i32>,
     name: Option<String>,
@@ -433,6 +466,10 @@ pub fn parse_sort_order_name_id_cursor(
 }
 
 /// Validates an enabled flag, priority, and numeric id cursor tuple.
+///
+/// # Errors
+///
+/// Returns an error when the tuple is incomplete or the id is not positive.
 pub fn parse_enabled_priority_id_cursor(
     enabled: Option<bool>,
     priority: Option<i32>,
@@ -464,6 +501,7 @@ pub struct CursorSlice<T> {
 
 impl<T> CursorSlice<T> {
     /// Creates an empty slice with a known total count.
+    #[must_use]
     pub fn empty(total: u64) -> Self {
         Self {
             items: Vec::new(),
@@ -473,6 +511,11 @@ impl<T> CursorSlice<T> {
     }
 
     /// Builds a cursor slice from a repository result that fetched `limit + 1` rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the item count or truncation limit cannot be represented by the
+    /// required integer type on the current platform.
     pub fn from_overfetch(mut items: Vec<T>, total: u64, limit: u64) -> Result<Self> {
         let item_count = u64::try_from(items.len())
             .map_err(|_| ApiError::new("cursor slice item count is too large"))?;

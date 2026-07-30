@@ -1,4 +1,4 @@
-//! Canonical WebDAV path handling.
+//! Canonical `WebDAV` path handling.
 
 use std::str;
 
@@ -19,13 +19,17 @@ const DAV_HREF_PATH_SET: &AsciiSet = &CONTROLS
     .add(b'+')
     .add(b'%');
 
-/// A normalized path relative to a WebDAV mount.
+/// A normalized path relative to a `WebDAV` mount.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DavPath {
     canonical: String,
 }
 
 /// Parses a mount-relative request path and returns its canonical decoded representation.
+///
+/// # Errors
+///
+/// Returns [`DavPathError`] when percent-decoding fails or dot segments escape the mount.
 pub fn decode_relative_path(relative: &str) -> Result<DavPath, DavPathError> {
     DavPath::new(relative)
 }
@@ -54,6 +58,10 @@ pub fn href_for_dav_path(prefix: &str, path: &DavPath) -> String {
 }
 
 /// Returns a child path with collection trailing-slash semantics.
+///
+/// # Errors
+///
+/// Returns [`DavPathError`] when the child name is invalid or escapes the parent path.
 pub fn child_relative_path(
     parent: &str,
     name: &[u8],
@@ -108,13 +116,13 @@ pub fn display_name(relative: &str) -> &str {
     }
 }
 
-/// Errors produced while canonicalizing a WebDAV path.
+/// Errors produced while canonicalizing a `WebDAV` path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavPathError {
     /// The path contains malformed percent encoding.
     #[error("invalid WebDAV path encoding")]
     InvalidEncoding,
-    /// Dot-segment normalization would escape the WebDAV mount root.
+    /// Dot-segment normalization would escape the `WebDAV` mount root.
     #[error("WebDAV path escapes the mount root")]
     PathEscape,
     /// A backend child name contains a path separator.
@@ -124,6 +132,10 @@ pub enum DavPathError {
 
 impl DavPath {
     /// Percent-decodes and canonicalizes a path without allowing root escape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavPathError`] when the mount path is invalid or the URI escapes that mount.
     pub fn new(path: &str) -> Result<Self, DavPathError> {
         let encoded = ensure_leading_slash(path);
         if contains_encoded_path_separator(&encoded) {
@@ -136,7 +148,7 @@ impl DavPath {
         Ok(Self { canonical })
     }
 
-    /// Returns the WebDAV mount root.
+    /// Returns the `WebDAV` mount root.
     #[must_use]
     pub fn root() -> Self {
         Self {

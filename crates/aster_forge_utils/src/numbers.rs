@@ -12,6 +12,7 @@ use crate::{Result, UtilsError};
 ///
 /// This helper is for APIs that require a non-zero numeric parameter but where product policy has
 /// already decided that an input of zero means "use the smallest legal value".
+#[must_use]
 pub fn non_zero_u32(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
 }
@@ -19,16 +20,25 @@ pub fn non_zero_u32(value: u32) -> NonZeroU32 {
 /// Converts `0` to [`NonZeroU64::MIN`] and preserves non-zero values.
 ///
 /// This is the `u64` companion to [`non_zero_u32`].
+#[must_use]
 pub fn non_zero_u64(value: u64) -> NonZeroU64 {
     NonZeroU64::new(value).unwrap_or(NonZeroU64::MIN)
 }
 
 /// Converts a signed byte count to `usize`.
+///
+/// # Errors
+///
+/// Returns an error when `bytes` is negative or does not fit in `usize` on the current platform.
 pub fn bytes_to_usize(bytes: i64, value_name: &str) -> Result<usize> {
     i64_to_usize(bytes, value_name)
 }
 
 /// Converts `i32` to `usize`.
+///
+/// # Errors
+///
+/// Returns an error when `value` is negative or does not fit in `usize` on the current platform.
 pub fn i32_to_usize(value: i32, value_name: &str) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} cannot be negative: {value}"))
@@ -36,6 +46,10 @@ pub fn i32_to_usize(value: i32, value_name: &str) -> Result<usize> {
 }
 
 /// Converts `i64` to `i32`.
+///
+/// # Errors
+///
+/// Returns an error when `value` is outside the `i32` range.
 pub fn i64_to_i32(value: i64, value_name: &str) -> Result<i32> {
     i32::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} is outside i32 range: {value}"))
@@ -43,6 +57,10 @@ pub fn i64_to_i32(value: i64, value_name: &str) -> Result<i32> {
 }
 
 /// Converts `i64` to `usize`.
+///
+/// # Errors
+///
+/// Returns an error when `value` is negative or does not fit in `usize` on the current platform.
 pub fn i64_to_usize(value: i64, value_name: &str) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!(
@@ -52,6 +70,10 @@ pub fn i64_to_usize(value: i64, value_name: &str) -> Result<usize> {
 }
 
 /// Converts `i64` to `u64`.
+///
+/// # Errors
+///
+/// Returns an error when `value` is negative.
 pub fn i64_to_u64(value: i64, value_name: &str) -> Result<u64> {
     u64::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} cannot be negative: {value}"))
@@ -59,6 +81,10 @@ pub fn i64_to_u64(value: i64, value_name: &str) -> Result<u64> {
 }
 
 /// Converts `u128` to `u64`.
+///
+/// # Errors
+///
+/// Returns an error when `value` exceeds [`u64::MAX`].
 pub fn u128_to_u64(value: u128, value_name: &str) -> Result<u64> {
     u64::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds u64 range: {value}"))
@@ -66,11 +92,17 @@ pub fn u128_to_u64(value: u128, value_name: &str) -> Result<u64> {
 }
 
 /// Converts `u128` to `u64`, saturating values above `u64::MAX`.
+#[must_use]
 pub fn u128_to_u64_saturating(value: u128) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// Converts seconds represented as `f64` to rounded milliseconds.
+///
+/// # Errors
+///
+/// Returns an error when `seconds` is non-finite, negative, outside [`std::time::Duration`]'s
+/// range, cannot be rounded safely, or the rounded millisecond count exceeds [`u64::MAX`].
 pub fn f64_seconds_to_u64_millis(seconds: f64, value_name: &str) -> Result<u64> {
     if !seconds.is_finite() {
         return Err(UtilsError::invalid_value(format!(
@@ -96,6 +128,10 @@ pub fn f64_seconds_to_u64_millis(seconds: f64, value_name: &str) -> Result<u64> 
 }
 
 /// Converts `u32` to `usize`.
+///
+/// # Errors
+///
+/// Returns an error when `value` does not fit in `usize` on the current platform.
 pub fn u32_to_usize(value: u32, value_name: &str) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!(
@@ -107,11 +143,16 @@ pub fn u32_to_usize(value: u32, value_name: &str) -> Result<usize> {
 /// Converts `u32` to `i64`.
 ///
 /// This conversion is infallible because every `u32` value fits into `i64`.
+#[must_use]
 pub fn u32_to_i64(value: u32) -> i64 {
     i64::from(value)
 }
 
 /// Converts `u32` to `i32`.
+///
+/// # Errors
+///
+/// Returns an error when `value` exceeds [`i32::MAX`].
 pub fn u32_to_i32(value: u32, value_name: &str) -> Result<i32> {
     i32::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds i32 range: {value}"))
@@ -119,6 +160,10 @@ pub fn u32_to_i32(value: u32, value_name: &str) -> Result<i32> {
 }
 
 /// Converts `u64` to `i64`.
+///
+/// # Errors
+///
+/// Returns an error when `value` exceeds [`i64::MAX`].
 pub fn u64_to_i64(value: u64, value_name: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds i64 range: {value}"))
@@ -126,6 +171,10 @@ pub fn u64_to_i64(value: u64, value_name: &str) -> Result<i64> {
 }
 
 /// Converts `u64` to `usize`.
+///
+/// # Errors
+///
+/// Returns an error when `value` does not fit in `usize` on the current platform.
 pub fn u64_to_usize(value: u64, value_name: &str) -> Result<usize> {
     usize::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!(
@@ -135,6 +184,10 @@ pub fn u64_to_usize(value: u64, value_name: &str) -> Result<usize> {
 }
 
 /// Converts `usize` to `i32`.
+///
+/// # Errors
+///
+/// Returns an error when `value` exceeds [`i32::MAX`].
 pub fn usize_to_i32(value: usize, value_name: &str) -> Result<i32> {
     i32::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds i32 range: {value}"))
@@ -145,6 +198,10 @@ pub fn usize_to_i32(value: usize, value_name: &str) -> Result<i32> {
 ///
 /// This is infallible only on 32-bit platforms, but the fallible signature keeps call sites
 /// consistent with the other checked conversions.
+///
+/// # Errors
+///
+/// Returns an error when `value` exceeds [`i64::MAX`].
 pub fn usize_to_i64(value: usize, value_name: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds i64 range: {value}"))
@@ -152,6 +209,10 @@ pub fn usize_to_i64(value: usize, value_name: &str) -> Result<i64> {
 }
 
 /// Converts `usize` to `u32`.
+///
+/// # Errors
+///
+/// Returns an error when `value` exceeds [`u32::MAX`].
 pub fn usize_to_u32(value: usize, value_name: &str) -> Result<u32> {
     u32::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds u32 range: {value}"))
@@ -159,6 +220,10 @@ pub fn usize_to_u32(value: usize, value_name: &str) -> Result<u32> {
 }
 
 /// Converts `usize` to `u64`.
+///
+/// # Errors
+///
+/// Returns an error when `value` does not fit in `u64` on the current platform.
 pub fn usize_to_u64(value: usize, value_name: &str) -> Result<u64> {
     u64::try_from(value).map_err(|_| {
         UtilsError::numeric_conversion(format!("{value_name} exceeds u64 range: {value}"))
@@ -166,6 +231,11 @@ pub fn usize_to_u64(value: usize, value_name: &str) -> Result<u64> {
 }
 
 /// Calculates the number of chunks needed to cover `total_size`.
+///
+/// # Errors
+///
+/// Returns an error when `total_size` is negative, `chunk_size` is not positive, the rounding
+/// addition overflows, or the resulting chunk count does not fit in `i32`.
 pub fn calc_total_chunks(total_size: i64, chunk_size: i64, context: &str) -> Result<i32> {
     if total_size < 0 {
         return Err(UtilsError::invalid_value(format!(

@@ -19,6 +19,11 @@ pub struct TestTempDir {
 
 impl TestTempDir {
     /// Creates an isolated directory under the platform temporary directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `scope` is invalid, the system clock predates the Unix epoch, or the directory
+    /// cannot be created.
     pub fn new(scope: &str) -> Self {
         Self::new_in(std::env::temp_dir(), scope)
     }
@@ -27,6 +32,11 @@ impl TestTempDir {
     ///
     /// This is useful when a test intentionally needs a path below the package directory, such as
     /// configuration tests that verify runtime-relative path rendering.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `scope` is invalid, the system clock predates the Unix epoch, or the directory
+    /// cannot be created below `root`.
     pub fn new_in(root: impl AsRef<Path>, scope: &str) -> Self {
         assert_valid_scope(scope);
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
@@ -50,17 +60,23 @@ impl TestTempDir {
     }
 
     /// Returns the owned temporary directory path.
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.guard.path()
     }
 
     /// Joins a test-owned relative path below the temporary directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `path` is absolute or contains a parent, root, or platform prefix component.
     pub fn join(&self, path: impl AsRef<Path>) -> PathBuf {
         let path = path.as_ref();
         assert!(
             path.components()
                 .all(|component| matches!(component, Component::Normal(_) | Component::CurDir)),
-            "test fixture path must stay relative to its temporary directory: {path:?}"
+            "test fixture path must stay relative to its temporary directory: {}",
+            path.display()
         );
         self.path().join(path)
     }
@@ -75,9 +91,9 @@ impl std::fmt::Debug for TestTempDir {
     }
 }
 
-/// A file-backed SQLite test database inside an isolated temporary directory.
+/// A file-backed `SQLite` test database inside an isolated temporary directory.
 ///
-/// The fixture owns the directory rather than only the main database file, so SQLite journal,
+/// The fixture owns the directory rather than only the main database file, so `SQLite` journal,
 /// WAL, and shared-memory sidecars are cleaned together. Database handles must be closed before
 /// this value is dropped on platforms that lock open files.
 #[derive(Debug)]
@@ -89,7 +105,12 @@ pub struct SqliteTestDatabase {
 }
 
 impl SqliteTestDatabase {
-    /// Creates a uniquely named file-backed SQLite fixture.
+    /// Creates a uniquely named file-backed `SQLite` fixture.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the scope or temporary directory is invalid, directory creation fails, or the
+    /// resulting database path is not valid UTF-8.
     pub fn new(scope: &str) -> Self {
         let directory = TestTempDir::new(&format!("sqlite-{scope}"));
         let path = directory.join("database.sqlite3");
@@ -102,26 +123,33 @@ impl SqliteTestDatabase {
     }
 
     /// Returns the database file path.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Returns a `mode=rwc` SQLite URL with the native path percent-encoded.
+    /// Returns a `mode=rwc` `SQLite` URL with the native path percent-encoded.
+    #[must_use]
     pub fn url(&self) -> &str {
         &self.url
     }
 
-    /// Returns the directory that owns the database and any SQLite sidecars.
+    /// Returns the directory that owns the database and any `SQLite` sidecars.
+    #[must_use]
     pub fn directory(&self) -> &Path {
         self.directory.path()
     }
 }
 
-/// Builds a file-backed SQLite URL from a native filesystem path.
+/// Builds a file-backed `SQLite` URL from a native filesystem path.
 ///
 /// The opaque `sqlite:` form lets drive letters, backslashes, spaces, `?`, and `#` remain part of
-/// the database filename after SQLx percent-decodes it, while the URL still passes generic URL
-/// validation performed by SeaORM.
+/// the database filename after `SQLx` percent-decodes it, while the URL still passes generic URL
+/// validation performed by `SeaORM`.
+///
+/// # Panics
+///
+/// Panics when the native path is not valid UTF-8.
 pub fn sqlite_database_url(path: impl AsRef<Path>) -> String {
     let path = path.as_ref();
     let path = path.to_str().unwrap_or_else(|| {

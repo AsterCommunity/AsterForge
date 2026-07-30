@@ -64,6 +64,10 @@ pub struct PrometheusMetrics {
 }
 
 impl PrometheusMetrics {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Built-in metric construction and registration stay together so initialization remains atomic."
+    )]
     fn new() -> Result<Self, prometheus::Error> {
         let registry = Registry::new();
 
@@ -387,21 +391,25 @@ impl ProductMetricHandle {
     }
 
     /// Returns the subsystem that owns this metric.
+    #[must_use]
     pub const fn subsystem(&self) -> &'static str {
         self.subsystem
     }
 
     /// Returns the descriptor-local metric name.
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         self.name
     }
 
     /// Returns the registered metric kind.
+    #[must_use]
     pub const fn kind(&self) -> MetricKind {
         self.kind
     }
 
     /// Returns the number of label values required by this metric.
+    #[must_use]
     pub const fn label_count(&self) -> usize {
         self.label_count
     }
@@ -415,11 +423,16 @@ pub struct ProductCounter {
 
 impl ProductCounter {
     /// Creates a typed counter from an opaque product metric handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the handle is not a counter or its descriptor is unavailable.
     pub fn from_handle(handle: ProductMetricHandle) -> ProductMetricResult<Self> {
         typed_product_metric_handle(handle, MetricKind::Counter).map(|handle| Self { handle })
     }
 
     /// Returns the underlying opaque handle.
+    #[must_use]
     pub const fn handle(&self) -> ProductMetricHandle {
         self.handle
     }
@@ -427,11 +440,15 @@ impl ProductCounter {
     /// Increments this counter and logs recording failures.
     pub fn inc(&self, label_values: &[&str], value: u64) {
         if let Err(error) = self.try_inc(label_values, value) {
-            log_product_metric_error(error);
+            log_product_metric_error(&error);
         }
     }
 
     /// Increments this counter and returns recording failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the label count is wrong or the counter cannot be updated.
     pub fn try_inc(&self, label_values: &[&str], value: u64) -> ProductMetricResult<()> {
         inc_product_counter(self.handle, label_values, value)
     }
@@ -445,11 +462,16 @@ pub struct ProductGauge {
 
 impl ProductGauge {
     /// Creates a typed gauge from an opaque product metric handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the handle is not a gauge or its descriptor is unavailable.
     pub fn from_handle(handle: ProductMetricHandle) -> ProductMetricResult<Self> {
         typed_product_metric_handle(handle, MetricKind::Gauge).map(|handle| Self { handle })
     }
 
     /// Returns the underlying opaque handle.
+    #[must_use]
     pub const fn handle(&self) -> ProductMetricHandle {
         self.handle
     }
@@ -457,11 +479,15 @@ impl ProductGauge {
     /// Sets this gauge and logs recording failures.
     pub fn set(&self, label_values: &[&str], value: f64) {
         if let Err(error) = self.try_set(label_values, value) {
-            log_product_metric_error(error);
+            log_product_metric_error(&error);
         }
     }
 
     /// Sets this gauge and returns recording failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the label count is wrong or the gauge cannot be set.
     pub fn try_set(&self, label_values: &[&str], value: f64) -> ProductMetricResult<()> {
         set_product_gauge(self.handle, label_values, value)
     }
@@ -469,11 +495,15 @@ impl ProductGauge {
     /// Adds to this gauge and logs recording failures.
     pub fn add(&self, label_values: &[&str], value: f64) {
         if let Err(error) = self.try_add(label_values, value) {
-            log_product_metric_error(error);
+            log_product_metric_error(&error);
         }
     }
 
     /// Adds to this gauge and returns recording failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the label count is wrong or the gauge cannot be adjusted.
     pub fn try_add(&self, label_values: &[&str], value: f64) -> ProductMetricResult<()> {
         add_product_gauge(self.handle, label_values, value)
     }
@@ -487,11 +517,16 @@ pub struct ProductHistogram {
 
 impl ProductHistogram {
     /// Creates a typed histogram from an opaque product metric handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the handle is not a histogram or its descriptor is unavailable.
     pub fn from_handle(handle: ProductMetricHandle) -> ProductMetricResult<Self> {
         typed_product_metric_handle(handle, MetricKind::Histogram).map(|handle| Self { handle })
     }
 
     /// Returns the underlying opaque handle.
+    #[must_use]
     pub const fn handle(&self) -> ProductMetricHandle {
         self.handle
     }
@@ -499,17 +534,21 @@ impl ProductHistogram {
     /// Observes a value in this histogram and logs recording failures.
     pub fn observe(&self, label_values: &[&str], value: f64) {
         if let Err(error) = self.try_observe(label_values, value) {
-            log_product_metric_error(error);
+            log_product_metric_error(&error);
         }
     }
 
     /// Observes a value in this histogram and returns recording failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the label count is wrong or the histogram cannot be observed.
     pub fn try_observe(&self, label_values: &[&str], value: f64) -> ProductMetricResult<()> {
         observe_product_histogram(self.handle, label_values, value)
     }
 }
 
-fn log_product_metric_error(error: ProductMetricError) {
+fn log_product_metric_error(error: &ProductMetricError) {
     tracing::warn!(error = %error, "failed to record product metric");
 }
 
@@ -589,6 +628,10 @@ pub enum ProductMetricError {
 pub type ProductMetricResult<T> = std::result::Result<T, ProductMetricError>;
 
 /// Initializes the shared Prometheus registry.
+///
+/// # Errors
+///
+/// Returns a Prometheus error when a built-in collector cannot be registered.
 pub fn init_metrics() -> Result<(), prometheus::Error> {
     if METRICS.get().is_some() {
         return Ok(());
@@ -611,6 +654,10 @@ pub fn is_initialized() -> bool {
 }
 
 /// Exports the current Prometheus text exposition body.
+///
+/// # Errors
+///
+/// Returns an error when metric families cannot be encoded as Prometheus text.
 pub fn export_metrics() -> Result<String, String> {
     let metrics = METRICS
         .get()
@@ -623,6 +670,10 @@ pub fn export_metrics() -> Result<String, String> {
 /// Product crates pass a Forge [`MetricDescriptor`] and receive an opaque handle
 /// for future record calls. This keeps product code independent from the
 /// `prometheus` crate while still allowing product-specific metric families.
+///
+/// # Errors
+///
+/// Returns an error when the descriptor is invalid, duplicated, or rejected by Prometheus.
 pub fn register_product_metric(
     descriptor: MetricDescriptor,
 ) -> ProductMetricResult<ProductMetricHandle> {
@@ -656,6 +707,10 @@ pub fn register_product_metric(
 /// The batch is all-or-nothing: when any descriptor fails, the families this
 /// batch already registered are rolled back so fixing the failure and
 /// retrying does not trip over `DuplicateRegistration`.
+///
+/// # Errors
+///
+/// Returns an error when validation or registration of any descriptor in the batch fails.
 pub fn register_product_metrics<I>(descriptors: I) -> ProductMetricResult<Vec<ProductMetricHandle>>
 where
     I: IntoIterator<Item = MetricDescriptor>,
@@ -708,6 +763,10 @@ fn unregister_product_metric(
 }
 
 /// Registers a product counter and returns a typed handle.
+///
+/// # Errors
+///
+/// Returns an error when the counter descriptor cannot be registered.
 pub fn register_product_counter(
     descriptor: MetricDescriptor,
 ) -> ProductMetricResult<ProductCounter> {
@@ -716,12 +775,20 @@ pub fn register_product_counter(
 }
 
 /// Registers a product gauge and returns a typed handle.
+///
+/// # Errors
+///
+/// Returns an error when the gauge descriptor cannot be registered.
 pub fn register_product_gauge(descriptor: MetricDescriptor) -> ProductMetricResult<ProductGauge> {
     ensure_descriptor_kind(&descriptor, MetricKind::Gauge)?;
     ProductGauge::from_handle(register_product_metric(descriptor)?)
 }
 
 /// Registers a product histogram and returns a typed handle.
+///
+/// # Errors
+///
+/// Returns an error when the histogram descriptor cannot be registered.
 pub fn register_product_histogram(
     descriptor: MetricDescriptor,
 ) -> ProductMetricResult<ProductHistogram> {
@@ -800,6 +867,10 @@ fn product_collector_box(
 }
 
 /// Increments a registered product counter.
+///
+/// # Errors
+///
+/// Returns an error when the handle kind or label count does not match the registered counter.
 pub fn inc_product_counter(
     handle: ProductMetricHandle,
     label_values: &[&str],
@@ -814,6 +885,10 @@ pub fn inc_product_counter(
 }
 
 /// Sets a registered product gauge.
+///
+/// # Errors
+///
+/// Returns an error when the handle kind or label count does not match the registered gauge.
 pub fn set_product_gauge(
     handle: ProductMetricHandle,
     label_values: &[&str],
@@ -828,6 +903,10 @@ pub fn set_product_gauge(
 }
 
 /// Adds to a registered product gauge.
+///
+/// # Errors
+///
+/// Returns an error when the handle kind or label count does not match the registered gauge.
 pub fn add_product_gauge(
     handle: ProductMetricHandle,
     label_values: &[&str],
@@ -842,6 +921,10 @@ pub fn add_product_gauge(
 }
 
 /// Observes a registered product histogram.
+///
+/// # Errors
+///
+/// Returns an error when the handle kind or label count does not match the histogram.
 pub fn observe_product_histogram(
     handle: ProductMetricHandle,
     label_values: &[&str],
@@ -1195,6 +1278,14 @@ fn record_application_event(category: &'static str, event: &'static str, status:
         .inc();
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Prometheus gauges and histograms use f64 samples; large integer observations are diagnostic approximations."
+)]
+fn prometheus_u64(value: u64) -> f64 {
+    value as f64
+}
+
 fn record_config_reload(
     source: &'static str,
     decision: &'static str,
@@ -1217,7 +1308,7 @@ fn record_config_reload(
     metrics
         .config_reload_changed_keys
         .with_label_values(&[source, decision, status])
-        .observe(changed_keys as f64);
+        .observe(prometheus_u64(changed_keys));
 }
 
 fn record_config_mutation(
@@ -1237,7 +1328,7 @@ fn record_config_mutation(
     metrics
         .config_mutation_changed_keys
         .with_label_values(&[source, operation, status])
-        .observe(changed_keys as f64);
+        .observe(prometheus_u64(changed_keys));
 }
 
 fn record_background_task_transition(kind: &'static str, status: &'static str) {
@@ -1335,7 +1426,6 @@ fn health_status_value(status: &'static str) -> f64 {
     match status {
         "healthy" => 0.0,
         "degraded" => 1.0,
-        "unhealthy" => 2.0,
         _ => 2.0,
     }
 }
@@ -1350,7 +1440,7 @@ async fn system_metrics_updater_task(shutdown_token: CancellationToken) {
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_token.cancelled() => break,
+            () = shutdown_token.cancelled() => break,
             _ = interval.tick() => {}
         }
 
@@ -1377,7 +1467,7 @@ async fn system_metrics_updater_task(shutdown_token: CancellationToken) {
             if let Some(process) = sys.process(pid) {
                 metrics
                     .process_memory_rss_bytes
-                    .set(process.memory() as f64);
+                    .set(prometheus_u64(process.memory()));
                 let cpu_millis = i64::try_from(process.accumulated_cpu_time()).unwrap_or(i64::MAX);
                 metrics.process_cpu_milliseconds_total.set(cpu_millis);
             }
@@ -1391,12 +1481,12 @@ async fn system_metrics_updater_task(shutdown_token: CancellationToken) {
         }));
 
         if let Err(panic) = update {
-            tracing::error!(panic = %panic_message(panic), "system metrics updater panicked");
+            tracing::error!(panic = %panic_message(panic.as_ref()), "system metrics updater panicked");
         }
     }
 }
 
-fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = panic.downcast_ref::<&str>() {
         (*message).to_string()
     } else if let Some(message) = panic.downcast_ref::<String>() {

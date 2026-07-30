@@ -20,6 +20,7 @@ pub enum UniqueUuidAttempt<T> {
 }
 
 /// Generates a UUID v4 string.
+#[must_use]
 pub fn new_uuid() -> String {
     Uuid::new_v4().to_string()
 }
@@ -34,6 +35,11 @@ fn unique_uuid_exhausted_message(value_name: &str) -> String {
 /// [`UniqueUuidAttempt::Collision`] asks the helper to retry with a new candidate, while returning
 /// an error stops immediately and gives that error back to the caller. If all candidates collide,
 /// the standard retry-budget error is converted into the caller's error type.
+///
+/// # Errors
+///
+/// Returns the callback's error immediately, or an `E` converted from [`crate::UtilsError`] after
+/// every candidate in [`UNIQUE_UUID_MAX_ATTEMPTS`] collides.
 pub async fn with_unique_uuid<F, Fut, T, E>(
     value_name: &str,
     mut try_candidate: F,
@@ -66,6 +72,11 @@ where
 /// This helper does not atomically reserve the value; callers must still rely on a database
 /// uniqueness constraint in the later write path. Use [`with_unique_uuid`] when check-and-reserve
 /// semantics are needed, and perform the write inside the callback.
+///
+/// # Errors
+///
+/// Returns the lookup callback's error immediately, or an `E` converted from
+/// [`crate::UtilsError`] when the UUID retry budget is exhausted.
 pub async fn new_best_effort_uuid<F, Fut, E>(
     value_name: &str,
     mut is_taken: F,
@@ -89,6 +100,7 @@ where
 }
 
 /// Generates a short 32-character hex token.
+#[must_use]
 pub fn new_short_token() -> String {
     Uuid::new_v4().simple().to_string()
 }
@@ -98,6 +110,7 @@ pub fn new_short_token() -> String {
 /// Runtime IDs are process-level identifiers for ownership and notification
 /// echo filtering. They are intentionally not stable business IDs or
 /// deployment node names.
+#[must_use]
 pub fn new_runtime_id() -> String {
     format!("runtime-{}", new_short_token())
 }

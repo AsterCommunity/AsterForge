@@ -1,6 +1,6 @@
-//! QQ Connect OAuth2 provider driver.
+//! QQ Connect `OAuth2` provider driver.
 //!
-//! QQ Connect uses fixed OAuth2 endpoints plus a provider-specific openid lookup before fetching
+//! QQ Connect uses fixed `OAuth2` endpoints plus a provider-specific openid lookup before fetching
 //! user information. The driver keeps the QQ namespace scoped by client id and returns a normalized
 //! profile without email claims because QQ does not provide a verified email in this flow.
 
@@ -29,7 +29,7 @@ const QQ_DEFAULT_SCOPES: &str = "get_user_info";
 const QQ_OPENID_MAX_LEN: usize = 255;
 const QQ_SNAPSHOT_MAX_LEN: usize = 255;
 
-/// QQ Connect OAuth2 provider driver.
+/// QQ Connect `OAuth2` provider driver.
 #[derive(Default)]
 pub struct QqProviderDriver;
 
@@ -67,7 +67,8 @@ struct QqUserInfoResponse {
 }
 
 impl QqProviderDriver {
-    /// Creates a QQ Connect provider driver with fixed OAuth2 endpoints.
+    /// Creates a QQ Connect provider driver with fixed `OAuth2` endpoints.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -423,7 +424,7 @@ fn qq_openid_url_from_token_url(mut token_url: reqwest::Url) -> Result<reqwest::
     {
         let mut paths = token_url
             .path_segments_mut()
-            .map_err(|_| ExternalAuthError::config_error("invalid QQ token URL"))?;
+            .map_err(|()| ExternalAuthError::config_error("invalid QQ token URL"))?;
         paths.pop_if_empty();
         paths.pop();
         paths.push("me");
@@ -508,7 +509,7 @@ mod tests {
             key: "qq".to_string(),
             provider_kind: ExternalAuthProviderKind::Qq,
             protocol: ExternalAuthProtocol::OAuth2,
-            options: Default::default(),
+            options: crate::types::ExternalAuthProviderOptions::default(),
             issuer_url: Some("https://ignored.example.com".to_string()),
             authorization_url: Some("https://ignored.example.com/auth".to_string()),
             token_url: Some("https://ignored.example.com/token".to_string()),

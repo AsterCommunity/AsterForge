@@ -1,7 +1,7 @@
 //! Feature-gated external authentication provider drivers for Aster services.
 //!
 //! This crate contains the provider-neutral external authentication contract plus reusable
-//! implementations for OpenID Connect, generic OAuth2, and selected fixed-endpoint providers. It
+//! implementations for `OpenID` Connect, generic `OAuth2`, and selected fixed-endpoint providers. It
 //! deliberately avoids application database models, account entities, and HTTP handler concerns:
 //! product crates map their stored provider rows into [`ExternalAuthProviderConfig`] and map
 //! [`ExternalAuthError`] into their own API error type. Built-in connectors are controlled by Cargo

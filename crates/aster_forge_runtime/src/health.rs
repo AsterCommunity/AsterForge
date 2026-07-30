@@ -28,6 +28,7 @@ pub enum HealthStatus {
 
 impl HealthStatus {
     /// Returns the stable lowercase wire value.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
@@ -37,6 +38,7 @@ impl HealthStatus {
     }
 
     /// Returns whether this status should be treated as an operational issue.
+    #[must_use]
     pub const fn is_issue(self) -> bool {
         !matches!(self, Self::Healthy)
     }
@@ -55,6 +57,7 @@ pub enum HealthCheckScope {
 
 impl HealthCheckScope {
     /// Returns the stable lowercase wire value.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Liveness => "liveness",
@@ -74,6 +77,7 @@ pub struct HealthCheckScopes {
 
 impl HealthCheckScopes {
     /// Includes the check in every health scope.
+    #[must_use]
     pub const fn all() -> Self {
         Self {
             liveness: true,
@@ -83,6 +87,7 @@ impl HealthCheckScopes {
     }
 
     /// Includes the check only in liveness runs.
+    #[must_use]
     pub const fn liveness() -> Self {
         Self {
             liveness: true,
@@ -92,6 +97,7 @@ impl HealthCheckScopes {
     }
 
     /// Includes the check only in readiness runs.
+    #[must_use]
     pub const fn readiness() -> Self {
         Self {
             liveness: false,
@@ -101,6 +107,7 @@ impl HealthCheckScopes {
     }
 
     /// Includes the check only in diagnostics runs.
+    #[must_use]
     pub const fn diagnostics() -> Self {
         Self {
             liveness: false,
@@ -110,6 +117,7 @@ impl HealthCheckScopes {
     }
 
     /// Includes the check in readiness and diagnostics runs.
+    #[must_use]
     pub const fn readiness_and_diagnostics() -> Self {
         Self {
             liveness: false,
@@ -119,6 +127,7 @@ impl HealthCheckScopes {
     }
 
     /// Returns whether this set includes `scope`.
+    #[must_use]
     pub const fn contains(self, scope: HealthCheckScope) -> bool {
         match scope {
             HealthCheckScope::Liveness => self.liveness,
@@ -165,6 +174,7 @@ pub struct HealthCheckOptions {
 
 impl HealthCheckOptions {
     /// Creates required-check options.
+    #[must_use]
     pub const fn required(timeout: Option<Duration>) -> Self {
         Self {
             requirement: HealthCheckRequirement::Required,
@@ -174,6 +184,7 @@ impl HealthCheckOptions {
     }
 
     /// Creates optional-check options.
+    #[must_use]
     pub const fn optional(timeout: Option<Duration>) -> Self {
         Self {
             requirement: HealthCheckRequirement::Optional,
@@ -183,12 +194,14 @@ impl HealthCheckOptions {
     }
 
     /// Returns options with a different timeout.
+    #[must_use]
     pub const fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.timeout = timeout;
         self
     }
 
     /// Returns options with different scope membership.
+    #[must_use]
     pub const fn with_scopes(mut self, scopes: HealthCheckScopes) -> Self {
         self.scopes = scopes;
         self
@@ -233,6 +246,7 @@ pub enum HealthComponentDetailValue {
 
 impl HealthComponentDetailValue {
     /// Returns the stable lowercase type name for product DTOs.
+    #[must_use]
     pub const fn value_type(&self) -> &'static str {
         match self {
             Self::Text(_) => "text",
@@ -244,6 +258,7 @@ impl HealthComponentDetailValue {
     }
 
     /// Returns the text value when this detail stores text.
+    #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text(value) => Some(value),
@@ -252,6 +267,7 @@ impl HealthComponentDetailValue {
     }
 
     /// Returns the signed integer value when this detail stores one.
+    #[must_use]
     pub const fn as_integer(&self) -> Option<i64> {
         match self {
             Self::Integer(value) => Some(*value),
@@ -260,6 +276,7 @@ impl HealthComponentDetailValue {
     }
 
     /// Returns the unsigned integer value when this detail stores one.
+    #[must_use]
     pub const fn as_unsigned(&self) -> Option<u64> {
         match self {
             Self::Unsigned(value) => Some(*value),
@@ -268,6 +285,7 @@ impl HealthComponentDetailValue {
     }
 
     /// Returns the boolean value when this detail stores one.
+    #[must_use]
     pub const fn as_boolean(&self) -> Option<bool> {
         match self {
             Self::Boolean(value) => Some(*value),
@@ -276,6 +294,7 @@ impl HealthComponentDetailValue {
     }
 
     /// Returns the duration value in milliseconds when this detail stores one.
+    #[must_use]
     pub const fn as_duration_millis(&self) -> Option<u64> {
         match self {
             Self::DurationMillis(value) => Some(*value),
@@ -284,6 +303,7 @@ impl HealthComponentDetailValue {
     }
 
     /// Returns a stable human-facing display value.
+    #[must_use]
     pub fn display_value(&self) -> String {
         match self {
             Self::Text(value) => value.clone(),
@@ -401,12 +421,14 @@ impl HealthComponentReport {
     }
 
     /// Returns this report with runtime duration attached.
+    #[must_use]
     pub fn with_duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
         self
     }
 
     /// Returns this report with a structured diagnostic detail appended.
+    #[must_use]
     pub fn with_detail(
         mut self,
         key: impl Into<String>,
@@ -417,6 +439,7 @@ impl HealthComponentReport {
     }
 
     /// Returns the first structured detail value for `key`.
+    #[must_use]
     pub fn detail(&self, key: &str) -> Option<&HealthComponentDetailValue> {
         self.details
             .iter()
@@ -457,12 +480,14 @@ pub struct HealthCheckRegistryBuilder {
 
 impl HealthCheckRegistryBuilder {
     /// Creates an empty registry builder.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the default timeout used by [`Self::register_required`] and
     /// [`Self::register_optional`].
+    #[must_use]
     pub const fn default_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.default_timeout = timeout;
         self
@@ -470,6 +495,7 @@ impl HealthCheckRegistryBuilder {
 
     /// Sets the default scope membership used by [`Self::register_required`]
     /// and [`Self::register_optional`].
+    #[must_use]
     pub const fn default_scopes(mut self, scopes: HealthCheckScopes) -> Self {
         self.default_scopes = scopes;
         self
@@ -519,6 +545,7 @@ impl HealthCheckRegistryBuilder {
     }
 
     /// Consumes the builder and returns the registry.
+    #[must_use]
     pub fn build(self) -> HealthCheckRegistry {
         self.registry
     }
@@ -537,6 +564,7 @@ pub struct HealthCheckRegistry {
 
 impl HealthCheckRegistry {
     /// Creates an empty health check registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -648,11 +676,13 @@ impl HealthCheckRegistry {
     }
 
     /// Returns how many health checks are registered.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.checks.len()
     }
 
     /// Returns whether no health checks are registered.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.checks.is_empty()
     }
@@ -741,7 +771,9 @@ fn duration_millis_display_value(duration_millis: u64) -> String {
     if duration_millis < 1_000 {
         format!("{duration_millis}ms")
     } else {
-        format!("{:.3}s", duration_millis as f64 / 1_000.0)
+        let seconds = duration_millis / 1_000;
+        let fractional_millis = duration_millis % 1_000;
+        format!("{seconds}.{fractional_millis:03}s")
     }
 }
 
@@ -779,6 +811,7 @@ pub struct SystemHealthReport {
 
 impl SystemHealthReport {
     /// Returns a report from component entries.
+    #[must_use]
     pub fn new(components: Vec<HealthComponentReport>) -> Self {
         Self {
             components,
@@ -787,6 +820,7 @@ impl SystemHealthReport {
     }
 
     /// Returns a report from component entries and aggregate duration.
+    #[must_use]
     pub fn with_duration(components: Vec<HealthComponentReport>, duration: Duration) -> Self {
         Self {
             components,
@@ -820,6 +854,7 @@ impl SystemHealthReport {
     }
 
     /// Returns whether any component is degraded or unhealthy.
+    #[must_use]
     pub fn has_issues(&self) -> bool {
         self.components
             .iter()
@@ -830,6 +865,7 @@ impl SystemHealthReport {
     ///
     /// `Unhealthy` dominates `Degraded`, and an empty report is considered
     /// healthy because no product probe reported an issue.
+    #[must_use]
     pub fn status(&self) -> HealthStatus {
         if self
             .components
@@ -849,6 +885,7 @@ impl SystemHealthReport {
     }
 
     /// Returns a compact operator-facing summary.
+    #[must_use]
     pub fn summary(&self) -> String {
         if self.components.is_empty() {
             return "system health check did not run any components".to_string();
@@ -862,6 +899,7 @@ impl SystemHealthReport {
     }
 
     /// Returns component status and diagnostic messages for every component.
+    #[must_use]
     pub fn details(&self) -> String {
         self.components
             .iter()
@@ -880,6 +918,7 @@ impl SystemHealthReport {
     /// Returns a compact summary of only degraded or unhealthy components.
     ///
     /// When no component reports an issue, this falls back to [`Self::summary`].
+    #[must_use]
     pub fn issue_summary(&self) -> String {
         let summary = self
             .components
@@ -899,6 +938,7 @@ impl SystemHealthReport {
     /// Returns diagnostic details for only degraded or unhealthy components.
     ///
     /// When no component reports an issue, this falls back to [`Self::details`].
+    #[must_use]
     pub fn issue_details(&self) -> String {
         let details = self
             .components

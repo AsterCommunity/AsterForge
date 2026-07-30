@@ -66,6 +66,7 @@ const MAIL_OUTBOX_TO_ADDRESS_MAX_LEN: usize = 255;
 const MAIL_OUTBOX_TO_NAME_MAX_LEN: usize = 255;
 
 /// Builds the shared `mail_outbox` table creation statement.
+#[must_use]
 pub fn create_mail_outbox_table(backend: DatabaseBackend) -> TableCreateStatement {
     Table::create()
         .table(mail_outbox_table())
@@ -110,6 +111,7 @@ pub fn create_mail_outbox_table(backend: DatabaseBackend) -> TableCreateStatemen
 }
 
 /// Builds the shared `mail_outbox` table drop statement.
+#[must_use]
 pub fn drop_mail_outbox_table() -> TableDropStatement {
     Table::drop()
         .table(mail_outbox_table())
@@ -118,6 +120,7 @@ pub fn drop_mail_outbox_table() -> TableDropStatement {
 }
 
 /// Builds the due-row index used by dispatch polling.
+#[must_use]
 pub fn create_mail_outbox_due_index() -> IndexCreateStatement {
     Index::create()
         .name(MAIL_OUTBOX_DUE_INDEX)
@@ -130,6 +133,7 @@ pub fn create_mail_outbox_due_index() -> IndexCreateStatement {
 }
 
 /// Builds the processing-stale index used by dispatch recovery.
+#[must_use]
 pub fn create_mail_outbox_processing_index() -> IndexCreateStatement {
     Index::create()
         .name(MAIL_OUTBOX_PROCESSING_INDEX)
@@ -142,6 +146,7 @@ pub fn create_mail_outbox_processing_index() -> IndexCreateStatement {
 }
 
 /// Builds the sent timestamp index used by retention and admin queries.
+#[must_use]
 pub fn create_mail_outbox_sent_at_index() -> IndexCreateStatement {
     Index::create()
         .name(MAIL_OUTBOX_SENT_AT_INDEX)
@@ -220,7 +225,7 @@ fn utc_datetime_column(backend: DatabaseBackend, column: Alias) -> ColumnDef {
     definition
 }
 
-/// SeaORM model for `mail_outbox`.
+/// `SeaORM` model for `mail_outbox`.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "mail_outbox")]
 pub struct Model {
@@ -304,17 +309,26 @@ pub struct MailOutboxDbStore {
 }
 
 impl MailOutboxDbStore {
-    /// Creates a mail outbox store from a SeaORM database connection.
+    /// Creates a mail outbox store from a `SeaORM` database connection.
+    #[must_use]
     pub const fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 
     /// Enqueues one pending mail outbox row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn create(&self, request: MailOutboxCreate) -> crate::Result<Model> {
         create_mail_outbox_row(&self.db, request).await
     }
 
     /// Lists rows that are due or stale enough to be reclaimed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn list_claimable(
         &self,
         now: DateTime<Utc>,
@@ -325,6 +339,10 @@ impl MailOutboxDbStore {
     }
 
     /// Attempts to claim one row for processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn try_claim(
         &self,
         id: i64,
@@ -335,11 +353,19 @@ impl MailOutboxDbStore {
     }
 
     /// Marks a processing row as sent and clears its sensitive payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn mark_sent(&self, id: i64, sent_at: DateTime<Utc>) -> crate::Result<bool> {
         mark_sent(&self.db, id, sent_at).await
     }
 
     /// Marks a processing row for retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn mark_retry(
         &self,
         id: i64,
@@ -351,6 +377,10 @@ impl MailOutboxDbStore {
     }
 
     /// Marks a processing row as permanently failed and clears its sensitive payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn mark_failed(
         &self,
         id: i64,
@@ -362,6 +392,10 @@ impl MailOutboxDbStore {
     }
 
     /// Counts pending or retry rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn count_active(&self) -> crate::Result<u64> {
         count_active(&self.db).await
     }
@@ -371,6 +405,10 @@ impl MailOutboxDbStore {
     /// Forge owns list/claim/mark/retry/failure persistence for the shared `mail_outbox` table.
     /// Products only provide rendering/delivery and audit hooks, which keeps every Aster service on
     /// the same state machine without copying payload-heavy rows across persistence callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database operation fails.
     pub async fn dispatch_due<E, Deliver, DeliverFut, OnSent, OnSentFut, OnFailed, OnFailedFut>(
         &self,
         config: &MailOutboxDispatchConfig,
@@ -421,7 +459,11 @@ impl MailOutboxDbStore {
     }
 }
 
-/// Enqueues one pending mail outbox row using any SeaORM connection or transaction.
+/// Enqueues one pending mail outbox row using any `SeaORM` connection or transaction.
+///
+/// # Errors
+///
+/// Returns an error when the database operation fails.
 pub async fn create_mail_outbox_row<C>(db: &C, request: MailOutboxCreate) -> crate::Result<Model>
 where
     C: ConnectionTrait,

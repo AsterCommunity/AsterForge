@@ -23,6 +23,11 @@ impl EmailPolicyList {
     ///
     /// Blank entries are ignored. Non-blank invalid entries fail the whole
     /// normalization pass so configuration writes do not silently persist typos.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any non-blank item is neither a valid exact email address nor a valid
+    /// exact domain.
     pub fn from_items<I, S>(items: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
@@ -65,16 +70,19 @@ impl EmailPolicyList {
     }
 
     /// Returns whether no emails or domains are configured.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.emails.is_empty() && self.domains.is_empty()
     }
 
     /// Returns whether `email` or `domain` exactly matches this list.
+    #[must_use]
     pub fn matches(&self, email: &str, domain: &str) -> bool {
         self.emails.contains(email) || self.domains.contains(domain)
     }
 
     /// Returns normalized entries as a stable sorted vector.
+    #[must_use]
     pub fn entries(&self) -> Vec<String> {
         self.emails
             .iter()
@@ -107,6 +115,10 @@ pub enum EmailPolicyEntry {
 }
 
 /// Normalizes and deduplicates raw email policy entries into a stable vector.
+///
+/// # Errors
+///
+/// Returns an error when any non-blank entry is invalid.
 pub fn normalize_email_policy_items<I, S>(items: I) -> Result<Vec<String>>
 where
     I: IntoIterator<Item = S>,
@@ -120,6 +132,10 @@ where
 /// Entries containing `@` are treated as exact email addresses unless they start
 /// with a single leading `@`, in which case they are treated as domains. Entries
 /// without `@` are treated as exact domains.
+///
+/// # Errors
+///
+/// Returns an error when the selected email or domain normalizer rejects the entry.
 pub fn parse_email_policy_item(item: &str) -> Result<EmailPolicyEntry> {
     if let Some(domain) = item.strip_prefix('@')
         && !domain.contains('@')
@@ -135,12 +151,21 @@ pub fn parse_email_policy_item(item: &str) -> Result<EmailPolicyEntry> {
 }
 
 /// Normalizes an exact email policy entry.
+///
+/// # Errors
+///
+/// Returns an error when `email` fails the shared lightweight email validation rules.
 pub fn normalize_email_policy_email(email: &str) -> Result<String> {
     let normalized = normalize_email(email)?;
     Ok(normalized.to_ascii_lowercase())
 }
 
 /// Normalizes an exact email domain policy entry.
+///
+/// # Errors
+///
+/// Returns an error when the domain is empty, too long, non-ASCII, structurally malformed, or
+/// contains characters other than ASCII letters, digits, hyphens, and dots.
 pub fn normalize_email_policy_domain(domain: &str) -> Result<String> {
     let normalized = domain.trim().trim_start_matches('@').to_ascii_lowercase();
     if normalized.is_empty()
@@ -168,6 +193,10 @@ pub fn normalize_email_policy_domain(domain: &str) -> Result<String> {
 }
 
 /// Normalizes an email and returns its exact-match domain.
+///
+/// # Errors
+///
+/// Returns an error when the email or its extracted domain fails normalization.
 pub fn normalized_email_and_domain(email: &str) -> Result<(String, String)> {
     let normalized = normalize_email_policy_email(email)?;
     let domain = email_domain(&normalized)?;

@@ -64,12 +64,14 @@ impl PanicHookConfig {
     }
 
     /// Overrides the crash log path.
+    #[must_use]
     pub fn with_crash_log_path(mut self, crash_log_path: impl Into<PathBuf>) -> Self {
         self.crash_log_path = crash_log_path.into();
         self
     }
 
     /// Overrides the repository-relative issue template path.
+    #[must_use]
     pub fn with_issue_template(mut self, issue_template: impl Into<String>) -> Self {
         self.issue_template = issue_template.into();
         self
@@ -125,10 +127,10 @@ pub fn install_panic_hook(config: PanicHookConfig) {
                 .format("%Y-%m-%d %H:%M:%S%.3f")
                 .to_string(),
             thread_name: thread.name().unwrap_or("<unnamed>").to_string(),
-            location: info
-                .location()
-                .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
-                .unwrap_or_else(|| "<unknown>".to_string()),
+            location: info.location().map_or_else(
+                || "<unknown>".to_string(),
+                |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+            ),
             message: panic_payload_message(info.payload()),
         };
 
@@ -217,9 +219,10 @@ fn open_crash_log_file(crash_log_path: &Path) -> Result<Mutex<std::fs::File>, St
 }
 
 fn crash_log_display_path(crash_log_path: &Path) -> PathBuf {
-    std::env::current_dir()
-        .map(|dir| dir.join(crash_log_path))
-        .unwrap_or_else(|_| crash_log_path.to_path_buf())
+    std::env::current_dir().map_or_else(
+        |_| crash_log_path.to_path_buf(),
+        |dir| dir.join(crash_log_path),
+    )
 }
 
 fn panic_payload_message(payload: &(dyn Any + Send)) -> String {

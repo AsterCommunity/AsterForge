@@ -40,6 +40,10 @@ pub enum DavLockPlanError {
 }
 
 /// Rejects an operation when a conflicting lock token was not submitted for its lock root.
+///
+/// # Errors
+///
+/// Returns a protocol response when lock lookup fails or a conflicting lock is not submitted.
 pub async fn enforce_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -90,6 +94,10 @@ pub async fn unsubmitted_lock_conflicts(
 }
 
 /// Applies [`enforce_unlocked`] to the canonical parent of a mutation target.
+///
+/// # Errors
+///
+/// Returns a protocol response when the parent lock lookup or submission check fails.
 pub async fn enforce_parent_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -120,6 +128,10 @@ pub async fn enforce_parent_unlocked(
 ///
 /// Existing resources are left untouched. A missing collection target remains missing because
 /// creating its hierarchy is outside LOCK semantics.
+///
+/// # Errors
+///
+/// Returns [`DavBackendError`] when metadata lookup or empty-resource creation fails.
 pub async fn ensure_lock_target_exists<WriteSystem: DavWriteSystem>(
     filesystem: &dyn DavFileSystem,
     write_system: &WriteSystem,
@@ -149,6 +161,10 @@ pub async fn ensure_lock_target_exists<WriteSystem: DavWriteSystem>(
 }
 
 /// Selects lock acquisition or refresh and validates all protocol-owned inputs.
+///
+/// # Errors
+///
+/// Returns [`DavLockPlanError`] when LOCK headers, body, target state, or timeout is invalid.
 pub fn plan_lock_request(
     headers: &HeaderMap,
     body: &[u8],
@@ -220,6 +236,10 @@ fn lock_success_response(
 }
 
 /// Builds the successful response for a LOCK refresh.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the refreshed lock response cannot be encoded.
 pub fn lock_refresh_success_response(
     lock: &DavLock,
     prefix: &str,
@@ -228,6 +248,10 @@ pub fn lock_refresh_success_response(
 }
 
 /// Builds the 200/201 response for a LOCK acquisition.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the acquired lock response cannot be encoded.
 pub fn lock_acquire_success_response(
     lock: &DavLock,
     prefix: &str,
@@ -263,20 +287,28 @@ pub fn lock_discovery_element(locks: &[DavLock], prefix: &str) -> DavXmlElement 
 }
 
 /// Builds a 423 response identifying the lock whose token must be submitted.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the lock-conflict response cannot be encoded.
 pub fn lock_conflict_response(prefix: &str, path: &DavPath) -> Result<DavResponse, DavXmlError> {
     lock_condition_response(
         StatusCode::LOCKED,
-        DavErrorCondition::LockTokenSubmitted {
+        &DavErrorCondition::LockTokenSubmitted {
             href: href_for_dav_path(prefix, path),
         },
     )
 }
 
 /// Builds the 409 response for an UNLOCK token that does not match the request URI.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the token-mismatch response cannot be encoded.
 pub fn unlock_token_mismatch_response() -> Result<DavResponse, DavXmlError> {
     lock_condition_response(
         StatusCode::CONFLICT,
-        DavErrorCondition::LockTokenMatchesRequestUri,
+        &DavErrorCondition::LockTokenMatchesRequestUri,
     )
 }
 
@@ -304,15 +336,19 @@ pub fn lock_limit_response() -> DavResponse {
 }
 
 /// Maps LOCK XML failures to their protocol response.
+///
+/// # Errors
+///
+/// Returns [`DavXmlError`] when the lock XML error response cannot be encoded.
 pub fn lock_xml_error_response(error: DavXmlError) -> Result<DavResponse, DavXmlError> {
     xml_request_error_response(error, "Invalid LOCK body")
 }
 
 fn lock_condition_response(
     status: StatusCode,
-    condition: DavErrorCondition,
+    condition: &DavErrorCondition,
 ) -> Result<DavResponse, DavXmlError> {
-    let mut response = DavResponse::bytes(status, dav_error_element(&condition).to_bytes()?);
+    let mut response = DavResponse::bytes(status, dav_error_element(condition).to_bytes()?);
     response.headers.insert(
         CONTENT_TYPE,
         HeaderValue::from_static("application/xml; charset=utf-8"),

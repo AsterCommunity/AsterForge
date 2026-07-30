@@ -1,7 +1,7 @@
-//! Generic OAuth2 authorization-code provider driver.
+//! Generic `OAuth2` authorization-code provider driver.
 //!
 //! This driver supports manually configured authorization, token, and userinfo endpoints. It owns
-//! the shared OAuth2 mechanics reused by fixed-endpoint providers: PKCE generation, token exchange,
+//! the shared `OAuth2` mechanics reused by fixed-endpoint providers: PKCE generation, token exchange,
 //! userinfo retrieval, safe endpoint diagnostics, and JSON claim extraction with dotted-path and
 //! JSON-pointer support.
 
@@ -47,7 +47,7 @@ struct OAuth2TokenRequest<'a> {
     client_secret: Option<&'a str>,
 }
 
-impl<'a> OAuth2TokenRequest<'a> {
+impl OAuth2TokenRequest<'_> {
     fn with_auth_method(self, auth_method: OAuth2TokenAuthMethod) -> Self {
         Self {
             auth_method,
@@ -56,7 +56,7 @@ impl<'a> OAuth2TokenRequest<'a> {
     }
 }
 
-/// Generic OAuth2 provider driver with manually configured endpoints.
+/// Generic `OAuth2` provider driver with manually configured endpoints.
 #[derive(Default)]
 pub struct OAuth2ProviderDriver;
 
@@ -76,7 +76,8 @@ struct OAuth2ErrorResponse {
 }
 
 impl OAuth2ProviderDriver {
-    /// Creates a generic OAuth2 provider driver.
+    /// Creates a generic `OAuth2` provider driver.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -225,7 +226,7 @@ impl ExternalAuthProviderDriver for OAuth2ProviderDriver {
     }
 }
 
-/// Builds the outbound HTTP client shared by Generic OAuth2 and specialized
+/// Builds the outbound HTTP client shared by Generic `OAuth2` and specialized
 /// OAuth2-backed providers such as GitHub.
 ///
 /// GitHub rejects API calls without a User-Agent header, so keep the project
@@ -619,7 +620,7 @@ mod tests {
             key: "generic".to_string(),
             provider_kind: ExternalAuthProviderKind::GenericOAuth2,
             protocol: ExternalAuthProtocol::OAuth2,
-            options: Default::default(),
+            options: crate::types::ExternalAuthProviderOptions::default(),
             issuer_url: None,
             authorization_url: Some("https://id.example.com/oauth/authorize".to_string()),
             token_url: Some("https://id.example.com/oauth/token".to_string()),

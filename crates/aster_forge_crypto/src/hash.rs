@@ -38,6 +38,7 @@ impl PasswordHashWorkFactor {
     /// Returns the RFC 9106 second recommended Argon2id profile.
     ///
     /// This uses 64 MiB of memory, three iterations, four lanes, and a 32-byte output.
+    #[must_use]
     pub const fn rfc_9106_second_recommended() -> Self {
         Self {
             memory_kib: RFC_9106_SECOND_MEMORY_KIB,
@@ -48,6 +49,11 @@ impl PasswordHashWorkFactor {
     }
 
     /// Creates a custom Argon2id work factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the output length or Argon2 cost parameters fall outside the ranges
+    /// accepted by the Argon2 implementation.
     pub fn new(
         memory_kib: u32,
         iterations: u32,
@@ -72,21 +78,25 @@ impl PasswordHashWorkFactor {
     }
 
     /// Memory cost in KiB.
+    #[must_use]
     pub const fn memory_kib(self) -> u32 {
         self.memory_kib
     }
 
     /// Number of Argon2 passes.
+    #[must_use]
     pub const fn iterations(self) -> u32 {
         self.iterations
     }
 
     /// Number of Argon2 lanes.
+    #[must_use]
     pub const fn parallelism(self) -> u32 {
         self.parallelism
     }
 
     /// Password-hash output length in bytes.
+    #[must_use]
     pub const fn output_length(self) -> usize {
         self.output_length
     }
@@ -114,6 +124,10 @@ impl Default for PasswordHashWorkFactor {
 /// [`PasswordHashVerification::needs_rehash`]. Values above these limits are rejected before the
 /// Argon2 work-memory allocation begins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The max prefix distinguishes verification ceilings from password hashing work factors."
+)]
 pub struct PasswordHashVerificationLimits {
     max_memory_kib: u32,
     max_iterations: u32,
@@ -123,6 +137,11 @@ pub struct PasswordHashVerificationLimits {
 
 impl PasswordHashVerificationLimits {
     /// Creates custom absolute verification limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any limit is below the Argon2 minimum or the output-length limit is
+    /// outside the range accepted by the password-hash encoding.
     pub fn new(
         max_memory_kib: u32,
         max_iterations: u32,
@@ -154,21 +173,25 @@ impl PasswordHashVerificationLimits {
     }
 
     /// Maximum accepted memory cost in KiB.
+    #[must_use]
     pub const fn max_memory_kib(self) -> u32 {
         self.max_memory_kib
     }
 
     /// Maximum accepted number of Argon2 passes.
+    #[must_use]
     pub const fn max_iterations(self) -> u32 {
         self.max_iterations
     }
 
     /// Maximum accepted number of Argon2 lanes.
+    #[must_use]
     pub const fn max_parallelism(self) -> u32 {
         self.max_parallelism
     }
 
     /// Maximum accepted password-hash output length in bytes.
+    #[must_use]
     pub const fn max_output_length(self) -> usize {
         self.max_output_length
     }
@@ -199,6 +222,11 @@ pub struct PasswordHashPolicy {
 
 impl PasswordHashPolicy {
     /// Creates a validated password-hash policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the work factor is invalid or exceeds any configured verification
+    /// limit.
     pub fn new(
         work_factor: PasswordHashWorkFactor,
         verification_limits: PasswordHashVerificationLimits,
@@ -232,11 +260,13 @@ impl PasswordHashPolicy {
     }
 
     /// Work factor used for newly created hashes.
+    #[must_use]
     pub const fn work_factor(self) -> PasswordHashWorkFactor {
         self.work_factor
     }
 
     /// Absolute limits used before verifying stored hashes.
+    #[must_use]
     pub const fn verification_limits(self) -> PasswordHashVerificationLimits {
         self.verification_limits
     }
@@ -266,11 +296,20 @@ pub struct PasswordHashVerification {
 }
 
 /// Hashes a password with the default RFC 9106 second recommended policy.
+///
+/// # Errors
+///
+/// Returns an error when the default Argon2 parameters cannot be constructed or hashing fails.
 pub fn hash_password(password: &str) -> Result<String> {
     hash_password_with_policy(password, &PasswordHashPolicy::default())
 }
 
 /// Hashes a password with an explicit policy and a fresh random salt.
+///
+/// # Errors
+///
+/// Returns an error when the policy's Argon2 parameters are invalid or the password-hash operation
+/// fails.
 pub fn hash_password_with_policy(password: &str, policy: &PasswordHashPolicy) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);
     password_hasher(policy.work_factor)?
@@ -283,12 +322,23 @@ pub fn hash_password_with_policy(password: &str, policy: &PasswordHashPolicy) ->
 ///
 /// Malformed, unsupported, or over-budget hashes return an error. Only a genuine password
 /// mismatch returns `Ok(false)`.
+///
+/// # Errors
+///
+/// Returns an error when the stored PHC string is malformed, uses unsupported parameters, exceeds
+/// the default verification budget, or the Argon2 verifier fails for a reason other than password
+/// mismatch.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     verify_password_with_policy(password, hash, &PasswordHashPolicy::default())
         .map(|verification| verification.is_valid)
 }
 
 /// Verifies a password with an explicit policy and reports whether a matching hash needs upgrade.
+///
+/// # Errors
+///
+/// Returns an error when the stored PHC string is malformed, unsupported, outside `policy`'s
+/// verification limits, or the Argon2 verifier fails for a reason other than password mismatch.
 pub fn verify_password_with_policy(
     password: &str,
     hash: &str,
@@ -439,6 +489,10 @@ fn usize_to_u64(value: usize) -> u64 {
 /// Products remain responsible for providing a high-entropy, purpose-specific key and managing
 /// its lifecycle. This helper is suitable for keyed cache components and lookup digests; it does
 /// not replace Argon2id for human passwords.
+///
+/// # Errors
+///
+/// Returns an error when the HMAC implementation rejects the supplied key.
 pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> Result<String> {
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
         .map_err(CryptoError::message_authentication)?;
@@ -447,6 +501,7 @@ pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> Result<String> {
 }
 
 /// Computes the SHA-256 digest of `data` and returns lowercase hex.
+#[must_use]
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -454,6 +509,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 /// Encodes arbitrary bytes as lowercase hex.
+#[must_use]
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -463,11 +519,13 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 /// Encodes a SHA-256 digest as lowercase hex.
+#[must_use]
 pub fn sha256_digest_to_hex(digest: &[u8]) -> String {
     bytes_to_hex(digest)
 }
 
 /// Creates a new incremental SHA-256 hasher.
+#[must_use]
 pub fn new_sha256() -> Sha256 {
     Sha256::new()
 }

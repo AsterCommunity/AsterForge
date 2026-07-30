@@ -72,6 +72,7 @@ impl moka::Expiry<String, MemoryCacheValue> for MemoryCacheExpiry {
 
 impl MemoryCache {
     /// Creates a memory cache with the provided default TTL in seconds.
+    #[must_use]
     pub fn new(default_ttl: u64) -> Self {
         let cache = Cache::builder()
             .max_capacity(MEMORY_CACHE_MAX_BYTES)
@@ -291,7 +292,7 @@ mod tests {
         let ttl = expiry
             .expire_after_create(&"key".to_string(), &value, created_at)
             .expect("entry should carry an expiration");
-        assert!(ttl > Duration::from_secs(59) && ttl <= Duration::from_secs(60));
+        assert!(ttl > Duration::from_secs(59) && ttl <= Duration::from_mins(1));
 
         // A zero-TTL value is already expired at insertion, so no lifetime remains.
         assert_eq!(

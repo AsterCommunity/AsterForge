@@ -81,14 +81,14 @@ fn subtree_raw_xml_is_an_exact_source_slice() {
 
     assert_eq!(
         owner.raw_xml(),
-        br#"<owner><href>a&amp;b</href><!-- exact --></owner>"#
+        br"<owner><href>a&amp;b</href><!-- exact --></owner>"
     );
     assert!(inside(source, owner.raw_xml()));
 }
 
 #[test]
 fn ordered_nodes_and_parent_links_are_preserved() {
-    let source = br#"<root>before<child/><![CDATA[raw]]><!--note--><?work now?>after</root>"#;
+    let source = br"<root>before<child/><![CDATA[raw]]><!--note--><?work now?>after</root>";
     let document = BorrowedDocument::parse(source.as_slice()).expect("document should parse");
     let root = document.root();
     let nodes: Vec<_> = root.children().collect();
@@ -103,7 +103,10 @@ fn ordered_nodes_and_parent_links_are_preserved() {
     ));
     assert!(matches!(nodes[5], NodeRef::Text("after")));
     let child = root.get_child("child").expect("child");
-    assert_eq!(child.parent().map(|parent| parent.id()), Some(root.id()));
+    assert_eq!(
+        child.parent().map(aster_forge_xml::ElementRef::id),
+        Some(root.id())
+    );
 }
 
 #[test]
@@ -113,7 +116,7 @@ fn descendants_preserve_depth_first_document_order() {
     let names: Vec<_> = document
         .root()
         .descendants()
-        .map(|element| element.name())
+        .map(aster_forge_xml::ElementRef::name)
         .collect();
 
     assert_eq!(names, ["root", "a", "b", "c", "d"]);
@@ -146,12 +149,15 @@ fn original_write_preserves_the_complete_document() {
 
 #[test]
 fn generic_owned_source_does_not_require_self_references() {
-    let source: Arc<[u8]> = Arc::from(br#"<root><child/></root>"#.as_slice());
+    let source: Arc<[u8]> = Arc::from(br"<root><child/></root>".as_slice());
     let document = XmlDocument::parse(Arc::clone(&source)).expect("owned document");
     drop(source);
 
     assert_eq!(
-        document.root().get_child("child").map(|child| child.name()),
+        document
+            .root()
+            .get_child("child")
+            .map(aster_forge_xml::ElementRef::name),
         Some("child")
     );
 }

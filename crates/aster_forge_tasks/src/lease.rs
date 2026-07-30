@@ -22,6 +22,7 @@ pub struct TaskLease {
 
 impl TaskLease {
     /// Creates a task processing lease.
+    #[must_use]
     pub const fn new(task_id: i64, processing_token: i64) -> Self {
         Self {
             task_id,
@@ -54,6 +55,7 @@ enum TaskLeaseTermination {
 
 impl TaskLeaseGuard {
     /// Creates a guard with the provided renewal timeout.
+    #[must_use]
     pub fn new(lease: TaskLease, renewal_timeout: Duration) -> Self {
         Self {
             lease,
@@ -67,6 +69,7 @@ impl TaskLeaseGuard {
     }
 
     /// Creates a guard that also observes worker shutdown.
+    #[must_use]
     pub fn with_shutdown_token(
         lease: TaskLease,
         renewal_timeout: Duration,
@@ -79,6 +82,7 @@ impl TaskLeaseGuard {
     }
 
     /// Returns the persisted lease represented by this guard.
+    #[must_use]
     pub const fn lease(&self) -> TaskLease {
         self.lease
     }
@@ -92,6 +96,7 @@ impl TaskLeaseGuard {
     }
 
     /// Marks the lease as lost and returns the corresponding error.
+    #[must_use]
     pub fn mark_lost(&self) -> TaskCoreError {
         let mut state = self.lock_state();
         state.termination = Some(TaskLeaseTermination::Lost);
@@ -99,6 +104,7 @@ impl TaskLeaseGuard {
     }
 
     /// Marks worker shutdown and returns the corresponding error.
+    #[must_use]
     pub fn mark_shutdown_requested(&self) -> TaskCoreError {
         let mut state = self.lock_state();
         state.termination = Some(TaskLeaseTermination::ShutdownRequested);
@@ -106,6 +112,10 @@ impl TaskLeaseGuard {
     }
 
     /// Returns success only while the lease is still safe for writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when the lease has been lost or cancellation was requested.
     pub fn ensure_active(&self) -> Result<()> {
         let mut state = self.lock_state();
         match state.termination {
@@ -150,6 +160,7 @@ pub struct TaskExecutionContext {
 
 impl TaskExecutionContext {
     /// Creates a task execution context.
+    #[must_use]
     pub fn new(
         lease: TaskLease,
         renewal_timeout: Duration,
@@ -166,27 +177,40 @@ impl TaskExecutionContext {
     }
 
     /// Returns the lease guard used by progress and heartbeat updates.
+    #[must_use]
     pub const fn lease_guard(&self) -> &TaskLeaseGuard {
         &self.lease_guard
     }
 
     /// Returns success only while the worker should continue task execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when the lease has been lost or shutdown was requested.
     pub fn ensure_active(&self) -> Result<()> {
         self.lease_guard.ensure_active()
     }
 
     /// Sleeps until `duration` elapses or shutdown is requested.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when shutdown wins before the requested sleep completes.
     pub async fn sleep_or_shutdown(&self, duration: Duration) -> Result<()> {
         self.lease_guard.ensure_active()?;
 
         tokio::select! {
             biased;
-            _ = self.shutdown_token.cancelled() => Err(self.lease_guard.mark_shutdown_requested()),
-            _ = tokio::time::sleep(duration) => Ok(()),
+            () = self.shutdown_token.cancelled() => Err(self.lease_guard.mark_shutdown_requested()),
+            () = tokio::time::sleep(duration) => Ok(()),
         }
     }
 
     /// Waits for shutdown and then returns the shutdown-requested lease error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskCoreError`] when shutdown or lease loss has been observed.
     pub async fn shutdown_requested(&self) -> Result<()> {
         self.shutdown_token.cancelled().await;
         Err(self.lease_guard.mark_shutdown_requested())
@@ -218,6 +242,7 @@ pub const fn task_worker_shutdown_requested(lease: TaskLease) -> TaskCoreError {
 }
 
 /// Returns the persisted lease expiry timestamp for a claim or heartbeat update.
+#[must_use]
 pub fn task_lease_expires_at(
     now: chrono::DateTime<chrono::Utc>,
     processing_stale_secs: i64,
@@ -226,6 +251,7 @@ pub fn task_lease_expires_at(
 }
 
 /// Returns the in-memory renewal timeout used to stop unsafe workers.
+#[must_use]
 pub fn task_lease_renewal_timeout(processing_stale_secs: i64, heartbeat_secs: u64) -> Duration {
     let stale_secs = i64_to_u64_saturating(processing_stale_secs.max(1));
     let heartbeat_secs = heartbeat_secs.max(1);
@@ -250,7 +276,7 @@ mod tests {
 
     #[test]
     fn lease_guard_reports_lost_lease_after_mark_lost() {
-        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_secs(60));
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
         let error = guard.mark_lost();
 
@@ -276,7 +302,7 @@ mod tests {
         let shutdown_token = CancellationToken::new();
         let guard = TaskLeaseGuard::with_shutdown_token(
             TaskLease::new(7, 2),
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             shutdown_token.clone(),
         );
 
@@ -294,13 +320,13 @@ mod tests {
         let shutdown_token = CancellationToken::new();
         let context = TaskExecutionContext::new(
             TaskLease::new(7, 2),
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             shutdown_token.clone(),
         );
 
         shutdown_token.cancel();
         let error = context
-            .sleep_or_shutdown(Duration::from_secs(60))
+            .sleep_or_shutdown(Duration::from_mins(1))
             .await
             .expect_err("sleep should stop for shutdown");
 

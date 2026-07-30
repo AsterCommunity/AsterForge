@@ -59,6 +59,7 @@ pub struct TemplateVariableSpec {
 
 impl TemplateVariableSpec {
     /// Creates a variable spec.
+    #[must_use]
     pub const fn new(
         key: &'static str,
         label_i18n_key: &'static str,
@@ -87,6 +88,7 @@ pub struct MailTemplateDefinition {
 
 impl MailTemplateDefinition {
     /// Creates a registered template definition.
+    #[must_use]
     pub const fn new(
         code: &'static str,
         category: &'static str,
@@ -102,6 +104,7 @@ impl MailTemplateDefinition {
     }
 
     /// Converts this definition into API-facing variable metadata.
+    #[must_use]
     pub fn variable_group(&self) -> TemplateVariableGroup {
         TemplateVariableGroup {
             category: self.category.to_string(),
@@ -128,11 +131,13 @@ pub struct MailTemplateRegistry {
 
 impl MailTemplateRegistry {
     /// Creates a registry from static product definitions.
+    #[must_use]
     pub const fn new(definitions: &'static [MailTemplateDefinition]) -> Self {
         Self { definitions }
     }
 
     /// Returns registered definitions in product order.
+    #[must_use]
     pub const fn definitions(&self) -> &'static [MailTemplateDefinition] {
         self.definitions
     }
@@ -146,6 +151,7 @@ impl MailTemplateRegistry {
     }
 
     /// Looks up a template definition by code.
+    #[must_use]
     pub fn get(&self, code: &str) -> Option<&'static MailTemplateDefinition> {
         self.definitions
             .iter()
@@ -153,6 +159,10 @@ impl MailTemplateRegistry {
     }
 
     /// Validates that this static registry has unique template codes and variable keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailTemplateRegistryError`] when template codes or variable definitions are invalid.
     pub fn validate(&self) -> Result<(), MailTemplateRegistryError> {
         validate_definitions(self.definitions.iter())
     }
@@ -169,6 +179,7 @@ pub type MailTemplateRegistrar = fn(&mut MailTemplateCatalogBuilder);
 
 impl MailTemplateCatalog {
     /// Creates an empty catalog builder.
+    #[must_use]
     pub fn builder() -> MailTemplateCatalogBuilder {
         MailTemplateCatalogBuilder::new()
     }
@@ -178,6 +189,10 @@ impl MailTemplateCatalog {
     /// Each registrar receives the same builder and can add one or more static template
     /// definitions. This keeps product bootstrapping declarative without forcing subsystems to
     /// share a concrete registry type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailTemplateRegistryError`] when any registrar adds an invalid or duplicate template.
     pub fn from_registrars(
         registrars: &[MailTemplateRegistrar],
     ) -> Result<Self, MailTemplateRegistryError> {
@@ -189,11 +204,13 @@ impl MailTemplateCatalog {
     }
 
     /// Returns registered definitions in registration order.
+    #[must_use]
     pub fn definitions(&self) -> &[&'static MailTemplateDefinition] {
         &self.definitions
     }
 
     /// Returns variable groups in registration order.
+    #[must_use]
     pub fn variable_groups(&self) -> Vec<TemplateVariableGroup> {
         self.definitions
             .iter()
@@ -202,6 +219,7 @@ impl MailTemplateCatalog {
     }
 
     /// Looks up a template definition by code.
+    #[must_use]
     pub fn get(&self, code: &str) -> Option<&'static MailTemplateDefinition> {
         self.definitions
             .iter()
@@ -218,6 +236,7 @@ pub struct MailTemplateCatalogBuilder {
 
 impl MailTemplateCatalogBuilder {
     /// Creates an empty builder.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -235,6 +254,10 @@ impl MailTemplateCatalogBuilder {
     }
 
     /// Builds a catalog after validating duplicate template codes and variable keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailTemplateRegistryError`] when the accumulated template catalog is invalid.
     pub fn build(self) -> Result<MailTemplateCatalog, MailTemplateRegistryError> {
         validate_definitions(self.definitions.iter().copied())?;
         Ok(MailTemplateCatalog {
@@ -335,6 +358,7 @@ pub struct TemplatePlaceholderSet {
 
 impl TemplatePlaceholderSet {
     /// Creates a placeholder set from separate text and HTML values.
+    #[must_use]
     pub fn new(
         text_values: Vec<(&'static str, String)>,
         html_values: Vec<(&'static str, String)>,
@@ -346,20 +370,23 @@ impl TemplatePlaceholderSet {
     }
 
     /// Returns placeholder values for plain text and subject rendering.
+    #[must_use]
     pub fn text_values(&self) -> &[(&'static str, String)] {
         &self.text_values
     }
 
     /// Returns placeholder values for HTML rendering.
+    #[must_use]
     pub fn html_values(&self) -> &[(&'static str, String)] {
         &self.html_values
     }
 }
 
 /// Renders a subject and HTML template with placeholder values and derives text fallback.
+#[must_use]
 pub fn render_template(
-    subject_template: String,
-    html_template: String,
+    subject_template: &str,
+    html_template: &str,
     placeholders: &TemplatePlaceholderSet,
 ) -> RenderedMail {
     let subject = render_placeholders(subject_template, placeholders.text_values());
@@ -378,9 +405,10 @@ pub fn render_template(
 /// Replacement is a single left-to-right pass: substituted values are never
 /// re-scanned, so a user-controlled value containing `{{another_key}}` cannot
 /// trigger a second expansion. Unknown or unterminated tokens stay literal.
-pub fn render_placeholders(template: String, values: &[(&'static str, String)]) -> String {
+#[must_use]
+pub fn render_placeholders(template: &str, values: &[(&'static str, String)]) -> String {
     let mut rendered = String::with_capacity(template.len());
-    let mut rest = template.as_str();
+    let mut rest = template;
 
     while let Some(open) = rest.find("{{") {
         let key_start = open + 2;
@@ -404,11 +432,13 @@ pub fn render_placeholders(template: String, values: &[(&'static str, String)]) 
 }
 
 /// Escapes text for insertion into HTML templates.
+#[must_use]
 pub fn escape_html(value: &str) -> String {
     aster_forge_utils::html::escape_html(value)
 }
 
 /// Converts simple HTML email content into a plain-text fallback.
+#[must_use]
 pub fn html_to_text(html: &str) -> String {
     let mut output = String::with_capacity(html.len());
     let mut in_tag = false;
@@ -711,8 +741,8 @@ mod tests {
     #[test]
     fn render_template_replaces_subject_html_and_text_placeholders() {
         let rendered = render_template(
-            "Hello {{username}}".to_string(),
-            "<p>Hello {{username}}</p><p>{{site_name}}</p>".to_string(),
+            "Hello {{username}}",
+            "<p>Hello {{username}}</p><p>{{site_name}}</p>",
             &TemplatePlaceholderSet::new(
                 vec![
                     ("username", "A&B".to_string()),
@@ -743,7 +773,7 @@ mod tests {
         // replacement would expand the "{{reset_url}}" smuggled in via
         // `username` and splice an href-only unescaped URL into the body.
         let rendered = render_placeholders(
-            "Hello {{username}}, reset here: {{reset_url}}".to_string(),
+            "Hello {{username}}, reset here: {{reset_url}}",
             &[
                 ("username", "{{reset_url}}".to_string()),
                 ("reset_url", "https://evil.example.com/reset".to_string()),
@@ -759,7 +789,7 @@ mod tests {
     #[test]
     fn render_placeholders_keeps_unknown_and_unterminated_tokens_literal() {
         let rendered = render_placeholders(
-            "Hi {{username}}, {{unknown}} and {{unterminated".to_string(),
+            "Hi {{username}}, {{unknown}} and {{unterminated",
             &[("username", "Aster".to_string())],
         );
 

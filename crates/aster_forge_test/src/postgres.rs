@@ -1,4 +1,4 @@
-//! Shared reusable PostgreSQL container for integration tests.
+//! Shared reusable `PostgreSQL` container for integration tests.
 //!
 //! The container provides isolated databases with automatic stale-resource cleanup. Products own
 //! their migrations and seed data; this module owns database creation, connection retry, and
@@ -11,7 +11,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection};
 use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
 
-/// Handle to the suite's shared PostgreSQL container.
+/// Handle to the suite's shared `PostgreSQL` container.
 pub struct PostgresTestContainer {
     admin_url: String,
     suite: TestContainerSuite,
@@ -19,7 +19,7 @@ pub struct PostgresTestContainer {
     _lease: ContainerLease,
 }
 
-/// Isolated PostgreSQL database owned by one test process.
+/// Isolated `PostgreSQL` database owned by one test process.
 pub struct PostgresTestDatabase {
     name: String,
     url: String,
@@ -28,7 +28,12 @@ pub struct PostgresTestDatabase {
 }
 
 impl PostgresTestContainer {
-    /// Starts (or reuses) the shared PostgreSQL container with `postgres`/`postgres` credentials.
+    /// Starts (or reuses) the shared `PostgreSQL` container with `postgres`/`postgres` credentials.
+    ///
+    /// # Panics
+    ///
+    /// Panics when shared state, container startup, port discovery, readiness, stale-database
+    /// cleanup, or connection shutdown fails.
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "postgres");
         let mut state = lock.load();
@@ -72,11 +77,17 @@ impl PostgresTestContainer {
     }
 
     /// Returns the admin URL pointing at the default `postgres` database.
+    #[must_use]
     pub fn admin_url(&self) -> &str {
         &self.admin_url
     }
 
     /// Creates and registers an isolated database for a product test.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the database name is invalid, shared state fails, or the admin connection,
+    /// `CREATE DATABASE`, or connection shutdown fails.
     pub async fn create_database(&self, name: &str) -> PostgresTestDatabase {
         assert_valid_database_name(name);
         let lock = ContainerStateLock::acquire(&self.suite, "postgres");
@@ -134,21 +145,32 @@ impl PostgresTestContainer {
 
 impl PostgresTestDatabase {
     /// Returns the isolated database name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Returns the connection URL for this database.
+    #[must_use]
     pub fn url(&self) -> &str {
         &self.url
     }
 
     /// Connects to this database, retrying while the service becomes ready.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the database does not accept a connection before the readiness timeout.
     pub async fn connect(&self) -> DatabaseConnection {
         connect_with_retry(&self.url, "PostgreSQL").await
     }
 
     /// Drops this database and removes it from the shared resource registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the admin connection, database drop, connection shutdown, or shared-state
+    /// update fails.
     pub async fn cleanup(&self) {
         let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;
         admin
@@ -176,10 +198,10 @@ impl PostgresTestDatabase {
 }
 
 fn database_url(admin_url: &str, name: &str) -> String {
-    admin_url
-        .rsplit_once('/')
-        .map(|(base, _)| format!("{base}/{name}"))
-        .unwrap_or_else(|| admin_url.to_string())
+    admin_url.rsplit_once('/').map_or_else(
+        || admin_url.to_string(),
+        |(base, _)| format!("{base}/{name}"),
+    )
 }
 
 fn quote_identifier(value: &str) -> String {

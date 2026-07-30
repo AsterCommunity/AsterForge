@@ -440,7 +440,7 @@ fn bounded_multi_range_plan_preserves_order_and_rfc_header_contract() {
         multipart
             .segments()
             .iter()
-            .map(|segment| segment.range())
+            .map(aster_forge_webdav::DavMultipartSegmentPlan::range)
             .collect::<Vec<_>>(),
         vec![
             aster_forge_utils::http_range::HttpByteRange::new(10, 12, 20).unwrap(),
@@ -842,16 +842,15 @@ fn conditional_downloads_plan_distinct_304_and_412_responses() {
 
 #[test]
 fn invalid_product_metadata_is_not_misclassified_as_a_request_error() {
-    let error = match plan_download_response(
+    let Err(error) = plan_download_response(
         &HeaderMap::new(),
         false,
         20,
         "text/plain\ninvalid",
         None,
         representation_time(),
-    ) {
-        Err(error) => error,
-        Ok(_) => panic!("invalid content type should fail response planning"),
+    ) else {
+        panic!("invalid content type should fail response planning");
     };
     assert_eq!(error, DavDownloadPlanError::InvalidRepresentation);
 
@@ -869,16 +868,15 @@ fn invalid_product_metadata_is_not_misclassified_as_a_request_error() {
 
     let mut conditional = HeaderMap::new();
     conditional.insert(IF_MATCH, HeaderValue::from_static("\"current\""));
-    let error = match plan_download_response(
+    let Err(error) = plan_download_response(
         &conditional,
         false,
         20,
         "text/plain",
         Some("etag\ninvalid"),
         representation_time(),
-    ) {
-        Err(error) => error,
-        Ok(_) => panic!("If-Match requires a representable product ETag"),
+    ) else {
+        panic!("If-Match requires a representable product ETag");
     };
     assert_eq!(error, DavDownloadPlanError::InvalidRepresentation);
 }
@@ -887,16 +885,15 @@ fn invalid_product_metadata_is_not_misclassified_as_a_request_error() {
 fn malformed_download_conditionals_remain_protocol_errors() {
     let mut headers = HeaderMap::new();
     headers.insert(IF_MATCH, HeaderValue::from_static("bare-etag"));
-    let error = match plan_download_response(
+    let Err(error) = plan_download_response(
         &headers,
         false,
         20,
         "text/plain",
         Some("etag-1"),
         representation_time(),
-    ) {
-        Err(error) => error,
-        Ok(_) => panic!("malformed If-Match should remain a request error"),
+    ) else {
+        panic!("malformed If-Match should remain a request error");
     };
     assert!(matches!(error, DavDownloadPlanError::Protocol(_)));
 }

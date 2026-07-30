@@ -51,11 +51,19 @@ impl ConfigReloadMessage {
     }
 
     /// Serializes the message for transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the reload message cannot be serialized.
     pub fn encode(&self) -> Result<String> {
         serde_json::to_string(self).map_err(Into::into)
     }
 
     /// Decodes a transport payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the transport payload is malformed or fails message validation.
     pub fn decode(payload: &str) -> Result<Self> {
         serde_json::from_str(payload).map_err(Into::into)
     }
@@ -70,6 +78,7 @@ pub enum ConfigChangeEvent {
 
 impl ConfigChangeEvent {
     /// Returns the reload message carried by this event.
+    #[must_use]
     pub const fn reload_message(&self) -> &ConfigReloadMessage {
         match self {
             Self::Reload(message) => message,
@@ -90,6 +99,7 @@ pub enum ConfigReloadDecision {
 
 impl ConfigReloadDecision {
     /// Returns the stable metrics label for this decision.
+    #[must_use]
     pub const fn as_label(self) -> &'static str {
         match self {
             Self::Reloaded => "reloaded",
@@ -118,11 +128,13 @@ impl ConfigReloadWorkerConfig {
     }
 
     /// Returns whether a message belongs to this worker namespace.
+    #[must_use]
     pub fn accepts_namespace(&self, message: &ConfigReloadMessage) -> bool {
         message.namespace == self.namespace
     }
 
     /// Returns whether a message was emitted by this process.
+    #[must_use]
     pub fn is_local_origin(&self, message: &ConfigReloadMessage) -> bool {
         message.origin_runtime_id == self.runtime_id
     }
@@ -133,11 +145,19 @@ impl ConfigReloadWorkerConfig {
 /// Transport adapters should use this helper before forwarding data into the common notifier path.
 /// Malformed payloads are returned as errors so listeners can log and continue instead of ending the
 /// subscription loop.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the transport payload is malformed or fails message validation.
 pub fn decode_config_reload_transport_payload(payload: &str) -> Result<ConfigChangeEvent> {
     ConfigReloadMessage::decode(payload).map(ConfigChangeEvent::Reload)
 }
 
 /// Handles one reload notification by filtering namespace/origin and invoking `reload`.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when notification decoding or the selected reload callback fails.
 pub async fn handle_config_reload_notification<F, Fut>(
     config: &ConfigReloadWorkerConfig,
     message: ConfigReloadMessage,

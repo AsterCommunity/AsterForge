@@ -82,6 +82,10 @@ pub enum DavPutPlanError {
 pub struct DavPutResponseError;
 
 /// Evaluates PUT preconditions and selects product-side create/open settings.
+///
+/// # Errors
+///
+/// Returns [`DavPutPlanError`] when capabilities, validators, or range headers reject the write.
 pub fn plan_put_request(
     snapshot: &DavCapabilitySnapshot,
     headers: &HeaderMap,
@@ -267,6 +271,10 @@ fn request_content_length(headers: &HeaderMap) -> Result<Option<u64>, DavPutPlan
 }
 
 /// Builds the 201/204 response selected by the pre-write resource state.
+///
+/// # Errors
+///
+/// Returns [`DavPutResponseError`] when the success response headers cannot be encoded.
 pub fn put_success_response(
     plan: &DavPutPlan,
     prefix: &str,

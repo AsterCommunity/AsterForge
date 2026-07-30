@@ -39,7 +39,7 @@ fn lock_plan_selects_acquire_with_parsed_body_depth_and_timeout() {
         body,
         &request_head(Depth::Infinity, None),
         "/webdav",
-        Duration::from_secs(600),
+        Duration::from_mins(10),
     )
     .expect("acquire plan");
     assert!(matches!(
@@ -49,7 +49,7 @@ fn lock_plan_selects_acquire_with_parsed_body_depth_and_timeout() {
             shared: true,
             deep: true,
             owner: Some(_),
-        } if timeout == Duration::from_secs(60)
+        } if timeout == Duration::from_mins(1)
     ));
 }
 
@@ -66,7 +66,7 @@ fn empty_lock_body_requires_exactly_one_scoped_refresh_token() {
         &[],
         &request_head(Depth::Zero, Some(if_header)),
         "/webdav",
-        Duration::from_secs(600),
+        Duration::from_mins(10),
     )
     .expect("one path-scoped token should refresh");
     assert!(matches!(plan, DavLockPlan::Refresh { token, .. } if token == "urn:uuid:a"));
@@ -76,7 +76,7 @@ fn empty_lock_body_requires_exactly_one_scoped_refresh_token() {
         &[],
         &request_head(Depth::Zero, None),
         "/webdav",
-        Duration::from_secs(600),
+        Duration::from_mins(10),
     )
     .expect_err("missing refresh token should fail");
     assert!(matches!(
@@ -93,7 +93,7 @@ fn lock_success_responses_own_status_xml_and_lock_token_header_contract() {
         principal: None,
         owner: None,
         timeout_at: None,
-        timeout: Some(Duration::from_secs(60)),
+        timeout: Some(Duration::from_mins(1)),
         shared: false,
         deep: false,
     };

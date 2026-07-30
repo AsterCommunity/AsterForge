@@ -351,9 +351,9 @@ fn if_header_preserves_tagged_groups_not_and_etags() {
 fn if_header_rejects_ambiguous_or_empty_grammar() {
     for value in [
         "()",
-        r#"(Notified <urn:uuid:one>)"#,
-        r#"(<urn:uuid:one>) </webdav/file.txt> (<urn:uuid:two>)"#,
-        r#"</webdav/current.txt> (<urn:uuid:current>"#,
+        r"(Notified <urn:uuid:one>)",
+        r"(<urn:uuid:one>) </webdav/file.txt> (<urn:uuid:two>)",
+        r"</webdav/current.txt> (<urn:uuid:current>",
     ] {
         assert!(parse_if_header(&headers("If", value)).is_err());
     }
@@ -363,7 +363,7 @@ fn if_header_rejects_ambiguous_or_empty_grammar() {
 fn if_header_accepts_case_insensitive_not_and_groups_tagged_lists() {
     let parsed = parse_if_header(&headers(
         "If",
-        r#"</webdav/a.txt> (<urn:uuid:a1>) (<urn:uuid:a2>) </webdav/b.txt> (nOt <urn:uuid:b>)"#,
+        r"</webdav/a.txt> (<urn:uuid:a1>) (<urn:uuid:a2>) </webdav/b.txt> (nOt <urn:uuid:b>)",
     ))
     .expect("If header should parse")
     .expect("If header should exist");
@@ -443,7 +443,7 @@ fn if_evaluator_uses_or_between_tagged_resource_groups() {
         ]),
         ..MockIfStateResolver::default()
     };
-    let matching = parsed_if(r#"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:b>)"#);
+    let matching = parsed_if(r"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:b>)");
     futures::executor::block_on(enforce_if_header(
         Some(&matching),
         &resolver,
@@ -455,7 +455,7 @@ fn if_evaluator_uses_or_between_tagged_resource_groups() {
     .expect("all tagged resource groups match");
 
     let partially_matching =
-        parsed_if(r#"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:wrong>)"#);
+        parsed_if(r"</webdav/a.txt> (<urn:uuid:a>) </webdav/b.txt> (<urn:uuid:wrong>)");
     futures::executor::block_on(enforce_if_header(
         Some(&partially_matching),
         &resolver,
@@ -467,7 +467,7 @@ fn if_evaluator_uses_or_between_tagged_resource_groups() {
     .expect("one matching tagged-list production satisfies the complete If header");
 
     let mismatched =
-        parsed_if(r#"</webdav/a.txt> (<urn:uuid:wrong-a>) </webdav/b.txt> (<urn:uuid:wrong-b>)"#);
+        parsed_if(r"</webdav/a.txt> (<urn:uuid:wrong-a>) </webdav/b.txt> (<urn:uuid:wrong-b>)");
     let error = futures::executor::block_on(enforce_if_header(
         Some(&mismatched),
         &resolver,
@@ -487,7 +487,7 @@ fn if_evaluator_uses_or_between_tagged_resource_groups() {
 fn if_evaluator_scopes_tagged_uris_before_calling_the_product_resolver() {
     let request_path = DavPath::new("/request.txt").expect("request path");
     let resolver = MockIfStateResolver::default();
-    let outside_origin = parsed_if(r#"<https://other.example/webdav/a.txt> (Not <urn:x>)"#);
+    let outside_origin = parsed_if(r"<https://other.example/webdav/a.txt> (Not <urn:x>)");
     futures::executor::block_on(enforce_if_header(
         Some(&outside_origin),
         &resolver,
@@ -499,7 +499,7 @@ fn if_evaluator_scopes_tagged_uris_before_calling_the_product_resolver() {
     .expect("negated state should match an out-of-scope resource");
     assert!(resolver.calls.lock().expect("call log lock").is_empty());
 
-    let decoded = parsed_if(r#"</webdav/current%20file.txt> (Not <urn:x>)"#);
+    let decoded = parsed_if(r"</webdav/current%20file.txt> (Not <urn:x>)");
     futures::executor::block_on(enforce_if_header(
         Some(&decoded),
         &resolver,
@@ -518,7 +518,7 @@ fn if_evaluator_scopes_tagged_uris_before_calling_the_product_resolver() {
 #[test]
 fn if_evaluator_separates_protocol_and_backend_failures() {
     let request_path = DavPath::new("/request.txt").expect("request path");
-    let invalid = parsed_if(r#"<https:/broken> (Not <urn:x>)"#);
+    let invalid = parsed_if(r"<https:/broken> (Not <urn:x>)");
     let resolver = MockIfStateResolver::default();
     let error = futures::executor::block_on(enforce_if_header(
         Some(&invalid),
@@ -538,7 +538,7 @@ fn if_evaluator_separates_protocol_and_backend_failures() {
         fail_path: Some("/request.txt".to_string()),
         ..MockIfStateResolver::default()
     };
-    let header = parsed_if(r#"(Not <urn:x>)"#);
+    let header = parsed_if(r"(Not <urn:x>)");
     let error = futures::executor::block_on(enforce_if_header(
         Some(&header),
         &resolver,
@@ -558,7 +558,7 @@ fn if_evaluator_separates_protocol_and_backend_failures() {
 fn submitted_tokens_apply_only_to_matching_tagged_resource() {
     let headers = headers(
         "If",
-        r#"<http://localhost:8080/webdav/current.txt> (<urn:uuid:current>) <http://remote.example/webdav/current.txt> (<urn:uuid:remote>)"#,
+        r"<http://localhost:8080/webdav/current.txt> (<urn:uuid:current>) <http://remote.example/webdav/current.txt> (<urn:uuid:remote>)",
     );
     assert_eq!(
         submitted_lock_tokens_for_path(&headers, "/webdav/current.txt", "http", "localhost:8080"),
@@ -570,7 +570,7 @@ fn submitted_tokens_apply_only_to_matching_tagged_resource() {
 fn submitted_tokens_are_decoded_deduplicated_and_include_negated_conditions() {
     let headers = headers(
         "If",
-        r#"</webdav/current%20file.txt> (<urn:uuid:current>) (<urn:uuid:current>) (Not <urn:uuid:other>)"#,
+        r"</webdav/current%20file.txt> (<urn:uuid:current>) (<urn:uuid:current>) (Not <urn:uuid:other>)",
     );
     assert_eq!(
         submitted_lock_tokens_for_path(&headers, "/webdav/current file.txt", "http", "localhost"),
@@ -582,7 +582,7 @@ fn submitted_tokens_are_decoded_deduplicated_and_include_negated_conditions() {
 fn submitted_tokens_ignore_other_resources_and_lock_token_header() {
     let mut headers = headers(
         "If",
-        r#"</webdav/other.txt> (<urn:uuid:other>) </webdav/current.txt> (<urn:uuid:current>)"#,
+        r"</webdav/other.txt> (<urn:uuid:other>) </webdav/current.txt> (<urn:uuid:current>)",
     );
     headers.insert(
         HeaderName::from_static("lock-token"),
@@ -596,7 +596,7 @@ fn submitted_tokens_ignore_other_resources_and_lock_token_header() {
 
 #[test]
 fn submitted_tokens_from_parsed_if_header_preserve_scope_and_deduplicate() {
-    let untagged = parse_if_header(&headers("If", r#"(<urn:uuid:untagged>)"#))
+    let untagged = parse_if_header(&headers("If", r"(<urn:uuid:untagged>)"))
         .expect("untagged If header should parse")
         .expect("If header should exist");
     assert_eq!(
@@ -611,7 +611,7 @@ fn submitted_tokens_from_parsed_if_header_preserve_scope_and_deduplicate() {
 
     let tagged = parse_if_header(&headers(
         "If",
-        r#"</webdav/current%20file.txt> (<urn:uuid:current>) (<urn:uuid:current>) (Not <urn:uuid:negated>) </webdav/other.txt> (<urn:uuid:other>) <https://remote.example/webdav/current%20file.txt> (<urn:uuid:remote>)"#,
+        r"</webdav/current%20file.txt> (<urn:uuid:current>) (<urn:uuid:current>) (Not <urn:uuid:negated>) </webdav/other.txt> (<urn:uuid:other>) <https://remote.example/webdav/current%20file.txt> (<urn:uuid:remote>)",
     ))
     .expect("If header should parse")
     .expect("If header should exist");
@@ -627,7 +627,7 @@ fn submitted_tokens_from_parsed_if_header_preserve_scope_and_deduplicate() {
 
 #[test]
 fn lock_timeout_uses_bounded_server_policy() {
-    let maximum = Duration::from_secs(604_800);
+    let maximum = Duration::from_hours(168);
     assert_eq!(
         parse_lock_timeout(&HeaderMap::new(), maximum).expect("missing timeout should use maximum"),
         maximum
@@ -640,7 +640,7 @@ fn lock_timeout_uses_bounded_server_policy() {
     assert_eq!(
         parse_lock_timeout(&headers("Timeout", "Second-3600"), maximum)
             .expect("bounded timeout should parse"),
-        Duration::from_secs(3600)
+        Duration::from_hours(1)
     );
     assert_eq!(
         parse_lock_timeout(&headers("Timeout", "Second-604800"), maximum)
@@ -650,7 +650,7 @@ fn lock_timeout_uses_bounded_server_policy() {
     assert_eq!(
         parse_lock_timeout(&headers("Timeout", "Extension, Second-60"), maximum)
             .expect("unknown candidate should not hide a valid timeout"),
-        Duration::from_secs(60)
+        Duration::from_mins(1)
     );
 
     for value in ["Second-604801", "Second-18446744073709551615"] {

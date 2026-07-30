@@ -71,7 +71,7 @@ fn roxmltree_snapshot(node: roxmltree::Node<'_, '_>) -> ElementSnapshot {
 #[test]
 fn forge_matches_roxmltree_for_source_backed_tree_queries() {
     for source in [
-        br#"<root/>"#.as_slice(),
+        br"<root/>".as_slice(),
         br#"<root a="1">before<child/>after</root>"#,
         br#"<D:prop xmlns:D="DAV:" xmlns:x="urn:x" x:id="7"><x:value>a&amp;b<![CDATA[<raw>]]></x:value></D:prop>"#,
         br#"<root xmlns="urn:one"><child xmlns=""><leaf/></child><p:item xmlns:p="urn:two"/></root>"#,
@@ -100,7 +100,7 @@ fn forge_and_roxmltree_expose_the_same_exact_root_range() {
 
 #[test]
 fn roxmltree_comparison_keeps_intentional_node_model_differences_explicit() {
-    let source = br#"<root>text<![CDATA[cdata]]><!--comment--><?work now?></root>"#;
+    let source = br"<root>text<![CDATA[cdata]]><!--comment--><?work now?></root>";
     let forge = BorrowedDocument::parse(source.as_slice()).expect("Forge fixture");
     let text = std::str::from_utf8(source).expect("UTF-8 fixture");
     let roxmltree = roxmltree::Document::parse(text).expect("roxmltree fixture");

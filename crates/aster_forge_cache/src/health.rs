@@ -70,6 +70,7 @@ fn register_cache_health_check(
 }
 
 /// Returns the standard cache health check options.
+#[must_use]
 pub fn cache_health_options() -> HealthCheckOptions {
     HealthCheckOptions::optional(Some(CACHE_HEALTH_CHECK_TIMEOUT))
         .with_scopes(HealthCheckScopes::diagnostics())

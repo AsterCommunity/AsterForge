@@ -1,4 +1,4 @@
-//! Shared reusable MySQL container for integration tests.
+//! Shared reusable `MySQL` container for integration tests.
 //!
 //! The container provides a root connection to the default `mysql` system database. Creating
 //! per-test databases and granting product users stays with the product test harness, which can
@@ -11,7 +11,7 @@ use crate::suite::TestContainerSuite;
 use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
 
-/// Handle to the suite's shared MySQL container.
+/// Handle to the suite's shared `MySQL` container.
 pub struct MysqlTestContainer {
     root_url: String,
     suite: TestContainerSuite,
@@ -21,7 +21,12 @@ pub struct MysqlTestContainer {
 }
 
 impl MysqlTestContainer {
-    /// Starts (or reuses) the shared MySQL container with `root`/`rootpass` credentials.
+    /// Starts (or reuses) the shared `MySQL` container with `root`/`rootpass` credentials.
+    ///
+    /// # Panics
+    ///
+    /// Panics when shared state, container startup, port discovery, readiness connection, or
+    /// readiness connection shutdown fails.
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "mysql");
         let mut state = lock.load();
@@ -59,19 +64,22 @@ impl MysqlTestContainer {
     }
 
     /// Returns the root URL pointing at the `mysql` system database.
+    #[must_use]
     pub fn root_url(&self) -> &str {
         &self.root_url
     }
 
     /// Builds a URL for a database created inside this container.
+    #[must_use]
     pub fn database_url(&self, database: &str) -> String {
-        self.root_url
-            .rsplit_once('/')
-            .map(|(base, _)| format!("{base}/{database}"))
-            .unwrap_or_else(|| self.root_url.clone())
+        self.root_url.rsplit_once('/').map_or_else(
+            || self.root_url.clone(),
+            |(base, _)| format!("{base}/{database}"),
+        )
     }
 
     /// Returns resources left by test processes that no longer exist.
+    #[must_use]
     pub fn stale_resources(&self) -> &[String] {
         &self.stale_resources
     }

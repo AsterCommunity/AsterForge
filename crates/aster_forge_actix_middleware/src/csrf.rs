@@ -96,11 +96,13 @@ impl CsrfError {
     }
 
     /// Returns the product-neutral failure category.
+    #[must_use]
     pub fn kind(&self) -> CsrfErrorKind {
         self.kind
     }
 
     /// Returns the diagnostic message.
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -128,6 +130,10 @@ impl CsrfTokenNames {
     /// Cookie names are validated against the conservative RFC 6265 token character set. Header
     /// names are parsed through Actix's HTTP header type and are stored in canonical lower-case
     /// form, which makes comparisons and CORS allow-list generation stable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CsrfError`] when either token name is empty or contains invalid characters.
     pub fn new(cookie_name: impl Into<String>, header_name: impl AsRef<str>) -> Result<Self> {
         let cookie_name = cookie_name.into();
         validate_cookie_name(&cookie_name)?;
@@ -176,6 +182,7 @@ pub fn default_csrf_token_names() -> &'static CsrfTokenNames {
 }
 
 /// Returns whether `method` can mutate state and should be protected by CSRF checks.
+#[must_use]
 pub fn is_unsafe_method(method: &Method) -> bool {
     !matches!(
         *method,
@@ -184,6 +191,7 @@ pub fn is_unsafe_method(method: &Method) -> bool {
 }
 
 /// Builds a URL-safe random CSRF token.
+#[must_use]
 pub fn build_csrf_token() -> String {
     use base64::Engine;
 
@@ -196,6 +204,10 @@ pub fn build_csrf_token() -> String {
 ///
 /// This uses [`default_csrf_token_names`]. Prefer [`ensure_double_submit_token_with_names`] in
 /// products that can run beside another Aster service on the same browser origin.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when the cookie or header is missing, empty, or does not match.
 pub fn ensure_double_submit_token(req: &HttpRequest) -> Result<()> {
     ensure_double_submit_token_with_names(req, default_csrf_token_names())
 }
@@ -205,6 +217,10 @@ pub fn ensure_double_submit_token(req: &HttpRequest) -> Result<()> {
 /// The helper only performs the double-submit comparison. Product middleware should decide when to
 /// call it, usually for unsafe methods authenticated by cookies. Pair it with request-source
 /// validation to reject cross-site writes before checking the token value.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when the configured cookie or header is missing, empty, or does not match.
 pub fn ensure_double_submit_token_with_names(
     req: &HttpRequest,
     names: &CsrfTokenNames,
@@ -245,12 +261,20 @@ pub fn ensure_double_submit_token_with_names(
 ///
 /// This uses [`default_csrf_token_names`]. Prefer [`ensure_service_double_submit_token_with_names`]
 /// in products that configure service-specific token names.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when the cookie or header is missing, empty, or does not match.
 pub fn ensure_service_double_submit_token(req: &ServiceRequest) -> Result<()> {
     ensure_double_submit_token(req.request())
 }
 
 /// Ensures an Actix service request contains matching CSRF cookie and header values using custom
 /// names.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when the configured cookie or header is missing, empty, or does not match.
 pub fn ensure_service_double_submit_token_with_names(
     req: &ServiceRequest,
     names: &CsrfTokenNames,
@@ -259,6 +283,10 @@ pub fn ensure_service_double_submit_token_with_names(
 }
 
 /// Validates source headers for an Actix request.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when the request origin or source headers are malformed or untrusted.
 pub fn ensure_request_source_allowed(
     req: &HttpRequest,
     public_site_origins: &[String],
@@ -277,6 +305,10 @@ pub fn ensure_request_source_allowed(
 }
 
 /// Validates source headers for an Actix service request.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when the request origin or source headers are malformed or untrusted.
 pub fn ensure_service_request_source_allowed(
     req: &ServiceRequest,
     public_site_origins: &[String],
@@ -298,6 +330,10 @@ pub fn ensure_service_request_source_allowed(
 }
 
 /// Validates raw source header values against the request and public-site origins.
+///
+/// # Errors
+///
+/// Returns [`CsrfError`] when a header is too long, malformed, missing when required, or untrusted.
 pub fn ensure_headers_allowed(
     origin: Option<&str>,
     referer: Option<&str>,
@@ -312,19 +348,13 @@ pub fn ensure_headers_allowed(
         "Sec-Fetch-Site",
         CsrfErrorKind::RequestHeaderValueInvalid,
     )?
-    .map(|value| value.to_ascii_lowercase());
+    .map(str::to_ascii_lowercase);
 
-    if let Some(fetch_site) = fetch_site.as_deref() {
-        match fetch_site {
-            "same-origin" | "same-site" => {}
-            "cross-site" | "none" => {
-                return Err(CsrfError::new(
-                    CsrfErrorKind::RequestSourceUntrusted,
-                    "untrusted request source for cookie-authenticated action",
-                ));
-            }
-            _ => {}
-        }
+    if let Some("cross-site" | "none") = fetch_site.as_deref() {
+        return Err(CsrfError::new(
+            CsrfErrorKind::RequestSourceUntrusted,
+            "untrusted request source for cookie-authenticated action",
+        ));
     }
     let same_site_fetch = fetch_site.as_deref() == Some("same-site");
 
@@ -399,10 +429,10 @@ fn validate_cookie_name(cookie_name: &str) -> Result<()> {
 }
 
 fn parse_header_name(header_name: &str) -> Result<HeaderName> {
-    HeaderName::from_bytes(header_name.as_bytes()).map_err(header_name_error)
+    HeaderName::from_bytes(header_name.as_bytes()).map_err(|error| header_name_error(&error))
 }
 
-fn header_name_error(error: InvalidHeaderName) -> CsrfError {
+fn header_name_error(error: &InvalidHeaderName) -> CsrfError {
     CsrfError::new(
         CsrfErrorKind::TokenNameInvalid,
         format!("invalid CSRF header name: {error}"),

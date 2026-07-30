@@ -20,6 +20,10 @@ pub async fn cleanup_runtime_temp_root(temp_root: &str) {
 }
 
 /// Prepares the token-scoped temporary directory for one claimed task lease.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the lease path is invalid or directory creation fails.
 pub async fn prepare_task_temp_dir_in_root(temp_root: &str, lease: TaskLease) -> Result<String> {
     tracing::debug!(
         task_id = lease.task_id,
@@ -44,6 +48,10 @@ pub async fn prepare_task_temp_dir_in_root(temp_root: &str, lease: TaskLease) ->
 }
 
 /// Cleans the token-scoped temporary directory for one claimed task lease.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the lease path is invalid or cleanup fails.
 pub async fn cleanup_task_temp_dir_for_lease_in_root(
     temp_root: &str,
     lease: TaskLease,
@@ -63,6 +71,10 @@ pub async fn cleanup_task_temp_dir_for_lease_in_root(
 }
 
 /// Cleans every temporary artifact directory for one persisted task id.
+///
+/// # Errors
+///
+/// Returns [`TaskCoreError`] when the task path is invalid or cleanup fails.
 pub async fn cleanup_task_temp_dir_for_task_in_root(temp_root: &str, task_id: i64) -> Result<()> {
     tracing::debug!(task_id, "cleaning background task temp dir in root");
     cleanup_temp_dir(&aster_forge_utils::paths::task_temp_dir(temp_root, task_id)).await;

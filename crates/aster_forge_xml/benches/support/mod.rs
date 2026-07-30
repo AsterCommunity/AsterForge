@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 
 use aster_forge_xml::{XmlSafetyPolicy, XmlStreamEvent, XmlStreamReader, XmlStreamWriter};
@@ -27,9 +28,11 @@ pub(crate) fn wopi_discovery(actions: usize) -> String {
     let mut xml =
         String::from("<wopi-discovery><net-zone name=\"external-https\"><app name=\"Word\">");
     for index in 0..actions {
-        xml.push_str(&format!(
+        write!(
+            xml,
             "<action name=\"view\" ext=\"x{index}\" urlsrc=\"https://office.example.test/view?file=&lt;WOPI_URL&gt;\"/>"
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     xml.push_str("</app></net-zone></wopi-discovery>");
     xml
@@ -38,10 +41,12 @@ pub(crate) fn wopi_discovery(actions: usize) -> String {
 pub(crate) fn multistatus(responses: usize) -> String {
     let mut xml = String::from("<D:multistatus xmlns:D=\"DAV:\">");
     for index in 0..responses {
-        xml.push_str(&format!(
+        write!(
+            xml,
             "<D:response><D:href>/files/{index}</D:href><D:propstat><D:prop><D:displayname>file-{index}</D:displayname><D:getcontentlength>{}</D:getcontentlength><D:getetag>&quot;etag-{index}&quot;</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>",
             index * 1024
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     xml.push_str("</D:multistatus>");
     xml

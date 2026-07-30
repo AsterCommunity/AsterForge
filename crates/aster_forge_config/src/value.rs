@@ -46,7 +46,8 @@ pub enum ConfigValueType {
 }
 
 impl ConfigValueType {
-    /// Returns the canonical snake_case storage name.
+    /// Returns the canonical `snake_case` storage name.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::String => "string",
@@ -59,7 +60,8 @@ impl ConfigValueType {
         }
     }
 
-    /// Parses a canonical snake_case storage name.
+    /// Parses a canonical `snake_case` storage name.
+    #[must_use]
     pub fn from_str_name(value: &str) -> Option<Self> {
         match value {
             "string" => Some(Self::String),
@@ -74,21 +76,25 @@ impl ConfigValueType {
     }
 
     /// Returns whether this type stores a multi-line string.
+    #[must_use]
     pub const fn is_multiline(self) -> bool {
         matches!(self, Self::Multiline)
     }
 
     /// Returns whether this type stores a JSON string array.
+    #[must_use]
     pub const fn is_string_array(self) -> bool {
         matches!(self, Self::StringArray)
     }
 
     /// Returns whether this type stores a JSON string enum set.
+    #[must_use]
     pub const fn is_string_enum_set(self) -> bool {
         matches!(self, Self::StringEnumSet)
     }
 
     /// Returns whether this type stores list-like strings.
+    #[must_use]
     pub const fn is_string_list(self) -> bool {
         matches!(self, Self::StringArray | Self::StringEnumSet)
     }
@@ -120,7 +126,8 @@ pub enum ConfigSource {
 }
 
 impl ConfigSource {
-    /// Returns the canonical snake_case storage name.
+    /// Returns the canonical `snake_case` storage name.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -128,7 +135,8 @@ impl ConfigSource {
         }
     }
 
-    /// Parses a canonical snake_case storage name.
+    /// Parses a canonical `snake_case` storage name.
+    #[must_use]
     pub fn from_str_name(value: &str) -> Option<Self> {
         match value {
             "system" => Some(Self::System),
@@ -167,7 +175,8 @@ pub enum ConfigVisibility {
 }
 
 impl ConfigVisibility {
-    /// Returns the canonical snake_case storage name.
+    /// Returns the canonical `snake_case` storage name.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Private => "private",
@@ -176,7 +185,8 @@ impl ConfigVisibility {
         }
     }
 
-    /// Parses a canonical snake_case storage name.
+    /// Parses a canonical `snake_case` storage name.
+    #[must_use]
     pub fn from_str_name(value: &str) -> Option<Self> {
         match value {
             "private" => Some(Self::Private),
@@ -187,11 +197,13 @@ impl ConfigVisibility {
     }
 
     /// Returns whether anonymous clients may see this value.
+    #[must_use]
     pub const fn visible_to_public(self) -> bool {
         matches!(self, Self::Public)
     }
 
     /// Returns whether authenticated clients may see this value.
+    #[must_use]
     pub const fn visible_to_authenticated(self) -> bool {
         matches!(self, Self::Public | Self::Authenticated)
     }
@@ -219,6 +231,10 @@ impl ConfigValue {
     pub const REDACTED: &'static str = "***REDACTED***";
 
     /// Converts a storage string into an API-facing value for `value_type`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the stored string does not match the declared value type.
     pub fn from_storage(value_type: impl Into<ConfigValueType>, value: String) -> Result<Self> {
         let value_type = value_type.into();
         if !value_type.is_string_list() {
@@ -250,6 +266,7 @@ impl ConfigValue {
     }
 
     /// Returns the canonical redacted API value.
+    #[must_use]
     pub fn redacted() -> Self {
         Self::String(Self::REDACTED.to_string())
     }
@@ -264,6 +281,7 @@ impl ConfigValue {
     }
 
     /// Returns whether this value is logically empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
             Self::String(value) => value.trim().is_empty(),
@@ -272,6 +290,10 @@ impl ConfigValue {
     }
 
     /// Converts an API-facing value into a storage string for `value_type`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the typed value does not match the requested storage type.
     pub fn to_storage_for_type(&self, value_type: impl Into<ConfigValueType>) -> Result<String> {
         let value_type = value_type.into();
         match (value_type, self) {
@@ -293,6 +315,7 @@ impl ConfigValue {
     }
 
     /// Converts the value into an audit-friendly string.
+    #[must_use]
     pub fn to_audit_string(&self) -> String {
         match self {
             Self::String(value) => value.clone(),
@@ -367,6 +390,10 @@ pub fn config_value_audit_string(
 /// This performs only product-neutral structural checks. Domain-specific rules,
 /// such as enum membership or cross-field constraints, belong to registry
 /// normalizers and dependency validators.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the stored value violates its declared type contract.
 pub fn validate_storage_value(value_type: ConfigValueType, value: &str) -> Result<()> {
     let trimmed = value.trim();
     match value_type {
@@ -400,6 +427,10 @@ pub fn validate_storage_value(value_type: ConfigValueType, value: &str) -> Resul
 /// such as URL canonicalization, domain lower-casing, allow-list filtering, or
 /// duplicate removal. The `key` is only used to produce a precise validation
 /// error.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the stored string array is malformed JSON.
 pub fn parse_string_array_config_value(value: &str, key: &str) -> Result<Vec<String>> {
     serde_json::from_str::<Vec<String>>(value.trim()).map_err(|error| {
         ConfigCoreError::invalid_value(format!("{key} must be a JSON array of strings: {error}"))
@@ -412,6 +443,10 @@ pub fn parse_string_array_config_value(value: &str, key: &str) -> Result<Vec<Str
 /// deployments stored single-select values as a JSON array with exactly one string because the UI
 /// previously treated them like enum sets. This helper keeps that migration-compatible shape in one
 /// place while product crates still own the concrete enum and accepted values.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when selection count or a selected value is invalid.
 pub fn parse_single_string_enum_selection<T>(
     value: &str,
     key: &str,
@@ -445,6 +480,10 @@ pub fn parse_single_string_enum_selection<T>(
 /// Product crates still own the concrete enum, canonical names, allowed values,
 /// and default set. Forge only handles the shared storage shape and duplicate
 /// detection so every service reports consistent malformed enum-set config.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the enum set is malformed, duplicated, or unknown.
 pub fn parse_string_enum_set_selection<T>(
     value: &str,
     key: &str,
@@ -479,6 +518,10 @@ where
 /// This is useful for `string_enum_set` config values whose storage order should
 /// stay stable regardless of the order provided by an API request. The returned
 /// values are the canonical storage strings from `display`.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the selected enum set cannot be normalized.
 pub fn normalize_string_enum_set_selection<T>(
     value: &str,
     key: &str,
@@ -715,7 +758,7 @@ mod tests {
         let parse = |value: &str| (value == "fast").then_some(value.to_string());
 
         assert!(
-            parse_single_string_enum_selection(r#"[]"#, "preview_profile", "fast", parse).is_err()
+            parse_single_string_enum_selection(r"[]", "preview_profile", "fast", parse).is_err()
         );
         assert!(
             parse_single_string_enum_selection(
@@ -743,7 +786,7 @@ mod tests {
             vec!["a".to_string(), "b".to_string()]
         );
         assert!(parse_string_array_config_value(r#""a""#, "domains").is_err());
-        assert!(parse_string_array_config_value(r#"[1]"#, "domains").is_err());
+        assert!(parse_string_array_config_value(r"[1]", "domains").is_err());
     }
 
     #[test]
@@ -794,7 +837,7 @@ mod tests {
         );
         assert_eq!(
             normalize_string_enum_set_selection(
-                r#"[]"#,
+                r"[]",
                 "preview_profiles",
                 "preview profile",
                 TEST_ENUMS,

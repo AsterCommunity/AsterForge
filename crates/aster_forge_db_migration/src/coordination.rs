@@ -22,7 +22,7 @@ pub struct MigrationLockOptions {
 }
 
 impl MigrationLockOptions {
-    /// Creates options using a deterministic PostgreSQL advisory key derived from `namespace`.
+    /// Creates options using a deterministic `PostgreSQL` advisory key derived from `namespace`.
     ///
     /// Products migrating from an existing lock implementation should call
     /// [`Self::with_postgres_advisory_key`] to preserve the old key during rolling upgrades.
@@ -35,29 +35,34 @@ impl MigrationLockOptions {
         }
     }
 
-    /// Overrides the PostgreSQL advisory key while preserving the shared namespace for MySQL.
+    /// Overrides the `PostgreSQL` advisory key while preserving the shared namespace for `MySQL`.
+    #[must_use]
     pub const fn with_postgres_advisory_key(mut self, key: i64) -> Self {
         self.postgres_advisory_key = key;
         self
     }
 
-    /// Overrides the MySQL named-lock wait timeout in whole seconds.
+    /// Overrides the `MySQL` named-lock wait timeout in whole seconds.
+    #[must_use]
     pub const fn with_mysql_timeout_seconds(mut self, seconds: u64) -> Self {
         self.mysql_timeout_seconds = seconds;
         self
     }
 
-    /// Returns the stable product namespace used for MySQL named locks.
+    /// Returns the stable product namespace used for `MySQL` named locks.
+    #[must_use]
     pub fn namespace(&self) -> &str {
         &self.namespace
     }
 
-    /// Returns the PostgreSQL transaction-scoped advisory-lock key.
+    /// Returns the `PostgreSQL` transaction-scoped advisory-lock key.
+    #[must_use]
     pub const fn postgres_advisory_key(&self) -> i64 {
         self.postgres_advisory_key
     }
 
-    /// Returns the MySQL named-lock wait timeout in seconds.
+    /// Returns the `MySQL` named-lock wait timeout in seconds.
+    #[must_use]
     pub const fn mysql_timeout_seconds(&self) -> u64 {
         self.mysql_timeout_seconds
     }
@@ -82,9 +87,14 @@ impl MigrationLockOptions {
 
 /// Runs a product migration callback while holding the backend's process-wide migration lock.
 ///
-/// PostgreSQL uses a transaction-scoped advisory lock. MySQL uses a connection-bound named lock
-/// and releases it before the transaction is committed. SQLite runs the callback in a transaction
+/// `PostgreSQL` uses a transaction-scoped advisory lock. `MySQL` uses a connection-bound named lock
+/// and releases it before the transaction is committed. `SQLite` runs the callback in a transaction
 /// without an additional external lock.
+///
+/// # Errors
+///
+/// Returns an error when lock options are invalid, the backend is unsupported, transaction or lock
+/// operations fail, the callback fails, or the transaction cannot be committed or rolled back.
 pub async fn with_migration_lock<T, F>(
     database: &DatabaseConnection,
     options: &MigrationLockOptions,
@@ -135,7 +145,11 @@ where
     }
 }
 
-/// Runs a standard SeaORM migrator while holding the backend migration lock.
+/// Runs a standard `SeaORM` migrator while holding the backend migration lock.
+///
+/// # Errors
+///
+/// Returns any migration coordination, transaction, lock, or [`MigratorTrait::up`] failure.
 pub async fn run_migrator_with_lock<M>(
     database: &DatabaseConnection,
     options: &MigrationLockOptions,

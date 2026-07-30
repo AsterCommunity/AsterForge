@@ -70,31 +70,40 @@ impl ConfigSyncRuntime {
     }
 
     /// Returns the product namespace this runtime accepts and publishes.
+    #[must_use]
     pub fn namespace(&self) -> &str {
         &self.namespace
     }
 
     /// Returns the process runtime ID.
+    #[must_use]
     pub fn runtime_id(&self) -> &str {
         &self.runtime_id
     }
 
     /// Returns the configured notifier, if cross-process sync is enabled.
+    #[must_use]
     pub fn notifier(&self) -> Option<&SharedConfigChangeNotifier> {
         self.notifier.as_ref()
     }
 
     /// Returns whether config sync is enabled.
+    #[must_use]
     pub fn enabled(&self) -> bool {
         self.notifier.is_some()
     }
 
     /// Converts this runtime into the reload-worker filter configuration.
+    #[must_use]
     pub fn worker_config(&self) -> ConfigReloadWorkerConfig {
         ConfigReloadWorkerConfig::new(self.namespace(), self.runtime_id())
     }
 
     /// Publishes a reload hint after a local config mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
     pub async fn publish_reload(
         &self,
         keys: impl IntoIterator<Item = impl Into<String>>,
@@ -118,6 +127,10 @@ impl ConfigSyncRuntime {
     ///
     /// Disabled runtimes simply wait for shutdown, which lets callers spawn the
     /// same task unconditionally if that is more convenient.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
     pub async fn run_reload_subscription<F, Fut>(
         &self,
         shutdown: CancellationToken,
@@ -135,6 +148,10 @@ impl ConfigSyncRuntime {
     }
 
     /// Runs this runtime's reload subscription worker and reports observations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
     pub async fn run_reload_subscription_with_observer<F, Fut>(
         &self,
         shutdown: CancellationToken,
@@ -163,6 +180,10 @@ impl ConfigSyncRuntime {
     ///
     /// `reconcile` runs after each successful subscription. Product code should
     /// reload its full snapshot and invalidate all derived configuration caches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
     pub async fn run_reload_subscription_with_reconcile<R, RFut, F, Fut>(
         &self,
         shutdown: CancellationToken,
@@ -184,6 +205,10 @@ impl ConfigSyncRuntime {
     }
 
     /// Runs a reconnecting subscription and reports reload and connection observations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
     pub async fn run_reload_subscription_with_reconcile_and_observers<R, RFut, F, Fut>(
         &self,
         shutdown: CancellationToken,

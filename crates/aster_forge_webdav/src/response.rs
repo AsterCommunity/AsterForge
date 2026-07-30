@@ -1,4 +1,4 @@
-//! Transport-neutral WebDAV response model and download response planning.
+//! Transport-neutral `WebDAV` response model and download response planning.
 
 use std::fmt::Write as _;
 use std::pin::Pin;
@@ -185,7 +185,7 @@ pub enum DavDownloadPlanError {
     InvalidRepresentation,
 }
 
-/// WebDAV response body before transport adaptation.
+/// `WebDAV` response body before transport adaptation.
 pub enum DavResponseBody {
     Empty,
     Bytes(Bytes),
@@ -224,7 +224,7 @@ impl DavResponse {
 
 pub(crate) fn xml_document_response(
     status: StatusCode,
-    root: DavXmlElement,
+    root: &DavXmlElement,
 ) -> Result<DavResponse, DavXmlError> {
     let mut response = DavResponse::bytes(status, root.to_bytes()?);
     response.headers.insert(
@@ -260,7 +260,7 @@ pub(crate) fn xml_request_error_response(
     match error {
         DavXmlError::ExternalEntity => xml_document_response(
             StatusCode::FORBIDDEN,
-            dav_error_element(&DavErrorCondition::NoExternalEntities),
+            &dav_error_element(&DavErrorCondition::NoExternalEntities),
         ),
         DavXmlError::TooLarge => Ok(text_document_response(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -308,7 +308,7 @@ pub fn capability_evaluation_error_response(error: &DavCapabilityEvaluationError
     }
 }
 
-/// Maps a classified product backend failure to the WebDAV status contract.
+/// Maps a classified product backend failure to the `WebDAV` status contract.
 #[must_use]
 pub fn backend_error_response(error: &DavBackendError) -> DavResponse {
     let status = match error.kind {
@@ -373,6 +373,10 @@ pub fn method_not_allowed_response(snapshot: &DavCapabilitySnapshot) -> DavRespo
 }
 
 /// Gates known and unknown methods through the same snapshot used by OPTIONS and 405.
+///
+/// # Errors
+///
+/// Returns [`DavMethodGateError`] when the method is unknown or disallowed by the snapshot.
 pub fn gate_method(
     method: Option<DavMethod>,
     snapshot: &DavCapabilitySnapshot,
@@ -411,6 +415,10 @@ pub fn body_error_response(error: DavBodyError) -> DavResponse {
 }
 
 /// Builds the GET/HEAD response and storage-read plan after product metadata has been resolved.
+///
+/// # Errors
+///
+/// Returns [`DavDownloadPlanError`] when validators, range input, or response headers are invalid.
 pub fn plan_download_response(
     headers: &HeaderMap,
     head_only: bool,
@@ -434,6 +442,10 @@ pub fn plan_download_response(
 ///
 /// Every limit and the final coalescing pass are applied before [`open_download`] opens a
 /// backend stream. A request containing one raw range retains the ordinary single-part path.
+///
+/// # Errors
+///
+/// Returns an error when validators, ranges, limits, or response headers are invalid.
 pub fn plan_download_response_with_multi_range(
     headers: &HeaderMap,
     head_only: bool,
@@ -471,6 +483,10 @@ enum DavRangeSelection {
     },
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Conditional precedence, range selection, and response headers form one RFC planning transaction."
+)]
 fn plan_download_response_with_mode(
     headers: &HeaderMap,
     head_only: bool,
@@ -595,6 +611,10 @@ fn plan_download_response_with_mode(
 /// Full, single-range, and every final multipart segment carry their exact selected length.
 /// Multipart segments are all opened and checked before the returned stream can emit bytes;
 /// empty plans never call the backend.
+///
+/// # Errors
+///
+/// Returns [`DavDownloadOpenError`] when a backend open fails or its length is inconsistent.
 pub async fn open_download<Source: DavDownloadSource>(
     source: &Source,
     path: &DavPath,

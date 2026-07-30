@@ -1,4 +1,4 @@
-//! WebDAV header parsing and protocol precondition rules.
+//! `WebDAV` header parsing and protocol precondition rules.
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use crate::{
 use aster_forge_utils::http_validators;
 use async_trait::async_trait;
 
-/// WebDAV `Depth` header value.
+/// `WebDAV` `Depth` header value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depth {
     /// The request target only.
@@ -36,13 +36,13 @@ impl Depth {
 /// A parsed `Destination` header restricted to the current origin and mount.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
-    /// Canonical path relative to the WebDAV mount.
+    /// Canonical path relative to the `WebDAV` mount.
     pub path: DavPath,
     /// Decoded relative path retained for product adapters.
     pub relative: String,
 }
 
-/// A parsed WebDAV `If` header.
+/// A parsed `WebDAV` `If` header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IfHeader {
     /// Resource-tagged or untagged condition groups.
@@ -65,7 +65,7 @@ pub struct IfStateList {
     pub conditions: Vec<IfStateCondition>,
 }
 
-/// One WebDAV `If` condition.
+/// One `WebDAV` `If` condition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IfStateCondition {
     /// A lock state token condition.
@@ -74,7 +74,7 @@ pub enum IfStateCondition {
     Etag { value: String, negated: bool },
 }
 
-/// Failure while resolving and evaluating a WebDAV `If` request precondition.
+/// Failure while resolving and evaluating a `WebDAV` `If` request precondition.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavIfEvaluationError {
     #[error(transparent)]
@@ -90,7 +90,7 @@ pub enum DavProtocolErrorKind {
     PreconditionFailed,
 }
 
-/// A product-neutral WebDAV protocol error.
+/// A product-neutral `WebDAV` protocol error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct DavProtocolError {
@@ -136,6 +136,10 @@ impl DavProtocolError {
 }
 
 /// Parses the `Depth` semantics used by `PROPFIND`.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_propfind_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolError> {
     match parse_depth_header(headers)? {
         Some(Depth::Zero) => Ok(Depth::Zero),
@@ -145,6 +149,10 @@ pub fn parse_propfind_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolErr
 }
 
 /// Parses the `Depth` semantics used by `COPY`.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_copy_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolError> {
     match parse_depth_header(headers)? {
         Some(Depth::Zero) => Ok(Depth::Zero),
@@ -154,16 +162,28 @@ pub fn parse_copy_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolError> 
 }
 
 /// Parses the `Depth` semantics used by `MOVE`.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_move_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolError> {
     Ok(parse_depth_header(headers)?.unwrap_or(Depth::Infinity))
 }
 
 /// Parses the `Depth` semantics used by `DELETE`.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_delete_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolError> {
     Ok(parse_depth_header(headers)?.unwrap_or(Depth::Infinity))
 }
 
 /// Parses the `Depth` semantics used by `LOCK`.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_lock_depth(headers: &HeaderMap) -> Result<Depth, DavProtocolError> {
     match parse_depth_header(headers)? {
         None | Some(Depth::Infinity) => Ok(Depth::Infinity),
@@ -189,6 +209,10 @@ fn parse_depth_header(headers: &HeaderMap) -> Result<Option<Depth>, DavProtocolE
 }
 
 /// Parses `Overwrite`, defaulting to `true` when the header is absent.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_overwrite(headers: &HeaderMap) -> Result<bool, DavProtocolError> {
     let Some(value) = headers.get("Overwrite") else {
         return Ok(true);
@@ -206,7 +230,11 @@ pub fn parse_overwrite(headers: &HeaderMap) -> Result<bool, DavProtocolError> {
     }
 }
 
-/// Parses and constrains `Destination` to the current origin and WebDAV mount.
+/// Parses and constrains `Destination` to the current origin and `WebDAV` mount.
+///
+/// # Errors
+///
+/// Returns [`DavProtocolError`] when `Destination` is absent, malformed, or cross-origin.
 pub fn destination_relative_path(
     headers: &HeaderMap,
     prefix: &str,
@@ -248,7 +276,11 @@ pub fn destination_relative_path(
     Ok(Destination { path, relative })
 }
 
-/// Parses a WebDAV `If` header.
+/// Parses a `WebDAV` `If` header.
+///
+/// # Errors
+///
+/// Returns [`DavProtocolError`] when a DAV `If` field has invalid syntax or target paths.
 pub fn parse_if_header(headers: &HeaderMap) -> Result<Option<IfHeader>, DavProtocolError> {
     let Some(value) = headers.get("If") else {
         return Ok(None);
@@ -259,10 +291,14 @@ pub fn parse_if_header(headers: &HeaderMap) -> Result<Option<IfHeader>, DavProto
     IfHeaderParser::new(raw).parse().map(Some)
 }
 
-/// Resolves referenced resources and enforces the complete WebDAV `If` state-list precondition.
+/// Resolves referenced resources and enforces the complete `WebDAV` `If` state-list precondition.
 ///
 /// Conditions inside one list are AND-connected. Lists for one resource and tagged resource
 /// productions across the complete header are OR-connected.
+///
+/// # Errors
+///
+/// Returns an error when resource state lookup fails or no submitted state list matches.
 pub async fn enforce_if_header(
     if_header: Option<&IfHeader>,
     resolver: &dyn DavIfStateResolver,
@@ -300,8 +336,12 @@ pub async fn enforce_if_header(
 /// Resolves `If` state from the canonical filesystem and lock backend ports.
 ///
 /// Products normally use this entrypoint instead of implementing a transport-local resolver.
-/// A missing resource contributes no ETag, while all other filesystem failures preserve the
+/// A missing resource contributes no `ETag`, while all other filesystem failures preserve the
 /// backend error boundary.
+///
+/// # Errors
+///
+/// Returns an error when filesystem or lock state lookup fails, or conditions do not match.
 pub async fn enforce_if_header_with_backends(
     if_header: Option<&IfHeader>,
     filesystem: &dyn DavFileSystem,
@@ -398,6 +438,7 @@ fn tagged_dav_path(
 }
 
 /// Extracts submitted lock tokens that apply to one request path.
+#[must_use]
 pub fn submitted_lock_tokens_for_path(
     headers: &HeaderMap,
     request_path: &str,
@@ -441,6 +482,10 @@ pub fn submitted_lock_tokens(
 }
 
 /// Parses a bounded LOCK timeout using a product-supplied maximum duration.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_lock_timeout(
     headers: &HeaderMap,
     maximum: Duration,
@@ -470,6 +515,10 @@ pub fn parse_lock_timeout(
 }
 
 /// Parses the required angle-bracketed `Lock-Token` request header.
+///
+/// # Errors
+///
+/// Returns an error when the `WebDAV` header is malformed or its condition fails.
 pub fn parse_lock_token_header(headers: &HeaderMap) -> Result<String, DavProtocolError> {
     let raw = headers
         .get("Lock-Token")

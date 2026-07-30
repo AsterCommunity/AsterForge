@@ -39,6 +39,7 @@ pub const RUNTIME_LEASE_UPDATED_AT_COLUMN: &str = "updated_at";
 /// Product migration crates should call this helper instead of duplicating the
 /// table shape. Forge owns this table contract because [`RuntimeLeaseDbStore`]
 /// owns its row semantics and update rules.
+#[must_use]
 pub fn create_runtime_leases_table(backend: DatabaseBackend) -> TableCreateStatement {
     Table::create()
         .table(runtime_leases_table())
@@ -62,6 +63,7 @@ pub fn create_runtime_leases_table(backend: DatabaseBackend) -> TableCreateState
 }
 
 /// Builds the shared `runtime_leases` table drop statement.
+#[must_use]
 pub fn drop_runtime_leases_table() -> TableDropStatement {
     Table::drop()
         .table(runtime_leases_table())
@@ -110,7 +112,7 @@ fn utc_datetime_column(backend: DatabaseBackend, column: Alias) -> ColumnDef {
     definition
 }
 
-/// SeaORM model for `runtime_leases`.
+/// `SeaORM` model for `runtime_leases`.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "runtime_leases")]
 pub struct Model {
@@ -141,12 +143,14 @@ pub struct RuntimeLeaseDbStore {
 }
 
 impl RuntimeLeaseDbStore {
-    /// Creates a runtime lease store from a SeaORM database connection.
+    /// Creates a runtime lease store from a `SeaORM` database connection.
+    #[must_use]
     pub const fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 
     /// Returns the underlying database connection.
+    #[must_use]
     pub const fn db(&self) -> &DatabaseConnection {
         &self.db
     }

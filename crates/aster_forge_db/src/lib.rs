@@ -1,6 +1,6 @@
 //! Shared database utilities for Aster services.
 //!
-//! This crate contains framework-neutral SeaORM helpers: connection setup, retry policy, offset
+//! This crate contains framework-neutral `SeaORM` helpers: connection setup, retry policy, offset
 //! pagination, full-text search query helpers, whitelisted sorting, and transaction wrappers.
 //! Product migrations, entities, and repository-specific query logic intentionally remain outside
 //! this crate.
@@ -124,7 +124,7 @@ pub enum DatabaseErrorKind {
     /// The database aborted the transaction because its serialization snapshot could not commit.
     SerializationFailure,
     /// The database rejected an operation after a lock wait timeout, or reported the
-    /// database as busy/locked (SQLite).
+    /// database as busy/locked (`SQLite`).
     LockTimeout,
     /// A unique or primary-key constraint rejected the operation.
     UniqueConstraint,
@@ -135,6 +135,7 @@ pub enum DatabaseErrorKind {
 impl DatabaseErrorKind {
     /// Returns whether the failure class is a transient locking conflict that a bounded
     /// retry at the correct boundary can resolve.
+    #[must_use]
     pub fn is_transient_locking(self) -> bool {
         matches!(
             self,
@@ -172,7 +173,7 @@ pub fn database_error_kind(error: &sea_orm::DbErr) -> Option<DatabaseErrorKind> 
         })
         .and_then(|code| code.parse::<i32>().ok());
     database_error_kind_from_signals(
-        database_error.kind(),
+        &database_error.kind(),
         mysql_number,
         postgres_code,
         sqlite_code,
@@ -180,14 +181,14 @@ pub fn database_error_kind(error: &sea_orm::DbErr) -> Option<DatabaseErrorKind> 
 }
 
 fn database_error_kind_from_signals(
-    driver_kind: sea_orm::sqlx::error::ErrorKind,
+    driver_kind: &sea_orm::sqlx::error::ErrorKind,
     mysql_number: Option<u16>,
     postgres_code: Option<&str>,
     sqlite_code: Option<i32>,
 ) -> Option<DatabaseErrorKind> {
     use sea_orm::sqlx::error::ErrorKind;
 
-    match driver_kind {
+    match *driver_kind {
         ErrorKind::UniqueViolation => return Some(DatabaseErrorKind::UniqueConstraint),
         ErrorKind::ForeignKeyViolation => return Some(DatabaseErrorKind::ForeignKeyConstraint),
         _ => {}
@@ -279,6 +280,7 @@ impl DbError {
     }
 
     /// Returns the driver-native classification, when one was available.
+    #[must_use]
     pub fn database_error_kind(&self) -> Option<DatabaseErrorKind> {
         match self {
             Self::DatabaseOperationClassified { kind, .. } => Some(*kind),
@@ -288,6 +290,7 @@ impl DbError {
     }
 
     /// Returns whether this error came from a commit with an unknown final outcome.
+    #[must_use]
     pub fn commit_outcome_is_unknown(&self) -> bool {
         matches!(self, Self::CommitOutcomeUnknown { .. })
     }
@@ -303,6 +306,7 @@ impl DbError {
     /// (deadlock, serialization failure, lock timeout) qualify. Unclassified operation
     /// errors are not retried: without a driver classification there is no evidence the
     /// operation failed in a retry-safe way, so callers see the failure immediately.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::DatabaseConnection(_) => true,
@@ -329,23 +333,23 @@ mod tests {
     #[test]
     fn database_error_kind_covers_common_driver_signals() {
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::Other, Some(1213), None, None),
+            database_error_kind_from_signals(&ErrorKind::Other, Some(1213), None, None),
             Some(DatabaseErrorKind::Deadlock)
         );
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::Other, Some(1205), None, None),
+            database_error_kind_from_signals(&ErrorKind::Other, Some(1205), None, None),
             Some(DatabaseErrorKind::LockTimeout)
         );
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::Other, None, Some("40P01"), None),
+            database_error_kind_from_signals(&ErrorKind::Other, None, Some("40P01"), None),
             Some(DatabaseErrorKind::Deadlock)
         );
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::Other, None, Some("40001"), None),
+            database_error_kind_from_signals(&ErrorKind::Other, None, Some("40001"), None),
             Some(DatabaseErrorKind::SerializationFailure)
         );
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::Other, None, Some("55P03"), None),
+            database_error_kind_from_signals(&ErrorKind::Other, None, Some("55P03"), None),
             Some(DatabaseErrorKind::LockTimeout)
         );
     }
@@ -356,7 +360,7 @@ mod tests {
         // high byte carries extra context (e.g. SQLITE_BUSY_SNAPSHOT = 517).
         for code in [5, 6, 261, 517, 262] {
             assert_eq!(
-                database_error_kind_from_signals(ErrorKind::Other, None, None, Some(code)),
+                database_error_kind_from_signals(&ErrorKind::Other, None, None, Some(code)),
                 Some(DatabaseErrorKind::LockTimeout),
                 "sqlite code {code} should classify as a lock timeout"
             );
@@ -364,7 +368,7 @@ mod tests {
         // SQLITE_ERROR = 1 and SQLITE_CONSTRAINT = 19 carry no retryable locking meaning.
         for code in [1, 19, 0] {
             assert_eq!(
-                database_error_kind_from_signals(ErrorKind::Other, None, None, Some(code)),
+                database_error_kind_from_signals(&ErrorKind::Other, None, None, Some(code)),
                 None,
                 "sqlite code {code} should stay unclassified"
             );
@@ -374,16 +378,16 @@ mod tests {
     #[test]
     fn database_error_kind_prefers_cross_backend_constraint_kind() {
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::UniqueViolation, Some(1213), None, None),
+            database_error_kind_from_signals(&ErrorKind::UniqueViolation, Some(1213), None, None,),
             Some(DatabaseErrorKind::UniqueConstraint)
         );
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::ForeignKeyViolation, None, None, None),
+            database_error_kind_from_signals(&ErrorKind::ForeignKeyViolation, None, None, None),
             Some(DatabaseErrorKind::ForeignKeyConstraint)
         );
         // A SQLite locking code must not override a cross-backend constraint kind.
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::UniqueViolation, None, None, Some(5)),
+            database_error_kind_from_signals(&ErrorKind::UniqueViolation, None, None, Some(5)),
             Some(DatabaseErrorKind::UniqueConstraint)
         );
     }
@@ -391,7 +395,7 @@ mod tests {
     #[test]
     fn database_error_kind_ignores_unknown_or_non_driver_signals() {
         assert_eq!(
-            database_error_kind_from_signals(ErrorKind::Other, Some(9999), Some("99999"), None),
+            database_error_kind_from_signals(&ErrorKind::Other, Some(9999), Some("99999"), None,),
             None
         );
         assert_eq!(

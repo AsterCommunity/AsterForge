@@ -1,4 +1,4 @@
-//! Observable WebDAV operation events.
+//! Observable `WebDAV` operation events.
 
 use std::time::Duration;
 use std::{panic::AssertUnwindSafe, panic::catch_unwind};
@@ -122,7 +122,7 @@ impl DavEventOutcome {
     }
 }
 
-/// One completed WebDAV operation.
+/// One completed `WebDAV` operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavEvent {
     pub request_id: Option<String>,
@@ -186,6 +186,10 @@ impl DavEvent {
 /// promptly without blocking on I/O; products that need asynchronous work must use a bounded,
 /// non-blocking enqueue into a product-owned worker.
 pub trait DavEventSink: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an observation error when the configured event sink rejects the event.
     fn publish(&self, event: &DavEvent) -> Result<(), DavObservationError>;
 }
 

@@ -232,24 +232,24 @@ fn class_three_requires_only_class_one_and_remains_independent_from_locking() {
         Err(DavCapabilityPlanError::Class3WithoutClass1)
     );
 
-    let mut class13 = declaration(DavResourceState::File, &[DavMethod::Options]);
-    class13.compliance.class3 = true;
+    let mut class_one_and_three = declaration(DavResourceState::File, &[DavMethod::Options]);
+    class_one_and_three.compliance.class3 = true;
     assert_eq!(
-        plan_capabilities(class13)
+        plan_capabilities(class_one_and_three)
             .expect("DAV classes 1 and 3")
             .dav_header()
             .expect("DAV header"),
         "1, 3"
     );
 
-    let mut class123 = declaration(
+    let mut all_three_classes = declaration(
         DavResourceState::File,
         &[DavMethod::Options, DavMethod::Lock, DavMethod::Unlock],
     );
-    class123.compliance.class3 = true;
-    class123.locking = DavLockingCapability::Class2;
+    all_three_classes.compliance.class3 = true;
+    all_three_classes.locking = DavLockingCapability::Class2;
     assert_eq!(
-        plan_capabilities(class123)
+        plan_capabilities(all_three_classes)
             .expect("DAV classes 1, 2 and 3")
             .dav_header()
             .expect("DAV header"),

@@ -1,8 +1,8 @@
-//! Integration coverage for SQLite connection-pool transaction behavior.
+//! Integration coverage for `SQLite` connection-pool transaction behavior.
 //!
-//! The test verifies the public connection helper preserves AsterDrive's single-writer SQLite
+//! The test verifies the public connection helper preserves `AsterDrive`'s single-writer `SQLite`
 //! semantics: concurrent transactions are serialized by the pool instead of silently opening
-//! multiple write-capable SQLite connections.
+//! multiple write-capable `SQLite` connections.
 
 use aster_forge_db::{DatabaseConfig, connect};
 use aster_forge_test::temp::{SqliteTestDatabase, TestTempDir, sqlite_database_url};

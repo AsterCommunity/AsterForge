@@ -16,6 +16,10 @@ pub const DEFAULT_GRAVATAR_BASE_URL: &str = "https://www.gravatar.com/avatar";
 ///
 /// Empty values fall back to [`DEFAULT_GRAVATAR_BASE_URL`]. Non-empty values
 /// must be absolute HTTP(S) base URLs without query or fragment components.
+///
+/// # Errors
+///
+/// Returns [`ConfigError`] when the Gravatar base URL is empty, malformed, or unsupported.
 pub fn normalize_gravatar_base_url_config_value(value: &str) -> Result<String> {
     normalize_http_base_url(
         value,
@@ -27,6 +31,7 @@ pub fn normalize_gravatar_base_url_config_value(value: &str) -> Result<String> {
 }
 
 /// Returns a normalized Gravatar base URL or [`DEFAULT_GRAVATAR_BASE_URL`].
+#[must_use]
 pub fn gravatar_base_url_or_default(value: Option<&str>) -> String {
     let normalized = value
         .unwrap_or(DEFAULT_GRAVATAR_BASE_URL)
