@@ -5,7 +5,6 @@
 //! validation helpers, overfetch trimming, and simple sort-order serialization. It deliberately
 //! avoids depending on any concrete web framework or product entity so handlers can adapt it to
 //! Axum, Actix, OpenAPI generation, or test-only fixtures.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

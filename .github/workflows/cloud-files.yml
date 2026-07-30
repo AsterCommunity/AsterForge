@@ -1,0 +1,215 @@
+name: Cloud Files CI
+
+on:
+  push:
+    paths:
+      - 'crates/aster_forge_cloud_files/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cloud-files.yml'
+    branches: [master]
+  pull_request:
+    paths:
+      - 'crates/aster_forge_cloud_files/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cloud-files.yml'
+    branches: [master, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Cloud Files Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cloud-files-core-v1
+
+      - name: Test Cloud Files Core
+        run: cargo test --locked -p aster_forge_cloud_files_core --all-targets
+
+      - name: Clippy Cloud Files Core
+        run: cargo clippy --locked -p aster_forge_cloud_files_core --all-targets -- -D warnings
+
+  windows:
+    name: Windows Cloud Files
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cloud-files-windows-v1
+
+      - name: Test Windows Cloud Files
+        run: cargo test --locked -p aster_forge_cloud_files_windows --all-targets
+
+      - name: Clippy Windows Cloud Files
+        run: cargo clippy --locked -p aster_forge_cloud_files_windows --all-targets -- -D warnings
+
+  linux:
+    name: Linux Cloud Files
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cloud-files-linux-v1
+
+      - name: Test Linux Cloud Files
+        run: cargo test --locked -p aster_forge_cloud_files_linux --all-targets
+
+      - name: Clippy Linux Cloud Files
+        run: cargo clippy --locked -p aster_forge_cloud_files_linux --all-targets -- -D warnings
+
+  macos:
+    name: macOS Cloud Files
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cloud-files-macos-v1
+
+      - name: Test macOS Cloud Files Bridge
+        run: cargo test --locked -p aster_forge_cloud_files_macos_bridge --all-targets
+
+      - name: Clippy macOS Cloud Files Bridge
+        run: cargo clippy --locked -p aster_forge_cloud_files_macos_bridge --all-targets -- -D warnings
+
+      - name: Test macOS File Provider Swift Shell
+        run: |
+          swift test \
+            --disable-sandbox \
+            --package-path crates/aster_forge_cloud_files/macos_bridge/swift \
+            --scratch-path "$RUNNER_TEMP/aster-forge-macos-shell"
+
+      - name: Generate macOS File Provider Fixture
+        run: |
+          cmake \
+            -S crates/aster_forge_cloud_files/macos_bridge/swift-fixture \
+            -B "$RUNNER_TEMP/aster-forge-macos-fixture" \
+            -G Xcode \
+            -DASTER_FORGE_CODE_SIGNING_ALLOWED=NO
+
+      - name: Build macOS Memory Example and File Provider Fixture
+        run: |
+          cmake \
+            --build "$RUNNER_TEMP/aster-forge-macos-fixture" \
+            --config Debug \
+            --target \
+              AsterForgeCloudFilesFixtureHost \
+              AsterForgeCloudFilesMacosMemoryCloudDrive
+
+      - name: Test macOS Memory Example
+        run: |
+          ctest \
+            --test-dir "$RUNNER_TEMP/aster-forge-macos-fixture" \
+            -C Debug \
+            --output-on-failure
+
+  miri:
+    name: Miri (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: aster_forge_cloud_files_core
+            miri_flags: ''
+            miri_test_args: ''
+          - package: aster_forge_cloud_files_linux
+            # Keep strict provenance enabled while allowing durable filesystem operations through
+            # Miri's isolation boundary. The exhaustive memory-cloud-drive example remains covered
+            # by the Linux test job; under Miri its state-machine scenarios exceed the bounded job
+            # budget by a wide margin and obscure the lower-level memory-model signal.
+            miri_flags: -Zmiri-strict-provenance -Zmiri-disable-isolation
+            miri_test_args: >-
+              --lib
+              --test backend_contract
+              --test create_contract
+              --test engine_contract
+              --test value_contract
+              --test writeback_contract
+          - package: aster_forge_cloud_files_macos_bridge
+            miri_flags: -Zmiri-strict-provenance
+            miri_test_args: ''
+          - package: aster_forge_cloud_files_windows
+            miri_flags: -Zmiri-strict-provenance
+            miri_test_args: ''
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Keep the Miri baseline independent from the workspace MSRV toolchain. This pinned nightly
+      # is the strict-provenance baseline for the portable cloud-files contracts.
+      - name: Setup pinned Miri toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-12
+          components: miri, rust-src
+
+      - name: Cache Miri build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cloud-files-miri-${{ matrix.package }}-v1
+
+      - name: Run Miri
+        env:
+          MIRIFLAGS: ${{ matrix.miri_flags }}
+        run: >-
+          cargo +nightly-2026-04-12 miri test --locked
+          -p ${{ matrix.package }}
+          ${{ matrix.miri_test_args }}

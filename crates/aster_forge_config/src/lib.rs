@@ -6,7 +6,6 @@
 //! Product crates still own their concrete database entities, repositories,
 //! localized labels, config keys, domain-specific normalizers, and any derived
 //! runtime state that is built from configuration values.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

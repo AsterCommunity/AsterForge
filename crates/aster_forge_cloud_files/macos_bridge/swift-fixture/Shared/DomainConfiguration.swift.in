@@ -1,0 +1,11 @@
+import FileProvider
+
+enum FixtureDomainConfiguration {
+    static let identifier = NSFileProviderDomainIdentifier("@ASTER_FORGE_DOMAIN_ID@")
+    static let displayName = "AsterForge Memory Cloud"
+    static let appGroupIdentifier = "@ASTER_FORGE_APP_GROUP_ID@"
+
+    static var domain: NSFileProviderDomain {
+        NSFileProviderDomain(identifier: identifier, displayName: displayName)
+    }
+}

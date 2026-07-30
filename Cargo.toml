@@ -7,6 +7,10 @@ members = [
     "crates/aster_forge_api",
     "crates/aster_forge_alloc",
     "crates/aster_forge_cache",
+    "crates/aster_forge_cloud_files/core",
+    "crates/aster_forge_cloud_files/linux",
+    "crates/aster_forge_cloud_files/macos_bridge",
+    "crates/aster_forge_cloud_files/windows",
     "crates/aster_forge_config",
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
@@ -41,10 +45,17 @@ authors = [
     "AptS-1543 <apts-1543@esaps.net>",
 ]
 
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
 [workspace.lints.clippy]
 # Suppressions must remain observable: `expect` reports when its justification goes stale.
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+multiple_unsafe_ops_per_block = "deny"
+undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
 actix-web = "4.14.0"
@@ -58,6 +69,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
 dashmap = "6"
 fs2 = "0.4"
+fuser = "0.18.0"
 futures = "0.3"
 governor = "0.10"
 headers = "0.4.1"
@@ -97,3 +109,4 @@ tikv-jemalloc-ctl = "0.7"
 utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+windows = { version = "0.62.2", default-features = false }

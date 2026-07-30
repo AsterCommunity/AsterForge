@@ -2,7 +2,6 @@
 //!
 //! Products retain their migration lists, history compatibility policy, table definitions, and
 //! data backfills. This crate owns the reusable execution mechanics and migration-only helpers.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

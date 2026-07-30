@@ -4,7 +4,6 @@
 //! display text, frontend asset URLs, email handling, and filename handling. It keeps validation
 //! errors as plain messages so API layers and domain services can decide how to present or translate
 //! them.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

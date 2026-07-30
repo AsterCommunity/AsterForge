@@ -4,7 +4,6 @@
 //! boolean-like string parsing, HTTP range/validator handling, checked numeric conversions, path
 //! rendering helpers, loopback host detection, UUID/token helpers, and RAII cleanup guards. The
 //! shared error type is intentionally simple so callers can map it into richer product errors.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

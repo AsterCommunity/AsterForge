@@ -8,7 +8,6 @@
 //! features so each backend can compile only the providers it supports. The default feature set
 //! enables `oidc` and generic `oauth2`; dedicated connectors such as `github`, `google`,
 //! `microsoft`, and `qq` must be enabled explicitly.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

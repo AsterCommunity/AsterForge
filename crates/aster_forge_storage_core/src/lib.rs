@@ -4,7 +4,6 @@
 //! safe relative object-key handling and S3-compatible endpoint normalization. Driver traits,
 //! connector wiring, and credential storage remain in application crates where policy decisions
 //! belong.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

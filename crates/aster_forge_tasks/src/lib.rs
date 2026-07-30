@@ -7,7 +7,6 @@
 //! SeaORM repositories, product task kind enums, runtime configuration, metrics labels, or concrete
 //! task implementations. Product crates keep those boundaries and register their specs and storage
 //! adapters explicitly.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

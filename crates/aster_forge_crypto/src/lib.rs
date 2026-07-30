@@ -3,7 +3,6 @@
 //! The crate currently exposes password hashing and digest utilities that were duplicated across
 //! application code. It keeps the error surface narrow so services can map cryptographic failures
 //! into their own API or domain errors without depending on implementation-specific error types.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #![cfg_attr(
     not(test),
     deny(

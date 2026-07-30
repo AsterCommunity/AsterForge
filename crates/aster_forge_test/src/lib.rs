@@ -6,7 +6,6 @@
 //!
 //! Everything here is test support code. Failures panic with descriptive messages instead of
 //! returning recoverable errors, because a broken test environment should fail fast and loud.
-#![deny(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
 pub mod temp;
 
