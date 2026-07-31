@@ -27,6 +27,7 @@ pub mod event;
 pub mod extension;
 pub mod lock;
 pub mod multistatus;
+pub mod mutation;
 pub mod patch;
 pub mod path;
 pub mod preference;
@@ -106,6 +107,12 @@ pub use multistatus::{
     DavMultiStatusError, DavMultiStatusErrorKind, DavMultiStatusLimits, DavMultiStatusProgress,
     DavMultiStatusSourceError, DavMultiStatusStream, DavMultiStatusWriter, dav_multistatus_bytes,
     multistatus_stream_response, multistatus_stream_response_with_cancellation,
+};
+pub use mutation::{
+    DavMutationCommand, DavMutationComposeError, DavMutationExecutorLimits, DavMutationOperation,
+    DavMutationOutcome, DavMutationPort, DavMutationRequest, DavMutationStepError,
+    DavMutationStepKind, DavMutationStop, DavMutationTargetRole, execute_recursive_mutation,
+    mutation_outcome_response,
 };
 pub use patch::{DavPatchPlan, DavPatchPlanError, patch_plan_error_response, plan_patch_request};
 pub use path::{

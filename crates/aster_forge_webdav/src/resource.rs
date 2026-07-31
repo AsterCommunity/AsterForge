@@ -120,6 +120,24 @@ impl DavMutationFailure {
         }
     }
 
+    /// Returns the resource whose mutation failed.
+    #[must_use]
+    pub fn path(&self) -> &DavPath {
+        &self.path
+    }
+
+    /// Returns the HTTP status associated with this resource failure.
+    #[must_use]
+    pub const fn status_code(&self) -> u16 {
+        self.status
+    }
+
+    /// Returns the lock root whose token was not submitted, when applicable.
+    #[must_use]
+    pub fn lock_path(&self) -> Option<&DavPath> {
+        self.lock_path.as_ref()
+    }
+
     /// Converts this typed failure into the shared Multi-Status response grammar.
     #[must_use]
     pub fn to_multistatus_item(&self, prefix: &str) -> DavMultiStatusItem {

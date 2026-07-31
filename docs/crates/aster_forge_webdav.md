@@ -399,11 +399,45 @@ pager 为终止性保留至多 `maximum_pages` 个 opaque cursor，并只复制�
 它不会保存全部目录 entry。产品负责数据库 keyset/order contract 和 cursor 编码，Forge 不解析
 cursor 内容。
 
-递归 COPY、MOVE、DELETE 或深度 PROPFIND 使用 `DavTraversalBudget` 记录 visited resources、
-queued work、failures、maximum depth 和 completed mutations。budget 自身不分配工作队列，也不
-执行 mutation；产品持有实际 queue、事务、cleanup 和 side effect。超限或取消返回
-`DavTraversalError`，其 progress 和 `partial_execution()` 让调用方区分“尚未修改”与“已部分
-执行，需要通过 207/终止语义报告”的结果。
+深度 PROPFIND 和自定义遍历可以直接使用 `DavTraversalBudget`。递归 COPY、MOVE、DELETE 则使用
+`execute_recursive_mutation`：Forge 持有受 hard limit 约束的工作队列和 collection frame，负责
+稳定分页、post-order collection finalization、失败子树剪枝、兄弟继续、取消检查，以及 visited、
+queued work、failure、depth 和 completed mutation 计数。目录 entry、工作队列和 failure `Vec`
+都有显式上限；精确上限可执行，上限加一会产生 typed stop，不会继续无界增长。
+
+产品实现 `DavMutationPort`，但不向 Forge 暴露 ORM transaction 类型。每个 `execute` 调用就是
+一个权威 commit boundary：产品在同一个 writer transaction 内重新锁定并读取受影响实体，重新
+验证当前锁/token 条件，完成资源 mutation，销毁 DELETE/MOVE source 上 rooted locks，保留或重绑
+destination lock scope，同步新旧实体的 `is_locked` 派生标记，然后只在 commit 成功后返回。
+COPY 不复制 source lock；MOVE 不把 source rooted lock 搬到 destination。audit、event 和非权威
+cache notification 在 commit 后发布，不参与协议成功判定。
+
+```rust
+use aster_forge_webdav::{
+    DavMutationCommand, DavMutationPort, DavMutationStepError,
+};
+
+struct ProductMutationPort;
+
+impl DavMutationPort for ProductMutationPort {
+    async fn execute(
+        &self,
+        command: DavMutationCommand,
+    ) -> Result<(), DavMutationStepError> {
+        // begin writer transaction
+        // lock and reload source/destination rows
+        // re-evaluate submitted lock tokens against current lock rows
+        // apply command.step + rooted-lock cleanup/rebind + is_locked synchronization
+        // commit, then publish non-authoritative observations
+        product_atomic_commit(command).await
+    }
+}
+# async fn product_atomic_commit(_: DavMutationCommand) -> Result<(), DavMutationStepError> { Ok(()) }
+```
+
+`DavMutationOutcome` 同时保留 typed resource failures、可选 stop 和 traversal progress。
+`mutation_outcome_response` 统一生成 DELETE 204、COPY/MOVE 201/204、partial 207，以及在尚无
+resource failure 时的 507/500；Drive 一类产品 adapter 不再维护自己的递归 status composer。
 
 ## Backend 与事件
 
@@ -450,6 +484,9 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
   倒序、page hard limit、backend failure，以及取消后不再请求下一页。
 - traversal budget 测试必须覆盖 visited/work/failure/depth 的精确上限和超限、取消、partial
   execution progress 与无额外 work storage 的值语义。
+- recursive mutation executor 测试必须覆盖 COPY/MOVE/DELETE、file/collection、post-order
+  namespace consistency、首/尾/all-child failure、兄弟继续、实际 affected href 与独立 lock-root
+  href、exact/+1 directory/work/failure/depth limits，以及 response start 前后的取消语义。
 - Litmus、rclone、curl、cadaver 兼容测试仍应针对具体产品 server 运行，因为它们验证的是协议层和产品 adapter 的组合结果。
 
 ## 参考项目
