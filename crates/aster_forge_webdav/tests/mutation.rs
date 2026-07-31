@@ -43,6 +43,7 @@ impl DavMetaData for Meta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     name: Vec<u8>,
+    stable_key: Vec<u8>,
     meta: Meta,
 }
 
@@ -50,6 +51,7 @@ impl Entry {
     fn file(name: &str) -> Self {
         Self {
             name: name.as_bytes().to_vec(),
+            stable_key: name.as_bytes().to_vec(),
             meta: Meta { collection: false },
         }
     }
@@ -57,8 +59,14 @@ impl Entry {
     fn collection(name: &str) -> Self {
         Self {
             name: name.as_bytes().to_vec(),
+            stable_key: name.as_bytes().to_vec(),
             meta: Meta { collection: true },
         }
+    }
+
+    fn with_stable_key(mut self, stable_key: &[u8]) -> Self {
+        self.stable_key = stable_key.to_vec();
+        self
     }
 }
 
@@ -71,6 +79,10 @@ impl DavDirectoryEntry for Entry {
 
     fn metadata(&self) -> &Self::Metadata {
         &self.meta
+    }
+
+    fn stable_key(&self) -> &[u8] {
+        &self.stable_key
     }
 }
 
@@ -232,6 +244,48 @@ impl DavMutationPort for Port {
         drop(commands);
         self.failures.get(&affected).cloned().map_or(Ok(()), Err)
     }
+}
+
+#[test]
+fn copy_matches_source_and_destination_children_by_name_not_backend_cursor_key() {
+    futures::executor::block_on(async {
+        let enumerator = Enumerator::default()
+            .with(
+                "/source/",
+                vec![Entry::collection("subcoll").with_stable_key(&[0, 1])],
+            )
+            .with(
+                "/destination/",
+                vec![Entry::collection("subcoll").with_stable_key(&[0, 9])],
+            )
+            .with("/source/subcoll/", vec![])
+            .with("/destination/subcoll/", vec![]);
+        let port = Port::default();
+
+        let outcome = execute_recursive_mutation(
+            request(DavMutationOperation::Copy),
+            &enumerator,
+            &port,
+            &DavNeverCancelled,
+            limits(16, 16, 4, 4, 8),
+        )
+        .await;
+
+        assert!(outcome.is_complete_success());
+        let commands = port.commands();
+        assert!(commands.iter().any(|command| {
+            command.step == DavMutationStepKind::PrepareCollection
+                && command.source.as_str() == "/source/subcoll/"
+                && command
+                    .destination
+                    .as_ref()
+                    .is_some_and(|path| path.as_str() == "/destination/subcoll/")
+        }));
+        assert!(!commands.iter().any(|command| {
+            command.step == DavMutationStepKind::DeleteCollection
+                && command.source.as_str() == "/destination/subcoll/"
+        }));
+    });
 }
 
 fn limits(

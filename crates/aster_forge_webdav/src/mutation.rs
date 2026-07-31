@@ -1,6 +1,5 @@
 //! Bounded recursive COPY, MOVE, and DELETE execution.
 
-use bytes::Bytes;
 use http::StatusCode;
 
 use crate::response::{no_store_empty_response, xml_document_response};
@@ -204,9 +203,24 @@ impl DavMutationOutcome {
 
 #[derive(Debug, Clone)]
 struct Child {
-    key: Bytes,
+    key: bytes::Bytes,
     path: DavPath,
     is_collection: bool,
+}
+
+impl Child {
+    fn namespace_name<'a>(&'a self, root: &DavPath) -> &'a str {
+        let relative = self
+            .path
+            .as_str()
+            .strip_prefix(root.as_str())
+            .unwrap_or_else(|| self.path.as_str());
+        if self.is_collection {
+            relative.strip_suffix('/').unwrap_or(relative)
+        } else {
+            relative
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -853,7 +867,7 @@ async fn read_children<E: DavDirectoryEnumerator, C: DavCancellation>(
                 ))
             })?;
             children.push(Child {
-                key: Bytes::copy_from_slice(entry.stable_key()),
+                key: bytes::Bytes::copy_from_slice(entry.stable_key()),
                 path: child_path,
                 is_collection,
             });
@@ -871,12 +885,36 @@ fn merge_transfer_children(
     frame: usize,
 ) -> Vec<Work> {
     let mut work = Vec::with_capacity(source.len().saturating_add(destination.len()));
+    let mut source_order = (0..source.len()).collect::<Vec<_>>();
+    source_order.sort_unstable_by(|left, right| {
+        source[*left]
+            .namespace_name(source_root)
+            .cmp(source[*right].namespace_name(source_root))
+            .then_with(|| source[*left].key.cmp(&source[*right].key))
+    });
+    let mut destination_order = (0..destination.len()).collect::<Vec<_>>();
+    destination_order.sort_unstable_by(|left, right| {
+        destination[*left]
+            .namespace_name(destination_root)
+            .cmp(destination[*right].namespace_name(destination_root))
+            .then_with(|| destination[*left].key.cmp(&destination[*right].key))
+    });
     let mut source_index = 0;
     let mut destination_index = 0;
     while source_index < source.len() || destination_index < destination.len() {
-        match (source.get(source_index), destination.get(destination_index)) {
+        match (
+            source_order
+                .get(source_index)
+                .and_then(|index| source.get(*index)),
+            destination_order
+                .get(destination_index)
+                .and_then(|index| destination.get(*index)),
+        ) {
             (Some(source_child), Some(destination_child)) => {
-                match source_child.key.cmp(&destination_child.key) {
+                match source_child
+                    .namespace_name(source_root)
+                    .cmp(destination_child.namespace_name(destination_root))
+                {
                     std::cmp::Ordering::Less => {
                         push_source_child(
                             &mut work,
