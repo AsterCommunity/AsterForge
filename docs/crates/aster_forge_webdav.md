@@ -73,8 +73,11 @@ let rejected = aster_forge_webdav::method_not_allowed_response(&snapshot);
 Rust 没有运行时 trait 反射，Forge 通过显式的 `DavCapabilityProvider` 聚合产品 impl；Forge 不扫描 handler，也不从字符串推测能力。provider 可以把资源类型、mount root、principal、权限、锁配置和扩展状态合并成 `DavCapabilityDeclaration`。`plan_capabilities` 校验声明并生成不可变的 `DavCapabilitySnapshot`。
 
 同一个 snapshot 是 `Allow`、`DAV`、`DASL`、`Accept-Patch`、OPTIONS、405、dispatch、body
-policy、REPORT gate、live-property catalog 和 RFC 8144 preference 的唯一事实源。
-`gate_method` 把已知和未知方法接入同一 405 gate，产品不直接拼协议 discovery header。
+policy、REPORT gate、live-property catalog 和 RFC 8144 preference 的唯一事实源。`Allow` 只广告
+目标资源当前支持的方法；对尚未映射的 URL，snapshot 仍会把 GET、HEAD、DELETE、COPY、MOVE、
+PROPFIND 和 PROPPATCH 纳入内部 dispatch，使对应 handler 能返回 404 或其他方法专属状态，而不会把这些方法
+错误广告到 `Allow`。`gate_method` 把已知和未知方法接入这一 typed gate，产品不直接拼协议
+discovery header。
 SEARCH grammar 使用 `DavSearchGrammar` 分别声明 DASL coded-URL 与 XML namespace/local-name，
 不会错误地从 URI 猜 QName。
 

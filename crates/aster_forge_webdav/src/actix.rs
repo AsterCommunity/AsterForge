@@ -99,7 +99,7 @@ pub async fn capability_snapshot<Provider: DavCapabilityProvider>(
 ///
 /// # Errors
 ///
-/// Returns a 405 response when the snapshot does not allow the request method.
+/// Returns a 405 response when the snapshot does not dispatch the request method.
 pub fn gate_request_method(
     request: &HttpRequest,
     snapshot: &DavCapabilitySnapshot,

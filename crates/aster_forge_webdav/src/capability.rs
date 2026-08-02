@@ -692,6 +692,7 @@ pub enum DavMethodGateError {
 pub struct DavCapabilitySnapshot {
     declaration: DavCapabilityDeclaration,
     supported_methods: DavMethodSet,
+    dispatch_methods: DavMethodSet,
     live_properties: DavLivePropertySet,
     reports: DavReportSet,
     preferences: DavPreferenceSet,
@@ -726,6 +727,12 @@ impl DavCapabilitySnapshot {
     #[must_use]
     pub const fn supports(&self, method: DavMethod) -> bool {
         self.supported_methods.contains(method)
+    }
+
+    /// Returns whether the protocol engine should dispatch this method for target-state handling.
+    #[must_use]
+    pub const fn dispatches(&self, method: DavMethod) -> bool {
+        self.dispatch_methods.contains(method)
     }
 
     #[must_use]
@@ -794,13 +801,13 @@ impl DavCapabilitySnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`DavMethodGateError`] when the capability snapshot disallows the method.
+    /// Returns [`DavMethodGateError`] when the capability snapshot does not dispatch the method.
     pub fn body_policy(
         &self,
         method: DavMethod,
         xml_limit: usize,
     ) -> Result<Option<DavBodyPolicy>, DavMethodGateError> {
-        if !self.allows(method) {
+        if !self.dispatches(method) {
             return Err(DavMethodGateError::MethodNotAllowed);
         }
         let extension_kind = || {
@@ -869,6 +876,9 @@ pub fn plan_capabilities(
 
     let package_methods = extension_methods(declaration.extensions, declaration.resource);
     let supported_methods = declaration.methods.union(package_methods);
+    let dispatch_methods = declaration
+        .methods
+        .union(unmapped_dispatch_methods(declaration.resource));
     let allow = header_value(&declaration.methods.render())?;
     let dav = render_dav_header(&declaration)?;
     let dasl = render_dasl_header(&declaration)?;
@@ -893,6 +903,7 @@ pub fn plan_capabilities(
     Ok(DavCapabilitySnapshot {
         declaration,
         supported_methods,
+        dispatch_methods,
         live_properties,
         reports,
         preferences,
@@ -902,6 +913,22 @@ pub fn plan_capabilities(
         accept_patch,
         ms_author_via,
     })
+}
+
+const fn unmapped_dispatch_methods(resource: DavResourceState) -> DavMethodSet {
+    if matches!(resource, DavResourceState::Unmapped) {
+        DavMethodSet::from_methods(&[
+            DavMethod::Get,
+            DavMethod::Head,
+            DavMethod::Delete,
+            DavMethod::Copy,
+            DavMethod::Move,
+            DavMethod::Propfind,
+            DavMethod::Proppatch,
+        ])
+    } else {
+        DavMethodSet::empty()
+    }
 }
 
 #[expect(

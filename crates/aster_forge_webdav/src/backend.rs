@@ -378,6 +378,7 @@ pub enum DavLockError {
     Conflict(Box<DavLock>),
     TokenMismatch,
     LimitExceeded,
+    NotFound,
     Backend,
 }
 

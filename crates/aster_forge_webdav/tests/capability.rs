@@ -762,6 +762,44 @@ fn options_405_and_dispatch_observe_the_same_snapshot() {
     );
 }
 
+#[test]
+fn unmapped_targets_keep_allow_narrow_while_dispatching_not_found_methods() {
+    let mut declaration = declaration(
+        DavResourceState::Unmapped,
+        &[
+            DavMethod::Options,
+            DavMethod::Put,
+            DavMethod::Mkcol,
+            DavMethod::Lock,
+            DavMethod::Unlock,
+        ],
+    );
+    declaration.locking = DavLockingCapability::Class2;
+    let snapshot = plan_capabilities(declaration).expect("valid unmapped snapshot");
+
+    assert_eq!(snapshot.allow_header(), "OPTIONS, PUT, MKCOL, LOCK, UNLOCK");
+    for method in [
+        DavMethod::Get,
+        DavMethod::Head,
+        DavMethod::Delete,
+        DavMethod::Copy,
+        DavMethod::Move,
+        DavMethod::Propfind,
+        DavMethod::Proppatch,
+    ] {
+        assert!(!snapshot.allows(method));
+        assert!(snapshot.dispatches(method));
+        assert_eq!(gate_method(Some(method), &snapshot), Ok(method));
+        assert!(snapshot.body_policy(method, 1024).is_ok());
+    }
+
+    let rejected = method_not_allowed_response(&snapshot);
+    assert_eq!(
+        rejected.headers.get(ALLOW).expect("405 Allow header"),
+        "OPTIONS, PUT, MKCOL, LOCK, UNLOCK"
+    );
+}
+
 struct CompleteProvider;
 
 impl DavClass1Support for CompleteProvider {}

@@ -372,7 +372,7 @@ pub fn method_not_allowed_response(snapshot: &DavCapabilitySnapshot) -> DavRespo
     response
 }
 
-/// Gates known and unknown methods through the same snapshot used by OPTIONS and 405.
+/// Gates known and unknown methods through the snapshot's protocol dispatch projection.
 ///
 /// # Errors
 ///
@@ -382,7 +382,7 @@ pub fn gate_method(
     snapshot: &DavCapabilitySnapshot,
 ) -> Result<DavMethod, DavMethodGateError> {
     match method {
-        Some(method) if snapshot.allows(method) => Ok(method),
+        Some(method) if snapshot.dispatches(method) => Ok(method),
         Some(_) | None => Err(DavMethodGateError::MethodNotAllowed),
     }
 }
