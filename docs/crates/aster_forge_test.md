@@ -91,6 +91,7 @@ database.cleanup().await;
 - 容器命名：`aster-test-{suite}-{instance}-{service}`。`instance` 是当前 checkout 路径的 hash，所以同一机器上多个 worktree 各自持有独立容器，互不干扰。
 - `ReuseDirective::Always`：同一 checkout 的多次测试运行复用同一容器。**容器数据在运行之间保留**，测试 key / 数据库名必须带进程唯一前缀（例如 pid + 自增计数）。
 - 容器镜像 tag 固定（redis:7-alpine、postgres:16、mysql:8.4），升级 tag 是有意识的变更。
+- MySQL helper 会在每次启动或复用时配置足够大的 `table_definition_cache`，避免大型测试二进制并行创建隔离 schema 时耗尽 prepared statement 的自动 reprepare 次数。
 
 ## 状态机与错误边界
 

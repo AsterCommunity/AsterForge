@@ -8,8 +8,15 @@
 use crate::database::connect_with_retry;
 use crate::state::{ContainerLease, ContainerStateLock};
 use crate::suite::TestContainerSuite;
+use sea_orm::ConnectionTrait;
 use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
+
+/// Table-definition cache used by the shared `MySQL` integration-test container.
+///
+/// Large test binaries may create hundreds of isolated schemas concurrently. `MySQL`'s default
+/// cache is too small for that workload and can exhaust prepared-statement reprepare attempts.
+pub const MYSQL_TEST_TABLE_DEFINITION_CACHE: u64 = 32_768;
 
 /// Handle to the suite's shared `MySQL` container.
 pub struct MysqlTestContainer {
@@ -47,9 +54,13 @@ impl MysqlTestContainer {
             .await
             .expect("MySQL test port should be exposed");
         let root_url = format!("mysql://root:rootpass@127.0.0.1:{port}/mysql");
-        connect_with_retry(&root_url, "MySQL")
-            .await
-            .close()
+        let root = connect_with_retry(&root_url, "MySQL").await;
+        root.execute_unprepared(&format!(
+            "SET GLOBAL table_definition_cache = {MYSQL_TEST_TABLE_DEFINITION_CACHE}"
+        ))
+        .await
+        .expect("failed to configure MySQL test table definition cache");
+        root.close()
             .await
             .expect("failed to close MySQL readiness probe connection");
         drop(lock);
