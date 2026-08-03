@@ -1,18 +1,15 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavConditionalEvaluationError, DavConditionalOutcome,
-    DavConditionalResource, DavFileSystem, DavIfEvaluationError, DavLock, DavLockError,
-    DavLockPreflightError, DavLockSystem, DavMetaData, DavMethod, DavPath, DavResponseBody,
-    DavWriteHandle, DavWriteOptions, DavWriteSystem, FsError, FsFuture, LsFuture,
+    DavConditionalResource, DavFileSystem, DavIfEvaluationError, DavLock, DavLockAcquireRequest,
+    DavLockAcquireResult, DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData,
+    DavMethod, DavMutationCredentials, DavPath, DavResponseBody, FsError, FsFuture, LsFuture,
     enforce_if_header_with_backends, enforce_parent_collection, enforce_parent_unlocked,
-    enforce_unlocked, ensure_lock_target_exists, parse_if_header, plan_conditionals_with_backends,
-    unsubmitted_lock_conflicts,
+    enforce_unlocked, parse_if_header, plan_conditionals_with_backends, unsubmitted_lock_conflicts,
 };
-use bytes::Bytes;
 use http::StatusCode;
 use http::header::{HeaderMap, HeaderValue};
 
@@ -48,82 +45,7 @@ impl DavMetaData for TestMeta {
 struct TestFileSystem {
     etags: HashMap<String, String>,
     directories: HashSet<String>,
-    files: Mutex<HashMap<String, Bytes>>,
-    concurrent_creations: Mutex<HashMap<String, Bytes>>,
     failures: HashMap<String, FsError>,
-    open_failure: Option<FsError>,
-    finish_failure: Option<FsError>,
-    open_calls: Mutex<Vec<(String, DavWriteOptions)>>,
-    finish_calls: Arc<AtomicUsize>,
-}
-
-struct TestWriteHandle {
-    finish_failure: Option<FsError>,
-    finish_calls: Arc<AtomicUsize>,
-}
-
-impl DavWriteHandle for TestWriteHandle {
-    async fn write_bytes(&mut self, _buf: Bytes) -> Result<(), DavBackendError> {
-        Err(DavBackendError::from(FsError::GeneralFailure))
-    }
-
-    async fn finish(self) -> Result<(), DavBackendError> {
-        self.finish_calls.fetch_add(1, Ordering::SeqCst);
-        self.finish_failure
-            .map_or(Ok(()), |error| Err(DavBackendError::from(error)))
-    }
-
-    async fn abort(self) -> Result<(), DavBackendError> {
-        Ok(())
-    }
-}
-
-impl DavWriteSystem for TestFileSystem {
-    type Handle = TestWriteHandle;
-
-    async fn open_write<'a>(
-        &'a self,
-        path: &'a DavPath,
-        options: DavWriteOptions,
-    ) -> Result<Self::Handle, DavBackendError> {
-        let create_new = options.create_new;
-        let truncate = options.truncate;
-        let create = options.create;
-        self.open_calls
-            .lock()
-            .expect("open call log should not be poisoned")
-            .push((path.as_str().to_owned(), options));
-        if let Some(error) = self.open_failure {
-            return Err(DavBackendError::from(error));
-        }
-        let concurrent_creation = self
-            .concurrent_creations
-            .lock()
-            .expect("concurrent creation state should not be poisoned")
-            .remove(path.as_str());
-        let mut files = self
-            .files
-            .lock()
-            .expect("file state should not be poisoned");
-        if let Some(contents) = concurrent_creation {
-            files.insert(path.as_str().to_owned(), contents);
-        }
-        if create_new
-            && (self.etags.contains_key(path.as_str()) || files.contains_key(path.as_str()))
-        {
-            return Err(DavBackendError::from(FsError::Exists));
-        }
-        if truncate {
-            files.insert(path.as_str().to_owned(), Bytes::new());
-        } else if create {
-            files.entry(path.as_str().to_owned()).or_default();
-        }
-        let file = TestWriteHandle {
-            finish_failure: self.finish_failure,
-            finish_calls: Arc::clone(&self.finish_calls),
-        };
-        Ok(file)
-    }
 }
 
 impl DavFileSystem for TestFileSystem {
@@ -134,12 +56,7 @@ impl DavFileSystem for TestFileSystem {
             }
             let is_dir = self.directories.contains(path.as_str());
             let etag = self.etags.get(path.as_str()).cloned();
-            let exists = etag.is_some()
-                || self
-                    .files
-                    .lock()
-                    .expect("file state should not be poisoned")
-                    .contains_key(path.as_str());
+            let exists = etag.is_some();
             if !is_dir && !exists {
                 return Err(FsError::NotFound);
             }
@@ -147,7 +64,11 @@ impl DavFileSystem for TestFileSystem {
         })
     }
 
-    fn create_dir<'a>(&'a self, _path: &'a DavPath) -> FsFuture<'a, ()> {
+    fn create_dir<'a>(
+        &'a self,
+        _path: &'a DavPath,
+        _credentials: DavMutationCredentials,
+    ) -> FsFuture<'a, ()> {
         Box::pin(async { Err(FsError::GeneralFailure) })
     }
 
@@ -184,13 +105,8 @@ impl DavLockSystem for TestLockSystem {
 
     fn lock(
         &self,
-        _path: &DavPath,
-        _principal: Option<&str>,
-        _owner: Option<&aster_forge_webdav::DavXmlElement>,
-        _timeout: Option<Duration>,
-        _shared: bool,
-        _deep: bool,
-    ) -> LsFuture<'_, Result<DavLock, DavLockError>> {
+        _request: DavLockAcquireRequest<'_>,
+    ) -> LsFuture<'_, Result<DavLockAcquireResult, DavLockError>> {
         Box::pin(async { Err(DavLockError::Backend) })
     }
 
@@ -487,7 +403,7 @@ fn lock_guard_requires_a_token_scoped_to_the_conflicting_lock_root() {
         assert_eq!(response.status, StatusCode::LOCKED);
         assert!(matches!(response.body, DavResponseBody::Bytes(_)));
 
-        let accepted = enforce_unlocked(
+        let credentials = match enforce_unlocked(
             &lock_system,
             &target,
             true,
@@ -496,10 +412,17 @@ fn lock_guard_requires_a_token_scoped_to_the_conflicting_lock_root() {
             "https",
             "dav.example",
         )
-        .await;
-        assert!(
-            accepted.is_ok(),
-            "a token tagged for the lock root should unlock the target"
+        .await
+        {
+            Ok(credentials) => credentials,
+            Err(response) => panic!(
+                "a token tagged for the lock root should unlock the target, got {}",
+                response.status
+            ),
+        };
+        assert_eq!(
+            credentials.submitted_lock_tokens,
+            ["urn:uuid:root-lock".to_string()]
         );
 
         assert_eq!(
@@ -517,6 +440,43 @@ fn lock_guard_requires_a_token_scoped_to_the_conflicting_lock_root() {
 }
 
 #[test]
+fn lock_guard_does_not_forward_negated_or_unrelated_tokens_as_credentials() {
+    futures::executor::block_on(async {
+        let target = DavPath::new("/locked/child.txt").expect("test path");
+        let lock_system = TestLockSystem {
+            conflicts: vec![lock("/locked/", "urn:uuid:root-lock")],
+            ..TestLockSystem::default()
+        };
+        let header = if_header(
+            "</webdav/locked/> (Not <urn:uuid:negated>) (<urn:uuid:root-lock>) </webdav/other/> (<urn:uuid:other>)",
+        );
+
+        let credentials = match enforce_unlocked(
+            &lock_system,
+            &target,
+            false,
+            "/webdav",
+            Some(&header),
+            "https",
+            "dav.example",
+        )
+        .await
+        {
+            Ok(credentials) => credentials,
+            Err(response) => panic!(
+                "the positively submitted root token should satisfy the lock, got {}",
+                response.status
+            ),
+        };
+
+        assert_eq!(
+            credentials.submitted_lock_tokens,
+            ["urn:uuid:root-lock".to_string()]
+        );
+    });
+}
+
+#[test]
 fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
     futures::executor::block_on(async {
         let target = DavPath::new("/folder/new.txt").expect("test path");
@@ -525,7 +485,7 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
             ..TestLockSystem::default()
         };
 
-        let accepted = enforce_parent_unlocked(
+        let credentials = match enforce_parent_unlocked(
             &lock_system,
             &target,
             "/webdav",
@@ -533,10 +493,17 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
             "https",
             "dav.example",
         )
-        .await;
-        assert!(
-            accepted.is_ok(),
-            "the parent-scoped token should allow the mutation"
+        .await
+        {
+            Ok(credentials) => credentials,
+            Err(response) => panic!(
+                "the parent-scoped token should allow the mutation, got {}",
+                response.status
+            ),
+        };
+        assert_eq!(
+            credentials.submitted_lock_tokens,
+            ["urn:uuid:parent-lock".to_string()]
         );
         assert_eq!(
             lock_system
@@ -557,7 +524,13 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
             "dav.example",
         )
         .await;
-        assert!(root_result.is_ok(), "the mount root has no parent to check");
+        match root_result {
+            Ok(credentials) => assert!(credentials.submitted_lock_tokens.is_empty()),
+            Err(response) => panic!(
+                "the mount root has no parent to check, got {}",
+                response.status
+            ),
+        }
         assert!(
             root_locks
                 .conflict_calls
@@ -689,7 +662,6 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
             directories: HashSet::from(["/folder/".to_owned()]),
             etags: HashMap::from([("/file/".to_owned(), "etag-file".to_owned())]),
             failures: HashMap::from([("/private/".to_owned(), FsError::Forbidden)]),
-            ..TestFileSystem::default()
         };
 
         let root_error =
@@ -731,151 +703,5 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
         .await
         .expect_err("backend errors must retain their protocol classification");
         assert_eq!(response.status, StatusCode::FORBIDDEN);
-    });
-}
-
-#[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "The test keeps the existing, missing, collection, and backend-failure lock targets in one matrix."
-)]
-fn lock_target_guard_creates_only_missing_files_and_preserves_failures() {
-    futures::executor::block_on(async {
-        let existing = TestFileSystem {
-            etags: HashMap::from([("/existing.txt".to_owned(), "etag".to_owned())]),
-            ..TestFileSystem::default()
-        };
-        assert!(
-            ensure_lock_target_exists(
-                &existing,
-                &existing,
-                &DavPath::new("/existing.txt").expect("existing file"),
-            )
-            .await
-            .expect("existing target lookup")
-        );
-        assert!(
-            existing
-                .open_calls
-                .lock()
-                .expect("open call log should not be poisoned")
-                .is_empty()
-        );
-
-        let missing = TestFileSystem::default();
-        assert!(
-            !ensure_lock_target_exists(
-                &missing,
-                &missing,
-                &DavPath::new("/new.txt").expect("missing file"),
-            )
-            .await
-            .expect("a missing file should become a lock-null resource")
-        );
-        assert_eq!(missing.finish_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            missing
-                .open_calls
-                .lock()
-                .expect("open call log should not be poisoned")
-                .as_slice(),
-            [(
-                "/new.txt".to_owned(),
-                DavWriteOptions {
-                    create: true,
-                    create_new: true,
-                    truncate: true,
-                    expected_length: Some(0),
-                    ..DavWriteOptions::default()
-                }
-            )]
-        );
-
-        let missing_collection = TestFileSystem::default();
-        assert_eq!(
-            ensure_lock_target_exists(
-                &missing_collection,
-                &missing_collection,
-                &DavPath::new("/new/").expect("missing collection"),
-            )
-            .await,
-            Err(DavBackendError::from(FsError::NotFound))
-        );
-        assert!(
-            missing_collection
-                .open_calls
-                .lock()
-                .expect("open call log should not be poisoned")
-                .is_empty()
-        );
-
-        for (filesystem, expected) in [
-            (
-                TestFileSystem {
-                    failures: HashMap::from([("/failed.txt".to_owned(), FsError::Forbidden)]),
-                    ..TestFileSystem::default()
-                },
-                FsError::Forbidden,
-            ),
-            (
-                TestFileSystem {
-                    open_failure: Some(FsError::InsufficientStorage),
-                    ..TestFileSystem::default()
-                },
-                FsError::InsufficientStorage,
-            ),
-            (
-                TestFileSystem {
-                    finish_failure: Some(FsError::GeneralFailure),
-                    ..TestFileSystem::default()
-                },
-                FsError::GeneralFailure,
-            ),
-        ] {
-            let result = ensure_lock_target_exists(
-                &filesystem,
-                &filesystem,
-                &DavPath::new("/failed.txt").expect("failed target"),
-            )
-            .await;
-            assert_eq!(
-                result.expect_err("lock target failure"),
-                DavBackendError::from(expected)
-            );
-        }
-    });
-}
-
-#[test]
-fn lock_target_guard_does_not_truncate_a_concurrent_put_creation() {
-    futures::executor::block_on(async {
-        let filesystem = TestFileSystem::default();
-        let path = DavPath::new("/raced.txt").expect("race target path");
-        filesystem
-            .concurrent_creations
-            .lock()
-            .expect("concurrent creation state should not be poisoned")
-            .insert(
-                path.as_str().to_owned(),
-                Bytes::from_static(b"concurrent PUT"),
-            );
-
-        assert!(matches!(
-            filesystem.metadata(&path).await,
-            Err(FsError::NotFound)
-        ));
-        let error = ensure_lock_target_exists(&filesystem, &filesystem, &path)
-            .await
-            .expect_err("create_new must reject a target created after metadata");
-        assert_eq!(error.kind, DavBackendErrorKind::AlreadyExists);
-        assert_eq!(filesystem.finish_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            filesystem
-                .files
-                .lock()
-                .expect("file state should not be poisoned")
-                .get(path.as_str()),
-            Some(&Bytes::from_static(b"concurrent PUT"))
-        );
     });
 }

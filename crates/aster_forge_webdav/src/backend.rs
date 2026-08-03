@@ -132,6 +132,23 @@ pub trait DavIfStateResolver: Send + Sync {
 
 /// Sequential write contract selected by the protocol planner.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DavMutationCredentials {
+    /// Positively submitted lock tokens whose URI scope applies to this mutation.
+    pub submitted_lock_tokens: Vec<String>,
+}
+
+impl DavMutationCredentials {
+    /// Merges another validated credential set while preserving a canonical unique token list.
+    pub fn merge(&mut self, other: Self) {
+        self.submitted_lock_tokens
+            .extend(other.submitted_lock_tokens);
+        self.submitted_lock_tokens.sort();
+        self.submitted_lock_tokens.dedup();
+    }
+}
+
+/// Sequential write contract selected by the protocol planner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DavWriteOptions {
     pub truncate: bool,
     pub create: bool,
@@ -139,6 +156,7 @@ pub struct DavWriteOptions {
     pub create_new: bool,
     pub expected_length: Option<u64>,
     pub checksum: Option<String>,
+    pub credentials: DavMutationCredentials,
 }
 
 /// Protocol-visible resource metadata supplied by the product adapter.
@@ -300,7 +318,11 @@ pub struct DavProp {
 /// Canonical resource and dead-property backend port.
 pub trait DavFileSystem: Send + Sync {
     fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>>;
-    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
+    fn create_dir<'a>(
+        &'a self,
+        path: &'a DavPath,
+        credentials: DavMutationCredentials,
+    ) -> FsFuture<'a, ()>;
     fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
     fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()>;
     fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()>;
@@ -376,10 +398,29 @@ pub enum DavLockPreflightError {
 #[derive(Debug, Clone)]
 pub enum DavLockError {
     Conflict(Box<DavLock>),
+    ParentMissing,
     TokenMismatch,
     LimitExceeded,
     NotFound,
     Backend,
+}
+
+#[derive(Debug, Clone)]
+pub struct DavLockAcquireResult {
+    pub lock: DavLock,
+    pub resource_existed: bool,
+}
+
+/// Product backend input for acquiring a new `WebDAV` lock.
+#[derive(Debug)]
+pub struct DavLockAcquireRequest<'a> {
+    pub path: &'a DavPath,
+    pub principal: Option<&'a str>,
+    pub owner: Option<&'a DavXmlElement>,
+    pub timeout: Option<Duration>,
+    pub shared: bool,
+    pub deep: bool,
+    pub credentials: DavMutationCredentials,
 }
 
 /// Canonical lock persistence and conflict backend port.
@@ -388,15 +429,10 @@ pub trait DavLockSystem: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
-    fn lock(
-        &self,
-        path: &DavPath,
-        principal: Option<&str>,
-        owner: Option<&DavXmlElement>,
-        timeout: Option<Duration>,
-        shared: bool,
-        deep: bool,
-    ) -> LsFuture<'_, Result<DavLock, DavLockError>>;
+    fn lock<'a>(
+        &'a self,
+        request: DavLockAcquireRequest<'a>,
+    ) -> LsFuture<'a, Result<DavLockAcquireResult, DavLockError>>;
 
     fn unlock(&self, path: &DavPath, token: &str) -> LsFuture<'_, Result<(), DavLockError>>;
     fn refresh(

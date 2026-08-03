@@ -45,7 +45,8 @@ pub use backend::{
     DavBackendError, DavBackendErrorKind, DavContentStream, DavDirectoryEntry,
     DavDirectoryEnumerator, DavDirectoryPage, DavDirectoryPageRequest, DavDownloadOpenError,
     DavDownloadSource, DavFileSystem, DavIfResourceState, DavIfStateResolver, DavLock,
-    DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData, DavOpenedDownload, DavProp,
+    DavLockAcquireRequest, DavLockAcquireResult, DavLockError, DavLockPreflightError,
+    DavLockSystem, DavMetaData, DavMutationCredentials, DavOpenedDownload, DavProp,
     DavRandomWriteHandle, DavRandomWriteSystem, DavResourceKind, DavWriteHandle, DavWriteOptions,
     DavWriteSystem, FsError, FsFuture, FsResult, LsFuture,
 };
@@ -98,10 +99,9 @@ pub use extension::{
 };
 pub use lock::{
     DavLockPlan, DavLockPlanError, enforce_parent_unlocked, enforce_unlocked,
-    ensure_lock_target_exists, lock_acquire_success_response, lock_conflict_response,
-    lock_discovery_element, lock_limit_response, lock_refresh_success_response,
-    lock_xml_error_response, plan_lock_request, unlock_success_response,
-    unlock_token_mismatch_response, unsubmitted_lock_conflicts,
+    lock_acquire_success_response, lock_conflict_response, lock_discovery_element,
+    lock_limit_response, lock_refresh_success_response, lock_xml_error_response, plan_lock_request,
+    unlock_success_response, unlock_token_mismatch_response, unsubmitted_lock_conflicts,
 };
 pub use multistatus::{
     DavMultiStatusError, DavMultiStatusErrorKind, DavMultiStatusLimits, DavMultiStatusProgress,

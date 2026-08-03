@@ -10,8 +10,8 @@ use crate::protocol::DavProtocolError;
 use crate::{
     DavBodyError, DavBodyPolicy, DavCapabilityContext, DavCapabilityProvider,
     DavCapabilitySnapshot, DavCapabilityTarget, DavConditionalPlan, DavConditionalResource,
-    DavFileSystem, DavIfEvaluationError, DavLockSystem, DavMethod, DavPath, DavRequestHead,
-    DavRequestOrigin, DavRequestTarget, DavResponse, DavResponseBody, IfHeader,
+    DavFileSystem, DavIfEvaluationError, DavLockSystem, DavMethod, DavMutationCredentials, DavPath,
+    DavRequestHead, DavRequestOrigin, DavRequestTarget, DavResponse, DavResponseBody, IfHeader,
 };
 
 /// Request body prepared according to the selected `WebDAV` method contract.
@@ -206,7 +206,7 @@ pub async fn enforce_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<(), HttpResponse> {
+) -> Result<DavMutationCredentials, HttpResponse> {
     crate::enforce_unlocked(
         lock_system,
         path,
@@ -232,7 +232,7 @@ pub async fn enforce_parent_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<(), HttpResponse> {
+) -> Result<DavMutationCredentials, HttpResponse> {
     crate::enforce_parent_unlocked(
         lock_system,
         path,

@@ -459,6 +459,31 @@ pub fn submitted_lock_tokens(
     request_scheme: &str,
     request_host: &str,
 ) -> Vec<String> {
+    submitted_lock_tokens_matching_path(if_header, request_path, request_scheme, request_host, true)
+}
+
+pub(crate) fn submitted_mutation_lock_tokens(
+    if_header: &IfHeader,
+    request_path: &str,
+    request_scheme: &str,
+    request_host: &str,
+) -> Vec<String> {
+    submitted_lock_tokens_matching_path(
+        if_header,
+        request_path,
+        request_scheme,
+        request_host,
+        false,
+    )
+}
+
+fn submitted_lock_tokens_matching_path(
+    if_header: &IfHeader,
+    request_path: &str,
+    request_scheme: &str,
+    request_host: &str,
+    include_negated: bool,
+) -> Vec<String> {
     let mut tokens = Vec::new();
     for group in &if_header.groups {
         match group.tagged_path.as_deref() {
@@ -470,7 +495,9 @@ pub fn submitted_lock_tokens(
         }
         for list in &group.lists {
             for condition in &list.conditions {
-                if let IfStateCondition::Token { value, .. } = condition {
+                if let IfStateCondition::Token { value, negated } = condition
+                    && (include_negated || !negated)
+                {
                     tokens.push(value.clone());
                 }
             }

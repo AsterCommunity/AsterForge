@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use aster_forge_webdav::{
-    DavBackendError, DavBackendErrorKind, DavRandomWriteHandle, DavRandomWriteSystem,
-    DavWriteHandle, DavWriteOptions, DavWriteSystem, FsError,
+    DavBackendError, DavBackendErrorKind, DavMutationCredentials, DavRandomWriteHandle,
+    DavRandomWriteSystem, DavWriteHandle, DavWriteOptions, DavWriteSystem, FsError,
 };
 use bytes::Bytes;
 
@@ -32,6 +32,24 @@ fn write_options_are_transport_neutral_values() {
         DavWriteOptions {
             ..DavWriteOptions::default()
         }
+    );
+}
+
+#[test]
+fn mutation_credentials_merge_to_a_canonical_unique_token_set() {
+    let mut credentials = DavMutationCredentials {
+        submitted_lock_tokens: vec!["urn:uuid:b".to_string(), "urn:uuid:a".to_string()],
+    };
+    credentials.merge(DavMutationCredentials {
+        submitted_lock_tokens: vec!["urn:uuid:a".to_string(), "urn:uuid:c".to_string()],
+    });
+    assert_eq!(
+        credentials.submitted_lock_tokens,
+        [
+            "urn:uuid:a".to_string(),
+            "urn:uuid:b".to_string(),
+            "urn:uuid:c".to_string(),
+        ]
     );
 }
 

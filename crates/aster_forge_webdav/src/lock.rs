@@ -6,13 +6,14 @@ use http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue, StatusCode};
 
 use crate::DavLockSystem;
+use crate::protocol::submitted_mutation_lock_tokens;
 use crate::response::{no_store_empty_response, xml_request_error_response};
 use crate::{
-    DavBackendError, DavErrorCondition, DavFileSystem, DavLock, DavLockXml, DavPath,
-    DavProtocolError, DavRequestHead, DavResponse, DavWriteHandle, DavWriteOptions, DavWriteSystem,
-    DavXmlElement, DavXmlError, FsError, IfHeader, dav_error_element, dav_lock_discovery_element,
-    dav_lock_response_element, href_for_dav_path, parent_relative_path, parse_lock_request,
-    parse_lock_timeout, protocol_error_response, submitted_lock_tokens,
+    DavBackendError, DavErrorCondition, DavLock, DavLockXml, DavMutationCredentials, DavPath,
+    DavProtocolError, DavRequestHead, DavResponse, DavXmlElement, DavXmlError, IfHeader,
+    dav_error_element, dav_lock_discovery_element, dav_lock_response_element, href_for_dav_path,
+    parent_relative_path, parse_lock_request, parse_lock_timeout, protocol_error_response,
+    submitted_lock_tokens,
 };
 
 /// Backend operation selected from a LOCK request.
@@ -52,8 +53,8 @@ pub async fn enforce_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<(), DavResponse> {
-    let conflicts = unsubmitted_lock_conflicts(
+) -> Result<DavMutationCredentials, DavResponse> {
+    let evaluation = evaluate_lock_conflicts(
         lock_system,
         path,
         deep,
@@ -64,11 +65,63 @@ pub async fn enforce_unlocked(
     )
     .await
     .map_err(|error| crate::backend_error_response(&error))?;
-    if let Some(lock) = conflicts.into_iter().next() {
+    if let Some(lock) = evaluation.unsubmitted.into_iter().next() {
         return Err(lock_conflict_response(prefix, &lock.path)
             .unwrap_or_else(|_| DavResponse::empty(StatusCode::INTERNAL_SERVER_ERROR)));
     }
-    Ok(())
+    Ok(evaluation.credentials)
+}
+
+struct DavLockConflictEvaluation {
+    credentials: DavMutationCredentials,
+    unsubmitted: Vec<crate::DavLock>,
+}
+
+async fn evaluate_lock_conflicts(
+    lock_system: &dyn DavLockSystem,
+    path: &DavPath,
+    deep: bool,
+    prefix: &str,
+    if_header: Option<&IfHeader>,
+    request_scheme: &str,
+    request_host: &str,
+) -> Result<DavLockConflictEvaluation, DavBackendError> {
+    let conflicts = lock_system.conflicting_locks(path, deep).await?;
+    let mut credentials = DavMutationCredentials::default();
+    let mut unsubmitted = Vec::new();
+    for (index, lock) in conflicts.iter().enumerate() {
+        if conflicts[..index]
+            .iter()
+            .any(|previous| previous.path == lock.path)
+        {
+            continue;
+        }
+        let lock_href = href_for_dav_path(prefix, &lock.path);
+        let submitted_tokens = if_header.map_or_else(Vec::new, |if_header| {
+            submitted_mutation_lock_tokens(if_header, &lock_href, request_scheme, request_host)
+        });
+        let matching_tokens = conflicts
+            .iter()
+            .filter(|candidate| candidate.path == lock.path)
+            .filter_map(|candidate| {
+                submitted_tokens
+                    .iter()
+                    .find(|token| *token == &candidate.token)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        if matching_tokens.is_empty() {
+            unsubmitted.push(lock.clone());
+        } else {
+            credentials.submitted_lock_tokens.extend(matching_tokens);
+        }
+    }
+    credentials.submitted_lock_tokens.sort();
+    credentials.submitted_lock_tokens.dedup();
+    Ok(DavLockConflictEvaluation {
+        credentials,
+        unsubmitted,
+    })
 }
 
 /// Returns conflicting locks whose tokens were not submitted for their corresponding lock root.
@@ -85,30 +138,17 @@ pub async fn unsubmitted_lock_conflicts(
     request_scheme: &str,
     request_host: &str,
 ) -> Result<Vec<crate::DavLock>, DavBackendError> {
-    let conflicts = lock_system.conflicting_locks(path, deep).await?;
-    let mut unsubmitted = Vec::new();
-    for (index, lock) in conflicts.iter().enumerate() {
-        if conflicts[..index]
-            .iter()
-            .any(|previous| previous.path == lock.path)
-        {
-            continue;
-        }
-        let lock_href = href_for_dav_path(prefix, &lock.path);
-        let submitted_tokens = if_header.map_or_else(Vec::new, |if_header| {
-            submitted_lock_tokens(if_header, &lock_href, request_scheme, request_host)
-        });
-        let root_is_satisfied = conflicts.iter().any(|candidate| {
-            candidate.path == lock.path
-                && submitted_tokens
-                    .iter()
-                    .any(|token| token == &candidate.token)
-        });
-        if !root_is_satisfied {
-            unsubmitted.push(lock.clone());
-        }
-    }
-    Ok(unsubmitted)
+    Ok(evaluate_lock_conflicts(
+        lock_system,
+        path,
+        deep,
+        prefix,
+        if_header,
+        request_scheme,
+        request_host,
+    )
+    .await?
+    .unsubmitted)
 }
 
 /// Applies [`enforce_unlocked`] to the canonical parent of a mutation target.
@@ -123,9 +163,9 @@ pub async fn enforce_parent_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<(), DavResponse> {
+) -> Result<DavMutationCredentials, DavResponse> {
     let Some(parent) = parent_relative_path(path.as_str()) else {
-        return Ok(());
+        return Ok(DavMutationCredentials::default());
     };
     let parent_path = DavPath::new(&parent).map_err(|_| {
         protocol_error_response(&DavProtocolError::bad_request("Invalid request path"))
@@ -140,42 +180,6 @@ pub async fn enforce_parent_unlocked(
         request_host,
     )
     .await
-}
-
-/// Ensures that a LOCK target exists, creating an empty lock-null file when allowed.
-///
-/// Existing resources are left untouched. A missing collection target remains missing because
-/// creating its hierarchy is outside LOCK semantics.
-///
-/// # Errors
-///
-/// Returns [`DavBackendError`] when metadata lookup or empty-resource creation fails.
-pub async fn ensure_lock_target_exists<WriteSystem: DavWriteSystem>(
-    filesystem: &dyn DavFileSystem,
-    write_system: &WriteSystem,
-    path: &DavPath,
-) -> Result<bool, DavBackendError> {
-    match filesystem.metadata(path).await {
-        Ok(_) => Ok(true),
-        Err(FsError::NotFound) if !path.is_collection() => {
-            let file = write_system
-                .open_write(
-                    path,
-                    DavWriteOptions {
-                        create: true,
-                        create_new: true,
-                        truncate: true,
-                        expected_length: Some(0),
-                        ..DavWriteOptions::default()
-                    },
-                )
-                .await?;
-            file.finish().await?;
-            Ok(false)
-        }
-        Err(FsError::NotFound) => Err(FsError::NotFound.into()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 /// Selects lock acquisition or refresh and validates all protocol-owned inputs.
