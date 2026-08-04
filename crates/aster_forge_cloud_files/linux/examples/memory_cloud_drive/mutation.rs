@@ -1,4 +1,8 @@
 #[async_trait]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the synthetic mutation journal demonstrates the complete generation-fenced state machine in one adapter"
+)]
 impl MutationJournalStore for MemoryWritebackStore {
     async fn activate_session(
         &self,

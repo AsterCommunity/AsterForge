@@ -35,6 +35,11 @@ impl LinuxKernelNotifier {
     }
 
     /// Applies one engine-produced invalidation to the mounted kernel namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the kernel rejects the invalidation or the mounted session is no
+    /// longer available.
     pub fn apply(&self, invalidation: &LinuxInvalidation) -> io::Result<()> {
         match invalidation {
             LinuxInvalidation::Entry { parent, name } => self
@@ -56,6 +61,10 @@ impl LinuxKernelNotifier {
     }
 
     /// Applies an ordered engine plan, stopping at the first kernel error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced while applying an invalidation to the kernel.
     pub fn apply_all<'a>(
         &self,
         invalidations: impl IntoIterator<Item = &'a LinuxInvalidation>,
@@ -75,16 +84,25 @@ pub struct LinuxBackgroundSession {
 
 impl LinuxBackgroundSession {
     /// Returns a cloneable kernel notification port for remote-change workers.
+    #[must_use]
     pub fn notifier(&self) -> LinuxKernelNotifier {
         LinuxKernelNotifier::new(self.inner.notifier())
     }
 
     /// Waits for the mounted session thread to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the background session thread terminates with an I/O failure.
     pub fn join(self) -> io::Result<()> {
         self.inner.join()
     }
 
     /// Unmounts the filesystem and then joins its session thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when unmounting or joining the background session fails.
     pub fn unmount_and_join(self) -> io::Result<()> {
         self.inner.umount_and_join()
     }
@@ -176,6 +194,11 @@ where
     S: LinuxWritebackStore + 'static,
 {
     /// Creates a native writable filesystem without mounting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `max_in_flight` is zero and the bounded dispatcher cannot be
+    /// constructed.
     pub fn new(
         engine: LinuxWritableEngine<B, S>,
         runtime: Handle,
@@ -188,6 +211,7 @@ where
     }
 
     /// Returns the shared dispatcher for metrics and controlled shutdown.
+    #[must_use]
     pub const fn dispatcher(&self) -> &LinuxRequestDispatcher {
         &self.dispatcher
     }
@@ -198,6 +222,11 @@ where
     B: CloudFilesBackend + 'static,
 {
     /// Creates a native filesystem without mounting it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `max_in_flight` is zero and the bounded dispatcher cannot be
+    /// constructed.
     pub fn new(
         engine: LinuxReadOnlyEngine<B>,
         runtime: Handle,
@@ -210,6 +239,7 @@ where
     }
 
     /// Returns the shared dispatcher for metrics and controlled shutdown.
+    #[must_use]
     pub const fn dispatcher(&self) -> &LinuxRequestDispatcher {
         &self.dispatcher
     }
@@ -431,12 +461,9 @@ where
                 return;
             }
         };
-        let start = match usize::try_from(offset) {
-            Ok(start) => start,
-            Err(_) => {
-                reply.ok();
-                return;
-            }
+        let Ok(start) = usize::try_from(offset) else {
+            reply.ok();
+            return;
         };
         let mut index = 0usize;
         let mut full = false;
@@ -457,9 +484,8 @@ where
             if full {
                 break;
             }
-            let next = match u64::try_from(index + 1) {
-                Ok(next) => next,
-                Err(_) => break,
+            let Ok(next) = u64::try_from(index + 1) else {
+                break;
             };
             if index >= start {
                 full = reply.add(
@@ -578,11 +604,11 @@ where
         size: Option<u64>,
         atime: Option<TimeOrNow>,
         mtime: Option<TimeOrNow>,
-        ctime: Option<SystemTime>,
+        status_change_time: Option<SystemTime>,
         handle: Option<FileHandle>,
-        crtime: Option<SystemTime>,
-        chgtime: Option<SystemTime>,
-        bkuptime: Option<SystemTime>,
+        creation_time: Option<SystemTime>,
+        attribute_change_time: Option<SystemTime>,
+        backup_time: Option<SystemTime>,
         flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
@@ -591,10 +617,10 @@ where
             || gid.is_some()
             || atime.is_some()
             || mtime.is_some()
-            || ctime.is_some()
-            || crtime.is_some()
-            || chgtime.is_some()
-            || bkuptime.is_some()
+            || status_change_time.is_some()
+            || creation_time.is_some()
+            || attribute_change_time.is_some()
+            || backup_time.is_some()
             || flags.is_some()
         {
             reply.error(Errno::ENOSYS);
@@ -915,12 +941,9 @@ where
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        let handle = match LinuxFileHandle::new(u64::from(handle)) {
-            Ok(handle) => handle,
-            Err(_) => {
-                reply.ok();
-                return;
-            }
+        let Ok(handle) = LinuxFileHandle::new(u64::from(handle)) else {
+            reply.ok();
+            return;
         };
         let engine = self.engine.clone();
         self.dispatcher.spawn_cleanup(async move {
@@ -974,12 +997,9 @@ where
                 return;
             }
         };
-        let start = match usize::try_from(offset) {
-            Ok(start) => start,
-            Err(_) => {
-                reply.ok();
-                return;
-            }
+        let Ok(start) = usize::try_from(offset) else {
+            reply.ok();
+            return;
         };
         let mut index = 0usize;
         let mut full = false;
@@ -1000,9 +1020,8 @@ where
             if full {
                 break;
             }
-            let next = match u64::try_from(index + 1) {
-                Ok(next) => next,
-                Err(_) => break,
+            let Ok(next) = u64::try_from(index + 1) else {
+                break;
             };
             if index >= start {
                 full = reply.add(
@@ -1100,6 +1119,10 @@ where
 }
 
 /// Mounts a blocking read-only FUSE session using product-neutral hardened defaults.
+///
+/// # Errors
+///
+/// Returns an error when the mountpoint cannot be opened or the FUSE session cannot be mounted.
 pub fn mount_read_only<B>(
     filesystem: LinuxReadOnlyFilesystem<B>,
     mountpoint: impl AsRef<Path>,
@@ -1128,6 +1151,11 @@ where
 }
 
 /// Spawns a read-only FUSE session and returns its kernel invalidation lifecycle handle.
+///
+/// # Errors
+///
+/// Returns an error when the mountpoint cannot be opened or the background FUSE session cannot be
+/// started.
 pub fn spawn_mount_read_only<B>(
     filesystem: LinuxReadOnlyFilesystem<B>,
     mountpoint: impl AsRef<Path>,
@@ -1157,6 +1185,10 @@ where
 }
 
 /// Mounts a blocking writable FUSE session without kernel writeback-cache semantics.
+///
+/// # Errors
+///
+/// Returns an error when the mountpoint cannot be opened or the FUSE session cannot be mounted.
 pub fn mount_writable<B, S>(
     filesystem: LinuxWritableFilesystem<B, S>,
     mountpoint: impl AsRef<Path>,
@@ -1185,6 +1217,11 @@ where
 }
 
 /// Spawns a writable direct-I/O FUSE session with a kernel invalidation handle.
+///
+/// # Errors
+///
+/// Returns an error when the mountpoint cannot be opened or the background FUSE session cannot be
+/// started.
 pub fn spawn_mount_writable<B, S>(
     filesystem: LinuxWritableFilesystem<B, S>,
     mountpoint: impl AsRef<Path>,

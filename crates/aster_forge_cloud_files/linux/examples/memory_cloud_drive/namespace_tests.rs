@@ -277,6 +277,10 @@ mod namespace_tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the scenario proves create, delete, recreate, rename, lookup, and directory snapshots against the same tombstone state"
+    )]
     async fn recreated_and_renamed_entries_supersede_same_name_tombstones() {
         let (engine, _, _) = activate(None, SessionGeneration::new(1).unwrap()).await;
 
@@ -452,6 +456,10 @@ mod namespace_tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the restart scenario verifies the original create parent across upload, rename, persistence, and reload"
+    )]
     async fn nested_create_upload_rename_and_reload_preserve_the_original_create_parent() {
         let directory = test_directory("nested-upload-reload");
         fs::create_dir_all(&directory).unwrap();
@@ -710,6 +718,10 @@ mod namespace_tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the remote overlay scenario checks each namespace transition and its exact ordered invalidation plan"
+    )]
     async fn durable_remote_overlay_updates_namespace_and_emits_exact_invalidations() {
         let (engine, _, scope) = activate(None, SessionGeneration::new(1).unwrap()).await;
         let before = engine.open_directory(LINUX_ROOT_INODE).await.unwrap();
@@ -885,6 +897,10 @@ mod namespace_tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the atomicity scenario exercises stale locations and replacement proofs without splitting shared preconditions"
+    )]
     async fn remote_overlay_rejects_stale_previous_and_unproven_replacements_atomically() {
         let (engine, _, scope) = activate(None, SessionGeneration::new(1).unwrap()).await;
         let remote_key = key(&scope, "remote-validation").unwrap();

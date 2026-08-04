@@ -30,6 +30,10 @@ impl MemoryWritebackStore {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "restoring the synthetic writeback document validates every durable collection before publishing state"
+    )]
     fn new(scope: CloudScope, state_directory: Option<&Path>) -> ExampleResult<Self> {
         let state_file = state_directory.map(|directory| directory.join("writeback.json"));
         let mut state = MemoryWritebackState::default();
@@ -365,8 +369,7 @@ impl MemoryWritebackStore {
     fn next_mount_generation(&self) -> ExampleResult<SessionGeneration> {
         let next = lock(&self.state)
             .active_generation
-            .map(SessionGeneration::get)
-            .unwrap_or(0)
+            .map_or(0, SessionGeneration::get)
             .checked_add(1)
             .ok_or("synthetic mount generation exhausted")?;
         Ok(SessionGeneration::new(next)?)
@@ -391,6 +394,10 @@ impl MemoryWritebackStore {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one atomic document must serialize the complete synthetic writeback transaction state"
+    )]
     fn persist_blocking(state_file: &Path, state: &MemoryWritebackState) -> StoreResult<()> {
         let mut files = state
             .files
@@ -544,7 +551,7 @@ impl MemoryWritebackStore {
                     .uploads
                     .values()
                     .map(DurableUploadRecord::from_record)
-                    .collect::<StoreResult<Vec<_>>>()?;
+                    .collect::<Vec<_>>();
                 uploads.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
                 uploads
             },
@@ -644,6 +651,10 @@ impl MemoryWritebackStore {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the example commit keeps staged bytes, immutable snapshots, upload intent, and generation fencing atomic"
+    )]
     fn commit(
         &self,
         state: &mut MemoryWritebackState,

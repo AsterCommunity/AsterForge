@@ -16,7 +16,7 @@ async fn run_mutation_worker(
             .into_items();
         if records.is_empty() {
             tokio::select! {
-                _ = store.mutation_notify.notified() => {}
+                () = store.mutation_notify.notified() => {}
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         return Ok(());
@@ -48,7 +48,7 @@ async fn run_mutation_worker(
         }
         if retry_later {
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         return Ok(());
@@ -77,7 +77,7 @@ async fn run_upload_worker(
             .into_items();
         if records.is_empty() {
             tokio::select! {
-                _ = store.upload_notify.notified() => {}
+                () = store.upload_notify.notified() => {}
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         return Ok(());
@@ -110,7 +110,7 @@ async fn run_upload_worker(
         }
         if retry_later {
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         return Ok(());
@@ -121,12 +121,15 @@ async fn run_upload_worker(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the executable entry point keeps mount assembly, worker lifecycle, and ordered shutdown visible together"
+)]
 pub fn run() -> ExampleResult<()> {
     let mut arguments = std::env::args_os().skip(1);
     let mountpoint = arguments
         .next()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/aster-forge-memory-cloud"));
+        .map_or_else(|| PathBuf::from("/tmp/aster-forge-memory-cloud"), PathBuf::from);
     let state_directory = arguments.next().map(PathBuf::from);
     if arguments.next().is_some() {
         return Err("expected at most MOUNTPOINT and optional STATE_DIRECTORY".into());

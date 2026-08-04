@@ -8,6 +8,10 @@ struct MemoryCloud {
 }
 
 impl MemoryCloud {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the example fixture defines one coherent paged namespace with nested files, content, capabilities, and stable inodes"
+    )]
     fn fixture() -> ExampleResult<(Self, Vec<LinuxInodeRecord>)> {
         let scope = CloudScope::new(
             CloudNamespaceId::new("aster-forge-memory-example")?,
@@ -205,7 +209,7 @@ impl CloudMetadataBackend for MemoryCloud {
                 CloudBackendErrorKind::InvalidRequest,
             ));
         }
-        let keys = self.children.get(parent).map(Vec::as_slice).unwrap_or(&[]);
+        let keys: &[CloudItemKey] = self.children.get(parent).map_or(&[], Vec::as_slice);
         let offset = match cursor {
             Some(cursor) => Self::decode_cursor(parent, cursor)?,
             None => 0,

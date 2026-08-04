@@ -537,8 +537,8 @@ struct DurableMutationFile {
 }
 
 impl DurableMutationFile {
-    fn from_item(item: &CloudItem) -> StoreResult<Self> {
-        Ok(Self {
+    fn from_item(item: &CloudItem) -> Self {
+        Self {
             namespace_id: item.key().scope().namespace_id().as_str().to_owned(),
             root_id: item.key().scope().root_id().as_str().to_owned(),
             item_id: item.key().item_id().as_str().to_owned(),
@@ -550,7 +550,7 @@ impl DurableMutationFile {
                 .content()
                 .map(|content| content.revision().as_bytes().to_vec()),
             size: item.content().map_or(0, CloudContentMetadata::size),
-        })
+        }
     }
 
     fn into_item(self) -> aster_forge_cloud_files_core::Result<CloudItem> {
@@ -605,19 +605,13 @@ enum DurableMutationOutcome {
 }
 
 impl DurableMutationOutcome {
-    fn from_outcome(outcome: &MutationRemoteOutcome) -> StoreResult<Self> {
-        Ok(match outcome {
+    fn from_outcome(outcome: &MutationRemoteOutcome) -> Self {
+        match outcome {
             MutationRemoteOutcome::Committed { item } => Self::Committed {
-                item: item
-                    .as_ref()
-                    .map(DurableMutationFile::from_item)
-                    .transpose()?,
+                item: item.as_ref().map(DurableMutationFile::from_item),
             },
             MutationRemoteOutcome::AlreadyCommitted { item } => Self::AlreadyCommitted {
-                item: item
-                    .as_ref()
-                    .map(DurableMutationFile::from_item)
-                    .transpose()?,
+                item: item.as_ref().map(DurableMutationFile::from_item),
             },
             MutationRemoteOutcome::PreconditionFailed {
                 metadata_revision,
@@ -631,7 +625,7 @@ impl DurableMutationOutcome {
                     .map(|revision| revision.as_bytes().to_vec()),
             },
             MutationRemoteOutcome::RemoteOutcomeUnknown => Self::RemoteOutcomeUnknown,
-        })
+        }
     }
 
     fn into_outcome(self) -> aster_forge_cloud_files_core::Result<MutationRemoteOutcome> {
@@ -675,8 +669,7 @@ impl DurableMutationRecord {
             state: record.state().into(),
             remote_outcome: record
                 .remote_outcome()
-                .map(DurableMutationOutcome::from_outcome)
-                .transpose()?,
+                .map(DurableMutationOutcome::from_outcome),
         })
     }
 
@@ -797,9 +790,9 @@ struct DurableUploadRecord {
 }
 
 impl DurableUploadRecord {
-    fn from_record(record: &ContentUploadRecord) -> StoreResult<Self> {
+    fn from_record(record: &ContentUploadRecord) -> Self {
         let intent = record.intent();
-        Ok(Self {
+        Self {
             operation_id: intent.operation_id().as_str().to_owned(),
             idempotency_key: intent.idempotency_key().as_str().to_owned(),
             namespace_id: intent
@@ -835,9 +828,8 @@ impl DurableUploadRecord {
             }),
             remote_outcome: record
                 .remote_outcome()
-                .map(DurableMutationOutcome::from_outcome)
-                .transpose()?,
-        })
+                .map(DurableMutationOutcome::from_outcome),
+        }
     }
 
     fn into_record(self, scope: &CloudScope) -> ExampleResult<ContentUploadRecord> {

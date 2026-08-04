@@ -102,23 +102,18 @@ impl MemoryRemoteMutationBackend {
                     return Err("synthetic remote ledger contained duplicate upload keys".into());
                 }
             }
-            match document.items {
-                Some(items) => {
-                    for item in items {
-                        let item = item.into_item()?;
-                        if state.items.insert(item.key().clone(), item).is_some() {
-                            return Err(
-                                "synthetic remote namespace contained duplicate items".into()
-                            );
-                        }
+            if let Some(items) = document.items {
+                for item in items {
+                    let item = item.into_item()?;
+                    if state.items.insert(item.key().clone(), item).is_some() {
+                        return Err("synthetic remote namespace contained duplicate items".into());
                     }
                 }
-                None => {
-                    let (fixture, _) = MemoryCloud::fixture()?;
-                    state.items = fixture.items;
-                    for item in state.committed.values().flatten() {
-                        state.items.insert(item.key().clone(), item.clone());
-                    }
+            } else {
+                let (fixture, _) = MemoryCloud::fixture()?;
+                state.items = fixture.items;
+                for item in state.committed.values().flatten() {
+                    state.items.insert(item.key().clone(), item.clone());
                 }
             }
         }
@@ -156,10 +151,7 @@ impl MemoryRemoteMutationBackend {
             .map(|(idempotency_key, item)| {
                 Ok(DurableRemoteCreate {
                     idempotency_key: idempotency_key.as_str().to_owned(),
-                    item: item
-                        .as_ref()
-                        .map(DurableMutationFile::from_item)
-                        .transpose()?,
+                    item: item.as_ref().map(DurableMutationFile::from_item),
                 })
             })
             .collect::<StoreResult<Vec<_>>>()?;
@@ -171,13 +163,10 @@ impl MemoryRemoteMutationBackend {
                 let committed = upload
                     .committed
                     .as_ref()
-                    .map(|(item, bytes)| {
-                        Ok(DurableRemoteContent {
-                            item: DurableMutationFile::from_item(item)?,
-                            bytes: bytes.to_vec(),
-                        })
-                    })
-                    .transpose()?;
+                    .map(|(item, bytes)| DurableRemoteContent {
+                        item: DurableMutationFile::from_item(item),
+                        bytes: bytes.to_vec(),
+                    });
                 Ok(DurableRemoteUpload {
                     idempotency_key: idempotency_key.as_str().to_owned(),
                     session_id: upload.session_id.as_str().to_owned(),
@@ -191,7 +180,7 @@ impl MemoryRemoteMutationBackend {
             .items
             .values()
             .map(DurableMutationFile::from_item)
-            .collect::<StoreResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         items.sort_by(|left, right| {
             (&left.namespace_id, &left.root_id, &left.item_id).cmp(&(
                 &right.namespace_id,
@@ -221,6 +210,10 @@ impl MemoryRemoteMutationBackend {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the synthetic backend validates every mutation kind and constructs its exact remote outcome in one dispatch"
+    )]
     fn mutation_outcome(
         &self,
         intent: &MutationIntent,

@@ -176,6 +176,10 @@ impl MemoryWritebackStore {
 }
 
 #[async_trait]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the synthetic namespace adapter keeps each durable acceptance contract visible in one product-side implementation"
+)]
 impl LinuxNamespaceMutationStore for MemoryWritebackStore {
     async fn activate_namespace(
         &self,

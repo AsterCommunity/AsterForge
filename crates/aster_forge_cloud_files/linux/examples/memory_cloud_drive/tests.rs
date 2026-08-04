@@ -20,7 +20,7 @@ mod tests {
         let request = LinuxCreateFileRequest::new(
             parent,
             "created.txt",
-            0o100644,
+            0o100_644,
             0,
             aster_forge_cloud_files_linux::LinuxFileAccess::ReadWrite,
             generation,
@@ -401,8 +401,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             completed.remote_outcome(),
-            Some(MutationRemoteOutcome::AlreadyCommitted { .. })
-                | Some(MutationRemoteOutcome::Committed { .. })
+            Some(
+                MutationRemoteOutcome::AlreadyCommitted { .. }
+                    | MutationRemoteOutcome::Committed { .. }
+            )
         ));
         assert_eq!(
             committed_upload_bytes(&restarted_backend, completed.intent()),
@@ -628,8 +630,10 @@ mod tests {
         assert_eq!(record.state(), MutationState::Completed);
         assert!(matches!(
             record.remote_outcome(),
-            Some(MutationRemoteOutcome::AlreadyCommitted { .. })
-                | Some(MutationRemoteOutcome::Committed { .. })
+            Some(
+                MutationRemoteOutcome::AlreadyCommitted { .. }
+                    | MutationRemoteOutcome::Committed { .. }
+            )
         ));
         assert!(directory.join("remote.json").is_file());
         fs::remove_dir_all(directory).unwrap();
@@ -700,7 +704,7 @@ mod tests {
         let request = LinuxCreateFileRequest::new(
             key(&scope, "root").unwrap(),
             "late.txt",
-            0o100644,
+            0o100_644,
             0,
             aster_forge_cloud_files_linux::LinuxFileAccess::ReadWrite,
             generation,
