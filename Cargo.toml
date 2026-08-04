@@ -77,7 +77,7 @@ headers = "0.4.1"
 hmac = "0.13"
 http = "1"
 httpdate = "1"
-ipnet = "2.12.0"
+ipnet = "2.12.1"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 md-5 = "0.11"
 moka = { version = "0.12.15", features = ["future"] }
@@ -91,8 +91,8 @@ rand = { version = "0.10.2", default-features = false, features = ["std", "std_r
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 redis = { version = "1.5.0", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 reqwest = { version = "0.13", features = ["json"] }
-sea-orm = { version = "2.0.0", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
-sea-orm-migration = { version = "2.0.0", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+sea-orm = { version = "2.0.1", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "2.0.1", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11"
