@@ -6,11 +6,10 @@ use crate::response::{no_store_empty_response, xml_document_response};
 use crate::{
     DavBackendErrorKind, DavCancellation, DavDirectoryEntry, DavDirectoryEnumerator,
     DavDirectoryPageLimits, DavDirectoryPageState, DavDirectoryReadError, DavErrorCondition,
-    DavMetaData, DavMultiStatusError, DavMutationFailure, DavPath, DavResourceKind, DavResponse,
-    DavTraversalBudget, DavTraversalError, DavTraversalErrorKind, DavTraversalLimits, DavXmlError,
-    child_relative_path, dav_error_element, delete_success_response,
+    DavMetaData, DavMultiStatusError, DavMutationFailure, DavPath, DavPathError, DavResourceKind,
+    DavResponse, DavTraversalBudget, DavTraversalError, DavTraversalErrorKind, DavTraversalLimits,
+    DavXmlError, dav_error_element, delete_success_response,
     mutation_multistatus_response_with_limits, mutation_success_response, read_next_directory_page,
-    replace_relative_prefix,
 };
 
 /// Recursive mutation selected by the request method.
@@ -203,23 +202,15 @@ impl DavMutationOutcome {
 
 #[derive(Debug, Clone)]
 struct Child {
+    name: bytes::Bytes,
     key: bytes::Bytes,
     path: DavPath,
     is_collection: bool,
 }
 
 impl Child {
-    fn namespace_name<'a>(&'a self, root: &DavPath) -> &'a str {
-        let relative = self
-            .path
-            .as_str()
-            .strip_prefix(root.as_str())
-            .unwrap_or_else(|| self.path.as_str());
-        if self.is_collection {
-            relative.strip_suffix('/').unwrap_or(relative)
-        } else {
-            relative
-        }
+    fn namespace_name(&self) -> &[u8] {
+        &self.name
     }
 }
 
@@ -583,14 +574,17 @@ where
                     stop = Some(DavMutationStop::InsufficientStorage);
                     continue;
                 };
-                let mut next = merge_transfer_children(
-                    &source,
+                let Ok(mut next) = merge_transfer_children(
                     &destination,
                     &source_children,
                     &destination_children,
                     child_depth,
                     frame,
-                );
+                ) else {
+                    stop = Some(DavMutationStop::Backend);
+                    propagate_frame_failure(frame, &mut frames);
+                    continue;
+                };
                 next.push(Work::FinalizeTransfer { source, frame });
                 if let Err(error) = budget.reserve_work(next.len()) {
                     stop = Some(stop_from_traversal(error));
@@ -855,18 +849,14 @@ async fn read_children<E: DavDirectoryEnumerator, C: DavCancellation>(
         }
         for entry in page.entries {
             let is_collection = entry.metadata().is_dir();
-            let relative = child_relative_path(path.as_str(), entry.name(), is_collection)
-                .map_err(|_| {
-                    DavDirectoryReadError::Backend(crate::DavBackendError::new(
-                        DavBackendErrorKind::Internal,
-                    ))
-                })?;
-            let child_path = DavPath::new(&relative).map_err(|_| {
+            let name = bytes::Bytes::copy_from_slice(entry.name());
+            let child_path = path.join_child(&name, is_collection).map_err(|_| {
                 DavDirectoryReadError::Backend(crate::DavBackendError::new(
                     DavBackendErrorKind::Internal,
                 ))
             })?;
             children.push(Child {
+                name,
                 key: bytes::Bytes::copy_from_slice(entry.stable_key()),
                 path: child_path,
                 is_collection,
@@ -877,26 +867,25 @@ async fn read_children<E: DavDirectoryEnumerator, C: DavCancellation>(
 }
 
 fn merge_transfer_children(
-    source_root: &DavPath,
     destination_root: &DavPath,
     source: &[Child],
     destination: &[Child],
     depth: usize,
     frame: usize,
-) -> Vec<Work> {
+) -> Result<Vec<Work>, DavPathError> {
     let mut work = Vec::with_capacity(source.len().saturating_add(destination.len()));
     let mut source_order = (0..source.len()).collect::<Vec<_>>();
     source_order.sort_unstable_by(|left, right| {
         source[*left]
-            .namespace_name(source_root)
-            .cmp(source[*right].namespace_name(source_root))
+            .namespace_name()
+            .cmp(source[*right].namespace_name())
             .then_with(|| source[*left].key.cmp(&source[*right].key))
     });
     let mut destination_order = (0..destination.len()).collect::<Vec<_>>();
     destination_order.sort_unstable_by(|left, right| {
         destination[*left]
-            .namespace_name(destination_root)
-            .cmp(destination[*right].namespace_name(destination_root))
+            .namespace_name()
+            .cmp(destination[*right].namespace_name())
             .then_with(|| destination[*left].key.cmp(&destination[*right].key))
     });
     let mut source_index = 0;
@@ -912,30 +901,22 @@ fn merge_transfer_children(
         ) {
             (Some(source_child), Some(destination_child)) => {
                 match source_child
-                    .namespace_name(source_root)
-                    .cmp(destination_child.namespace_name(destination_root))
+                    .namespace_name()
+                    .cmp(destination_child.namespace_name())
                 {
                     std::cmp::Ordering::Less => {
-                        push_source_child(
-                            &mut work,
-                            source_root,
-                            destination_root,
-                            source_child,
-                            depth,
-                            frame,
-                        );
+                        push_source_child(&mut work, destination_root, source_child, depth, frame)?;
                         source_index += 1;
                     }
                     std::cmp::Ordering::Equal => {
                         push_matching_children(
                             &mut work,
-                            source_root,
                             destination_root,
                             source_child,
                             destination_child,
                             depth,
                             frame,
-                        );
+                        )?;
                         source_index += 1;
                         destination_index += 1;
                     }
@@ -946,14 +927,7 @@ fn merge_transfer_children(
                 }
             }
             (Some(source_child), None) => {
-                push_source_child(
-                    &mut work,
-                    source_root,
-                    destination_root,
-                    source_child,
-                    depth,
-                    frame,
-                );
+                push_source_child(&mut work, destination_root, source_child, depth, frame)?;
                 source_index += 1;
             }
             (None, Some(destination_child)) => {
@@ -963,25 +937,17 @@ fn merge_transfer_children(
             (None, None) => break,
         }
     }
-    work
+    Ok(work)
 }
 
 fn push_source_child(
     work: &mut Vec<Work>,
-    source_root: &DavPath,
     destination_root: &DavPath,
     child: &Child,
     depth: usize,
     frame: usize,
-) {
-    let destination_relative = replace_relative_prefix(
-        child.path.as_str(),
-        source_root.as_str(),
-        destination_root.as_str(),
-    );
-    let Ok(destination) = DavPath::new(&destination_relative) else {
-        return;
-    };
+) -> Result<(), DavPathError> {
+    let destination = destination_root.join_child(&child.name, child.is_collection)?;
     if child.is_collection {
         work.push(Work::TransferDirectory {
             source: child.path.clone(),
@@ -997,25 +963,18 @@ fn push_source_child(
             parent: Some(frame),
         });
     }
+    Ok(())
 }
 
 fn push_matching_children(
     work: &mut Vec<Work>,
-    source_root: &DavPath,
     destination_root: &DavPath,
     source: &Child,
     destination: &Child,
     depth: usize,
     frame: usize,
-) {
-    let destination_relative = replace_relative_prefix(
-        source.path.as_str(),
-        source_root.as_str(),
-        destination_root.as_str(),
-    );
-    let Ok(destination_path) = DavPath::new(&destination_relative) else {
-        return;
-    };
+) -> Result<(), DavPathError> {
+    let destination_path = destination_root.join_child(&source.name, source.is_collection)?;
     if source.is_collection {
         work.push(Work::TransferDirectory {
             source: source.path.clone(),
@@ -1038,6 +997,7 @@ fn push_matching_children(
             parent: Some(frame),
         });
     }
+    Ok(())
 }
 
 fn destination_delete_work(child: &Child, depth: usize, frame: usize) -> Work {

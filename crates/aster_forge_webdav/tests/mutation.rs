@@ -288,6 +288,44 @@ fn copy_matches_source_and_destination_children_by_name_not_backend_cursor_key()
     });
 }
 
+#[test]
+fn recursive_copy_preserves_decoded_literal_percent_child_names() {
+    futures::executor::block_on(async {
+        let names = ["%", "%FF", "%2F", "%5C", "%2E%2E"];
+        let enumerator = Enumerator::default()
+            .with(
+                "/source/",
+                names.iter().map(|name| Entry::file(name)).collect(),
+            )
+            .with("/destination/", vec![]);
+        let port = Port::default();
+
+        let outcome = execute_recursive_mutation(
+            request(DavMutationOperation::Copy),
+            &enumerator,
+            &port,
+            &DavNeverCancelled,
+            limits(16, 16, 4, 4, 8),
+        )
+        .await;
+
+        assert!(outcome.is_complete_success());
+        let commands = port.commands();
+        for name in names {
+            let source = format!("/source/{name}");
+            let destination = format!("/destination/{name}");
+            assert!(commands.iter().any(|command| {
+                command.step == DavMutationStepKind::CopyFile
+                    && command.source.as_str() == source
+                    && command
+                        .destination
+                        .as_ref()
+                        .is_some_and(|path| path.as_str() == destination)
+            }));
+        }
+    });
+}
+
 fn limits(
     visited: usize,
     queued: usize,

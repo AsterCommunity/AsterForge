@@ -514,6 +514,43 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
             [("/folder/".to_owned(), false)]
         );
 
+        let literal_target =
+            DavPath::new("/folder%252F/new.txt").expect("literal percent parent target");
+        let literal_lock_system = TestLockSystem {
+            conflicts: vec![lock("/folder%252F/", "urn:uuid:literal-parent-lock")],
+            ..TestLockSystem::default()
+        };
+        let credentials = match enforce_parent_unlocked(
+            &literal_lock_system,
+            &literal_target,
+            "/webdav",
+            Some(&if_header(
+                "</webdav/folder%252F/> (<urn:uuid:literal-parent-lock>)",
+            )),
+            "https",
+            "dav.example",
+        )
+        .await
+        {
+            Ok(credentials) => credentials,
+            Err(response) => panic!(
+                "canonical parent must not be percent-decoded again, got {}",
+                response.status
+            ),
+        };
+        assert_eq!(
+            credentials.submitted_lock_tokens,
+            ["urn:uuid:literal-parent-lock".to_string()]
+        );
+        assert_eq!(
+            literal_lock_system
+                .conflict_calls
+                .lock()
+                .expect("conflict call log should not be poisoned")
+                .as_slice(),
+            [("/folder%2F/".to_owned(), false)]
+        );
+
         let root_locks = TestLockSystem::default();
         let root_result = enforce_parent_unlocked(
             &root_locks,
@@ -659,7 +696,7 @@ fn lock_guard_fails_closed_when_conflict_lookup_fails() {
 fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries() {
     futures::executor::block_on(async {
         let filesystem = TestFileSystem {
-            directories: HashSet::from(["/folder/".to_owned()]),
+            directories: HashSet::from(["/folder/".to_owned(), "/folder%2F/".to_owned()]),
             etags: HashMap::from([("/file/".to_owned(), "etag-file".to_owned())]),
             failures: HashMap::from([("/private/".to_owned(), FsError::Forbidden)]),
         };
@@ -684,6 +721,15 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
             .await
             .is_ok(),
             "an existing collection is a valid parent"
+        );
+        assert!(
+            enforce_parent_collection(
+                &filesystem,
+                &DavPath::new("/folder%252F/new.txt").expect("literal percent parent target"),
+            )
+            .await
+            .is_ok(),
+            "canonical literal percent parents must not be parsed as encoded request input"
         );
 
         for target in ["/file/new.txt", "/missing/new.txt"] {

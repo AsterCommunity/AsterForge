@@ -242,7 +242,9 @@ PUT 的 `DavPutWritePlan::Replace` 使用 `DavWriteSystem`；`Partial` 只在声
 
 Forge 负责：
 
-- `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝。
+- `DavPath` 的百分号解码、dot-segment 规范化和 mount escape 拒绝；`DavPath::new` /
+  `decode_relative_path` 只处理 encoded request input，canonical parent 与 decoded backend
+  child 变换分别使用 `DavPath::parent` 和 `DavPath::join_child`，不会把 literal `%` 名称再次解码。
 - WebDAV 方法、`Depth`、`Overwrite`、`Destination`、`If`、`Timeout` 和 `Lock-Token` header 解析。
 - `If` tagged-resource 归一化、AND/OR/Not 状态机，以及只暴露 ETag/lock token 的 resolver port。
 - 通过 `DavFileSystem` / `DavWriteSystem` / `DavLockSystem` 统一执行 `If`、资源锁、父级锁、父集合存在性与 LOCK lock-null 文件前置条件；产品不再复制 resolver/guard。
@@ -465,7 +467,8 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
 
 ## 测试要求
 
-- 协议 crate 测试路径逃逸、header grammar、同源 `Destination`、条件请求和 request-head 解析。
+- 协议 crate 测试路径逃逸、encoded request 与 decoded canonical 变换边界、literal `%` / `%2F` /
+  `%5C` / `%2E%2E` 名称、header grammar、同源 `Destination`、条件请求和 request-head 解析。
 - fake backend 矩阵覆盖 ETag + lock token 联合解析、tagged lock root、父级锁、父集合、lock-null 文件创建，以及 metadata/open/finish 错误传播。
 - XML 边界矩阵覆盖空体、QName 冲突、未知子树、重复/互斥控制、DTD/ENTITY、reader I/O、输入大小与深度精确临界、非法 UTF-8、转义和大属性值。
 - XML response 矩阵覆盖状态行、元素顺序、QName、namespace shadowing/undeclaration、锁字段、死属性重建、异常旧值转义，以及非法 writer model 与深度临界。

@@ -12,8 +12,7 @@ use crate::{
     DavBackendError, DavErrorCondition, DavLock, DavLockXml, DavMutationCredentials, DavPath,
     DavProtocolError, DavRequestHead, DavResponse, DavXmlElement, DavXmlError, IfHeader,
     dav_error_element, dav_lock_discovery_element, dav_lock_response_element, href_for_dav_path,
-    parent_relative_path, parse_lock_request, parse_lock_timeout, protocol_error_response,
-    submitted_lock_tokens,
+    parse_lock_request, parse_lock_timeout, submitted_lock_tokens,
 };
 
 /// Backend operation selected from a LOCK request.
@@ -164,12 +163,9 @@ pub async fn enforce_parent_unlocked(
     request_scheme: &str,
     request_host: &str,
 ) -> Result<DavMutationCredentials, DavResponse> {
-    let Some(parent) = parent_relative_path(path.as_str()) else {
+    let Some(parent_path) = path.parent() else {
         return Ok(DavMutationCredentials::default());
     };
-    let parent_path = DavPath::new(&parent).map_err(|_| {
-        protocol_error_response(&DavProtocolError::bad_request("Invalid request path"))
-    })?;
     enforce_unlocked(
         lock_system,
         &parent_path,
