@@ -7,7 +7,7 @@ use crate::response::no_store_empty_response;
 use crate::{
     DavErrorCondition, DavFileSystem, DavMultiStatusError, DavMultiStatusItem,
     DavMultiStatusLimits, DavPath, DavResourceKind, DavResponse, Depth, FsError,
-    backend_error_response, dav_multistatus_bytes, href_for_dav_path, parent_relative_path,
+    backend_error_response, dav_multistatus_bytes, href_for_dav_path,
 };
 
 /// COPY or MOVE operation selected by the request method.
@@ -64,19 +64,14 @@ pub async fn enforce_parent_collection(
     filesystem: &dyn DavFileSystem,
     target: &DavPath,
 ) -> Result<(), DavResponse> {
-    let Some(parent) = parent_relative_path(target.as_str()) else {
+    let Some(parent) = target.parent() else {
         return Err(mutation_plan_error_response(
             DavMutationPlanError::MethodNotAllowed,
         ));
     };
-    if parent == "/" {
+    if parent == DavPath::root() {
         return Ok(());
     }
-    let Ok(parent) = DavPath::new(&parent) else {
-        return Err(mutation_plan_error_response(
-            DavMutationPlanError::BadRequest,
-        ));
-    };
     match filesystem.metadata(&parent).await {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         Ok(_) | Err(FsError::NotFound) => {

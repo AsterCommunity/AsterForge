@@ -123,6 +123,52 @@ fn dav_path_rejects_every_root_escape_shape() {
 }
 
 #[test]
+fn dav_path_canonical_transformations_preserve_literal_percent_names() {
+    let nested = DavPath::new("/names/%252F/child.txt")
+        .expect("encoded request input should decode exactly once");
+    assert_eq!(nested.as_str(), "/names/%2F/child.txt");
+    assert_eq!(
+        nested.parent().as_ref().map(DavPath::as_str),
+        Some("/names/%2F/")
+    );
+
+    let root = DavPath::root();
+    assert_eq!(root.parent(), None);
+    assert_eq!(
+        DavPath::new("/file.txt").expect("root child path").parent(),
+        Some(DavPath::root())
+    );
+
+    for (name, expected) in [
+        (b"%".as_slice(), "/names/%"),
+        (b"%FF".as_slice(), "/names/%FF"),
+        (b"%2F".as_slice(), "/names/%2F"),
+        (b"%5C".as_slice(), "/names/%5C"),
+        (b"%2E%2E".as_slice(), "/names/%2E%2E"),
+    ] {
+        let child = DavPath::new("/names/")
+            .expect("canonical parent")
+            .join_child(name, false)
+            .expect("literal percent child");
+        assert_eq!(child.as_str(), expected);
+    }
+
+    let collection = DavPath::new("/names/")
+        .expect("canonical parent")
+        .join_child(b"%2F", true)
+        .expect("literal percent collection");
+    assert_eq!(collection.as_str(), "/names/%2F/");
+    assert!(collection.is_collection());
+
+    for invalid in [b"".as_slice(), b".".as_slice(), b"..".as_slice()] {
+        assert_eq!(
+            root.join_child(invalid, false),
+            Err(DavPathError::InvalidChildName)
+        );
+    }
+}
+
+#[test]
 fn href_and_relative_path_helpers_preserve_collection_semantics() {
     assert_eq!(
         href_for_relative("/webdav", "/folder/file name%2B.txt"),
@@ -138,6 +184,10 @@ fn href_and_relative_path_helpers_preserve_collection_semantics() {
     );
     assert_eq!(
         child_relative_path("/folder/", b"bad\\name", false),
+        Err(DavPathError::InvalidChildName)
+    );
+    assert_eq!(
+        child_relative_path("/folder/", b"..", false),
         Err(DavPathError::InvalidChildName)
     );
     assert_eq!(

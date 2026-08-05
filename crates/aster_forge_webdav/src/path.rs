@@ -68,7 +68,7 @@ pub fn child_relative_path(
     is_collection: bool,
 ) -> Result<String, DavPathError> {
     let name = str::from_utf8(name).map_err(|_| DavPathError::InvalidEncoding)?;
-    if name.contains(['/', '\\']) {
+    if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\']) {
         return Err(DavPathError::InvalidChildName);
     }
     let mut relative = if parent == "/" {
@@ -125,8 +125,8 @@ pub enum DavPathError {
     /// Dot-segment normalization would escape the `WebDAV` mount root.
     #[error("WebDAV path escapes the mount root")]
     PathEscape,
-    /// A backend child name contains a path separator.
-    #[error("WebDAV child name contains a path separator")]
+    /// A backend child name is empty, a dot segment, or contains a path separator.
+    #[error("invalid WebDAV child name")]
     InvalidChildName,
 }
 
@@ -172,6 +172,29 @@ impl DavPath {
     #[must_use]
     pub fn is_collection(&self) -> bool {
         self.canonical == "/" || self.canonical.ends_with('/')
+    }
+
+    /// Returns the canonical parent collection without reparsing decoded path data.
+    ///
+    /// Returns `None` when this path is the `WebDAV` mount root.
+    #[must_use]
+    pub fn parent(&self) -> Option<Self> {
+        parent_relative_path(&self.canonical).map(|canonical| Self { canonical })
+    }
+
+    /// Joins one decoded backend child name without treating literal percent bytes as URI input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavPathError`] when the decoded child name is not UTF-8, is empty, is a dot
+    /// segment, or contains a path separator.
+    pub fn join_child(
+        &self,
+        decoded_name: &[u8],
+        is_collection: bool,
+    ) -> Result<Self, DavPathError> {
+        let canonical = child_relative_path(&self.canonical, decoded_name, is_collection)?;
+        Ok(Self { canonical })
     }
 }
 
