@@ -5,13 +5,14 @@
 //! extraction helpers while applying their own issuer and claim defaults.
 
 use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
 
 use async_trait::async_trait;
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
-use openidconnect::reqwest;
 use openidconnect::{
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope,
+    AsyncHttpClient, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest,
+    HttpResponse, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
 };
 use openidconnect::{EndpointMaybeSet, EndpointNotSet, EndpointSet};
 
@@ -28,8 +29,38 @@ use crate::driver::{
 const OIDC_ISSUER_MAX_LEN: usize = 512;
 const OIDC_SUBJECT_MAX_LEN: usize = 255;
 const OIDC_SNAPSHOT_MAX_LEN: usize = 255;
+pub(super) const OIDC_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
-pub(super) type OidcHttpClient = reqwest::Client;
+pub(super) struct OidcHttpClient {
+    client: reqwest::Client,
+}
+
+impl OidcHttpClient {
+    #[cfg(feature = "microsoft")]
+    pub(super) fn reqwest(&self) -> &reqwest::Client {
+        &self.client
+    }
+}
+
+impl<'client> AsyncHttpClient<'client> for OidcHttpClient {
+    type Error = aster_forge_http::BufferedHttpError;
+    type Future = Pin<
+        Box<
+            dyn Future<Output = std::result::Result<HttpResponse, Self::Error>>
+                + Send
+                + Sync
+                + 'client,
+        >,
+    >;
+
+    fn call(&'client self, request: HttpRequest) -> Self::Future {
+        Box::pin(aster_forge_http::execute_reqwest_buffered_limited(
+            &self.client,
+            request,
+            OIDC_RESPONSE_MAX_BYTES,
+        ))
+    }
+}
 pub(super) type OidcClient = CoreClient<
     EndpointSet,
     EndpointNotSet,
@@ -204,7 +235,7 @@ pub(super) fn start_authorization_with_oidc_client(
 }
 
 pub(super) fn oidc_http_client(provider: &ExternalAuthProviderConfig) -> Result<OidcHttpClient> {
-    reqwest::ClientBuilder::new()
+    let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(15))
         .user_agent(outbound_http_user_agent(provider))
@@ -212,7 +243,8 @@ pub(super) fn oidc_http_client(provider: &ExternalAuthProviderConfig) -> Result<
         .map_external_auth_err_ctx(
             "failed to build OIDC HTTP client",
             ExternalAuthError::internal_error,
-        )
+        )?;
+    Ok(OidcHttpClient { client })
 }
 
 pub(super) async fn build_client(

@@ -42,6 +42,7 @@ const cratePages = [
   ["Database migration", "/crates/aster_forge_db_migration"],
   ["External auth", "/crates/aster_forge_external_auth"],
   ["File classification", "/crates/aster_forge_file_classification"],
+  ["HTTP", "/crates/aster_forge_http"],
   ["Logging", "/crates/aster_forge_logging"],
   ["Mail", "/crates/aster_forge_mail"],
   ["Metrics", "/crates/aster_forge_metrics"],
