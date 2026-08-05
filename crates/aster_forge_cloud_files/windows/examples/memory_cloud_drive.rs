@@ -112,6 +112,37 @@ mod windows_example {
         }
     }
 
+    fn registration(
+        scope: &CloudScope,
+        root_key: &CloudItemKey,
+    ) -> ExampleResult<WindowsSyncRootRegistration> {
+        Ok(WindowsSyncRootRegistration::new(
+            "AsterForge Memory Cloud",
+            env!("CARGO_PKG_VERSION"),
+            WindowsProviderId::new(0x2b7c_1d94_f321_4dc1_8b45_714b_15bd_38d2)?,
+            WindowsSyncRootIdentity::encode(scope)?,
+            WindowsFileIdentity::encode(root_key)?,
+            WindowsSyncRootPolicies {
+                hydration: WindowsHydrationPolicy {
+                    primary: WindowsHydrationPolicyPrimary::Progressive,
+                    validation_required: false,
+                    streaming_allowed: false,
+                    auto_dehydration_allowed: true,
+                    allow_full_restart_hydration: true,
+                },
+                population: WindowsPopulationPolicy::AlwaysFull,
+                in_sync: WindowsInSyncPolicy::FILE_LAST_WRITE_TIME,
+                hard_links: WindowsHardLinkPolicy::Forbidden,
+                placeholder_management: WindowsPlaceholderManagementPolicy::default(),
+            },
+            WindowsSyncRootRegistrationOptions {
+                update_existing: true,
+                disable_on_demand_population_on_root: true,
+                mark_in_sync_on_root: true,
+            },
+        )?)
+    }
+
     pub fn run() -> ExampleResult<()> {
         let (sync_root, unregister_only) = sync_root_from_args()?;
         if unregister_only {
@@ -133,31 +164,7 @@ mod windows_example {
             std::env::var_os("ASTER_FORGE_CLOUD_FILES_DISABLE_WATCHDOG_POLL").is_some();
         let cloud = Arc::new(MemoryCloud::new(read_delay.unwrap_or_default()));
         let items = memory_items(&scope, &root_id, &cloud)?;
-        let registration = WindowsSyncRootRegistration::new(
-            "AsterForge Memory Cloud",
-            env!("CARGO_PKG_VERSION"),
-            WindowsProviderId::new(0x2b7c_1d94_f321_4dc1_8b45_714b_15bd_38d2)?,
-            WindowsSyncRootIdentity::encode(&scope)?,
-            WindowsFileIdentity::encode(&root_key)?,
-            WindowsSyncRootPolicies {
-                hydration: WindowsHydrationPolicy {
-                    primary: WindowsHydrationPolicyPrimary::Progressive,
-                    validation_required: false,
-                    streaming_allowed: false,
-                    auto_dehydration_allowed: true,
-                    allow_full_restart_hydration: true,
-                },
-                population: WindowsPopulationPolicy::AlwaysFull,
-                in_sync: WindowsInSyncPolicy::FILE_LAST_WRITE_TIME,
-                hard_links: WindowsHardLinkPolicy::Forbidden,
-                placeholder_management: WindowsPlaceholderManagementPolicy::default(),
-            },
-            WindowsSyncRootRegistrationOptions {
-                update_existing: true,
-                disable_on_demand_population_on_root: true,
-                mark_in_sync_on_root: true,
-            },
-        )?;
+        let registration = registration(&scope, &root_key)?;
         let platform = register_sync_root(&sync_root, &registration)?;
         println!(
             "registered {} (CFAPI integration {:#x})",
@@ -213,6 +220,28 @@ mod windows_example {
             "after this process stops, unhydrated files report \
              ERROR_CLOUD_FILE_PROVIDER_TERMINATED (0x80070194) until the provider reconnects"
         );
+        run_callback_loop(
+            &receiver,
+            &cloud,
+            &waiters,
+            &coordinator,
+            &runtime,
+            smoke_duration,
+            disable_watchdog_poll,
+        )?;
+        connection.disconnect()?;
+        Ok(())
+    }
+
+    fn run_callback_loop(
+        receiver: &std::sync::mpsc::Receiver<WindowsCallbackRequest>,
+        cloud: &MemoryCloud,
+        waiters: &aster_forge_cloud_files_windows::WindowsFetchDataWaiterRegistry,
+        coordinator: &HydrationCoordinator,
+        runtime: &tokio::runtime::Runtime,
+        smoke_duration: Option<Duration>,
+        disable_watchdog_poll: bool,
+    ) -> ExampleResult<()> {
         let smoke_deadline = smoke_duration.map(|duration| std::time::Instant::now() + duration);
         loop {
             if smoke_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
@@ -222,19 +251,19 @@ mod windows_example {
             match receiver.recv_timeout(Duration::from_millis(250)) {
                 Ok(WindowsCallbackRequest::FetchData(request)) => {
                     let key = request.snapshot().info().file_identity().decode()?;
-                    println!("fetch data: {:?}", key);
+                    println!("fetch data: {key:?}");
                     let Some(revision) = cloud.revision(&key) else {
                         request.fail(WindowsFetchDataFailure::NotInSync)?;
                         continue;
                     };
                     if request.snapshot().is_recovery() {
-                        println!("recovery hydration: {:?}", key);
+                        println!("recovery hydration: {key:?}");
                     }
                     runtime.block_on(request.hydrate(
-                        &coordinator,
+                        coordinator,
                         revision,
                         Alignment::ONE,
-                        &waiters,
+                        waiters,
                     ))?;
                 }
                 Ok(WindowsCallbackRequest::CancelFetchData(request)) => {
@@ -248,7 +277,7 @@ mod windows_example {
                     if let WindowsObservedNotification::DeleteCompleted { info, .. } = &notification
                     {
                         let key = info.file_identity().decode()?;
-                        println!("delete completed: removed={} {:?}", cloud.remove(&key), key);
+                        println!("delete completed: removed={} {key:?}", cloud.remove(&key));
                     } else {
                         println!("platform observation: {notification:?}");
                     }
@@ -261,7 +290,6 @@ mod windows_example {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         }
-        connection.disconnect()?;
         Ok(())
     }
 

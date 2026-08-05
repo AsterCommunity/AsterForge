@@ -687,6 +687,11 @@ impl WindowsFetchDataProgressReporter {
     }
 
     /// Reports one monotonic progress sample and refreshes the matching local watchdog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this reporter has no native completion authority, the progress sample
+    /// is invalid, or CFAPI rejects the native progress report.
     #[cfg(windows)]
     pub fn report(
         &self,
@@ -894,14 +899,19 @@ impl WindowsFetchDataRequest {
     /// Restarts pending CFAPI hydration after the backend has established that the original
     /// placeholder bytes or revision are no longer valid. This consumes the terminal native
     /// attempt for the old callback; CFAPI will issue a subsequent callback for the restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this request has no native completion authority, the replacement
+    /// identity does not match the callback item, or CFAPI rejects the restart operation.
     #[cfg(windows)]
-    pub fn restart_hydration(self, replacement: WindowsRestartHydration) -> Result<()> {
+    pub fn restart_hydration(self, replacement: &WindowsRestartHydration) -> Result<()> {
         self.completion_authority.require_native()?;
         replacement.validate_for(self.snapshot.info())?;
         if !self.terminal.begin_native() {
             return Ok(());
         }
-        crate::native_connection::restart_fetch_hydration(&self.snapshot, &replacement)
+        crate::native_connection::restart_fetch_hydration(&self.snapshot, replacement)
     }
 
     /// Builds the exact revision-bound core hydration request for this callback.
@@ -1016,6 +1026,11 @@ impl WindowsFetchDataRequest {
     ///
     /// Backend lookup, authentication, retries, and revision selection remain in the backend and
     /// product adapter. This method owns the terminal success/failure mapping once work starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when hydration preparation fails or CFAPI rejects the terminal transfer or
+    /// failure completion.
     #[cfg(windows)]
     pub async fn hydrate(
         mut self,
@@ -1040,6 +1055,11 @@ impl WindowsFetchDataRequest {
     }
 
     /// Completes this request with one already resolved core content response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the response does not match this callback or CFAPI rejects the
+    /// terminal transfer or failure completion.
     #[cfg(windows)]
     pub fn complete(
         mut self,
@@ -1050,6 +1070,11 @@ impl WindowsFetchDataRequest {
     }
 
     /// Completes this request with a structured CFAPI failure at most once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this request has no native completion authority or CFAPI rejects the
+    /// failure completion.
     #[cfg(windows)]
     pub fn fail(mut self, failure: WindowsFetchDataFailure) -> Result<()> {
         self.fail_inner(failure)
@@ -1340,12 +1365,22 @@ impl WindowsPreflightRequest {
     }
 
     /// Acknowledges that the product has durably accepted this local platform effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this request has no native completion authority or CFAPI rejects the
+    /// acknowledgement.
     #[cfg(windows)]
     pub fn approve(mut self) -> Result<()> {
         self.acknowledge_inner(WindowsFetchDataFailure::Unsuccessful, true)
     }
 
     /// Denies the local platform effect with a structured CFAPI failure classification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this request has no native completion authority or CFAPI rejects the
+    /// acknowledgement.
     #[cfg(windows)]
     pub fn deny(mut self, failure: WindowsFetchDataFailure) -> Result<()> {
         self.acknowledge_inner(failure, false)

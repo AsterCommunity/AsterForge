@@ -217,36 +217,47 @@ pub struct WindowsSyncRootConnection {
 
 impl WindowsSyncRootConnection {
     /// Returns the opaque native connection key.
+    #[must_use]
     pub const fn connection_key(&self) -> WindowsConnectionKey {
         self.connection_key
     }
 
     /// Returns the durable generation fence owned by this connection.
+    #[must_use]
     pub fn generation(&self) -> SessionGeneration {
         self.session.generation()
     }
 
     /// Returns the current lifecycle state without exposing transition authority.
+    #[must_use]
     pub fn state(&self) -> SessionState {
         self.session.state()
     }
 
     /// Returns the number of accepted callbacks still draining.
+    #[must_use]
     pub fn active_callbacks(&self) -> usize {
         self.session.active_callbacks()
     }
 
     /// Returns callback ingress counters for this native connection.
+    #[must_use]
     pub fn queue_metrics(&self) -> WindowsCallbackQueueMetrics {
         self.session.queue_metrics()
     }
 
     /// Returns the registry workers use to make pending hydration cancellable by CFAPI callbacks.
+    #[must_use]
     pub fn fetch_data_waiters(&self) -> WindowsFetchDataWaiterRegistry {
         self.waiters.clone()
     }
 
     /// Explicitly disconnects this connection, retrying after a previous native failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when CFAPI rejects the disconnect or the session cannot enter its draining
+    /// state after native disconnection.
     pub fn disconnect(&mut self) -> Result<WindowsDisconnectOutcome> {
         self.disconnect_inner()
     }
@@ -270,7 +281,7 @@ impl WindowsSyncRootConnection {
         if self.disconnect_state == DisconnectState::Disconnected {
             return Ok(WindowsDisconnectOutcome::AlreadyDisconnected);
         }
-        self.session.begin_closing();
+        let _ = self.session.begin_closing();
         if let Some(context) = self.context.as_ref() {
             // Closing ingress independently releases the bounded-channel sender even when CFAPI
             // keeps the callback context alive after a failed disconnect.
@@ -300,7 +311,7 @@ impl std::fmt::Debug for WindowsSyncRootConnection {
             .field("generation", &self.session.generation())
             .field("state", &self.session.state())
             .field("disconnect_state", &self.disconnect_state)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -321,6 +332,11 @@ impl Drop for WindowsSyncRootConnection {
 ///
 /// The supplied synchronous channel should be bounded. Callback threads only copy native values,
 /// acquire a generation lease, and call `try_send`; they never wait for remote I/O or a database.
+///
+/// # Errors
+///
+/// Returns an error when the path is invalid, contains an embedded NUL, or CFAPI rejects the native
+/// connection request.
 pub fn connect_sync_root(
     sync_root_path: &Path,
     generation: SessionGeneration,
@@ -481,30 +497,23 @@ fn handle_preflight(
     // SAFETY: this handler runs only from a registered CFAPI trampoline; callback allocations and
     // every pointer-backed member remain readable until that trampoline returns.
     let result = unsafe { snapshot_preflight(callback_info, callback_parameters, kind) };
-    let (context, snapshot) = match result {
-        Ok(value) => value,
-        Err(_) => {
-            // SAFETY: the callback lifetime still holds and the raw fallback validates
-            // `StructSize` before copying native correlation keys.
-            unsafe { fail_preflight_from_raw(callback_info, kind) };
-            return;
-        }
+    let Ok((context, snapshot)) = result else {
+        // SAFETY: the callback lifetime still holds and the raw fallback validates `StructSize`
+        // before copying native correlation keys.
+        unsafe { fail_preflight_from_raw(callback_info, kind) };
+        return;
     };
-    let lease = match context.session.begin_callback(snapshot.info().generation()) {
-        Ok(lease) => lease,
-        Err(_) => {
-            let _ = complete_preflight(
-                &snapshot,
-                WindowsFetchDataFailure::ProviderTerminated,
-                false,
-            );
-            return;
-        }
+    let Ok(lease) = context.session.begin_callback(snapshot.info().generation()) else {
+        let _ = complete_preflight(
+            &snapshot,
+            WindowsFetchDataFailure::ProviderTerminated,
+            false,
+        );
+        return;
     };
     context.session.record_accepted_callback();
-    let request = match WindowsCallbackRequest::native_preflight(snapshot, lease) {
-        Ok(request) => request,
-        Err(_) => return,
+    let Ok(request) = WindowsCallbackRequest::native_preflight(snapshot, lease) else {
+        return;
     };
     match context.ingress.try_send(request) {
         CallbackIngressOutcome::Sent => context.session.record_queued_preflight(),
@@ -554,20 +563,17 @@ fn handle_fetch_data(
     // SAFETY: this handler is reachable only from the registered CFAPI callback. CFAPI keeps both
     // callback structures and all pointer-backed fields readable until the trampoline returns.
     let result = unsafe { snapshot_fetch_data(callback_info, callback_parameters) };
-    let (context, snapshot) = match result {
-        Ok(value) => value,
-        Err(_) => {
-            // SAFETY: the pointers retain the callback-scoped validity described above. The
-            // fallback copies only size-validated scalar keys and range data.
-            unsafe {
-                fail_fetch_from_raw(
-                    callback_info,
-                    callback_parameters,
-                    STATUS_CLOUD_FILE_INVALID_REQUEST,
-                )
-            };
-            return;
+    let Ok((context, snapshot)) = result else {
+        // SAFETY: the pointers retain the callback-scoped validity described above. The fallback
+        // copies only size-validated scalar keys and range data.
+        unsafe {
+            fail_fetch_from_raw(
+                callback_info,
+                callback_parameters,
+                STATUS_CLOUD_FILE_INVALID_REQUEST,
+            );
         }
+        return;
     };
     let lease = match context.session.begin_callback(snapshot.info().generation()) {
         Ok(lease) => lease,
@@ -591,9 +597,8 @@ fn handle_fetch_data(
         }
     };
     context.session.record_accepted_callback();
-    let request = match WindowsCallbackRequest::native_fetch_data(snapshot, lease) {
-        Ok(request) => request,
-        Err(_) => return,
+    let Ok(request) = WindowsCallbackRequest::native_fetch_data(snapshot, lease) else {
+        return;
     };
     match context.ingress.try_send(request) {
         CallbackIngressOutcome::Sent => context.session.record_queued_fetch(),
@@ -813,8 +818,7 @@ unsafe fn read_callback_member<T: Copy>(
         return Err(invalid_callback("callback parameter member is truncated"));
     }
     let member = callback_parameters
-        .cast::<u8>()
-        .wrapping_add(CALLBACK_PARAMETERS_UNION_OFFSET)
+        .wrapping_byte_add(CALLBACK_PARAMETERS_UNION_OFFSET)
         .cast::<T>();
     // SAFETY: the validated `ParamSize` covers the complete active member at the union ABI offset,
     // and CFAPI keeps the allocation readable for this callback.
@@ -836,8 +840,7 @@ unsafe fn read_fetch_parameters(
         return Err(invalid_callback("FETCH_DATA parameter size is truncated"));
     }
     let fetch_pointer = callback_parameters
-        .cast::<u8>()
-        .wrapping_add(CALLBACK_PARAMETERS_UNION_OFFSET)
+        .wrapping_byte_add(CALLBACK_PARAMETERS_UNION_OFFSET)
         .cast::<CF_CALLBACK_PARAMETERS_0_1>();
     // SAFETY: the validated `ParamSize` covers the complete `Anonymous.FetchData` member at its
     // exact ABI offset, and CFAPI keeps that parameter buffer readable for this callback.
@@ -861,13 +864,13 @@ unsafe fn read_cancel_fetch_parameters(
         ));
     }
     let cancel_base = callback_parameters
-        .cast::<u8>()
-        .wrapping_add(CALLBACK_PARAMETERS_UNION_OFFSET);
+        .wrapping_byte_add(CALLBACK_PARAMETERS_UNION_OFFSET)
+        .cast::<CF_CALLBACK_PARAMETERS_0_0>();
     // SAFETY: the validated `ParamSize` covers the leading cancel flags at the union's exact ABI
     // offset, and CFAPI keeps the parameter buffer readable for this callback.
     let flags = unsafe { cancel_base.cast::<i32>().read_unaligned() };
     let fetch_pointer = cancel_base
-        .wrapping_add(offset_of!(CF_CALLBACK_PARAMETERS_0_0, Anonymous))
+        .wrapping_byte_add(offset_of!(CF_CALLBACK_PARAMETERS_0_0, Anonymous))
         .cast::<CF_CALLBACK_PARAMETERS_0_0_0_0>();
     // SAFETY: the validated `ParamSize` covers the complete nested cancel FetchData member at its
     // exact ABI offset, and CFAPI keeps the parameter buffer readable for this callback.
@@ -1207,9 +1210,7 @@ pub(crate) fn restart_fetch_hydration(
         } else {
             CF_OPERATION_RESTART_HYDRATION_FLAG_NONE
         },
-        FsMetadata: metadata
-            .as_ref()
-            .map_or(ptr::null(), |metadata| metadata as *const CF_FS_METADATA),
+        FsMetadata: metadata.as_ref().map_or(ptr::null(), ptr::from_ref),
         FileIdentity: identity.map_or(ptr::null(), |identity| identity.as_bytes().as_ptr().cast()),
         FileIdentityLength: identity_length,
     };
@@ -1564,6 +1565,53 @@ mod tests {
             .collect()
     }
 
+    #[repr(C)]
+    struct AlignedHeader<T> {
+        header: u32,
+        alignment: [T; 0],
+    }
+
+    impl<T> AlignedHeader<T> {
+        const fn new(header: u32) -> Self {
+            Self {
+                header,
+                alignment: [],
+            }
+        }
+
+        fn as_ptr(&self) -> *const T {
+            ptr::from_ref(self).cast()
+        }
+
+        fn as_mut_ptr(&mut self) -> *mut T {
+            ptr::from_mut(self).cast()
+        }
+    }
+
+    fn initialized_header<T>(header: u32) -> AlignedHeader<T> {
+        assert!(size_of::<T>() >= size_of::<u32>());
+        AlignedHeader::new(header)
+    }
+
+    fn assert_process_snapshot(snapshot: &WindowsCallbackInfoSnapshot) {
+        let process = snapshot
+            .process()
+            .expect("process snapshot must be present");
+        assert_eq!(
+            process.image_path.as_deref(),
+            Some(Path::new(r"C:\fixture.exe"))
+        );
+        assert_eq!(process.package_name.as_deref(), Some(OsStr::new("package")));
+        assert_eq!(
+            process.application_id.as_deref(),
+            Some(OsStr::new("application"))
+        );
+        assert_eq!(
+            process.command_line.as_deref(),
+            Some(OsStr::new("fixture.exe --test"))
+        );
+    }
+
     #[test]
     fn failed_disconnect_closes_ingress_and_remains_retryable() {
         let (sender, receiver) = sync_channel(1);
@@ -1673,15 +1721,14 @@ mod tests {
 
     #[test]
     fn generic_callback_member_reader_validates_exact_union_extent() {
-        let truncated = u32::try_from(CALLBACK_PARAMETERS_UNION_OFFSET)
-            .expect("callback union offset should fit u32");
-        // SAFETY: the allocation contains only `ParamSize`; the reader must reject it before
-        // copying the requested union member.
-        let result = unsafe {
-            read_callback_member::<CF_CALLBACK_PARAMETERS_0_10>(
-                (&raw const truncated).cast::<CF_CALLBACK_PARAMETERS>(),
-            )
-        };
+        let truncated = initialized_header::<CF_CALLBACK_PARAMETERS>(
+            u32::try_from(CALLBACK_PARAMETERS_UNION_OFFSET)
+                .expect("callback union offset should fit u32"),
+        );
+        // SAFETY: only the aligned leading `ParamSize` is initialized; the reader must reject it
+        // before copying the requested union member.
+        let result =
+            unsafe { read_callback_member::<CF_CALLBACK_PARAMETERS_0_10>(truncated.as_ptr()) };
         assert!(matches!(
             result,
             Err(WindowsCloudFilesError::InvalidCallbackSnapshot {
@@ -1809,13 +1856,13 @@ mod tests {
 
     #[test]
     fn fetch_parameter_reader_rejects_header_only_and_copies_exact_member() {
-        let header_only = u32::try_from(CALLBACK_PARAMETERS_UNION_OFFSET)
-            .expect("callback parameter offset must fit u32");
-        // SAFETY: the test provides exactly the leading `ParamSize` field. The reader must reject
-        // it before attempting any full-structure or union-member read.
-        let truncated = unsafe {
-            read_fetch_parameters((&raw const header_only).cast::<CF_CALLBACK_PARAMETERS>())
-        };
+        let header_only = initialized_header::<CF_CALLBACK_PARAMETERS>(
+            u32::try_from(CALLBACK_PARAMETERS_UNION_OFFSET)
+                .expect("callback parameter offset must fit u32"),
+        );
+        // SAFETY: only the aligned leading `ParamSize` is initialized. The reader must reject it
+        // before attempting any full-structure or union-member read.
+        let truncated = unsafe { read_fetch_parameters(header_only.as_ptr()) };
         assert!(matches!(
             truncated,
             Err(WindowsCloudFilesError::InvalidCallbackSnapshot {
@@ -1848,13 +1895,13 @@ mod tests {
 
     #[test]
     fn cancel_parameter_reader_rejects_header_only_and_copies_nested_member() {
-        let header_only = u32::try_from(CALLBACK_PARAMETERS_UNION_OFFSET)
-            .expect("callback parameter offset must fit u32");
-        // SAFETY: the test provides exactly the leading `ParamSize` field. The reader must reject
-        // it before attempting either the cancel flags or nested FetchData read.
-        let truncated = unsafe {
-            read_cancel_fetch_parameters((&raw const header_only).cast::<CF_CALLBACK_PARAMETERS>())
-        };
+        let header_only = initialized_header::<CF_CALLBACK_PARAMETERS>(
+            u32::try_from(CALLBACK_PARAMETERS_UNION_OFFSET)
+                .expect("callback parameter offset must fit u32"),
+        );
+        // SAFETY: only the aligned leading `ParamSize` is initialized. The reader must reject it
+        // before attempting either the cancel flags or nested FetchData read.
+        let truncated = unsafe { read_cancel_fetch_parameters(header_only.as_ptr()) };
         assert!(matches!(
             truncated,
             Err(WindowsCloudFilesError::InvalidCallbackSnapshot {
@@ -1889,10 +1936,10 @@ mod tests {
     #[test]
     fn structure_readers_reject_header_only_allocations() {
         let callback_header = u32::try_from(size_of::<u32>()).expect("u32 size must fit u32");
-        // SAFETY: the test provides exactly `StructSize`. The reader must reject it before a
-        // full-width `CF_CALLBACK_INFO` copy.
-        let callback_result =
-            unsafe { read_callback_info((&raw const callback_header).cast::<CF_CALLBACK_INFO>()) };
+        let callback_info = initialized_header::<CF_CALLBACK_INFO>(callback_header);
+        // SAFETY: only the aligned leading `StructSize` is initialized. The reader must reject it
+        // before a full-width `CF_CALLBACK_INFO` copy.
+        let callback_result = unsafe { read_callback_info(callback_info.as_ptr()) };
         assert!(matches!(
             callback_result,
             Err(WindowsCloudFilesError::InvalidCallbackSnapshot {
@@ -1900,11 +1947,10 @@ mod tests {
             })
         ));
 
-        let mut process_header = callback_header;
-        // SAFETY: the test provides exactly `StructSize`. The reader must reject it before a
-        // full-width `CF_PROCESS_INFO` copy.
-        let process_result =
-            unsafe { copy_process_info((&raw mut process_header).cast::<CF_PROCESS_INFO>()) };
+        let mut process_info = initialized_header::<CF_PROCESS_INFO>(callback_header);
+        // SAFETY: only the aligned leading `StructSize` is initialized. The reader must reject it
+        // before a full-width `CF_PROCESS_INFO` copy.
+        let process_result = unsafe { copy_process_info(process_info.as_mut_ptr()) };
         assert!(matches!(
             process_result,
             Err(WindowsCloudFilesError::InvalidCallbackSnapshot {
@@ -2032,21 +2078,6 @@ mod tests {
             snapshot.file_identity().decode().expect("item must decode"),
             item_key()
         );
-        let process = snapshot
-            .process()
-            .expect("process snapshot must be present");
-        assert_eq!(
-            process.image_path.as_deref(),
-            Some(Path::new(r"C:\fixture.exe"))
-        );
-        assert_eq!(process.package_name.as_deref(), Some(OsStr::new("package")));
-        assert_eq!(
-            process.application_id.as_deref(),
-            Some(OsStr::new("application"))
-        );
-        assert_eq!(
-            process.command_line.as_deref(),
-            Some(OsStr::new("fixture.exe --test"))
-        );
+        assert_process_snapshot(&snapshot);
     }
 }

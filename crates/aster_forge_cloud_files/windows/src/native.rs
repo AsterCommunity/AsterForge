@@ -106,6 +106,11 @@ impl Drop for WindowsCloudFileHandle {
 }
 
 /// Removes one persistent CFAPI sync-root registration.
+///
+/// # Errors
+///
+/// Returns an error when the path is empty, contains an embedded NUL, or CFAPI rejects the
+/// unregister operation.
 pub fn unregister_sync_root(sync_root_path: &Path) -> Result<()> {
     validate_path(sync_root_path)?;
     let path = wide_null(sync_root_path.as_os_str())?;
@@ -114,6 +119,11 @@ pub fn unregister_sync_root(sync_root_path: &Path) -> Result<()> {
 }
 
 /// Marks one placeholder in-sync or not-in-sync.
+///
+/// # Errors
+///
+/// Returns an error when the path cannot be opened as a cloud file or CFAPI rejects the state
+/// update.
 pub fn set_placeholder_in_sync(path: &Path, in_sync: bool) -> Result<()> {
     let handle = WindowsCloudFileHandle::open_for_update(path)?;
     let state = if in_sync {
@@ -127,6 +137,11 @@ pub fn set_placeholder_in_sync(path: &Path, in_sync: bool) -> Result<()> {
 }
 
 /// Updates one placeholder pin state using explicit recursion semantics.
+///
+/// # Errors
+///
+/// Returns an error when the path cannot be opened as a cloud file or CFAPI rejects the pin-state
+/// update.
 pub fn set_placeholder_pin_state(
     path: &Path,
     state: WindowsPinState,
@@ -152,6 +167,11 @@ pub fn set_placeholder_pin_state(
 }
 
 /// Dehydrates a full placeholder or one exact signed CFAPI range.
+///
+/// # Errors
+///
+/// Returns an error when the path cannot be opened, the range is unaligned or exceeds CFAPI's
+/// signed boundary, or CFAPI rejects the dehydration request.
 pub fn dehydrate_placeholder(
     path: &Path,
     range: Option<aster_forge_cloud_files_core::ByteRange>,
@@ -206,6 +226,11 @@ pub struct WindowsPlaceholderBatchOutcome {
 }
 
 /// Creates a batch of placeholders below one registered sync-root directory.
+///
+/// # Errors
+///
+/// Returns an error when the batch or any placeholder cannot be converted to CFAPI input, the base
+/// path contains an embedded NUL, or CFAPI rejects the batch.
 pub fn create_placeholders(
     base_directory: &Path,
     placeholders: &[WindowsPlaceholder],
@@ -232,7 +257,7 @@ pub fn create_placeholders(
             PCWSTR(base_directory.as_ptr()),
             &mut native_entries,
             CF_CREATE_FLAG_NONE,
-            Some(&mut entries_processed),
+            Some(&raw mut entries_processed),
         )?;
     }
 
@@ -249,6 +274,11 @@ pub fn create_placeholders(
 }
 
 /// Persistently registers or updates one Windows Cloud Files sync root.
+///
+/// # Errors
+///
+/// Returns an error when the registration or path is invalid, the active Windows platform does
+/// not support the requested policy, or CFAPI rejects the registration.
 pub fn register_sync_root(
     sync_root_path: &Path,
     registration: &WindowsSyncRootRegistration,
@@ -304,8 +334,8 @@ pub fn register_sync_root(
     unsafe {
         CfRegisterSyncRoot(
             PCWSTR(sync_root_path.as_ptr()),
-            &native_registration,
-            &native_policies,
+            &raw const native_registration,
+            &raw const native_policies,
             native_registration_options(registration.options()),
         )?;
     }

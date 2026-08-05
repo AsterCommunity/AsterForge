@@ -15,48 +15,61 @@ use aster_forge_cloud_files_windows::{
 };
 
 fn assert_send<T: Send>() {}
+fn assert_sync<T: Sync>() {}
+fn assert_api<T>(_: T) {}
 
 #[test]
 fn windows_connection_api_keeps_owned_sender_generation_and_raii_handle() {
-    let _connect: fn(
+    let connect: fn(
         &Path,
         SessionGeneration,
         SyncSender<WindowsCallbackRequest>,
         WindowsSyncRootConnectOptions,
     ) -> Result<WindowsSyncRootConnection> = connect_sync_root;
-    let _disconnect: fn(&mut WindowsSyncRootConnection) -> Result<WindowsDisconnectOutcome> =
+    let disconnect: fn(&mut WindowsSyncRootConnection) -> Result<WindowsDisconnectOutcome> =
         WindowsSyncRootConnection::disconnect;
-    let _fail: fn(WindowsFetchDataRequest, WindowsFetchDataFailure) -> Result<()> =
+    let fail: fn(WindowsFetchDataRequest, WindowsFetchDataFailure) -> Result<()> =
         WindowsFetchDataRequest::fail;
-    let _complete: fn(
-        WindowsFetchDataRequest,
-        &ContentRevision,
-        ContentReadResponse,
-    ) -> Result<()> = WindowsFetchDataRequest::complete;
-    let _hydrate = WindowsFetchDataRequest::hydrate;
-    let _restart: fn(WindowsFetchDataRequest, WindowsRestartHydration) -> Result<()> =
+    let complete: fn(WindowsFetchDataRequest, &ContentRevision, ContentReadResponse) -> Result<()> =
+        WindowsFetchDataRequest::complete;
+    let hydrate = WindowsFetchDataRequest::hydrate;
+    let restart: fn(WindowsFetchDataRequest, &WindowsRestartHydration) -> Result<()> =
         WindowsFetchDataRequest::restart_hydration;
-    let _reporter: fn(&WindowsFetchDataRequest) -> WindowsFetchDataProgressReporter =
+    let reporter: fn(&WindowsFetchDataRequest) -> WindowsFetchDataProgressReporter =
         WindowsFetchDataRequest::progress_reporter;
-    let _progress: fn(
+    let progress: fn(
         &WindowsFetchDataProgressReporter,
         &WindowsFetchDataWaiterRegistry,
         WindowsFetchDataProgress,
         std::time::Instant,
     ) -> Result<usize> = WindowsFetchDataProgressReporter::report;
-    let _waiters: fn(&WindowsSyncRootConnection) -> WindowsFetchDataWaiterRegistry =
+    let waiters: fn(&WindowsSyncRootConnection) -> WindowsFetchDataWaiterRegistry =
         WindowsSyncRootConnection::fetch_data_waiters;
-    let _queue_metrics: fn(&WindowsSyncRootConnection) -> WindowsCallbackQueueMetrics =
+    let queue_metrics: fn(&WindowsSyncRootConnection) -> WindowsCallbackQueueMetrics =
         WindowsSyncRootConnection::queue_metrics;
-    let _unregister: fn(&Path) -> Result<()> = unregister_sync_root;
-    let _in_sync: fn(&Path, bool) -> Result<()> = set_placeholder_in_sync;
-    let _pin: fn(&Path, WindowsPinState, WindowsPinRecursion) -> Result<()> =
+    let unregister: fn(&Path) -> Result<()> = unregister_sync_root;
+    let in_sync: fn(&Path, bool) -> Result<()> = set_placeholder_in_sync;
+    let pin: fn(&Path, WindowsPinState, WindowsPinRecursion) -> Result<()> =
         set_placeholder_pin_state;
-    let _dehydrate: fn(&Path, Option<ByteRange>, bool) -> Result<()> = dehydrate_placeholder;
+    let dehydrate: fn(&Path, Option<ByteRange>, bool) -> Result<()> = dehydrate_placeholder;
+
+    assert_api(connect);
+    assert_api(disconnect);
+    assert_api(fail);
+    assert_api(complete);
+    assert_api(hydrate);
+    assert_api(restart);
+    assert_api(reporter);
+    assert_api(progress);
+    assert_api(waiters);
+    assert_api(queue_metrics);
+    assert_api(unregister);
+    assert_api(in_sync);
+    assert_api(pin);
+    assert_api(dehydrate);
 
     assert_send::<WindowsSyncRootConnection>();
     assert_send::<WindowsCallbackRequest>();
     assert_send::<WindowsFetchDataWaiterRegistry>();
-    fn assert_sync<T: Sync>() {}
     assert_sync::<WindowsFetchDataWaiterRegistry>();
 }
