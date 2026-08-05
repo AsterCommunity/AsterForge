@@ -1,6 +1,7 @@
 # aster_forge_crypto
 
-`aster_forge_crypto` 收纳跨项目共享的密码哈希、带密钥消息认证和摘要工具。当前模块集中在 `hash`。
+`aster_forge_crypto` 收纳跨项目共享的密码哈希、带密钥消息认证、摘要工具和版本化
+authenticated secret envelope。
 
 ## 适用场景
 
@@ -10,6 +11,7 @@
 - SHA-256 digest 和 hex 编码。
 - HMAC-SHA-256 keyed digest。
 - 创建可流式更新的 SHA-256 hasher。
+- 使用 AES-256-GCM 与 HKDF-SHA256 持久化产品 secret。
 
 不适合放在这里的内容：
 
@@ -17,6 +19,7 @@
 - 登录失败锁定。
 - 密码重置 token。
 - 加密密钥管理。
+- 产品 master-key 长度、trim、来源、轮换和 KMS 策略。
 
 ## Cargo 接入
 
@@ -112,6 +115,26 @@ let cache_component = hmac_sha256_hex(cache_key_secret, credential.as_bytes())?;
 
 产品负责提供高熵、用途隔离的 key，并负责 key 的加载、轮换和持久化策略。HMAC-SHA-256 不替代人类密码的 Argon2id。
 
+## Versioned secret envelope
+
+```rust
+use aster_forge_crypto::{decrypt_secret, encrypt_secret};
+
+const CONTEXT: &[u8] = b"product:credential:v1";
+let envelope = encrypt_secret(master_key, CONTEXT, aad, plaintext)?;
+let plaintext = decrypt_secret(master_key, CONTEXT, aad, &envelope)?;
+```
+
+当前格式固定为 `v1:<base64url nonce>:<base64url ciphertext>`，使用 HKDF-SHA256 以显式
+`context` 派生 AES-256-GCM key，并使用调用方提供的 AAD。`context` 和 AAD 都是持久化
+协议的一部分；已有值不能静默重命名。解析会严格拒绝未知版本、额外字段、非法
+base64url、错误 nonce 长度和认证失败。
+
+Forge 不 trim master key，也不规定字符长度。产品应在调用前实施自己的配置策略，并把
+字符串按原有规则转换为字节。产品还负责 key 加载、轮换、实体相关 AAD 和错误映射。
+`CryptoError` 的 secret-envelope variants 只暴露稳定分类，不包含 master key、AAD、
+plaintext 或 ciphertext。
+
 ## 接入边界
 
 密码策略应该留在产品层，例如：
@@ -121,6 +144,8 @@ let cache_component = hmac_sha256_hex(cache_key_secret, credential.as_bytes())?;
 - 是否需要旧 hash 迁移。
 - 登录失败提示。
 - HMAC key 的来源、用途隔离和轮换。
+- secret-envelope master key 的字符策略、来源和轮换。
+- 各用途稳定且互不相同的 HKDF context，以及实体相关 AAD。
 - Argon2 的认证并发上限和 blocking 执行策略。
 
 Forge 只保证同一套哈希实现被多个项目复用。
@@ -136,6 +161,8 @@ Forge 只保证同一套哈希实现被多个项目复用。
 - SHA-256 输出与固定向量一致。
 - HMAC-SHA-256 输出与 RFC 4231 固定向量一致。
 - 产品侧密码策略测试不要搬到 Forge。
+- secret envelope 覆盖空、binary、较大 plaintext、wrong key/context/AAD、篡改、截断、
+  非法 nonce、未知版本和固定兼容 fixture。
 
 ## 参考项目
 

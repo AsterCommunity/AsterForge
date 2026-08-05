@@ -1,8 +1,9 @@
 //! Shared cryptographic helpers for Aster services.
 //!
-//! The crate currently exposes password hashing and digest utilities that were duplicated across
-//! application code. It keeps the error surface narrow so services can map cryptographic failures
-//! into their own API or domain errors without depending on implementation-specific error types.
+//! The crate exposes password hashing, digest utilities, and a versioned authenticated secret
+//! envelope shared by Aster products. It keeps the error surface narrow so services can map
+//! cryptographic failures into their own API or domain errors without depending on
+//! implementation-specific error types.
 #![cfg_attr(
     not(test),
     deny(
@@ -16,6 +17,7 @@
 )]
 
 pub mod hash;
+pub mod secret_envelope;
 
 pub use hash::{
     PasswordHashPolicy, PasswordHashVerification, PasswordHashVerificationLimits,
@@ -23,6 +25,7 @@ pub use hash::{
     hmac_sha256_hex, new_sha256, sha256_digest_to_hex, sha256_hex, verify_password,
     verify_password_with_policy,
 };
+pub use secret_envelope::{decrypt_secret, encrypt_secret};
 
 /// Result type returned by `aster_forge_crypto` helpers.
 pub type Result<T> = std::result::Result<T, CryptoError>;
@@ -52,6 +55,30 @@ pub enum CryptoError {
     /// Keyed message authentication initialization failed.
     #[error("message authentication error: {0}")]
     MessageAuthentication(String),
+
+    /// The caller supplied an invalid product-owned secret-envelope context or policy value.
+    #[error("invalid secret envelope policy")]
+    InvalidSecretEnvelopePolicy,
+
+    /// The stored secret envelope is malformed.
+    #[error("invalid secret envelope")]
+    InvalidSecretEnvelope,
+
+    /// The stored secret envelope uses an unsupported version.
+    #[error("unsupported secret envelope version")]
+    UnsupportedSecretEnvelopeVersion,
+
+    /// The encryption key could not be derived for the supplied context.
+    #[error("secret envelope key derivation failed")]
+    SecretEnvelopeKeyDerivation,
+
+    /// Authenticated encryption failed.
+    #[error("secret envelope encryption failed")]
+    SecretEnvelopeEncryption,
+
+    /// Authentication or decryption failed.
+    #[error("secret envelope authentication failed")]
+    SecretEnvelopeAuthentication,
 }
 
 impl CryptoError {
