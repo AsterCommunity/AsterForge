@@ -18,6 +18,7 @@ members = [
     "crates/aster_forge_external_auth",
     "crates/aster_forge_events",
     "crates/aster_forge_file_classification",
+    "crates/aster_forge_http",
     "crates/aster_forge_logging",
     "crates/aster_forge_metrics",
     "crates/aster_forge_panic",
@@ -61,6 +62,7 @@ undocumented_unsafe_blocks = "deny"
 [workspace.dependencies]
 actix-web = "4.14.0"
 actix-governor = "0.10"
+aes-gcm = "0.11"
 async-trait = "0.1"
 argon2 = "0.5.3"
 base64 = { version = "0.23", default-features = false, features = ["std"] }
@@ -75,6 +77,7 @@ futures = "0.3"
 governor = "0.10"
 headers = "0.4.1"
 hmac = "0.13"
+hkdf = "0.13"
 http = "1"
 httpdate = "1"
 ipnet = "2.12.1"
@@ -86,7 +89,7 @@ percent-encoding = "2.3"
 proc-macro2 = "1"
 quick-xml = { version = "0.41", default-features = false }
 quote = "1"
-openidconnect = "4.0.1"
+openidconnect = { version = "4.0.1", default-features = false }
 rand = { version = "0.10.2", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 redis = { version = "1.5.0", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }

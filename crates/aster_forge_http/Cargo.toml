@@ -1,5 +1,5 @@
 [package]
-name = "aster_forge_crypto"
+name = "aster_forge_http"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,14 +9,13 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-aes-gcm.workspace = true
-argon2.workspace = true
-base64.workspace = true
-hkdf.workspace = true
-hmac.workspace = true
-rand_core_06.workspace = true
-sha2.workspace = true
+futures.workspace = true
+http.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "net"] }
 
 [lints]
 workspace = true

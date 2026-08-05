@@ -179,6 +179,11 @@ assert_eq!(return_path, "/settings?tab=login");
 - 本地邮箱格式校验、账号绑定、自动创建用户、审计和 session 写入。
 - 为 outbound provider request 注入产品自己的 User-Agent；不要把共享 crate 名称暴露给外部 provider。
 
+OIDC driver 使用 `aster_forge_http` 上的 `reqwest 0.13` bounded adapter 执行 discovery、
+JWKS 和 token 请求。共享 driver 固定禁止自动 redirect、设置 15 秒 timeout，并限制响应体；
+产品仍负责注入自己的 User-Agent。`openidconnect` 的默认 reqwest feature 不应重新启用，
+否则会把另一代 HTTP transport 带回完整依赖图。
+
 不要在产品仓库保留只重复这些规则的实现。产品常量应直接传给带 `max_len` 等参数的 Forge helper；不要为了注入一个常量建立同名纯转发 helper。
 
 ## 自定义 provider

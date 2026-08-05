@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use openidconnect::core::{
     CoreClient, CoreIdTokenVerifier, CoreJsonWebKeySet, CoreProviderMetadata,
 };
-use openidconnect::reqwest;
 use openidconnect::{ClientId, IssuerUrl, Nonce};
 
 use crate::driver::{
@@ -21,7 +20,8 @@ use crate::{ExternalAuthError, MapExternalAuthErr, Result};
 use aster_forge_utils::net::is_loopback_host;
 
 use super::oidc::{
-    OidcClient, oidc_http_client, profile_from_id_token, start_authorization_with_oidc_client,
+    OIDC_RESPONSE_MAX_BYTES, OidcClient, oidc_http_client, profile_from_id_token,
+    start_authorization_with_oidc_client,
 };
 
 const MICROSOFT_DEFAULT_TENANT: &str = "common";
@@ -342,6 +342,7 @@ async fn discover_microsoft_provider(
     let discovery_url = microsoft_discovery_url(configured_issuer)?;
     let http_client = oidc_http_client(provider)?;
     let response = http_client
+        .reqwest()
         .get(discovery_url.as_str())
         .send()
         .await
@@ -352,10 +353,13 @@ async fn discover_microsoft_provider(
             "OIDC discovery failed: HTTP status code {status} at {discovery_url}"
         )));
     }
-    let body = response
-        .bytes()
-        .await
-        .map_external_auth_err_ctx("OIDC discovery failed", ExternalAuthError::validation_error)?;
+    let body = aster_forge_http::read_reqwest_body_limited(
+        response,
+        "Microsoft OIDC discovery response",
+        OIDC_RESPONSE_MAX_BYTES,
+        ExternalAuthError::validation_error,
+    )
+    .await?;
     let metadata: CoreProviderMetadata = serde_json::from_slice(&body).map_external_auth_err_ctx(
         "OIDC discovery metadata parse failed",
         ExternalAuthError::validation_error,
