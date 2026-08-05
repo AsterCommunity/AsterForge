@@ -574,15 +574,15 @@ where
                     stop = Some(DavMutationStop::InsufficientStorage);
                     continue;
                 };
-                let Ok(mut next) = merge_transfer_children(
+                let Some(mut next) = merge_transfer_children_or_stop(
                     &destination,
                     &source_children,
                     &destination_children,
                     child_depth,
                     frame,
+                    &mut frames,
+                    &mut stop,
                 ) else {
-                    stop = Some(DavMutationStop::Backend);
-                    propagate_frame_failure(frame, &mut frames);
                     continue;
                 };
                 next.push(Work::FinalizeTransfer { source, frame });
@@ -940,6 +940,24 @@ fn merge_transfer_children(
     Ok(work)
 }
 
+fn merge_transfer_children_or_stop(
+    destination_root: &DavPath,
+    source: &[Child],
+    destination: &[Child],
+    depth: usize,
+    frame: usize,
+    frames: &mut [Frame],
+    stop: &mut Option<DavMutationStop>,
+) -> Option<Vec<Work>> {
+    if let Ok(work) = merge_transfer_children(destination_root, source, destination, depth, frame) {
+        Some(work)
+    } else {
+        *stop = Some(DavMutationStop::Backend);
+        propagate_frame_failure(frame, frames);
+        None
+    }
+}
+
 fn push_source_child(
     work: &mut Vec<Work>,
     destination_root: &DavPath,
@@ -1132,4 +1150,43 @@ pub enum DavMutationComposeError {
     MultiStatus(#[from] DavMultiStatusError),
     #[error("failed to compose mutation DAV error response")]
     Xml(#[from] DavXmlError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_private_child_state_stops_transfer_merge() {
+        let source = Child {
+            name: bytes::Bytes::from_static(b"invalid/name"),
+            key: bytes::Bytes::from_static(b"source-key"),
+            path: DavPath::new("/source/item").unwrap(),
+            is_collection: false,
+        };
+        let destination = Child {
+            name: bytes::Bytes::from_static(b"invalid/name"),
+            key: bytes::Bytes::from_static(b"destination-key"),
+            path: DavPath::new("/destination/item").unwrap(),
+            is_collection: false,
+        };
+        let mut frames = [Frame {
+            parent: None,
+            failed: false,
+        }];
+        let mut stop = None;
+
+        let work = merge_transfer_children_or_stop(
+            &DavPath::new("/destination/").unwrap(),
+            &[source],
+            &[destination],
+            1,
+            0,
+            &mut frames,
+            &mut stop,
+        );
+
+        assert!(work.is_none());
+        assert_eq!(stop, Some(DavMutationStop::Backend));
+    }
 }
