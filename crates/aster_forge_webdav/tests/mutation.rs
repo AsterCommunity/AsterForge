@@ -326,6 +326,80 @@ fn recursive_copy_preserves_decoded_literal_percent_child_names() {
     });
 }
 
+#[test]
+fn copy_merges_source_and_destination_children_across_all_name_orderings() {
+    futures::executor::block_on(async {
+        let enumerator = Enumerator::default()
+            .with(
+                "/source/",
+                vec![Entry::file("alpha.txt"), Entry::file("shared.txt")],
+            )
+            .with(
+                "/destination/",
+                vec![Entry::file("shared.txt"), Entry::file("stale.txt")],
+            );
+        let port = Port::default();
+
+        let outcome = execute_recursive_mutation(
+            request(DavMutationOperation::Copy),
+            &enumerator,
+            &port,
+            &DavNeverCancelled,
+            limits(16, 16, 4, 4, 8),
+        )
+        .await;
+
+        assert!(outcome.is_complete_success());
+        let commands = port.commands();
+        assert!(commands.iter().any(|command| {
+            command.step == DavMutationStepKind::CopyFile
+                && command.source.as_str() == "/source/alpha.txt"
+                && command
+                    .destination
+                    .as_ref()
+                    .is_some_and(|path| path.as_str() == "/destination/alpha.txt")
+        }));
+        assert!(commands.iter().any(|command| {
+            command.step == DavMutationStepKind::CopyFile
+                && command.source.as_str() == "/source/shared.txt"
+                && command
+                    .destination
+                    .as_ref()
+                    .is_some_and(|path| path.as_str() == "/destination/shared.txt")
+        }));
+        assert!(commands.iter().any(|command| {
+            command.step == DavMutationStepKind::DeleteFile
+                && command.source.as_str() == "/destination/stale.txt"
+        }));
+    });
+}
+
+#[test]
+fn recursive_copy_rejects_invalid_backend_child_names_before_mutation() {
+    futures::executor::block_on(async {
+        let enumerator = Enumerator::default()
+            .with("/source/", vec![Entry::file("invalid/name")])
+            .with("/destination/", vec![]);
+        let port = Port::default();
+
+        let outcome = execute_recursive_mutation(
+            request(DavMutationOperation::Copy),
+            &enumerator,
+            &port,
+            &DavNeverCancelled,
+            limits(16, 16, 4, 4, 8),
+        )
+        .await;
+
+        assert_eq!(outcome.stop, None);
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].path().as_str(), "/source/");
+        let commands = port.commands();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].step, DavMutationStepKind::PrepareCollection);
+    });
+}
+
 fn limits(
     visited: usize,
     queued: usize,
