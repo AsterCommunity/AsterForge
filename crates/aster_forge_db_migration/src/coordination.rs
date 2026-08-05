@@ -1,16 +1,17 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use sea_orm_migration::MigratorTrait;
 use sea_orm_migration::sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, Statement,
-    TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DatabaseExecutor, DatabaseTransaction, DbBackend, DbErr,
+    RuntimeErr, Statement, TransactionTrait,
 };
 
 const DEFAULT_MYSQL_LOCK_TIMEOUT_SECONDS: u64 = 300;
 const MYSQL_LOCK_NAME_MAX_BYTES: usize = 64;
 
-/// Boxed migration callback future tied to the coordinated database transaction.
+/// Boxed migration callback future tied to the coordinated database connection.
 pub type MigrationFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, DbErr>> + Send + 'a>>;
 
 /// Stable cross-process migration lock configuration.
@@ -87,62 +88,107 @@ impl MigrationLockOptions {
 
 /// Runs a product migration callback while holding the backend's process-wide migration lock.
 ///
-/// `PostgreSQL` uses a transaction-scoped advisory lock. `MySQL` uses a connection-bound named lock
-/// and releases it before the transaction is committed. `SQLite` runs the callback in a transaction
-/// without an additional external lock.
+/// `PostgreSQL` uses a transaction-scoped advisory lock. `MySQL` uses a dedicated single-connection
+/// pool and a connection-bound named lock without wrapping DDL in a transaction. `SQLite` runs the
+/// callback in a transaction without an additional external lock.
 ///
 /// # Errors
 ///
-/// Returns an error when lock options are invalid, the backend is unsupported, transaction or lock
-/// operations fail, the callback fails, or the transaction cannot be committed or rolled back.
+/// Returns an error when lock options are invalid, the backend is unsupported, connection,
+/// transaction, or lock operations fail, the callback fails, or transactional finalization fails.
 pub async fn with_migration_lock<T, F>(
     database: &DatabaseConnection,
     options: &MigrationLockOptions,
     operation: F,
 ) -> Result<T, DbErr>
 where
-    F: for<'a> FnOnce(&'a DatabaseTransaction) -> MigrationFuture<'a, T>,
+    F: for<'a> FnOnce(DatabaseExecutor<'a>) -> MigrationFuture<'a, T>,
 {
     options.validate()?;
-    let backend = database.get_database_backend();
-    let transaction = database.begin().await?;
-    match backend {
-        DbBackend::Postgres => acquire_postgres_lock(&transaction, options).await?,
-        DbBackend::MySql => acquire_mysql_lock(&transaction, options).await?,
-        DbBackend::Sqlite => {}
-        _ => {
-            return Err(DbErr::Custom(
-                "unsupported database backend for migration coordination".to_string(),
-            ));
+    match database.get_database_backend() {
+        DbBackend::Postgres => {
+            run_transactional_migration(database, options, operation, true).await
         }
+        DbBackend::Sqlite => run_transactional_migration(database, options, operation, false).await,
+        DbBackend::MySql => run_mysql_migration(database, options, operation).await,
+        _ => Err(DbErr::Custom(
+            "unsupported database backend for migration coordination".to_string(),
+        )),
     }
+}
 
-    let operation_result = operation(&transaction).await;
-    let release_result = if backend == DbBackend::MySql {
-        release_mysql_lock(&transaction, options).await
-    } else {
-        Ok(())
-    };
+async fn run_transactional_migration<T, F>(
+    database: &DatabaseConnection,
+    options: &MigrationLockOptions,
+    operation: F,
+    acquire_postgres_advisory_lock: bool,
+) -> Result<T, DbErr>
+where
+    F: for<'a> FnOnce(DatabaseExecutor<'a>) -> MigrationFuture<'a, T>,
+{
+    let transaction = database.begin().await?;
+    if acquire_postgres_advisory_lock {
+        acquire_postgres_lock(&transaction, options).await?;
+    }
+    let operation_result = operation((&transaction).into()).await;
 
-    match (operation_result, release_result) {
-        (Ok(value), Ok(())) => {
+    match operation_result {
+        Ok(value) => {
             transaction.commit().await?;
             Ok(value)
         }
-        (Err(error), Ok(())) => rollback_preserving_error(transaction, error).await,
-        (Ok(_), Err(release_error)) => {
-            rollback_after_infrastructure_error(transaction, &release_error).await;
-            Err(release_error)
-        }
-        (Err(operation_error), Err(release_error)) => {
-            let combined = DbErr::Custom(format!(
-                "migration operation failed: {operation_error}; additionally failed to release \
-                 the MySQL migration lock: {release_error}"
-            ));
-            rollback_after_infrastructure_error(transaction, &combined).await;
-            Err(combined)
-        }
+        Err(error) => rollback_preserving_error(transaction, error).await,
     }
+}
+
+async fn run_mysql_migration<T, F>(
+    database: &DatabaseConnection,
+    options: &MigrationLockOptions,
+    operation: F,
+) -> Result<T, DbErr>
+where
+    F: for<'a> FnOnce(DatabaseExecutor<'a>) -> MigrationFuture<'a, T>,
+{
+    let dedicated_database = create_mysql_migration_connection(database).await?;
+    acquire_mysql_lock(&dedicated_database, options).await?;
+    let operation_result = operation((&dedicated_database).into()).await;
+    let release_result = release_mysql_lock(&dedicated_database, options).await;
+
+    let result = match (operation_result, release_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(release_error)) => Err(release_error),
+        (Err(operation_error), Err(release_error)) => Err(DbErr::Custom(format!(
+            "migration operation failed: {operation_error}; additionally failed to release \
+             the MySQL migration lock: {release_error}"
+        ))),
+    };
+
+    if let Err(close_error) = dedicated_database.close().await {
+        tracing::warn!(%close_error, "failed to close dedicated MySQL migration connection");
+    }
+    result
+}
+
+async fn create_mysql_migration_connection(
+    database: &DatabaseConnection,
+) -> Result<DatabaseConnection, DbErr> {
+    let source_pool = database.get_mysql_connection_pool();
+    let connect_options = source_pool.connect_options();
+    let dedicated_pool = source_pool
+        .options()
+        .clone()
+        .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .test_before_acquire(false)
+        .before_acquire(|_, _| Box::pin(async { Ok(true) }))
+        .after_release(|_, _| Box::pin(async { Ok(true) }))
+        .connect_with((*connect_options).clone())
+        .await
+        .map_err(|error| DbErr::Conn(RuntimeErr::SqlxError(Arc::new(error))))?;
+    Ok(dedicated_pool.into())
 }
 
 /// Runs a standard `SeaORM` migrator while holding the backend migration lock.
@@ -158,8 +204,8 @@ pub async fn run_migrator_with_lock<M>(
 where
     M: MigratorTrait + 'static,
 {
-    with_migration_lock(database, options, |transaction| {
-        Box::pin(M::up(transaction, steps))
+    with_migration_lock(database, options, |connection| {
+        Box::pin(M::up(connection, steps))
     })
     .await
 }
@@ -179,14 +225,14 @@ async fn acquire_postgres_lock(
 }
 
 async fn acquire_mysql_lock(
-    transaction: &DatabaseTransaction,
+    connection: &DatabaseConnection,
     options: &MigrationLockOptions,
 ) -> Result<(), DbErr> {
     let timeout = i64::try_from(options.mysql_timeout_seconds).map_err(|_| {
         DbErr::Custom("MySQL migration lock timeout exceeds signed 64-bit range".to_string())
     })?;
     let acquired = mysql_lock_query_result(
-        transaction,
+        connection,
         "SELECT GET_LOCK(?, ?)",
         [options.namespace.clone().into(), timeout.into()],
         "acquire",
@@ -203,11 +249,11 @@ async fn acquire_mysql_lock(
 }
 
 async fn release_mysql_lock(
-    transaction: &DatabaseTransaction,
+    connection: &DatabaseConnection,
     options: &MigrationLockOptions,
 ) -> Result<(), DbErr> {
     let released = mysql_lock_query_result(
-        transaction,
+        connection,
         "SELECT RELEASE_LOCK(?)",
         [options.namespace.clone().into()],
         "release",
@@ -223,13 +269,16 @@ async fn release_mysql_lock(
     }
 }
 
-async fn mysql_lock_query_result<const N: usize>(
-    transaction: &DatabaseTransaction,
+async fn mysql_lock_query_result<C, const N: usize>(
+    connection: &C,
     sql: &str,
     values: [sea_orm_migration::sea_orm::Value; N],
     operation: &str,
-) -> Result<bool, DbErr> {
-    let row = transaction
+) -> Result<bool, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let row = connection
         .query_one_raw(Statement::from_sql_and_values(
             DbBackend::MySql,
             sql,
@@ -270,12 +319,6 @@ async fn rollback_preserving_error<T>(
         tracing::warn!(%rollback_error, "failed to rollback migration transaction after callback error");
     }
     Err(error)
-}
-
-async fn rollback_after_infrastructure_error(transaction: DatabaseTransaction, error: &DbErr) {
-    if let Err(rollback_error) = transaction.rollback().await {
-        tracing::warn!(%error, %rollback_error, "failed to rollback migration transaction");
-    }
 }
 
 fn stable_advisory_key(namespace: &str) -> i64 {

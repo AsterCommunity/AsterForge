@@ -160,6 +160,69 @@ async fn assert_mysql_lock_timeout(database: &DatabaseConnection, namespace: &st
     holder.await.unwrap().unwrap();
 }
 
+async fn assert_mysql_callback_uses_lock_owning_session(
+    database: &DatabaseConnection,
+    namespace: &str,
+) {
+    let options = MigrationLockOptions::new(namespace).with_mysql_timeout_seconds(2);
+    let namespace = namespace.to_owned();
+    with_migration_lock(database, &options, |connection| {
+        Box::pin(async move {
+            let row = connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::MySql,
+                    "SELECT CONNECTION_ID(), IS_USED_LOCK(?)",
+                    [namespace.into()],
+                ))
+                .await?
+                .ok_or_else(|| DbErr::Custom("session identity query returned no row".into()))?;
+            let connection_id = row.try_get_by_index::<u64>(0)?;
+            let lock_owner_id = row.try_get_by_index::<Option<u64>>(1)?.ok_or_else(|| {
+                DbErr::Custom("migration lock did not have an owning session".into())
+            })?;
+            if connection_id != lock_owner_id {
+                return Err(DbErr::Custom(
+                    "migration callback did not use the lock-owning MySQL session".into(),
+                ));
+            }
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+}
+
+async fn assert_mysql_ddl_is_not_rolled_back(database: &DatabaseConnection, namespace: &str) {
+    let table_name = format!("migration_lock_ddl_{}", std::process::id());
+    let create_table_name = table_name.clone();
+    let options = MigrationLockOptions::new(namespace).with_mysql_timeout_seconds(2);
+    let error = with_migration_lock(database, &options, |connection| {
+        Box::pin(async move {
+            connection
+                .execute_unprepared(&format!(
+                    "CREATE TABLE `{create_table_name}` (id BIGINT PRIMARY KEY)"
+                ))
+                .await?;
+            Err::<(), _>(DbErr::Custom("expected DDL migration error".into()))
+        })
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Custom Error: expected DDL migration error"
+    );
+
+    database
+        .execute_unprepared(&format!("INSERT INTO `{table_name}` (id) VALUES (1)"))
+        .await
+        .unwrap();
+    database
+        .execute_unprepared(&format!("DROP TABLE `{table_name}`"))
+        .await
+        .unwrap();
+}
+
 async fn mysql_index_exists(
     database: &DatabaseConnection,
     table_name: &str,
@@ -276,6 +339,8 @@ async fn mysql_serializes_migrations_and_releases_after_error() {
     )
     .await;
     assert_mysql_lock_timeout(&database, "forge:mysql:timeout").await;
+    assert_mysql_callback_uses_lock_owning_session(&database, "forge:mysql:session").await;
+    assert_mysql_ddl_is_not_rolled_back(&database, "forge:mysql:ddl").await;
     assert_callback_error_releases_lock(&database, "forge:mysql:error-release").await;
     assert_mysql_index_helpers_are_idempotent(&database).await;
 
