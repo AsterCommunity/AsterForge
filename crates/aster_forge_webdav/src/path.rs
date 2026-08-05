@@ -175,6 +175,8 @@ impl DavPath {
     }
 
     /// Returns the canonical parent collection without reparsing decoded path data.
+    ///
+    /// Returns `None` when this path is the `WebDAV` mount root.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
         parent_relative_path(&self.canonical).map(|canonical| Self { canonical })

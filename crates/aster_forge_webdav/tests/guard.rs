@@ -696,7 +696,7 @@ fn lock_guard_fails_closed_when_conflict_lookup_fails() {
 fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries() {
     futures::executor::block_on(async {
         let filesystem = TestFileSystem {
-            directories: HashSet::from(["/folder/".to_owned(), "/folder%2F/".to_owned()]),
+            directories: HashSet::from(["/folder/".to_owned()]),
             etags: HashMap::from([("/file/".to_owned(), "etag-file".to_owned())]),
             failures: HashMap::from([("/private/".to_owned(), FsError::Forbidden)]),
         };
@@ -722,9 +722,13 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
             .is_ok(),
             "an existing collection is a valid parent"
         );
+        let literal_filesystem = TestFileSystem {
+            directories: HashSet::from(["/folder%2F/".to_owned()]),
+            ..TestFileSystem::default()
+        };
         assert!(
             enforce_parent_collection(
-                &filesystem,
+                &literal_filesystem,
                 &DavPath::new("/folder%252F/new.txt").expect("literal percent parent target"),
             )
             .await
