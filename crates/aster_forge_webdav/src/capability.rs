@@ -26,6 +26,51 @@ pub enum DavResourceState {
     AddMemberEndpoint,
 }
 
+/// Product-neutral RFC 3253 state of a request target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DavVersioningState {
+    /// The target does not expose the core version-control package.
+    #[default]
+    Unsupported,
+    /// An ordinary resource that can be placed under version control.
+    Versionable,
+    /// A version-controlled resource whose current version is checked in.
+    CheckedIn,
+    /// A version-controlled resource whose current version is checked out.
+    CheckedOut,
+    /// An immutable version resource.
+    Version,
+}
+
+/// Automatic side effects selected by a product for checked-in resources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DavAutoVersion {
+    /// Mutation requires an explicitly checked-out resource.
+    #[default]
+    None,
+    /// Automatically check out before mutation and check in after it succeeds.
+    CheckoutCheckin,
+    /// Check out before mutation, then check in unless the resource is write-locked.
+    CheckoutUnlockedCheckin,
+    /// Automatically check out before mutation and leave the resource checked out.
+    Checkout,
+    /// Automatically check out only when the checked-in resource is write-locked.
+    LockedCheckout,
+}
+
+/// RFC 3253 facts projected by the product capability provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct DavVersioningCapabilities {
+    pub state: DavVersioningState,
+    pub auto_version: DavAutoVersion,
+    /// Whether the current target is protected by a write lock.
+    pub write_locked: bool,
+    /// Whether the current checkout is associated with a write lock after automatic checkout.
+    pub auto_checkout_lock: bool,
+    /// Whether this server permits DELETE of immutable version resources.
+    pub allow_version_delete: bool,
+}
+
 /// Request target supplied to a capability provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilityTarget {
@@ -552,6 +597,7 @@ write_profile!(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilityDeclaration {
     pub resource: DavResourceState,
+    pub versioning: DavVersioningCapabilities,
     /// Methods allowed for this principal and target. Package implementation methods are derived.
     pub methods: DavMethodSet,
     pub locking: DavLockingCapability,
@@ -567,6 +613,13 @@ impl DavCapabilityDeclaration {
     pub const fn new(resource: DavResourceState, methods: DavMethodSet) -> Self {
         Self {
             resource,
+            versioning: DavVersioningCapabilities {
+                state: DavVersioningState::Unsupported,
+                auto_version: DavAutoVersion::None,
+                write_locked: false,
+                auto_checkout_lock: false,
+                allow_version_delete: false,
+            },
             methods,
             locking: DavLockingCapability::Disabled,
             extensions: DavExtensionSet::empty(),
@@ -614,6 +667,22 @@ pub enum DavCapabilityPlanError {
         package: DavExtensionPackage,
         resource: DavResourceState,
     },
+    #[error("the RFC 3253 version-control package requires explicit target versioning facts")]
+    VersionControlWithoutTarget,
+    #[error("versioning target facts require the RFC 3253 version-control package")]
+    VersioningTargetWithoutPackage,
+    #[error("automatic versioning is only valid for a checked-in or checked-out resource")]
+    AutoVersionNotApplicable,
+    #[error("an automatic checkout lock is only valid for a write-locked checked-out resource")]
+    AutoCheckoutLockNotApplicable,
+    #[error(
+        "an automatic checkout lock requires an auto-version mode that can leave a locked resource checked out"
+    )]
+    AutoCheckoutLockWithoutApplicableMode,
+    #[error("version DELETE policy is only applicable to immutable version resources")]
+    VersionDeletePolicyNotApplicable,
+    #[error("VERSION-CONTROL is only applicable to versionable or version-controlled resources")]
+    VersionControlMethodNotApplicable,
     #[error("method {method:?} requires an applicable RFC extension package")]
     ExtensionMethodWithoutPackage { method: DavMethod },
     #[error("SEARCH requires at least DAV:basicsearch")]
@@ -874,7 +943,7 @@ pub fn plan_capabilities(
     validate_extension_methods(&declaration)?;
     validate_writes(&declaration)?;
 
-    let package_methods = extension_methods(declaration.extensions, declaration.resource);
+    let package_methods = extension_methods_for_declaration(&declaration);
     let supported_methods = declaration.methods.union(package_methods);
     let dispatch_methods = declaration
         .methods
@@ -892,10 +961,18 @@ pub fn plan_capabilities(
     for package in declaration.extensions.iter() {
         let descriptor = package.descriptor();
         for property in descriptor.live_properties {
-            live_properties.insert(*property);
+            if package != DavExtensionPackage::VersionControl
+                || versioning_live_property(declaration.versioning.state, *property)
+            {
+                live_properties.insert(*property);
+            }
         }
         for report in descriptor.reports {
-            reports.insert(*report);
+            if package != DavExtensionPackage::VersionControl
+                || versioning_report(declaration.versioning.state, *report)
+            {
+                reports.insert(*report);
+            }
         }
         preferences = preferences.union(descriptor.preferences);
     }
@@ -1051,6 +1128,44 @@ fn validate_extensions(
             });
         }
     }
+    let has_version_control = declaration
+        .extensions
+        .contains(DavExtensionPackage::VersionControl);
+    if has_version_control && declaration.versioning.state == DavVersioningState::Unsupported {
+        return Err(DavCapabilityPlanError::VersionControlWithoutTarget);
+    }
+    if !has_version_control && declaration.versioning.state != DavVersioningState::Unsupported {
+        return Err(DavCapabilityPlanError::VersioningTargetWithoutPackage);
+    }
+    if declaration.versioning.auto_version != DavAutoVersion::None
+        && !matches!(
+            declaration.versioning.state,
+            DavVersioningState::CheckedIn | DavVersioningState::CheckedOut
+        )
+    {
+        return Err(DavCapabilityPlanError::AutoVersionNotApplicable);
+    }
+    if declaration.versioning.auto_checkout_lock
+        && (!declaration.versioning.write_locked
+            || declaration.versioning.state != DavVersioningState::CheckedOut)
+    {
+        return Err(DavCapabilityPlanError::AutoCheckoutLockNotApplicable);
+    }
+    if declaration.versioning.auto_checkout_lock
+        && !matches!(
+            declaration.versioning.auto_version,
+            DavAutoVersion::CheckoutUnlockedCheckin
+                | DavAutoVersion::Checkout
+                | DavAutoVersion::LockedCheckout
+        )
+    {
+        return Err(DavCapabilityPlanError::AutoCheckoutLockWithoutApplicableMode);
+    }
+    if declaration.versioning.allow_version_delete
+        && declaration.versioning.state != DavVersioningState::Version
+    {
+        return Err(DavCapabilityPlanError::VersionDeletePolicyNotApplicable);
+    }
     let search_enabled = declaration.extensions.contains(DavExtensionPackage::Search);
     if search_enabled {
         if !declaration
@@ -1070,13 +1185,79 @@ fn validate_extensions(
 fn validate_extension_methods(
     declaration: &DavCapabilityDeclaration,
 ) -> Result<(), DavCapabilityPlanError> {
-    let package_methods = extension_methods(declaration.extensions, declaration.resource);
+    let package_methods = extension_methods_for_declaration(declaration);
     for method in declaration.methods.iter() {
         if is_extension_only_method(method) && !package_methods.contains(method) {
             return Err(DavCapabilityPlanError::ExtensionMethodWithoutPackage { method });
         }
     }
+    if declaration.methods.contains(DavMethod::VersionControl)
+        && !matches!(
+            declaration.versioning.state,
+            DavVersioningState::Versionable
+                | DavVersioningState::CheckedIn
+                | DavVersioningState::CheckedOut
+        )
+    {
+        return Err(DavCapabilityPlanError::VersionControlMethodNotApplicable);
+    }
     Ok(())
+}
+
+const fn versioning_methods(methods: DavMethodSet, state: DavVersioningState) -> DavMethodSet {
+    match state {
+        DavVersioningState::Versionable
+        | DavVersioningState::CheckedIn
+        | DavVersioningState::CheckedOut => methods,
+        DavVersioningState::Version => methods.without(DavMethod::VersionControl),
+        DavVersioningState::Unsupported => methods
+            .without(DavMethod::VersionControl)
+            .without(DavMethod::Report),
+    }
+}
+
+fn extension_methods_for_declaration(declaration: &DavCapabilityDeclaration) -> DavMethodSet {
+    let methods = extension_methods(declaration.extensions, declaration.resource);
+    if declaration
+        .extensions
+        .contains(DavExtensionPackage::VersionControl)
+    {
+        versioning_methods(methods, declaration.versioning.state)
+    } else {
+        methods
+    }
+}
+
+const fn versioning_report(state: DavVersioningState, report: DavReportType) -> bool {
+    match report {
+        DavReportType::ExpandProperty => !matches!(state, DavVersioningState::Unsupported),
+        DavReportType::VersionTree => matches!(
+            state,
+            DavVersioningState::CheckedIn
+                | DavVersioningState::CheckedOut
+                | DavVersioningState::Version
+        ),
+        _ => true,
+    }
+}
+
+const fn versioning_live_property(state: DavVersioningState, property: DavLiveProperty) -> bool {
+    match property {
+        DavLiveProperty::CheckedIn => matches!(state, DavVersioningState::CheckedIn),
+        DavLiveProperty::CheckedOut => matches!(state, DavVersioningState::CheckedOut),
+        DavLiveProperty::AutoVersion => matches!(
+            state,
+            DavVersioningState::CheckedIn | DavVersioningState::CheckedOut
+        ),
+        DavLiveProperty::PredecessorSet => matches!(
+            state,
+            DavVersioningState::CheckedOut | DavVersioningState::Version
+        ),
+        DavLiveProperty::SuccessorSet
+        | DavLiveProperty::CheckoutSet
+        | DavLiveProperty::VersionName => matches!(state, DavVersioningState::Version),
+        _ => true,
+    }
 }
 
 const fn is_extension_only_method(method: DavMethod) -> bool {

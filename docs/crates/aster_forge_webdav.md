@@ -42,6 +42,17 @@ DeltaV 不再压缩成一个 `versioning` 布尔值。`version-control`、`check
 checkout-in-place 和 version-history。运行时 declaration 仍必须显式投影当前目标真正启用的完整
 package 集，且不能超过静态上限。
 
+core `version-control` declaration 还必须提供 `DavVersioningCapabilities`，用
+`DavVersioningState::{Versionable, CheckedIn, CheckedOut, Version}` 明确当前目标，而不是从
+entity、URL 或 method 集反推。`DavAutoVersion` 描述 checked-in mutation 的 checkout/checkin
+副作用并覆盖 `checkout-checkin`、`checkout-unlocked-checkin`、`checkout` 和 `locked-checkout`；
+`write_locked` 与 `auto_checkout_lock` 分别表达当前写锁状态、当前 checkout 是否由该写锁关联的
+自动 checkout 产生。`allow_version_delete` 只表达服务器是否采用 RFC 3253 可选的 version DELETE
+行为，非 version target 携带该 policy 会被 planner 拒绝。
+`plan_capabilities` 用这些 facts 同时裁剪 method support、`supported-live-property-set` 和
+`supported-report-set`：versionable resource 只开放 `expand-property`，checked-in/out 和 immutable
+version 才开放 `version-tree`，immutable version 不开放 `VERSION-CONTROL`。
+
 typed catalog 还包含 WebDAV ACL（[RFC 3744](https://www.rfc-editor.org/rfc/rfc3744.html)）、
 SEARCH（[RFC 5323](https://www.rfc-editor.org/rfc/rfc5323.html)）、Quota（[RFC 4331](https://www.rfc-editor.org/rfc/rfc4331.html)）、
 Collection Sync（[RFC 6578](https://www.rfc-editor.org/rfc/rfc6578.html)）、Extended MKCOL（[RFC 5689](https://www.rfc-editor.org/rfc/rfc5689.html)）、
@@ -92,8 +103,70 @@ provider trait 使用原生 `async fn` 和泛型静态分发，不为 capability
 Forge 维护标准 live property 的静态 catalog，并从 capability snapshot 投影
 `supported-method-set`、`supported-live-property-set`、`supported-report-set` 和
 `supported-query-grammar-set`。package descriptor 负责 discovery 与 dispatch gate；每个高级
-REPORT 的具体请求 grammar 和执行 handler 仍由对应协议模块或产品 adapter 实现，声明 package
-不等于伪装成所有操作已经落地。
+非 core REPORT 的具体请求 grammar 和执行 handler 仍由对应协议模块或产品 adapter 实现；core
+`version-tree` 与 `expand-property` 已由 DeltaV 模块完整持有。声明其他 package 不等于伪装成其
+全部操作已经落地。
+
+## RFC 3253 core DeltaV
+
+`plan_report_request_with_limits` 解析并通过 capability snapshot gate，返回
+`DavReportRequest::{VersionTree, ExpandProperty, Other}`。`DavVersionTreeRequest` 保留 optional
+`DAV:prop`、expanded namespace、客户端 lexical prefix 和 REPORT Depth；未携带 Depth 时按 RFC
+默认 `Depth: 0`。`DavExpandPropertyRequest` 保留任意层 nested `DAV:property` 选择及每层
+`name`/`namespace`。`version-tree` 的 `ANY` grammar 忽略未知 extension 子树；`expand-property`
+只接受 DTD 声明的 nested `DAV:property`。DTD/ENTITY、重复 `DAV:prop`、property-name character
+data、缺失/非法 `name`、`expand-property` 的异名子元素和零 limits 都在 backend 调用前拒绝。
+
+```rust
+let request = aster_forge_webdav::plan_report_request_with_limits(
+    &snapshot,
+    body,
+    request_head.depth,
+    report_limits,
+)?;
+
+match request {
+    aster_forge_webdav::DavReportRequest::VersionTree(request) => {
+        let versions = product_history_adapter.versions(&target).await?;
+        aster_forge_webdav::version_tree_response(&request, versions)?
+    }
+    aster_forge_webdav::DavReportRequest::ExpandProperty(request) => {
+        aster_forge_webdav::execute_expand_property(
+            &product_property_adapter,
+            target_href,
+            &request,
+            report_limits,
+            &cancellation,
+        ).await?
+    }
+    aster_forge_webdav::DavReportRequest::Other { .. } => product_report_adapter.execute(request).await?,
+}
+```
+
+`DavReportLimits` 同时限制 input bytes、XML depth、nested expansion depth、expanded resource
+数、resolved property 数和最终 `DavMultiStatusLimits`。`execute_expand_property` 在每次 backend
+property lookup 和 href traversal 前检查 `DavCancellation`；产品 deadline 使用同一 cancellation
+source。executor 维护 active href 集检测循环，区分 missing property、missing nested href、backend
+failure、depth/resource/property/output limit 和 cancellation，不把持久化错误文本写进 DAV body。
+
+version-tree backend 返回 `DavVersionReportItem` 和 ordered `DavVersionProperty`。Forge 只输出请求
+中的 properties；未提供的 requested property 进入 `404 propstat`，backend classification 进入对应
+property-level status，unknown namespace/QName 原样保留。`version-name`、creator/comment、
+predecessor/successor/checkout href sets 与可选 ETag/content length/type/last-modified 都使用同一
+通用 property model，不再存在固定四字段 response shape。
+
+VERSION-CONTROL handler 使用 `plan_version_control_request` 得到
+`DavVersionControlAction::{PutUnderVersionControl, AlreadyControlled}`，再把 plan 交给产品实现的
+`DavVersionControlPort`。产品 port 在一个 writer transaction 中创建/复用 history 与 immutable
+version、回滚失败、记录 audit，并返回 `DavVersionControlResult`；Forge 只组合空 `200` 或带未来
+扩展子元素的 `DAV:version-control-response`。
+
+PUT handler 已直接调用 `plan_versioning_method`。PROPPATCH、DELETE、COPY、MOVE 和 UNLOCK handler
+也必须在产品副作用前调用同一 planner：checked-in PUT/PROPPATCH 根据 `DavAutoVersion` 选择 typed
+auto-checkout plan；immutable version 的 PUT/PROPPATCH/MOVE 和按策略禁止的 DELETE 返回对应
+`DavVersioningPrecondition` 与 DAV error condition；UNLOCK 可返回 `AutoCheckinOnUnlock`。产品执行
+checkout/checkin、rollback、version persistence、quota、permission 和 audit，Forge 不接收产品
+entity 或 repository。
 
 PROPFIND 先通过 `live_property_requirements` 汇总本次真正需要的 metadata、lock、dead property、
 quota、principal、sync token、add-member 和扩展值。`DavLivePropertyProvider` 每个资源只取得一次
@@ -267,10 +340,12 @@ Forge 负责：
 - PROPFIND、PROPPATCH、LOCK、REPORT、VERSION-CONTROL 的 XML 安全校验、QName 语法和未知扩展处理。
 - PROPFIND 的 allprop/include/propname/prop selector、去重和 200/404 propstat 分组。
 - PROPPATCH 的状态分组、PROPFIND/PROPPATCH XML error mapping、finite-depth 与 207 response composition。
-- REPORT 根 QName 解析与 snapshot gate；已实现的 `DAV:version-tree` grammar、file-only mapping、version multistatus 和 VERSION-CONTROL response selection。
+- typed REPORT AST、Depth 默认/显式值、snapshot gate、requested-property-driven `version-tree`
+  propstat、bounded `expand-property` traversal 与 VERSION-CONTROL plan/port/response。
 - 已知 request grammar 直接遍历 `aster_forge_xml` 的 source-backed arena，不先重复 validation，也不复制整棵通用 DOM；只有需要持久化或回显的 owner/property 子树才物化为 `DavXmlElement`。
 - `DavXmlElement` 只承担 DAV 持久化子树与 response composition；通用解析、安全限制、namespace 和 reader/writer 由 `aster_forge_xml` 承担。
-- DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV version-tree 的 response grammar。
+- DAV error、multistatus/propstat、dead property、supportedlock/lockdiscovery 和 DeltaV nested
+  response grammar。
 - 产品中立 backend contracts：`DavFileSystem` / `DavMetaData` 负责单资源机械层，`DavDirectoryEnumerator` 负责 bounded page/cursor 枚举，`DavDownloadSource` 负责 full/range stream，`DavWriteSystem` 负责顺序提交，`DavRandomWriteSystem` 只负责显式随机写，`DavLockSystem` 负责锁持久化与冲突查询。
 - `DavLockSystem` 的 discovery、batch discovery 和 conflict lookup 都返回 typed backend failure；产品 adapter 不得把查询失败降级成空锁集合，Forge 会让 `If`、mutation guard 和 `lockdiscovery` fail closed。
 - 批量 dead-property 读取只向 backend 传递 `DavPath`；产品 adapter 自行解析数据库身份并执行批量查询。
@@ -295,12 +370,13 @@ Forge 负责：
 | PROPPATCH | 必须存在 | `DAV:propertyupdate` | 有序的 `set` / `remove`，每个 action 恰好一个 `DAV:prop` | action 按文档顺序保留；action 内重复 `prop` 拒绝；至少需要一个有效 property 操作 |
 | LOCK acquire | 必须存在 | `DAV:lockinfo` | 一个 `lockscope`、一个 `locktype`、可选一个 `owner` | 控制顺序无关；重复或同时出现多个已知识别值时拒绝 |
 | LOCK refresh | 必须缺省 | 无 | token 来自 `If` header | body presence 由 LOCK planner 区分 acquire 与 refresh |
-| REPORT `version-tree` | 必须存在 | `DAV:version-tree` | 至多一个直接 `DAV:prop` | 其他元素忽略；重复 `DAV:prop` 拒绝 |
+| REPORT `version-tree` | 必须存在 | `DAV:version-tree` | 至多一个直接 `DAV:prop`，保留 ordered QName 选择 | 其他元素忽略；重复 `DAV:prop` 拒绝 |
+| REPORT `expand-property` | 必须存在 | `DAV:expand-property` | 零个或多个 nested `DAV:property name namespace` | 非 `DAV:property` 子元素拒绝；缺少或非法 `name` 拒绝；深度/数量有界 |
 | VERSION-CONTROL | 可缺省；存在时必须是 XML | `DAV:version-control` | RFC 3253 定义为 `ANY` | 安全、完整且根 QName 正确后保留扩展内容 |
 
 结构化协议容器不接受额外字符数据。property-name 上下文只把元素 QName 作为属性名；直接字符数据会被视为非法 property value，而未知子元素仍按 RFC 4918 的完整子树忽略规则处理。`PROPPATCH set` 的 property value 和 LOCK `owner` 属于需要保留的内容，不应用这条 property-name 限制。
 
-DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.5) 和 [Section 3.7](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.7) 为准。`VERSION-CONTROL` 使用 bounded XML body policy，因此 transport adapter 不会绕过产品提供的 XML 请求体上限。
+DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.5)、[Section 3.7](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.7) 和 [Section 3.8](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.8) 为准。`VERSION-CONTROL` 与两个 core REPORT 都使用 bounded XML body policy，因此 transport adapter 不会绕过产品提供的 XML 请求体上限。
 
 产品负责：
 
@@ -490,6 +566,12 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
   倒序、page hard limit、backend failure，以及取消后不再请求下一页。
 - traversal budget 测试必须覆盖 visited/work/failure/depth 的精确上限和超限、取消、partial
   execution progress 与无额外 work storage 的值语义。
+- DeltaV 测试必须覆盖 VERSION-CONTROL absent/valid/extension/invalid/XXE、versionable/checked-in/
+  checked-out/immutable/collection/unmapped planner、version-tree default/explicit property selection
+  与 lexical QName、success/missing/unknown/backend propstat、predecessor/successor/checkout href
+  sets、expand-property nested success/missing href/cycle/depth/item/byte/cancellation/backend failure、
+  REPORT default/explicit Depth、known-but-unavailable 与 unknown report，以及 OPTIONS/405/dispatch/
+  body/property/report one-snapshot consistency。
 - recursive mutation executor 测试必须覆盖 COPY/MOVE/DELETE、file/collection、post-order
   namespace consistency、首/尾/all-child failure、兄弟继续、实际 affected href 与独立 lock-root
   href、exact/+1 directory/work/failure/depth limits，以及 response start 前后的取消语义。

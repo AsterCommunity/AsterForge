@@ -247,6 +247,10 @@ fn full_capability_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
     }];
     plan_capabilities(DavCapabilityDeclaration {
         resource: DavResourceState::File,
+        versioning: aster_forge_webdav::DavVersioningCapabilities {
+            state: aster_forge_webdav::DavVersioningState::CheckedIn,
+            ..aster_forge_webdav::DavVersioningCapabilities::default()
+        },
         methods: DavMethodSet::from_methods(&[
             DavMethod::Options,
             DavMethod::Get,

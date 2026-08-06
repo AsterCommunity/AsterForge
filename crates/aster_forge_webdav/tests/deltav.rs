@@ -1,11 +1,26 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use aster_forge_webdav::{
-    DavCapabilityDeclaration, DavExtensionPackage, DavExtensionSet, DavMethod, DavMethodSet,
-    DavReportErrorResponsePolicy, DavReportPlanError, DavReportType, DavResourceKind,
-    DavResourceState, DavResponse, DavResponseBody, DavVersionXml, DavXmlError, plan_capabilities,
-    plan_report_request, report_plan_error_response, validate_version_control_request,
-    version_control_request_error_response, version_control_response,
-    version_tree_non_file_response, version_tree_response,
+    DavAutoVersion, DavBackendError, DavBackendErrorKind, DavCancellationToken,
+    DavCapabilityDeclaration, DavCapabilitySnapshot, DavExpandPropertyError,
+    DavExpandPropertyProvider, DavExpandPropertyValue, DavExtensionPackage, DavExtensionSet,
+    DavMethod, DavMethodSet, DavMultiStatusErrorKind, DavMultiStatusLimits,
+    DavReportErrorResponsePolicy, DavReportLimits, DavReportPlanError, DavReportRequest,
+    DavReportType, DavRequestedProperty, DavResourceState, DavResponse, DavResponseBody,
+    DavVersionControlAction, DavVersionControlPlan, DavVersionControlPlanError,
+    DavVersionControlPort, DavVersionControlResult, DavVersionProperty, DavVersionReportItem,
+    DavVersionTreeRequest, DavVersioningCapabilities, DavVersioningMethodPlan,
+    DavVersioningPrecondition, DavVersioningState, DavXmlElement, DavXmlError, DavXmlNode, Depth,
+    dav_property_text_element, execute_expand_property, execute_version_control,
+    expand_property_error_response, plan_capabilities, plan_report_request,
+    plan_report_request_with_limits, plan_version_control_request, plan_versioning_method,
+    report_plan_error_response, version_control_plan_error_response, version_control_response,
+    version_tree_response, version_tree_response_with_limits, versioning_precondition_response,
 };
+use async_trait::async_trait;
+use futures::executor::block_on;
 use http::StatusCode;
 
 fn body_text(response: &DavResponse) -> String {
@@ -13,6 +28,41 @@ fn body_text(response: &DavResponse) -> String {
         panic!("response should contain bytes");
     };
     String::from_utf8(body.to_vec()).expect("UTF-8 response")
+}
+
+fn dav_property(name: &str) -> DavRequestedProperty {
+    DavRequestedProperty {
+        name: name.to_owned(),
+        namespace: Some("DAV:".to_owned()),
+        prefix: Some("D".to_owned()),
+    }
+}
+
+fn versioning_snapshot(
+    resource: DavResourceState,
+    state: DavVersioningState,
+    methods: &[DavMethod],
+) -> DavCapabilitySnapshot {
+    let mut declaration =
+        DavCapabilityDeclaration::new(resource, DavMethodSet::from_methods(methods));
+    declaration.compliance.class1 = true;
+    declaration.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    if methods.contains(&DavMethod::Lock) && methods.contains(&DavMethod::Unlock) {
+        declaration.locking = aster_forge_webdav::DavLockingCapability::Class2;
+    }
+    declaration.versioning = DavVersioningCapabilities {
+        state,
+        ..DavVersioningCapabilities::default()
+    };
+    plan_capabilities(declaration).expect("versioning snapshot")
+}
+
+fn report_snapshot(state: DavVersioningState) -> DavCapabilitySnapshot {
+    versioning_snapshot(
+        DavResourceState::File,
+        state,
+        &[DavMethod::Options, DavMethod::Report],
+    )
 }
 
 struct ReportResponsePolicy;
@@ -33,56 +83,111 @@ impl DavReportErrorResponsePolicy for ReportResponsePolicy {
     }
 }
 
-fn report_snapshot(packages: &[DavExtensionPackage]) -> aster_forge_webdav::DavCapabilitySnapshot {
-    let mut declaration = DavCapabilityDeclaration::new(
-        DavResourceState::Collection,
-        DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Report]),
-    );
-    declaration.compliance.class1 = true;
-    declaration.extensions = DavExtensionSet::from_packages(packages);
-    plan_capabilities(declaration).expect("REPORT snapshot")
+#[test]
+fn version_tree_request_preserves_explicit_properties_qnames_and_depth() {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    let request = plan_report_request_with_limits(
+        &snapshot,
+        br#"<D:version-tree xmlns:D="DAV:" xmlns:Z="urn:test"><D:prop><Z:custom/><D:version-name/></D:prop></D:version-tree>"#,
+        Some(Depth::Infinity),
+        DavReportLimits::default(),
+    )
+    .expect("typed version-tree request");
+    let DavReportRequest::VersionTree(request) = request else {
+        panic!("expected version-tree request");
+    };
+    assert_eq!(request.depth, Depth::Infinity);
+    assert_eq!(request.properties.as_ref().map(Vec::len), Some(2));
+    let custom = &request.properties.expect("explicit properties")[0];
+    assert_eq!(custom.name, "custom");
+    assert_eq!(custom.namespace.as_deref(), Some("urn:test"));
+    assert_eq!(custom.prefix.as_deref(), Some("Z"));
+
+    let default = plan_report_request(&snapshot, br#"<D:version-tree xmlns:D="DAV:"/>"#)
+        .expect("default request");
+    let DavReportRequest::VersionTree(default) = default else {
+        panic!("expected version-tree request");
+    };
+    assert_eq!(default.depth, Depth::Zero);
+    assert!(default.properties.is_none());
 }
 
 #[test]
-fn report_selector_accepts_only_snapshot_discovered_dav_report_types() {
-    let snapshot = report_snapshot(&[DavExtensionPackage::VersionControl]);
-    assert_eq!(
-        plan_report_request(&snapshot, br#"<D:version-tree xmlns:D="DAV:"/>"#)
-            .expect("valid report"),
-        DavReportType::VersionTree
-    );
-    assert_eq!(
-        plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="DAV:"/>"#)
-            .expect("prefix is lexical only"),
-        DavReportType::VersionTree
-    );
-    plan_report_request(
+fn expand_property_request_preserves_nested_namespace_selections() {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    let request = plan_report_request(
         &snapshot,
-        br#"<D:version-tree xmlns:D="DAV:" xmlns:X="urn:x">
-              <D:future><D:prop><D:not-active/></D:prop></D:future>
-              <D:prop><D:getetag><D:ignored>value</D:ignored></D:getetag></D:prop>
-              <X:future/>
-            </D:version-tree>"#,
+        br#"<D:expand-property xmlns:D="DAV:">
+              <D:property name="version-history">
+                <D:property name="version-set">
+                  <D:property name="creator-displayname"/>
+                  <D:property name="custom" namespace="urn:test"/>
+                </D:property>
+              </D:property>
+            </D:expand-property>"#,
     )
-    .expect("unknown report extensions should be ignored");
-
+    .expect("expand request");
+    let DavReportRequest::ExpandProperty(request) = request else {
+        panic!("expected expand-property");
+    };
+    assert_eq!(request.depth, Depth::Zero);
+    assert_eq!(request.properties[0].property.name, "version-history");
+    assert_eq!(request.properties[0].nested[0].property.name, "version-set");
     assert_eq!(
-        plan_report_request(&snapshot, br#"<D:expand-property xmlns:D="DAV:"/>"#),
-        Ok(DavReportType::ExpandProperty)
+        request.properties[0].nested[0].nested[1]
+            .property
+            .namespace
+            .as_deref(),
+        Some("urn:test")
     );
+}
+
+#[test]
+fn empty_expand_property_request_produces_an_empty_success_propstat() {
+    let request = expand_request(br#"<D:expand-property xmlns:D="DAV:"/>"#);
+    let response = block_on(execute_expand_property(
+        &ExpandProvider::default(),
+        "/resource",
+        &request,
+        DavReportLimits::default(),
+        &DavCancellationToken::new(),
+    ))
+    .expect("empty expand response");
+    let xml = body_text(&response);
+    assert!(xml.contains("/resource"), "{xml}");
+    assert!(xml.contains("HTTP/1.1 200 OK"), "{xml}");
+}
+
+#[test]
+fn report_grammar_and_snapshot_availability_fail_closed() {
+    let versionable = report_snapshot(DavVersioningState::Versionable);
     assert_eq!(
-        plan_report_request(&snapshot, br#"<D:sync-collection xmlns:D="DAV:"/>"#),
+        plan_report_request(&versionable, br#"<D:version-tree xmlns:D="DAV:"/>"#,),
         Err(DavReportPlanError::NotAvailable {
-            report: DavReportType::SyncCollection,
+            report: DavReportType::VersionTree,
         })
     );
-    let sync = report_snapshot(&[DavExtensionPackage::CollectionSync]);
+    assert!(matches!(
+        plan_report_request(&versionable, br#"<D:expand-property xmlns:D="DAV:"/>"#,),
+        Ok(DavReportRequest::ExpandProperty(_))
+    ));
+
+    let controlled = report_snapshot(DavVersioningState::CheckedIn);
+    for body in [
+        br#"<D:version-tree xmlns:D="DAV:"><D:prop/><D:prop/></D:version-tree>"#.as_slice(),
+        br#"<D:version-tree xmlns:D="DAV:">text</D:version-tree>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="bad:name"/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><X:property xmlns:X="urn:x" name="ignored"/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"><X:property xmlns:X="urn:x" name="ignored"/></D:property></D:expand-property>"#,
+    ] {
+        assert_eq!(
+            plan_report_request(&controlled, body),
+            Err(DavReportPlanError::Xml(DavXmlError::InvalidGrammar))
+        );
+    }
     assert_eq!(
-        plan_report_request(&sync, br#"<D:sync-collection xmlns:D="DAV:"/>"#),
-        Ok(DavReportType::SyncCollection)
-    );
-    assert_eq!(
-        plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="urn:extension"/>"#,),
+        plan_report_request(&controlled, br#"<X:version-tree xmlns:X="urn:extension"/>"#,),
         Err(DavReportPlanError::UnknownType {
             namespace: Some("urn:extension".to_owned()),
             name: "version-tree".to_owned(),
@@ -90,119 +195,58 @@ fn report_selector_accepts_only_snapshot_discovered_dav_report_types() {
     );
     assert_eq!(
         plan_report_request(
+            &controlled,
+            br#"<!DOCTYPE x [<!ENTITY e SYSTEM "file:///TARGET">]><D:version-tree xmlns:D="DAV:">&e;</D:version-tree>"#,
+        ),
+        Err(DavReportPlanError::Xml(DavXmlError::ExternalEntity))
+    );
+}
+
+#[test]
+fn report_limits_cover_input_xml_depth_and_nested_selection_depth() {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    assert_eq!(
+        plan_report_request_with_limits(
             &snapshot,
-            br#"<X:version-tree xmlns:X="urn:other-extension"/>"#,
+            br#"<D:version-tree xmlns:D="DAV:"/>"#,
+            None,
+            DavReportLimits::new(0, 8, 2, 8, 8, DavMultiStatusLimits::default()),
         ),
-        Err(DavReportPlanError::UnknownType {
-            namespace: Some("urn:other-extension".to_owned()),
-            name: "version-tree".to_owned(),
-        })
+        Err(DavReportPlanError::InvalidLimits)
     );
+    let limits = DavReportLimits::new(16, 8, 2, 8, 8, DavMultiStatusLimits::default());
     assert_eq!(
-        plan_report_request(&snapshot, br#"<D:future-report xmlns:D="DAV:"/>"#),
-        Err(DavReportPlanError::UnknownType {
-            namespace: Some("DAV:".to_owned()),
-            name: "future-report".to_owned(),
-        })
-    );
-    let namespaced =
-        plan_report_request(&snapshot, br#"<X:version-tree xmlns:X="urn:extension"/>"#)
-            .expect_err("extension namespace is not a DAV REPORT type");
-    assert_eq!(
-        namespaced.to_string(),
-        r#"unknown WebDAV REPORT type "version-tree" in namespace Some("urn:extension")"#
-    );
-    let unqualified = plan_report_request(&snapshot, br"<version-tree/>")
-        .expect_err("an unqualified root is not a DAV REPORT type");
-    assert_eq!(
-        unqualified.to_string(),
-        r#"unknown WebDAV REPORT type "version-tree" in namespace None"#
-    );
-    for body in [
-        br#"<D:version-tree xmlns:D="DAV:"><D:prop/><D:prop/></D:version-tree>"#.as_slice(),
-        br#"<D:version-tree xmlns:D="DAV:">text</D:version-tree>"#,
-        br#"<D:version-tree xmlns:D="DAV:"><D:prop><D:getetag>value</D:getetag></D:prop></D:version-tree>"#,
-    ] {
-        assert_eq!(
-            plan_report_request(&snapshot, body),
-            Err(DavReportPlanError::Xml(
-                DavXmlError::InvalidGrammar
-            ))
-        );
-    }
-}
-
-#[test]
-fn version_tree_known_prop_order_is_irrelevant_across_extensions() {
-    let snapshot = report_snapshot(&[DavExtensionPackage::VersionControl]);
-    for body in [
-        br#"<D:version-tree xmlns:D="DAV:" xmlns:X="urn:x">
-              <D:prop><D:getetag/></D:prop><X:future/><D:future/>
-            </D:version-tree>"#
-            .as_slice(),
-        br#"<D:version-tree xmlns:D="DAV:" xmlns:X="urn:x">
-              <X:future/><D:future/><D:prop><D:getetag/></D:prop>
-            </D:version-tree>"#,
-        br#"<D:version-tree xmlns:D="DAV:" xmlns:X="urn:x">
-              <X:before/><D:prop><D:getetag/></D:prop><X:after/>
-            </D:version-tree>"#,
-    ] {
-        plan_report_request(&snapshot, body)
-            .expect("version-tree extension ordering should not affect the known prop control");
-    }
-}
-
-#[test]
-fn version_control_accepts_absent_or_any_safe_dav_body() {
-    validate_version_control_request(b"").expect("absent body is valid");
-    validate_version_control_request(br#"<D:version-control xmlns:D="DAV:"/>"#)
-        .expect("empty DAV body is valid");
-    validate_version_control_request(
-        br#"<V:version-control xmlns:V="DAV:" xmlns:X="urn:x" X:flag="1">
-              text<X:future><V:nested/></X:future><![CDATA[more]]>
-            </V:version-control>"#,
-    )
-    .expect("RFC 3253 declares version-control as ANY");
-}
-
-#[test]
-fn version_control_rejects_wrong_root_and_unsafe_or_malformed_xml() {
-    assert_eq!(
-        validate_version_control_request(br#"<X:version-control xmlns:X="urn:x"/>"#),
-        Err(DavXmlError::InvalidGrammar)
-    );
-    assert_eq!(
-        validate_version_control_request(b"   \r\n"),
-        Err(DavXmlError::Malformed)
-    );
-    assert_eq!(
-        validate_version_control_request(
-            br#"<!DOCTYPE x [<!ENTITY e SYSTEM "file:///TARGET">]><D:version-control xmlns:D="DAV:">&e;</D:version-control>"#,
-        ),
-        Err(DavXmlError::ExternalEntity)
-    );
-}
-
-#[test]
-fn report_selector_preserves_xml_failure_categories() {
-    let snapshot = report_snapshot(&[DavExtensionPackage::VersionControl]);
-    assert_eq!(
-        plan_report_request(&snapshot, b"<D:version-tree"),
-        Err(DavReportPlanError::Xml(DavXmlError::Malformed))
-    );
-    assert_eq!(
-        plan_report_request(
+        plan_report_request_with_limits(
             &snapshot,
-            br#"<!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><D:version-tree xmlns:D="DAV:"/>"#,
+            br#"<D:version-tree xmlns:D="DAV:"/>"#,
+            None,
+            limits,
         ),
-        Err(DavReportPlanError::Xml(
-            DavXmlError::ExternalEntity
-        ))
+        Err(DavReportPlanError::Xml(DavXmlError::TooLarge))
+    );
+    let limits = DavReportLimits::new(4096, 8, 2, 8, 8, DavMultiStatusLimits::default());
+    assert_eq!(
+        plan_report_request_with_limits(
+            &snapshot,
+            br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"><D:property name="b"><D:property name="c"/></D:property></D:property></D:expand-property>"#,
+            None,
+            limits,
+        ),
+        Err(DavReportPlanError::Xml(DavXmlError::TooDeep))
+    );
+
+    let two_properties = br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"/><D:property name="b"/></D:expand-property>"#;
+    let exact = DavReportLimits::new(4096, 8, 4, 8, 2, DavMultiStatusLimits::default());
+    assert!(plan_report_request_with_limits(&snapshot, two_properties, None, exact).is_ok());
+    let one_too_few = DavReportLimits::new(4096, 8, 4, 8, 1, DavMultiStatusLimits::default());
+    assert_eq!(
+        plan_report_request_with_limits(&snapshot, two_properties, None, one_too_few),
+        Err(DavReportPlanError::Xml(DavXmlError::TooLarge))
     );
 }
 
 #[test]
-fn report_errors_select_plain_or_dav_xml_responses() {
+fn report_errors_map_xml_unknown_and_unavailable_categories() {
     let invalid = report_plan_error_response(
         &DavReportPlanError::Xml(DavXmlError::Malformed),
         &ReportResponsePolicy,
@@ -210,29 +254,25 @@ fn report_errors_select_plain_or_dav_xml_responses() {
     .expect("invalid response");
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
     assert_eq!(invalid.headers.get("Cache-Control").unwrap(), "no-store");
-    assert_eq!(body_text(&invalid), "Invalid XML body");
 
     let unsupported = report_plan_error_response(
         &DavReportPlanError::UnknownType {
             namespace: Some("urn:extension".to_owned()),
-            name: "expand-property".to_owned(),
+            name: "future".to_owned(),
         },
         &ReportResponsePolicy,
     )
-    .expect("unsupported response");
+    .expect("unknown response");
     assert_eq!(unsupported.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(body_text(&unsupported).contains("urn:extension"));
-    assert!(body_text(&unsupported).contains("expand-property"));
 
     let unavailable = report_plan_error_response(
         &DavReportPlanError::NotAvailable {
-            report: DavReportType::SyncCollection,
+            report: DavReportType::VersionTree,
         },
         &ReportResponsePolicy,
     )
     .expect("unavailable response");
     assert_eq!(unavailable.status, StatusCode::CONFLICT);
-    assert!(body_text(&unavailable).contains("sync-collection"));
 
     let external = report_plan_error_response(
         &DavReportPlanError::Xml(DavXmlError::ExternalEntity),
@@ -240,57 +280,841 @@ fn report_errors_select_plain_or_dav_xml_responses() {
     )
     .expect("external entity response");
     assert_eq!(external.status, StatusCode::FORBIDDEN);
-    assert_eq!(
-        external.headers.get("Content-Type").unwrap(),
-        "application/xml; charset=utf-8"
-    );
     assert!(body_text(&external).contains("no-external-entities"));
+}
 
-    let too_large = report_plan_error_response(
-        &DavReportPlanError::Xml(DavXmlError::TooLarge),
-        &ReportResponsePolicy,
-    )
-    .expect("too large response");
-    assert_eq!(too_large.status, StatusCode::PAYLOAD_TOO_LARGE);
-
-    let version_control = version_control_request_error_response(DavXmlError::InvalidGrammar)
-        .expect("version-control error response");
-    assert_eq!(version_control.status, StatusCode::BAD_REQUEST);
+#[test]
+fn version_control_plans_versionable_and_already_controlled_targets() {
+    let versionable = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::Versionable,
+        &[DavMethod::Options, DavMethod::VersionControl],
+    );
     assert_eq!(
-        version_control.headers.get("Cache-Control").unwrap(),
-        "no-store"
+        plan_version_control_request(&versionable, b"")
+            .expect("versionable plan")
+            .action,
+        DavVersionControlAction::PutUnderVersionControl
+    );
+    let controlled = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::CheckedOut,
+        &[DavMethod::Options, DavMethod::VersionControl],
+    );
+    assert_eq!(
+        plan_version_control_request(
+            &controlled,
+            br#"<D:version-control xmlns:D="DAV:"><X:future xmlns:X="urn:x"/></D:version-control>"#,
+        )
+        .expect("already controlled plan")
+        .action,
+        DavVersionControlAction::AlreadyControlled
+    );
+    assert_eq!(
+        plan_version_control_request(&controlled, br#"<X:version-control xmlns:X="urn:x"/>"#),
+        Err(DavVersionControlPlanError::Xml(DavXmlError::InvalidGrammar))
+    );
+    assert_eq!(
+        plan_version_control_request(
+            &controlled,
+            br#"<!DOCTYPE x [<!ENTITY e SYSTEM "file:///TARGET">]><D:version-control xmlns:D="DAV:">&e;</D:version-control>"#,
+        ),
+        Err(DavVersionControlPlanError::Xml(DavXmlError::ExternalEntity))
     );
 }
 
 #[test]
-fn version_tree_response_composes_multistatus_properties() {
-    let response = version_tree_response(vec![DavVersionXml {
-        href: "/webdav/file.txt?v=1".to_owned(),
-        version_name: "V1".to_owned(),
-        creator: "alice".to_owned(),
-        content_length: 42,
-        last_modified: "Sat, 25 Jul 2026 00:00:00 GMT".to_owned(),
-    }])
-    .expect("version response");
-    assert_eq!(response.status, StatusCode::MULTI_STATUS);
-    assert!(response.headers.get("Cache-Control").is_none());
+fn version_control_response_is_empty_without_extensions_and_structured_with_them() {
+    let empty = version_control_response(DavVersionControlResult {
+        response_extensions: Vec::new(),
+    })
+    .expect("empty success");
+    assert_eq!(empty.status, StatusCode::OK);
+    assert!(matches!(empty.body, DavResponseBody::Empty));
+
+    let mut extension = DavXmlElement::new("X:created-version");
+    extension.namespace = Some("urn:test".to_owned());
+    extension
+        .namespaces
+        .insert("X".to_owned(), "urn:test".to_owned());
+    extension
+        .children
+        .push(DavXmlNode::Text("/versions/1".to_owned()));
+    let response = version_control_response(DavVersionControlResult {
+        response_extensions: vec![extension],
+    })
+    .expect("extension success");
     let xml = body_text(&response);
-    assert!(xml.contains("version-name"), "{xml}");
-    assert!(xml.contains("V1"), "{xml}");
-    assert!(xml.contains("42"), "{xml}");
+    assert!(xml.contains("version-control-response"), "{xml}");
+    assert!(xml.contains("created-version"), "{xml}");
+}
+
+#[derive(Debug)]
+struct RecordingVersionControlPort {
+    seen: Mutex<Vec<DavVersionControlPlan>>,
+    result: Result<DavVersionControlResult, DavBackendError>,
+}
+
+#[async_trait]
+impl DavVersionControlPort for RecordingVersionControlPort {
+    async fn version_control(
+        &self,
+        plan: DavVersionControlPlan,
+    ) -> Result<DavVersionControlResult, DavBackendError> {
+        self.seen.lock().expect("recording lock").push(plan);
+        self.result.clone()
+    }
 }
 
 #[test]
-fn file_only_and_version_control_responses_select_protocol_status() {
-    let report = version_tree_non_file_response();
-    assert_eq!(report.status, StatusCode::CONFLICT);
-    assert_eq!(report.headers.get("Cache-Control").unwrap(), "no-store");
+fn version_control_executor_passes_the_plan_once_and_preserves_backend_classification() {
+    let plan = DavVersionControlPlan {
+        action: DavVersionControlAction::PutUnderVersionControl,
+    };
+    let port = RecordingVersionControlPort {
+        seen: Mutex::new(Vec::new()),
+        result: Ok(DavVersionControlResult {
+            response_extensions: Vec::new(),
+        }),
+    };
+    let result = block_on(execute_version_control(&port, plan)).expect("transaction result");
+    assert!(result.response_extensions.is_empty());
+    assert_eq!(*port.seen.lock().expect("recorded plan"), vec![plan]);
 
-    let file = version_control_response(DavResourceKind::File);
-    assert_eq!(file.status, StatusCode::OK);
-    assert!(file.headers.get("Cache-Control").is_none());
+    let failing = RecordingVersionControlPort {
+        seen: Mutex::new(Vec::new()),
+        result: Err(DavBackendError::new(DavBackendErrorKind::Conflict)),
+    };
+    assert_eq!(
+        block_on(execute_version_control(&failing, plan)),
+        Err(DavBackendError::new(DavBackendErrorKind::Conflict))
+    );
+    assert_eq!(*failing.seen.lock().expect("recorded plan"), vec![plan]);
+}
 
-    let collection = version_control_response(DavResourceKind::Collection);
-    assert_eq!(collection.status, StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(collection.headers.get("Cache-Control").unwrap(), "no-store");
+#[test]
+fn checked_in_mutations_cover_every_auto_version_mode_and_lock_state() {
+    let methods = [
+        DavMethod::Options,
+        DavMethod::Put,
+        DavMethod::Proppatch,
+        DavMethod::Delete,
+        DavMethod::Copy,
+        DavMethod::Move,
+        DavMethod::Lock,
+        DavMethod::Unlock,
+        DavMethod::Report,
+    ];
+    let checked_in = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::CheckedIn,
+        &methods,
+    );
+    assert_eq!(
+        plan_versioning_method(&checked_in, DavMethod::Put),
+        Err(DavVersioningPrecondition::CannotModifyVersionControlledContent)
+    );
+    assert_eq!(
+        plan_versioning_method(&checked_in, DavMethod::Proppatch),
+        Err(DavVersioningPrecondition::CannotModifyVersionControlledProperty)
+    );
+
+    let mut declaration = checked_in.declaration().clone();
+    declaration.versioning.auto_version = DavAutoVersion::CheckoutCheckin;
+    let auto = plan_capabilities(declaration).expect("auto-version snapshot");
+    assert_eq!(
+        plan_versioning_method(&auto, DavMethod::Put),
+        Ok(DavVersioningMethodPlan::AutoCheckoutCheckin)
+    );
+
+    for (auto_version, write_locked, expected) in [
+        (
+            DavAutoVersion::CheckoutUnlockedCheckin,
+            false,
+            DavVersioningMethodPlan::AutoCheckoutCheckin,
+        ),
+        (
+            DavAutoVersion::CheckoutUnlockedCheckin,
+            true,
+            DavVersioningMethodPlan::AutoCheckout,
+        ),
+        (
+            DavAutoVersion::Checkout,
+            false,
+            DavVersioningMethodPlan::AutoCheckout,
+        ),
+        (
+            DavAutoVersion::LockedCheckout,
+            true,
+            DavVersioningMethodPlan::AutoCheckout,
+        ),
+    ] {
+        let mut declaration = checked_in.declaration().clone();
+        declaration.versioning.auto_version = auto_version;
+        declaration.versioning.write_locked = write_locked;
+        let snapshot = plan_capabilities(declaration).expect("auto-version snapshot");
+        assert_eq!(
+            plan_versioning_method(&snapshot, DavMethod::Put),
+            Ok(expected)
+        );
+    }
+
+    let mut locked_checkout = checked_in.declaration().clone();
+    locked_checkout.versioning.auto_version = DavAutoVersion::LockedCheckout;
+    let locked_checkout = plan_capabilities(locked_checkout).expect("unlocked target snapshot");
+    assert_eq!(
+        plan_versioning_method(&locked_checkout, DavMethod::Put),
+        Err(DavVersioningPrecondition::CannotModifyVersionControlledContent)
+    );
+    assert_eq!(
+        plan_versioning_method(&locked_checkout, DavMethod::Proppatch),
+        Err(DavVersioningPrecondition::CannotModifyVersionControlledProperty)
+    );
+}
+
+#[test]
+fn checked_out_mutations_and_unlock_use_explicit_automatic_checkout_lock_facts() {
+    let methods = [
+        DavMethod::Options,
+        DavMethod::Put,
+        DavMethod::Lock,
+        DavMethod::Unlock,
+    ];
+    let checked_out = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::CheckedOut,
+        &methods,
+    );
+    assert_eq!(
+        plan_versioning_method(&checked_out, DavMethod::Put),
+        Ok(DavVersioningMethodPlan::DirectMutation)
+    );
+    let mut auto_checkout_lock = checked_out.declaration().clone();
+    auto_checkout_lock.versioning.auto_version = DavAutoVersion::CheckoutUnlockedCheckin;
+    auto_checkout_lock.versioning.write_locked = true;
+    auto_checkout_lock.versioning.auto_checkout_lock = true;
+    let auto_checkout_lock =
+        plan_capabilities(auto_checkout_lock).expect("automatic checkout lock snapshot");
+    assert_eq!(
+        plan_versioning_method(&auto_checkout_lock, DavMethod::Unlock),
+        Ok(DavVersioningMethodPlan::AutoCheckinOnUnlock)
+    );
+}
+
+#[test]
+fn immutable_version_mutations_cover_modify_rename_copy_and_delete_policy() {
+    let methods = [
+        DavMethod::Options,
+        DavMethod::Put,
+        DavMethod::Proppatch,
+        DavMethod::Delete,
+        DavMethod::Copy,
+        DavMethod::Move,
+        DavMethod::Report,
+    ];
+    let version = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::Version,
+        &methods,
+    );
+    assert_eq!(
+        plan_versioning_method(&version, DavMethod::Put),
+        Err(DavVersioningPrecondition::CannotModifyVersion)
+    );
+    assert_eq!(
+        plan_versioning_method(&version, DavMethod::Proppatch),
+        Err(DavVersioningPrecondition::CannotModifyVersion)
+    );
+    assert_eq!(
+        plan_versioning_method(&version, DavMethod::Move),
+        Err(DavVersioningPrecondition::CannotRenameVersion)
+    );
+    assert_eq!(
+        plan_versioning_method(&version, DavMethod::Delete),
+        Err(DavVersioningPrecondition::NoVersionDelete)
+    );
+    assert_eq!(
+        plan_versioning_method(&version, DavMethod::Copy),
+        Ok(DavVersioningMethodPlan::DirectMutation)
+    );
+    let mut delete_allowed = version.declaration().clone();
+    delete_allowed.versioning.allow_version_delete = true;
+    let delete_allowed = plan_capabilities(delete_allowed).expect("version DELETE snapshot");
+    assert_eq!(
+        plan_versioning_method(&delete_allowed, DavMethod::Delete),
+        Ok(DavVersioningMethodPlan::DeleteVersion)
+    );
+}
+
+#[test]
+fn version_control_target_kinds_and_precondition_responses_are_typed() {
+    for resource in [DavResourceState::Collection, DavResourceState::Unmapped] {
+        let snapshot = versioning_snapshot(
+            resource,
+            DavVersioningState::Versionable,
+            &[DavMethod::Options, DavMethod::VersionControl],
+        );
+        assert_eq!(
+            plan_versioning_method(&snapshot, DavMethod::VersionControl),
+            Ok(DavVersioningMethodPlan::VersionControl(
+                DavVersionControlAction::PutUnderVersionControl
+            ))
+        );
+    }
+
+    let response_snapshot = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::Version,
+        &[
+            DavMethod::Options,
+            DavMethod::Put,
+            DavMethod::Proppatch,
+            DavMethod::Delete,
+            DavMethod::Move,
+        ],
+    );
+    for error in [
+        DavVersioningPrecondition::CannotModifyVersionControlledContent,
+        DavVersioningPrecondition::CannotModifyVersionControlledProperty,
+        DavVersioningPrecondition::CannotModifyVersion,
+        DavVersioningPrecondition::CannotRenameVersion,
+        DavVersioningPrecondition::NoVersionDelete,
+    ] {
+        let response = versioning_precondition_response(&response_snapshot, error)
+            .expect("DAV error response");
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        assert!(body_text(&response).contains("D:error"));
+    }
+}
+
+#[test]
+fn version_tree_response_groups_success_missing_unknown_and_backend_errors() {
+    let request = DavVersionTreeRequest {
+        properties: Some(vec![
+            dav_property("version-name"),
+            dav_property("predecessor-set"),
+            dav_property("comment"),
+            DavRequestedProperty {
+                name: "custom".to_owned(),
+                namespace: Some("urn:test".to_owned()),
+                prefix: Some("Z".to_owned()),
+            },
+        ]),
+        depth: Depth::Zero,
+    };
+    let response = version_tree_response(
+        &request,
+        vec![DavVersionReportItem {
+            href: "/versions/1".to_owned(),
+            properties: vec![
+                DavVersionProperty::text(dav_property("version-name"), "V1"),
+                DavVersionProperty::hrefs(
+                    dav_property("predecessor-set"),
+                    ["/versions/0".to_owned()],
+                ),
+                DavVersionProperty::backend_error(
+                    dav_property("comment"),
+                    DavBackendErrorKind::Internal,
+                ),
+            ],
+        }],
+    )
+    .expect("version-tree response");
+    let xml = body_text(&response);
+    assert!(xml.contains("HTTP/1.1 200 OK"), "{xml}");
+    assert!(xml.contains("HTTP/1.1 404 Not Found"), "{xml}");
+    assert!(xml.contains("HTTP/1.1 500 Internal Server Error"), "{xml}");
+    assert!(xml.contains("/versions/0"), "{xml}");
+    assert!(xml.contains("Z:custom"), "{xml}");
+}
+
+#[test]
+fn version_tree_response_covers_empty_default_href_sets_and_output_boundaries() {
+    let empty_selection = DavVersionTreeRequest {
+        properties: Some(Vec::new()),
+        depth: Depth::Zero,
+    };
+    let response = version_tree_response(
+        &empty_selection,
+        vec![DavVersionReportItem {
+            href: "/versions/empty".to_owned(),
+            properties: Vec::new(),
+        }],
+    )
+    .expect("empty requested set");
+    let xml = body_text(&response);
+    assert!(xml.contains("/versions/empty"), "{xml}");
+    assert!(xml.contains("<D:prop></D:prop>"), "{xml}");
+    assert!(xml.contains("HTTP/1.1 200 OK"), "{xml}");
+
+    let default_request = DavVersionTreeRequest {
+        properties: None,
+        depth: Depth::Zero,
+    };
+    let version = DavVersionReportItem {
+        href: "/versions/1".to_owned(),
+        properties: vec![
+            DavVersionProperty::text(dav_property("version-name"), "V1"),
+            DavVersionProperty::hrefs(dav_property("predecessor-set"), ["/versions/0".to_owned()]),
+            DavVersionProperty::hrefs(
+                dav_property("successor-set"),
+                ["/versions/2".to_owned(), "/versions/branch".to_owned()],
+            ),
+            DavVersionProperty::hrefs(dav_property("checkout-set"), ["/working/file".to_owned()]),
+        ],
+    };
+    let response = version_tree_response(&default_request, vec![version.clone()])
+        .expect("default property response");
+    let xml = body_text(&response);
+    for expected in [
+        "V1",
+        "/versions/0",
+        "/versions/2",
+        "/versions/branch",
+        "/working/file",
+    ] {
+        assert!(xml.contains(expected), "missing {expected}: {xml}");
+    }
+
+    let empty_history =
+        version_tree_response(&default_request, Vec::new()).expect("empty version history");
+    assert_eq!(empty_history.status, StatusCode::MULTI_STATUS);
+    assert!(!body_text(&empty_history).contains("<D:response>"));
+
+    let too_small = DavMultiStatusLimits::new(32, 8, 32, 8);
+    let Err(error) = version_tree_response_with_limits(&default_request, vec![version], too_small)
+    else {
+        panic!("expected output byte limit");
+    };
+    assert_eq!(error.kind, DavMultiStatusErrorKind::OutputLimitExceeded);
+}
+
+#[derive(Default)]
+struct ExpandProvider {
+    values: HashMap<(String, String), Result<Option<DavExpandPropertyValue>, DavBackendError>>,
+}
+
+struct CancellingExpandProvider {
+    cancellation: DavCancellationToken,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl DavExpandPropertyProvider for CancellingExpandProvider {
+    async fn property(
+        &self,
+        _href: &str,
+        _property: &DavRequestedProperty,
+    ) -> Result<Option<DavExpandPropertyValue>, DavBackendError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.cancellation.cancel();
+        Ok(None)
+    }
+}
+
+impl ExpandProvider {
+    fn set(
+        &mut self,
+        href: &str,
+        property: &str,
+        value: Result<Option<DavExpandPropertyValue>, DavBackendError>,
+    ) {
+        self.values
+            .insert((href.to_owned(), property.to_owned()), value);
+    }
+}
+
+#[async_trait]
+impl DavExpandPropertyProvider for ExpandProvider {
+    async fn property(
+        &self,
+        href: &str,
+        property: &DavRequestedProperty,
+    ) -> Result<Option<DavExpandPropertyValue>, DavBackendError> {
+        self.values
+            .get(&(href.to_owned(), property.name.clone()))
+            .cloned()
+            .unwrap_or(Ok(None))
+    }
+}
+
+fn expand_request(body: &[u8]) -> aster_forge_webdav::DavExpandPropertyRequest {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    let DavReportRequest::ExpandProperty(request) =
+        plan_report_request(&snapshot, body).expect("expand request")
+    else {
+        panic!("expected expand request");
+    };
+    request
+}
+
+#[test]
+fn expand_property_executes_nested_success_and_missing_href() {
+    let request = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="version-set"><D:property name="version-name"/></D:property></D:expand-property>"#,
+    );
+    let mut provider = ExpandProvider::default();
+    provider.set(
+        "/history/1",
+        "version-set",
+        Ok(Some(DavExpandPropertyValue::Hrefs(vec![
+            "/versions/1".to_owned(),
+            "/versions/missing".to_owned(),
+        ]))),
+    );
+    provider.set(
+        "/versions/1",
+        "version-name",
+        Ok(Some(DavExpandPropertyValue::Element(
+            DavVersionProperty::text(dav_property("version-name"), "V1")
+                .result
+                .into_value(),
+        ))),
+    );
+    provider.set(
+        "/versions/missing",
+        "version-name",
+        Err(DavBackendError::new(DavBackendErrorKind::NotFound)),
+    );
+    let response = block_on(execute_expand_property(
+        &provider,
+        "/history/1",
+        &request,
+        DavReportLimits::default(),
+        &DavCancellationToken::new(),
+    ))
+    .expect("expanded response");
+    let xml = body_text(&response);
+    assert!(xml.contains("/versions/1"), "{xml}");
+    assert!(xml.contains("V1"), "{xml}");
+    assert!(xml.contains("HTTP/1.1 404 Not Found"), "{xml}");
+}
+
+trait VersionPropertyResultExt {
+    fn into_value(self) -> DavXmlElement;
+}
+
+impl VersionPropertyResultExt for aster_forge_webdav::DavVersionPropertyResult {
+    fn into_value(self) -> DavXmlElement {
+        let aster_forge_webdav::DavVersionPropertyResult::Value(value) = self else {
+            panic!("expected value");
+        };
+        value
+    }
+}
+
+#[test]
+fn expand_property_enforces_cycle_limits_cancellation_and_backend_failure() {
+    let request = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="next"/></D:property></D:expand-property>"#,
+    );
+    let mut cyclic = ExpandProvider::default();
+    cyclic.set(
+        "/a",
+        "next",
+        Ok(Some(DavExpandPropertyValue::Hrefs(vec!["/a".to_owned()]))),
+    );
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &cyclic,
+            "/a",
+            &request,
+            DavReportLimits::default(),
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::Cycle { href }) if href == "/a"
+    ));
+
+    let limited = DavReportLimits {
+        maximum_expanded_resources: 1,
+        ..DavReportLimits::default()
+    };
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &cyclic,
+            "/a",
+            &request,
+            limited,
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::ResourceLimitExceeded)
+    ));
+
+    let mut two_resources = ExpandProvider::default();
+    two_resources.set(
+        "/a",
+        "next",
+        Ok(Some(DavExpandPropertyValue::Hrefs(vec!["/b".to_owned()]))),
+    );
+    let exact_resources = DavReportLimits {
+        maximum_expanded_resources: 2,
+        ..DavReportLimits::default()
+    };
+    block_on(execute_expand_property(
+        &two_resources,
+        "/a",
+        &request,
+        exact_resources,
+        &DavCancellationToken::new(),
+    ))
+    .expect("exact resource limit");
+}
+
+#[test]
+fn expand_property_checks_cancellation_before_and_between_backend_lookups() {
+    let request = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="next"/></D:property></D:expand-property>"#,
+    );
+    let cyclic = ExpandProvider::default();
+    let cancelled = DavCancellationToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &cyclic,
+            "/a",
+            &request,
+            DavReportLimits::default(),
+            &cancelled,
+        )),
+        Err(DavExpandPropertyError::Cancelled)
+    ));
+
+    let cancellation = DavCancellationToken::new();
+    let cancelling = CancellingExpandProvider {
+        cancellation: cancellation.clone(),
+        calls: AtomicUsize::new(0),
+    };
+    let two = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="one"/><D:property name="two"/></D:expand-property>"#,
+    );
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &cancelling,
+            "/a",
+            &two,
+            DavReportLimits::default(),
+            &cancellation,
+        )),
+        Err(DavExpandPropertyError::Cancelled)
+    ));
+    assert_eq!(cancelling.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn expand_property_preserves_backend_failure_classification() {
+    let flat = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="value"/></D:expand-property>"#,
+    );
+    let mut failing = ExpandProvider::default();
+    failing.set(
+        "/a",
+        "value",
+        Err(DavBackendError::new(DavBackendErrorKind::Internal)),
+    );
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &failing,
+            "/a",
+            &flat,
+            DavReportLimits::default(),
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::Backend(error))
+            if error == DavBackendError::new(DavBackendErrorKind::Internal)
+    ));
+}
+
+#[test]
+fn expand_property_enforces_depth_property_value_and_output_byte_boundaries() {
+    let nested = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="next"><D:property name="value"/></D:property></D:property></D:expand-property>"#,
+    );
+    let mut provider = ExpandProvider::default();
+    provider.set(
+        "/a",
+        "next",
+        Ok(Some(DavExpandPropertyValue::Hrefs(vec!["/b".to_owned()]))),
+    );
+    provider.set(
+        "/b",
+        "next",
+        Ok(Some(DavExpandPropertyValue::Hrefs(vec!["/c".to_owned()]))),
+    );
+    provider.set(
+        "/c",
+        "value",
+        Ok(Some(DavExpandPropertyValue::Element(
+            dav_property_text_element(&dav_property("value"), "done"),
+        ))),
+    );
+    let depth_limited = DavReportLimits {
+        maximum_expansion_depth: 1,
+        ..DavReportLimits::default()
+    };
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &provider,
+            "/a",
+            &nested,
+            depth_limited,
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::DepthLimitExceeded)
+    ));
+
+    let flat = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="one"/><D:property name="two"/></D:expand-property>"#,
+    );
+    let exact = DavReportLimits {
+        maximum_expanded_properties: 2,
+        ..DavReportLimits::default()
+    };
+    block_on(execute_expand_property(
+        &ExpandProvider::default(),
+        "/a",
+        &flat,
+        exact,
+        &DavCancellationToken::new(),
+    ))
+    .expect("exact property limit");
+    let one_too_few = DavReportLimits {
+        maximum_expanded_properties: 1,
+        ..DavReportLimits::default()
+    };
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &ExpandProvider::default(),
+            "/a",
+            &flat,
+            one_too_few,
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::PropertyLimitExceeded)
+    ));
+}
+
+#[test]
+fn expand_property_rejects_non_href_nested_values_and_bounds_output_bytes() {
+    let invalid_nested = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="value"/></D:property></D:expand-property>"#,
+    );
+    let mut scalar = ExpandProvider::default();
+    scalar.set(
+        "/a",
+        "next",
+        Ok(Some(DavExpandPropertyValue::Element(
+            dav_property_text_element(&dav_property("next"), "not-an-href-set"),
+        ))),
+    );
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &scalar,
+            "/a",
+            &invalid_nested,
+            DavReportLimits::default(),
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::InvalidPropertyValue)
+    ));
+
+    let value = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="value"/></D:expand-property>"#,
+    );
+    let mut large = ExpandProvider::default();
+    large.set(
+        "/a",
+        "value",
+        Ok(Some(DavExpandPropertyValue::Element(
+            dav_property_text_element(&dav_property("value"), "x".repeat(256)),
+        ))),
+    );
+    let output_limited = DavReportLimits {
+        multistatus: DavMultiStatusLimits::new(64, 8, 8, 8),
+        ..DavReportLimits::default()
+    };
+    assert!(matches!(
+        block_on(execute_expand_property(
+            &large,
+            "/a",
+            &value,
+            output_limited,
+            &DavCancellationToken::new(),
+        )),
+        Err(DavExpandPropertyError::MultiStatus(error))
+            if error.kind == DavMultiStatusErrorKind::OutputLimitExceeded
+    ));
+}
+
+#[test]
+fn version_control_plan_errors_render_protocol_status_and_condition() {
+    let snapshot = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::Versionable,
+        &[DavMethod::Options, DavMethod::VersionControl],
+    );
+    let response = version_control_plan_error_response(
+        &snapshot,
+        DavVersionControlPlanError::Xml(DavXmlError::ExternalEntity),
+    )
+    .expect("external entity response");
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert!(body_text(&response).contains("no-external-entities"));
+
+    let response = versioning_precondition_response(
+        &snapshot,
+        DavVersioningPrecondition::CannotModifyVersionControlledContent,
+    )
+    .expect("precondition response");
+    assert!(body_text(&response).contains("cannot-modify-version-controlled-content"));
+
+    let disallowed = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::Versionable,
+        &[DavMethod::Options],
+    );
+    let response = version_control_plan_error_response(
+        &disallowed,
+        DavVersionControlPlanError::MethodNotAllowed,
+    )
+    .expect("405 response");
+    assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.headers.get("Allow").expect("Allow"), "OPTIONS");
+    let response =
+        versioning_precondition_response(&disallowed, DavVersioningPrecondition::MethodNotAllowed)
+            .expect("versioning 405 response");
+    assert_eq!(response.headers.get("Allow").expect("Allow"), "OPTIONS");
+}
+
+#[test]
+fn expand_property_failures_map_before_response_start() {
+    for (error, expected) in [
+        (
+            DavExpandPropertyError::Cycle {
+                href: "/a".to_owned(),
+            },
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavExpandPropertyError::DepthLimitExceeded,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavExpandPropertyError::Cancelled,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            DavExpandPropertyError::InvalidPropertyValue,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let response = expand_property_error_response(&error).expect("failure response");
+        assert_eq!(response.status, expected);
+        assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
+    }
+
+    let backend = expand_property_error_response(&DavExpandPropertyError::Backend(
+        DavBackendError::new(DavBackendErrorKind::Forbidden),
+    ))
+    .expect("backend response");
+    assert_eq!(backend.status, StatusCode::FORBIDDEN);
 }
