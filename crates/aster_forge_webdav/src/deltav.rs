@@ -21,40 +21,30 @@ use crate::{
 
 const DAV_NAMESPACE: &str = "DAV:";
 
-/// Hard limits shared by REPORT grammar, traversal, and response composition.
+/// Independent hard limits for REPORT grammar, traversal, and response composition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavReportLimits {
     pub maximum_input_bytes: usize,
     pub maximum_xml_depth: usize,
+    /// Maximum nested `DAV:property` levels in the request selection AST, counted from one.
+    pub maximum_selection_depth: usize,
+    /// Maximum `DAV:property` nodes in the request selection AST.
+    pub maximum_selection_properties: usize,
+    /// Maximum resource expansion hops, counted from zero at the root resource.
     pub maximum_expansion_depth: usize,
+    /// Maximum resources visited during expansion, including the root resource.
     pub maximum_expanded_resources: usize,
+    /// Maximum backend property lookups performed during expansion.
     pub maximum_expanded_properties: usize,
     pub multistatus: DavMultiStatusLimits,
 }
 
 impl DavReportLimits {
-    #[must_use]
-    pub const fn new(
-        maximum_input_bytes: usize,
-        maximum_xml_depth: usize,
-        maximum_expansion_depth: usize,
-        maximum_expanded_resources: usize,
-        maximum_expanded_properties: usize,
-        multistatus: DavMultiStatusLimits,
-    ) -> Self {
-        Self {
-            maximum_input_bytes,
-            maximum_xml_depth,
-            maximum_expansion_depth,
-            maximum_expanded_resources,
-            maximum_expanded_properties,
-            multistatus,
-        }
-    }
-
     fn is_valid(self) -> bool {
         self.maximum_input_bytes != 0
             && self.maximum_xml_depth != 0
+            && self.maximum_selection_depth != 0
+            && self.maximum_selection_properties != 0
             && self.maximum_expansion_depth != 0
             && self.maximum_expanded_resources != 0
             && self.maximum_expanded_properties != 0
@@ -64,14 +54,16 @@ impl DavReportLimits {
 impl Default for DavReportLimits {
     fn default() -> Self {
         let xml = XmlSafetyPolicy::untrusted();
-        Self::new(
-            xml.max_input_bytes,
-            xml.max_depth,
-            16,
-            10_000,
-            100_000,
-            DavMultiStatusLimits::default(),
-        )
+        Self {
+            maximum_input_bytes: xml.max_input_bytes,
+            maximum_xml_depth: xml.max_depth,
+            maximum_selection_depth: 16,
+            maximum_selection_properties: 100_000,
+            maximum_expansion_depth: 16,
+            maximum_expanded_resources: 10_000,
+            maximum_expanded_properties: 100_000,
+            multistatus: DavMultiStatusLimits::default(),
+        }
     }
 }
 
@@ -193,8 +185,8 @@ pub fn plan_report_request_with_limits(
         body,
         limits.maximum_input_bytes,
         limits.maximum_xml_depth,
-        limits.maximum_expansion_depth,
-        limits.maximum_expanded_properties,
+        limits.maximum_selection_depth,
+        limits.maximum_selection_properties,
     )?;
     let depth = depth.unwrap_or(Depth::Zero);
     let request = match parsed {
@@ -235,10 +227,9 @@ pub fn report_plan_error_response<P: DavReportErrorResponsePolicy>(
     policy: &P,
 ) -> Result<DavResponse, DavXmlError> {
     match error {
-        DavReportPlanError::InvalidLimits => Ok(text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Invalid REPORT limits",
-        )),
+        DavReportPlanError::InvalidLimits => {
+            Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, ""))
+        }
         DavReportPlanError::Xml(error) => xml_request_error_response(*error),
         DavReportPlanError::UnknownType { namespace, name } => {
             Ok(policy.unknown_type(namespace.as_deref(), name))
@@ -630,8 +621,6 @@ pub enum DavExpandPropertyError {
     ResourceLimitExceeded,
     #[error("expand-property property limit exceeded")]
     PropertyLimitExceeded,
-    #[error("nested expand-property requires an href-valued property")]
-    InvalidPropertyValue,
     #[error(transparent)]
     Backend(#[from] DavBackendError),
     #[error(transparent)]
@@ -793,7 +782,10 @@ fn expand_response_item<'a, P: DavExpandPropertyProvider, C: DavCancellation>(
                             .push(property);
                     }
                     Some(DavExpandPropertyValue::Element(_)) => {
-                        return Err(DavExpandPropertyError::InvalidPropertyValue);
+                        groups
+                            .entry(StatusCode::FORBIDDEN.as_u16())
+                            .or_default()
+                            .push(dav_property_name_element(&selection.property));
                     }
                 }
             }
@@ -970,7 +962,7 @@ pub fn expand_property_error_response(
 ) -> Result<DavResponse, DavXmlError> {
     let response = match error {
         DavExpandPropertyError::InvalidLimits => {
-            text_response(StatusCode::INTERNAL_SERVER_ERROR, "Invalid REPORT limits")
+            text_response(StatusCode::INTERNAL_SERVER_ERROR, "")
         }
         DavExpandPropertyError::Cancelled => text_response(StatusCode::SERVICE_UNAVAILABLE, ""),
         DavExpandPropertyError::Cycle { .. }
@@ -978,9 +970,6 @@ pub fn expand_property_error_response(
         | DavExpandPropertyError::ResourceLimitExceeded
         | DavExpandPropertyError::PropertyLimitExceeded => {
             text_response(StatusCode::INSUFFICIENT_STORAGE, "")
-        }
-        DavExpandPropertyError::InvalidPropertyValue => {
-            text_response(StatusCode::INTERNAL_SERVER_ERROR, "")
         }
         DavExpandPropertyError::Backend(error) => {
             return Ok(crate::backend_error_response(error));

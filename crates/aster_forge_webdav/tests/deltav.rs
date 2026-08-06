@@ -6,10 +6,10 @@ use aster_forge_webdav::{
     DavAutoVersion, DavBackendError, DavBackendErrorKind, DavCancellationToken,
     DavCapabilityDeclaration, DavCapabilitySnapshot, DavExpandPropertyError,
     DavExpandPropertyProvider, DavExpandPropertyValue, DavExtensionPackage, DavExtensionSet,
-    DavMethod, DavMethodSet, DavMultiStatusErrorKind, DavMultiStatusLimits,
-    DavReportErrorResponsePolicy, DavReportLimits, DavReportPlanError, DavReportRequest,
-    DavReportType, DavRequestedProperty, DavResourceState, DavResponse, DavResponseBody,
-    DavVersionControlAction, DavVersionControlPlan, DavVersionControlPlanError,
+    DavMethod, DavMethodSet, DavMultiStatusError, DavMultiStatusErrorKind, DavMultiStatusLimits,
+    DavMultiStatusProgress, DavReportErrorResponsePolicy, DavReportLimits, DavReportPlanError,
+    DavReportRequest, DavReportType, DavRequestedProperty, DavResourceState, DavResponse,
+    DavResponseBody, DavVersionControlAction, DavVersionControlPlan, DavVersionControlPlanError,
     DavVersionControlPort, DavVersionControlResult, DavVersionProperty, DavVersionReportItem,
     DavVersionTreeRequest, DavVersioningCapabilities, DavVersioningMethodPlan,
     DavVersioningPrecondition, DavVersioningState, DavXmlElement, DavXmlError, DavXmlNode, Depth,
@@ -19,6 +19,7 @@ use aster_forge_webdav::{
     report_plan_error_response, version_control_plan_error_response, version_control_response,
     version_tree_response, version_tree_response_with_limits, versioning_precondition_response,
 };
+use aster_forge_xml::BorrowedDocument;
 use async_trait::async_trait;
 use futures::executor::block_on;
 use http::StatusCode;
@@ -63,6 +64,19 @@ fn report_snapshot(state: DavVersioningState) -> DavCapabilitySnapshot {
         state,
         &[DavMethod::Options, DavMethod::Report],
     )
+}
+
+fn bounded_report_limits() -> DavReportLimits {
+    DavReportLimits {
+        maximum_input_bytes: 4096,
+        maximum_xml_depth: 8,
+        maximum_selection_depth: 4,
+        maximum_selection_properties: 8,
+        maximum_expansion_depth: 4,
+        maximum_expanded_resources: 8,
+        maximum_expanded_properties: 8,
+        multistatus: DavMultiStatusLimits::default(),
+    }
 }
 
 struct ReportResponsePolicy;
@@ -178,6 +192,10 @@ fn report_grammar_and_snapshot_availability_fail_closed() {
         br#"<D:version-tree xmlns:D="DAV:">text</D:version-tree>"#,
         br#"<D:expand-property xmlns:D="DAV:"><D:property/></D:expand-property>"#,
         br#"<D:expand-property xmlns:D="DAV:"><D:property name="bad:name"/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="value" namespace="urn:bad namespace"/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="value" namespace="urn:bad&lt;namespace"/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="value" namespace="urn:bad&quot;namespace"/></D:expand-property>"#,
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="value" namespace="urn:bad&#x7f;namespace"/></D:expand-property>"#,
         br#"<D:expand-property xmlns:D="DAV:"><X:property xmlns:X="urn:x" name="ignored"/></D:expand-property>"#,
         br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"><X:property xmlns:X="urn:x" name="ignored"/></D:property></D:expand-property>"#,
     ] {
@@ -203,18 +221,54 @@ fn report_grammar_and_snapshot_availability_fail_closed() {
 }
 
 #[test]
-fn report_limits_cover_input_xml_depth_and_nested_selection_depth() {
+fn report_limits_reject_each_zero_field_and_bound_input_bytes() {
     let snapshot = report_snapshot(DavVersioningState::CheckedIn);
-    assert_eq!(
-        plan_report_request_with_limits(
-            &snapshot,
-            br#"<D:version-tree xmlns:D="DAV:"/>"#,
-            None,
-            DavReportLimits::new(0, 8, 2, 8, 8, DavMultiStatusLimits::default()),
-        ),
-        Err(DavReportPlanError::InvalidLimits)
-    );
-    let limits = DavReportLimits::new(16, 8, 2, 8, 8, DavMultiStatusLimits::default());
+    let valid = bounded_report_limits();
+    for limits in [
+        DavReportLimits {
+            maximum_input_bytes: 0,
+            ..valid
+        },
+        DavReportLimits {
+            maximum_xml_depth: 0,
+            ..valid
+        },
+        DavReportLimits {
+            maximum_selection_depth: 0,
+            ..valid
+        },
+        DavReportLimits {
+            maximum_selection_properties: 0,
+            ..valid
+        },
+        DavReportLimits {
+            maximum_expansion_depth: 0,
+            ..valid
+        },
+        DavReportLimits {
+            maximum_expanded_resources: 0,
+            ..valid
+        },
+        DavReportLimits {
+            maximum_expanded_properties: 0,
+            ..valid
+        },
+    ] {
+        assert_eq!(
+            plan_report_request_with_limits(
+                &snapshot,
+                br#"<D:version-tree xmlns:D="DAV:"/>"#,
+                None,
+                limits,
+            ),
+            Err(DavReportPlanError::InvalidLimits)
+        );
+    }
+
+    let limits = DavReportLimits {
+        maximum_input_bytes: 16,
+        ..valid
+    };
     assert_eq!(
         plan_report_request_with_limits(
             &snapshot,
@@ -224,21 +278,80 @@ fn report_limits_cover_input_xml_depth_and_nested_selection_depth() {
         ),
         Err(DavReportPlanError::Xml(DavXmlError::TooLarge))
     );
-    let limits = DavReportLimits::new(4096, 8, 2, 8, 8, DavMultiStatusLimits::default());
+}
+
+#[test]
+fn report_limits_cover_exact_xml_depth_and_one_over() {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    let valid = bounded_report_limits();
+    let two_xml_levels =
+        br#"<D:version-tree xmlns:D="DAV:" xmlns:X="urn:x"><X:future/></D:version-tree>"#;
+    assert!(
+        plan_report_request_with_limits(
+            &snapshot,
+            two_xml_levels,
+            None,
+            DavReportLimits {
+                maximum_xml_depth: 2,
+                ..valid
+            },
+        )
+        .is_ok()
+    );
     assert_eq!(
         plan_report_request_with_limits(
             &snapshot,
-            br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"><D:property name="b"><D:property name="c"/></D:property></D:property></D:expand-property>"#,
+            two_xml_levels,
             None,
-            limits,
+            DavReportLimits {
+                maximum_xml_depth: 1,
+                ..valid
+            },
+        ),
+        Err(DavReportPlanError::Xml(DavXmlError::TooDeep))
+    );
+}
+
+#[test]
+fn report_limits_cover_selection_depth_and_property_count_boundaries() {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    let valid = bounded_report_limits();
+    let three_selection_levels = br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"><D:property name="b"><D:property name="c"/></D:property></D:property></D:expand-property>"#;
+    assert!(
+        plan_report_request_with_limits(
+            &snapshot,
+            three_selection_levels,
+            None,
+            DavReportLimits {
+                maximum_selection_depth: 3,
+                ..valid
+            },
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        plan_report_request_with_limits(
+            &snapshot,
+            three_selection_levels,
+            None,
+            DavReportLimits {
+                maximum_selection_depth: 2,
+                ..valid
+            },
         ),
         Err(DavReportPlanError::Xml(DavXmlError::TooDeep))
     );
 
     let two_properties = br#"<D:expand-property xmlns:D="DAV:"><D:property name="a"/><D:property name="b"/></D:expand-property>"#;
-    let exact = DavReportLimits::new(4096, 8, 4, 8, 2, DavMultiStatusLimits::default());
+    let exact = DavReportLimits {
+        maximum_selection_properties: 2,
+        ..valid
+    };
     assert!(plan_report_request_with_limits(&snapshot, two_properties, None, exact).is_ok());
-    let one_too_few = DavReportLimits::new(4096, 8, 4, 8, 1, DavMultiStatusLimits::default());
+    let one_too_few = DavReportLimits {
+        maximum_selection_properties: 1,
+        ..valid
+    };
     assert_eq!(
         plan_report_request_with_limits(&snapshot, two_properties, None, one_too_few),
         Err(DavReportPlanError::Xml(DavXmlError::TooLarge))
@@ -247,6 +360,16 @@ fn report_limits_cover_input_xml_depth_and_nested_selection_depth() {
 
 #[test]
 fn report_errors_map_xml_unknown_and_unavailable_categories() {
+    let invalid_limits =
+        report_plan_error_response(&DavReportPlanError::InvalidLimits, &ReportResponsePolicy)
+            .expect("invalid limits response");
+    assert_eq!(invalid_limits.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        invalid_limits.headers.get("Cache-Control").unwrap(),
+        "no-store"
+    );
+    assert_eq!(body_text(&invalid_limits), "");
+
     let invalid = report_plan_error_response(
         &DavReportPlanError::Xml(DavXmlError::Malformed),
         &ReportResponsePolicy,
@@ -320,6 +443,38 @@ fn version_control_plans_versionable_and_already_controlled_targets() {
             br#"<!DOCTYPE x [<!ENTITY e SYSTEM "file:///TARGET">]><D:version-control xmlns:D="DAV:">&e;</D:version-control>"#,
         ),
         Err(DavVersionControlPlanError::Xml(DavXmlError::ExternalEntity))
+    );
+
+    let checked_in = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::CheckedIn,
+        &[DavMethod::Options, DavMethod::VersionControl],
+    );
+    assert_eq!(
+        plan_version_control_request(&checked_in, b"")
+            .expect("checked-in plan")
+            .action,
+        DavVersionControlAction::AlreadyControlled
+    );
+
+    let immutable = versioning_snapshot(
+        DavResourceState::File,
+        DavVersioningState::Version,
+        &[DavMethod::Options],
+    );
+    assert_eq!(
+        plan_version_control_request(&immutable, b""),
+        Err(DavVersionControlPlanError::MethodNotAllowed)
+    );
+
+    let unsupported = plan_capabilities(DavCapabilityDeclaration::new(
+        DavResourceState::File,
+        DavMethodSet::from_methods(&[DavMethod::Options]),
+    ))
+    .expect("unsupported snapshot");
+    assert_eq!(
+        plan_version_control_request(&unsupported, b""),
+        Err(DavVersionControlPlanError::MethodNotAllowed)
     );
 }
 
@@ -629,6 +784,52 @@ fn version_tree_response_groups_success_missing_unknown_and_backend_errors() {
 }
 
 #[test]
+fn version_tree_response_escapes_text_and_hrefs_and_rejects_invalid_xml_characters() {
+    let request = DavVersionTreeRequest {
+        properties: Some(vec![
+            dav_property("comment"),
+            dav_property("predecessor-set"),
+        ]),
+        depth: Depth::Zero,
+    };
+    let response = version_tree_response(
+        &request,
+        vec![DavVersionReportItem {
+            href: "/versions/a&b".to_owned(),
+            properties: vec![
+                DavVersionProperty::text(dav_property("comment"), "<note>&\"'"),
+                DavVersionProperty::hrefs(
+                    dav_property("predecessor-set"),
+                    ["/versions/0?left=1&right=2".to_owned()],
+                ),
+            ],
+        }],
+    )
+    .expect("escaped version-tree response");
+    let xml = body_text(&response);
+    assert!(xml.contains("/versions/a&amp;b"), "{xml}");
+    assert!(xml.contains("&lt;note&gt;&amp;&quot;&apos;"), "{xml}");
+    assert!(xml.contains("/versions/0?left=1&amp;right=2"), "{xml}");
+    assert!(!xml.contains("<note>"), "{xml}");
+    BorrowedDocument::parse(xml.as_bytes()).expect("response must remain well-formed XML");
+
+    let result = version_tree_response(
+        &request,
+        vec![DavVersionReportItem {
+            href: "/versions/invalid".to_owned(),
+            properties: vec![DavVersionProperty::text(
+                dav_property("comment"),
+                "invalid\u{1}text",
+            )],
+        }],
+    );
+    let Err(error) = result else {
+        panic!("XML 1.0 forbidden control characters must be rejected");
+    };
+    assert_eq!(error.kind, DavMultiStatusErrorKind::Xml);
+}
+
+#[test]
 fn version_tree_response_covers_empty_default_href_sets_and_output_boundaries() {
     let empty_selection = DavVersionTreeRequest {
         properties: Some(Vec::new()),
@@ -804,7 +1005,7 @@ impl VersionPropertyResultExt for aster_forge_webdav::DavVersionPropertyResult {
 }
 
 #[test]
-fn expand_property_enforces_cycle_limits_cancellation_and_backend_failure() {
+fn expand_property_enforces_cycle_and_resource_limits() {
     let request = expand_request(
         br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="next"/></D:property></D:expand-property>"#,
     );
@@ -925,7 +1126,7 @@ fn expand_property_preserves_backend_failure_classification() {
 }
 
 #[test]
-fn expand_property_enforces_depth_property_value_and_output_byte_boundaries() {
+fn expand_property_enforces_depth_and_property_count_limits() {
     let nested = expand_request(
         br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="next"><D:property name="value"/></D:property></D:property></D:expand-property>"#,
     );
@@ -994,10 +1195,7 @@ fn expand_property_enforces_depth_property_value_and_output_byte_boundaries() {
 }
 
 #[test]
-fn expand_property_rejects_non_href_nested_values_and_bounds_output_bytes() {
-    let invalid_nested = expand_request(
-        br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="value"/></D:property></D:expand-property>"#,
-    );
+fn expand_property_reports_non_href_nested_values_and_bounds_output_bytes() {
     let mut scalar = ExpandProvider::default();
     scalar.set(
         "/a",
@@ -1006,16 +1204,28 @@ fn expand_property_rejects_non_href_nested_values_and_bounds_output_bytes() {
             dav_property_text_element(&dav_property("next"), "not-an-href-set"),
         ))),
     );
-    assert!(matches!(
-        block_on(execute_expand_property(
-            &scalar,
-            "/a",
-            &invalid_nested,
-            DavReportLimits::default(),
-            &DavCancellationToken::new(),
-        )),
-        Err(DavExpandPropertyError::InvalidPropertyValue)
-    ));
+    scalar.set(
+        "/a",
+        "sibling",
+        Ok(Some(DavExpandPropertyValue::Element(
+            dav_property_text_element(&dav_property("sibling"), "still-returned"),
+        ))),
+    );
+    let invalid_nested = expand_request(
+        br#"<D:expand-property xmlns:D="DAV:"><D:property name="next"><D:property name="value"/></D:property><D:property name="sibling"/></D:expand-property>"#,
+    );
+    let response = block_on(execute_expand_property(
+        &scalar,
+        "/a",
+        &invalid_nested,
+        DavReportLimits::default(),
+        &DavCancellationToken::new(),
+    ))
+    .expect("unexpandable property remains property-scoped");
+    let xml = body_text(&response);
+    assert!(xml.contains("HTTP/1.1 403 Forbidden"), "{xml}");
+    assert!(xml.contains("HTTP/1.1 200 OK"), "{xml}");
+    assert!(xml.contains("still-returned"), "{xml}");
 
     let value = expand_request(
         br#"<D:expand-property xmlns:D="DAV:"><D:property name="value"/></D:expand-property>"#,
@@ -1099,11 +1309,19 @@ fn expand_property_failures_map_before_response_start() {
             StatusCode::INSUFFICIENT_STORAGE,
         ),
         (
+            DavExpandPropertyError::ResourceLimitExceeded,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavExpandPropertyError::PropertyLimitExceeded,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
             DavExpandPropertyError::Cancelled,
             StatusCode::SERVICE_UNAVAILABLE,
         ),
         (
-            DavExpandPropertyError::InvalidPropertyValue,
+            DavExpandPropertyError::InvalidLimits,
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     ] {
@@ -1117,4 +1335,55 @@ fn expand_property_failures_map_before_response_start() {
     ))
     .expect("backend response");
     assert_eq!(backend.status, StatusCode::FORBIDDEN);
+
+    for (kind, expected) in [
+        (
+            DavMultiStatusErrorKind::InvalidLimits,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            DavMultiStatusErrorKind::ItemLimitExceeded,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavMultiStatusErrorKind::PropertyLimitExceeded,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavMultiStatusErrorKind::InvalidItem,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            DavMultiStatusErrorKind::OutputLimitExceeded,
+            StatusCode::INSUFFICIENT_STORAGE,
+        ),
+        (
+            DavMultiStatusErrorKind::Cancelled,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            DavMultiStatusErrorKind::Xml,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            DavMultiStatusErrorKind::Write,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let error = DavExpandPropertyError::MultiStatus(DavMultiStatusError {
+            kind,
+            progress: DavMultiStatusProgress::default(),
+        });
+        let response = expand_property_error_response(&error).expect("Multi-Status response");
+        assert_eq!(response.status, expected);
+        assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
+    }
+
+    let multistatus_backend = DavExpandPropertyError::MultiStatus(DavMultiStatusError {
+        kind: DavMultiStatusErrorKind::Backend(DavBackendError::new(DavBackendErrorKind::Locked)),
+        progress: DavMultiStatusProgress::default(),
+    });
+    let response = expand_property_error_response(&multistatus_backend)
+        .expect("Multi-Status backend response");
+    assert_eq!(response.status, StatusCode::LOCKED);
 }

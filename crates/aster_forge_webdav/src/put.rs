@@ -151,7 +151,7 @@ pub fn put_plan_error_response(
 ) -> DavResponse {
     match error {
         DavPutPlanError::MethodNotAllowed | DavPutPlanError::CollectionTarget => {
-            no_store_empty_response(StatusCode::METHOD_NOT_ALLOWED)
+            crate::method_not_allowed_response(snapshot)
         }
         DavPutPlanError::Protocol(error) => crate::protocol_error_response(error),
         DavPutPlanError::PreconditionFailed(plan) => {

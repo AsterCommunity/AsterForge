@@ -106,10 +106,10 @@ fn put_requires_the_method_and_rejects_undeclared_partial_write_headers() {
         plan_put_request(&disabled, &HeaderMap::new(), existing(None)),
         Err(DavPutPlanError::MethodNotAllowed)
     ));
-    assert_eq!(
-        put_plan_error_response(&disabled, &DavPutPlanError::MethodNotAllowed).status,
-        StatusCode::METHOD_NOT_ALLOWED
-    );
+    let response = put_plan_error_response(&disabled, &DavPutPlanError::MethodNotAllowed);
+    assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.headers.get("Allow").unwrap(), "OPTIONS");
+    assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 
     let snapshot = ordinary_put_snapshot();
     for (name, value) in [
@@ -353,6 +353,7 @@ fn put_plan_enforces_etag_preconditions_and_collection_target() {
     ));
     let response = put_plan_error_response(&snapshot, &DavPutPlanError::CollectionTarget);
     assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.headers.get("Allow").unwrap(), "OPTIONS, PUT");
     assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 }
 

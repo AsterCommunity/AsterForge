@@ -63,7 +63,7 @@ pub enum DavAutoVersion {
 pub struct DavVersioningCapabilities {
     pub state: DavVersioningState,
     pub auto_version: DavAutoVersion,
-    /// Whether the current target is protected by a write lock.
+    /// Whether the current target is protected by an active DAV write lock.
     pub write_locked: bool,
     /// Whether the current checkout is associated with a write lock after automatic checkout.
     pub auto_checkout_lock: bool,
@@ -673,6 +673,8 @@ pub enum DavCapabilityPlanError {
     VersioningTargetWithoutPackage,
     #[error("automatic versioning is only valid for a checked-in or checked-out resource")]
     AutoVersionNotApplicable,
+    #[error("a write-locked versioning target requires DAV locking compliance class 2")]
+    WriteLockWithoutClass2,
     #[error("an automatic checkout lock is only valid for a write-locked checked-out resource")]
     AutoCheckoutLockNotApplicable,
     #[error(
@@ -1145,6 +1147,9 @@ fn validate_extensions(
     {
         return Err(DavCapabilityPlanError::AutoVersionNotApplicable);
     }
+    if declaration.versioning.write_locked && declaration.locking != DavLockingCapability::Class2 {
+        return Err(DavCapabilityPlanError::WriteLockWithoutClass2);
+    }
     if declaration.versioning.auto_checkout_lock
         && (!declaration.versioning.write_locked
             || declaration.versioning.state != DavVersioningState::CheckedOut)
@@ -1185,13 +1190,10 @@ fn validate_extensions(
 fn validate_extension_methods(
     declaration: &DavCapabilityDeclaration,
 ) -> Result<(), DavCapabilityPlanError> {
-    let package_methods = extension_methods_for_declaration(declaration);
-    for method in declaration.methods.iter() {
-        if is_extension_only_method(method) && !package_methods.contains(method) {
-            return Err(DavCapabilityPlanError::ExtensionMethodWithoutPackage { method });
-        }
-    }
-    if declaration.methods.contains(DavMethod::VersionControl)
+    if declaration
+        .extensions
+        .contains(DavExtensionPackage::VersionControl)
+        && declaration.methods.contains(DavMethod::VersionControl)
         && !matches!(
             declaration.versioning.state,
             DavVersioningState::Versionable
@@ -1200,6 +1202,12 @@ fn validate_extension_methods(
         )
     {
         return Err(DavCapabilityPlanError::VersionControlMethodNotApplicable);
+    }
+    let package_methods = extension_methods_for_declaration(declaration);
+    for method in declaration.methods.iter() {
+        if is_extension_only_method(method) && !package_methods.contains(method) {
+            return Err(DavCapabilityPlanError::ExtensionMethodWithoutPackage { method });
+        }
     }
     Ok(())
 }

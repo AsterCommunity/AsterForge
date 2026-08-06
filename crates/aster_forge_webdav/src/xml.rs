@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 use aster_forge_xml::{
     BorrowedDocument, ElementRef, Error as ForgeXmlError, NodeRef, OwnedDocument, ParseOptions,
     XmlSafetyError, XmlSafetyPolicy, XmlStreamWriter, XmlWriteAttribute, is_valid_xml_local_name,
+    is_valid_xml_namespace_name,
 };
 
 use crate::deltav::{DavExpandPropertySelection, DavParsedReport};
@@ -404,8 +405,8 @@ pub(crate) fn parse_report_request(
     body: &[u8],
     maximum_input_bytes: usize,
     maximum_xml_depth: usize,
-    maximum_expansion_depth: usize,
-    maximum_properties: usize,
+    maximum_selection_depth: usize,
+    maximum_selection_properties: usize,
 ) -> Result<DavParsedReport, DavXmlError> {
     let options = webdav_parse_options()
         .max_size(maximum_input_bytes)
@@ -418,8 +419,8 @@ pub(crate) fn parse_report_request(
     if is_dav_element(root, "expand-property") {
         return Ok(DavParsedReport::ExpandProperty(parse_expand_property(
             root,
-            maximum_expansion_depth,
-            maximum_properties,
+            maximum_selection_depth,
+            maximum_selection_properties,
         )?));
     }
     Ok(DavParsedReport::Other(requested_property(root)))
@@ -481,9 +482,6 @@ fn parse_expand_property<S: AsRef<[u8]>>(
     maximum_depth: usize,
     maximum_properties: usize,
 ) -> Result<Vec<DavExpandPropertySelection>, DavXmlError> {
-    if maximum_depth == 0 || maximum_properties == 0 {
-        return Err(DavXmlError::InvalidGrammar);
-    }
     require_element_content(root)?;
     if root
         .child_elements()
@@ -532,7 +530,7 @@ fn parse_expand_property_selection<S: AsRef<[u8]>>(
         .filter(|name| is_valid_xml_local_name(name))
         .ok_or(DavXmlError::InvalidGrammar)?;
     let namespace = property.attribute("namespace").unwrap_or(DAV_NAMESPACE);
-    if namespace.is_empty() || namespace.trim() != namespace {
+    if namespace.is_empty() || !is_valid_xml_namespace_name(namespace) {
         return Err(DavXmlError::InvalidGrammar);
     }
     let nested = property

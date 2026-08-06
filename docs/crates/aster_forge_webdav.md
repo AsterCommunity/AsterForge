@@ -46,8 +46,9 @@ core `version-control` declaration 还必须提供 `DavVersioningCapabilities`�
 `DavVersioningState::{Versionable, CheckedIn, CheckedOut, Version}` 明确当前目标，而不是从
 entity、URL 或 method 集反推。`DavAutoVersion` 描述 checked-in mutation 的 checkout/checkin
 副作用并覆盖 `checkout-checkin`、`checkout-unlocked-checkin`、`checkout` 和 `locked-checkout`；
-`write_locked` 与 `auto_checkout_lock` 分别表达当前写锁状态、当前 checkout 是否由该写锁关联的
-自动 checkout 产生。`allow_version_delete` 只表达服务器是否采用 RFC 3253 可选的 version DELETE
+`write_locked` 与 `auto_checkout_lock` 分别表达当前 DAV 写锁状态、当前 checkout 是否由该写锁关联的
+自动 checkout 产生；`write_locked` 只能在启用 Class 2 锁能力时声明。`allow_version_delete`
+只表达服务器是否采用 RFC 3253 可选的 version DELETE
 行为，非 version target 携带该 policy 会被 planner 拒绝。
 `plan_capabilities` 用这些 facts 同时裁剪 method support、`supported-live-property-set` 和
 `supported-report-set`：versionable resource 只开放 `expand-property`，checked-in/out 和 immutable
@@ -143,8 +144,9 @@ match request {
 }
 ```
 
-`DavReportLimits` 同时限制 input bytes、XML depth、nested expansion depth、expanded resource
-数、resolved property 数和最终 `DavMultiStatusLimits`。`execute_expand_property` 在每次 backend
+`DavReportLimits` 分别限制 input bytes、XML depth、请求 selection AST 的嵌套层数与 property
+节点数、执行期 resource expansion hops、visited resource 数、backend property lookup 数和最终
+`DavMultiStatusLimits`；解析预算与执行预算不复用字段。`execute_expand_property` 在每次 backend
 property lookup 和 href traversal 前检查 `DavCancellation`；产品 deadline 使用同一 cancellation
 source。executor 维护 active href 集检测循环，区分 missing property、missing nested href、backend
 failure、depth/resource/property/output limit 和 cancellation，不把持久化错误文本写进 DAV body。
@@ -154,6 +156,10 @@ version-tree backend 返回 `DavVersionReportItem` 和 ordered `DavVersionProper
 property-level status，unknown namespace/QName 原样保留。`version-name`、creator/comment、
 predecessor/successor/checkout href sets 与可选 ETag/content length/type/last-modified 都使用同一
 通用 property model，不再存在固定四字段 response shape。
+
+旧的 `DavVersionXml` 与 `dav_version_multistatus_bytes` 已移除，不保留兼容 facade。调用方应直接构造
+`DavVersionReportItem` / `DavVersionProperty`，并使用 `version_tree_response`；需要自定义输出预算时使用
+`version_tree_response_with_limits`。
 
 VERSION-CONTROL handler 使用 `plan_version_control_request` 得到
 `DavVersionControlAction::{PutUnderVersionControl, AlreadyControlled}`，再把 plan 交给产品实现的

@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesPI, BytesStart, BytesText, Event};
 use quick_xml::writer::Writer;
 
-use crate::{Error, ValidatedXml, XmlSafetyError};
+use crate::{Error, ValidatedXml, XmlSafetyError, is_valid_xml_namespace_name};
 
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_MAX_DEPTH: usize = 128;
@@ -600,6 +600,7 @@ fn validate_namespace_binding(prefix: &str, uri: &str) -> Result<(), Error> {
         || (prefix == "xml" && uri != XML_NAMESPACE_URI)
         || (prefix != "xml" && uri == XML_NAMESPACE_URI)
         || (!prefix.is_empty() && uri.is_empty())
+        || !is_valid_xml_namespace_name(uri)
     {
         Err(Error::InvalidData("invalid namespace binding".into()))
     } else {

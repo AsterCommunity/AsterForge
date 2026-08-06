@@ -145,6 +145,16 @@ fn rejects_invalid_document_state_namespaces_names_and_values() {
     assert_invalid_data(writer.start_element("root", [("xmlns:xml", "urn:wrong")]));
     assert_invalid_data(writer.start_element("root", [("xmlns:xmlns", "urn:x")]));
     assert_invalid_data(writer.start_element("root", [("xmlns:p", "")]));
+    for namespace in [
+        "urn:bad namespace",
+        "urn:bad<namespace",
+        "urn:bad>namespace",
+        "urn:bad\"namespace",
+        "urn:bad\\namespace",
+        "urn:bad\u{7f}namespace",
+    ] {
+        assert_invalid_data(writer.start_element("root", [("xmlns:p", namespace)]));
+    }
     assert_invalid_data(writer.start_element(
         "root",
         [("xmlns:p", "http://www.w3.org/XML/1998/namespace")],

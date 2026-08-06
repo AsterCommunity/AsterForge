@@ -532,6 +532,21 @@ fn deltav_dependencies_and_extension_only_methods_are_validated() {
         })
     );
 
+    let mut immutable_with_method = declaration(
+        DavResourceState::File,
+        &[DavMethod::Options, DavMethod::VersionControl],
+    );
+    immutable_with_method.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    immutable_with_method.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::Version,
+        ..DavVersioningCapabilities::default()
+    };
+    assert_eq!(
+        plan_capabilities(immutable_with_method),
+        Err(DavCapabilityPlanError::VersionControlMethodNotApplicable)
+    );
+
     let mut supported_but_disallowed = declaration(DavResourceState::File, &[DavMethod::Options]);
     supported_but_disallowed.extensions =
         DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
@@ -898,7 +913,9 @@ fn deltav_resource_states_keep_method_body_property_and_report_discovery_on_one_
 
 #[test]
 fn deltav_runtime_facts_reject_inapplicable_auto_checkout_and_delete_policy() {
-    let mut invalid_state = declaration(DavResourceState::File, &[DavMethod::Options]);
+    let locking_methods = [DavMethod::Options, DavMethod::Lock, DavMethod::Unlock];
+    let mut invalid_state = declaration(DavResourceState::File, &locking_methods);
+    invalid_state.locking = DavLockingCapability::Class2;
     invalid_state.extensions =
         DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
     invalid_state.versioning = DavVersioningCapabilities {
@@ -913,7 +930,8 @@ fn deltav_runtime_facts_reject_inapplicable_auto_checkout_and_delete_policy() {
         Err(DavCapabilityPlanError::AutoCheckoutLockNotApplicable)
     );
 
-    let mut invalid_mode = declaration(DavResourceState::File, &[DavMethod::Options]);
+    let mut invalid_mode = declaration(DavResourceState::File, &locking_methods);
+    invalid_mode.locking = DavLockingCapability::Class2;
     invalid_mode.extensions =
         DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
     invalid_mode.versioning = DavVersioningCapabilities {
@@ -940,6 +958,51 @@ fn deltav_runtime_facts_reject_inapplicable_auto_checkout_and_delete_policy() {
         plan_capabilities(invalid_delete),
         Err(DavCapabilityPlanError::VersionDeletePolicyNotApplicable)
     );
+
+    let mut write_locked_without_class2 =
+        declaration(DavResourceState::File, &[DavMethod::Options]);
+    write_locked_without_class2.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    write_locked_without_class2.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::CheckedIn,
+        write_locked: true,
+        ..DavVersioningCapabilities::default()
+    };
+    assert_eq!(
+        plan_capabilities(write_locked_without_class2),
+        Err(DavCapabilityPlanError::WriteLockWithoutClass2)
+    );
+
+    let mut package_without_target = declaration(DavResourceState::File, &[DavMethod::Options]);
+    package_without_target.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    assert_eq!(
+        plan_capabilities(package_without_target),
+        Err(DavCapabilityPlanError::VersionControlWithoutTarget)
+    );
+
+    let mut target_without_package = declaration(DavResourceState::File, &[DavMethod::Options]);
+    target_without_package.versioning.state = DavVersioningState::CheckedIn;
+    assert_eq!(
+        plan_capabilities(target_without_package),
+        Err(DavCapabilityPlanError::VersioningTargetWithoutPackage)
+    );
+
+    for state in [DavVersioningState::Versionable, DavVersioningState::Version] {
+        let mut invalid_auto_version = declaration(DavResourceState::File, &[DavMethod::Options]);
+        invalid_auto_version.extensions =
+            DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+        invalid_auto_version.versioning = DavVersioningCapabilities {
+            state,
+            auto_version: DavAutoVersion::Checkout,
+            ..DavVersioningCapabilities::default()
+        };
+        assert_eq!(
+            plan_capabilities(invalid_auto_version),
+            Err(DavCapabilityPlanError::AutoVersionNotApplicable),
+            "{state:?}"
+        );
+    }
 }
 
 #[test]

@@ -346,6 +346,9 @@ fn rejects_invalid_or_unbound_namespace_prefixes() {
         br#"<root xmlns:xmlns="urn:no"/>"#,
         br#"<root xmlns:1x="urn:no"/>"#,
         br#"<root xmlns:p=""/>"#,
+        br#"<root xmlns:p="urn:bad namespace"/>"#,
+        br#"<root xmlns:p="urn:bad&lt;namespace"/>"#,
+        br#"<root xmlns:p="urn:bad&quot;namespace"/>"#,
     ] {
         assert_eq!(
             validate_xml_input(input, policy),
