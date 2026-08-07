@@ -435,10 +435,10 @@ fn maximum_compatible_package_set_plans_for_every_resource_state() {
         DavResourceState::RedirectReference,
         DavResourceState::AddMemberEndpoint,
     ] {
-        let versioning_resource = matches!(
-            resource,
-            DavResourceState::File | DavResourceState::Collection | DavResourceState::MountRoot
-        );
+        let versioning_resource = DavExtensionPackage::VersionControl
+            .descriptor()
+            .resources
+            .contains(resource);
         let packages = DavExtensionPackage::ALL
             .into_iter()
             .filter(|package| {
@@ -941,6 +941,11 @@ fn deltav_runtime_facts_reject_inapplicable_auto_checkout_and_delete_policy() {
         auto_checkout_lock: true,
         allow_version_delete: false,
     };
+    assert_eq!(
+        plan_capabilities(invalid_mode.clone()),
+        Err(DavCapabilityPlanError::AutoCheckoutLockWithoutApplicableMode)
+    );
+    invalid_mode.versioning.auto_version = DavAutoVersion::None;
     assert_eq!(
         plan_capabilities(invalid_mode),
         Err(DavCapabilityPlanError::AutoCheckoutLockWithoutApplicableMode)

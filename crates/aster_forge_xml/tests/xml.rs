@@ -349,6 +349,10 @@ fn rejects_invalid_or_unbound_namespace_prefixes() {
         br#"<root xmlns:p="urn:bad namespace"/>"#,
         br#"<root xmlns:p="urn:bad&lt;namespace"/>"#,
         br#"<root xmlns:p="urn:bad&quot;namespace"/>"#,
+        br#"<root xmlns:p="urn:bad%"/>"#,
+        br#"<root xmlns:p="urn:bad%2"/>"#,
+        br#"<root xmlns:p="urn:bad%ZZ"/>"#,
+        br#"<root xmlns:p="urn:%0G"/>"#,
     ] {
         assert_eq!(
             validate_xml_input(input, policy),
@@ -359,6 +363,8 @@ fn rejects_invalid_or_unbound_namespace_prefixes() {
         BorrowedDocument::parse(br#"<root xmlns:1x="urn:no"/>"#.as_slice()),
         Err(Error::Safety(XmlSafetyError::Malformed))
     ));
+    validate_xml_input(br#"<p:root xmlns:p="urn:valid%20namespace"/>"#, policy)
+        .expect("valid percent-encoded namespace");
 }
 
 #[test]

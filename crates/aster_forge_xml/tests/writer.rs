@@ -152,6 +152,10 @@ fn rejects_invalid_document_state_namespaces_names_and_values() {
         "urn:bad\"namespace",
         "urn:bad\\namespace",
         "urn:bad\u{7f}namespace",
+        "urn:bad%",
+        "urn:bad%2",
+        "urn:bad%ZZ",
+        "urn:%0G",
     ] {
         assert_invalid_data(writer.start_element("root", [("xmlns:p", namespace)]));
     }
@@ -161,6 +165,15 @@ fn rejects_invalid_document_state_namespaces_names_and_values() {
     ));
     assert_invalid_data(writer.start_element("root", [("xmlns", "http://www.w3.org/2000/xmlns/")]));
     assert_invalid_data(writer.start_element("root", [("x", "\u{0}")]));
+
+    let mut encoded = XmlStreamWriter::new(Vec::new()).expect("encoded namespace writer");
+    encoded
+        .empty_element("p:root", [("xmlns:p", "urn:valid%20namespace")])
+        .expect("valid percent-encoded namespace");
+    assert_eq!(
+        finish(encoded),
+        br#"<p:root xmlns:p="urn:valid%20namespace"/>"#
+    );
 
     writer.start("root").expect("valid root after failures");
     assert_invalid_data(writer.comment("a--b"));

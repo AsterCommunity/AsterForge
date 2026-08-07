@@ -115,7 +115,7 @@ Forge 维护标准 live property 的静态 catalog，并从 capability snapshot 
 `DAV:prop`、expanded namespace、客户端 lexical prefix 和 REPORT Depth；未携带 Depth 时按 RFC
 默认 `Depth: 0`。`DavExpandPropertyRequest` 保留任意层 nested `DAV:property` 选择及每层
 `name`/`namespace`。`version-tree` 的 `ANY` grammar 忽略未知 extension 子树；`expand-property`
-只接受 DTD 声明的 nested `DAV:property`。DTD/ENTITY、重复 `DAV:prop`、property-name character
+只接受符合 RFC grammar 的 nested `DAV:property`。DTD/ENTITY、重复 `DAV:prop`、property-name character
 data、缺失/非法 `name`、`expand-property` 的异名子元素和零 limits 都在 backend 调用前拒绝。
 
 ```rust
@@ -382,7 +382,7 @@ Forge 负责：
 
 结构化协议容器不接受额外字符数据。property-name 上下文只把元素 QName 作为属性名；直接字符数据会被视为非法 property value，而未知子元素仍按 RFC 4918 的完整子树忽略规则处理。`PROPPATCH set` 的 property value 和 LOCK `owner` 属于需要保留的内容，不应用这条 property-name 限制。
 
-DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.5)、[Section 3.7](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.7) 和 [Section 3.8](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.8) 为准。`VERSION-CONTROL` 与两个 core REPORT 都使用 bounded XML body policy，因此 transport adapter 不会绕过产品提供的 XML 请求体上限。
+DeltaV 语义以 [RFC 3253 Section 3.5](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.5)、[Section 3.7](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.7)、[Section 3.8](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.8) 以及 mutation 方法对应的 [Sections 3.9–3.16](https://www.rfc-editor.org/rfc/rfc3253.html#section-3.9) 为准。`VERSION-CONTROL` 与两个 core REPORT 都使用 bounded XML body policy，因此 transport adapter 不会绕过产品提供的 XML 请求体上限。
 
 产品负责：
 
