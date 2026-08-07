@@ -1,9 +1,9 @@
 use aster_forge_webdav::{
-    DavCapabilityDeclaration, DavCapabilitySnapshot, DavMethod, DavMethodSet,
-    DavPartialPutCapability, DavPath, DavPrivateUpdateRangeCapability, DavProtocolErrorKind,
-    DavPutPlanError, DavPutResourceState, DavPutWritePlan, DavResourceState, DavWriteCapabilities,
-    DavWritePrecondition, plan_capabilities, plan_put_request, put_plan_error_response,
-    put_success_response,
+    DavCapabilityDeclaration, DavCapabilitySnapshot, DavExtensionPackage, DavExtensionSet,
+    DavMethod, DavMethodSet, DavPartialPutCapability, DavPath, DavPrivateUpdateRangeCapability,
+    DavProtocolErrorKind, DavPutPlanError, DavPutResourceState, DavPutWritePlan, DavResourceState,
+    DavVersioningCapabilities, DavVersioningState, DavWriteCapabilities, DavWritePrecondition,
+    plan_capabilities, plan_put_request, put_plan_error_response, put_success_response,
 };
 use http::header::{
     CONTENT_LENGTH, CONTENT_LOCATION, CONTENT_RANGE, ETAG, IF_MATCH, IF_NONE_MATCH,
@@ -18,6 +18,39 @@ fn put_snapshot(writes: DavWriteCapabilities) -> DavCapabilitySnapshot {
     );
     declaration.writes = writes;
     plan_capabilities(declaration).expect("valid PUT capability snapshot")
+}
+
+#[test]
+fn put_planner_applies_core_versioning_preconditions_before_storage_write() {
+    let mut declaration = DavCapabilityDeclaration::new(
+        DavResourceState::File,
+        DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Put]),
+    );
+    declaration.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::Version,
+        ..DavVersioningCapabilities::default()
+    };
+    declaration.compliance.class1 = true;
+    declaration.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    let snapshot = plan_capabilities(declaration).expect("immutable version snapshot");
+    let error = plan_put_request(&snapshot, &HeaderMap::new(), existing(Some("v1")))
+        .expect_err("immutable version PUT must be rejected");
+    assert!(matches!(
+        error,
+        DavPutPlanError::Versioning(
+            aster_forge_webdav::DavVersioningPrecondition::CannotModifyVersion
+        )
+    ));
+    let response = put_plan_error_response(&snapshot, &error);
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert!(
+        String::from_utf8(match response.body {
+            aster_forge_webdav::DavResponseBody::Bytes(body) => body.to_vec(),
+            _ => Vec::new(),
+        })
+        .expect("UTF-8 DAV error")
+        .contains("cannot-modify-version")
+    );
 }
 
 fn ordinary_put_snapshot() -> DavCapabilitySnapshot {
@@ -73,10 +106,10 @@ fn put_requires_the_method_and_rejects_undeclared_partial_write_headers() {
         plan_put_request(&disabled, &HeaderMap::new(), existing(None)),
         Err(DavPutPlanError::MethodNotAllowed)
     ));
-    assert_eq!(
-        put_plan_error_response(&DavPutPlanError::MethodNotAllowed).status,
-        StatusCode::METHOD_NOT_ALLOWED
-    );
+    let response = put_plan_error_response(&disabled, &DavPutPlanError::MethodNotAllowed);
+    assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.headers.get("Allow").unwrap(), "OPTIONS");
+    assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 
     let snapshot = ordinary_put_snapshot();
     for (name, value) in [
@@ -90,7 +123,7 @@ fn put_requires_the_method_and_rejects_undeclared_partial_write_headers() {
         headers.insert(name, HeaderValue::from_static(value));
         let error = plan_put_request(&snapshot, &headers, existing(Some("v1")))
             .expect_err("undeclared partial write must be rejected");
-        let response = put_plan_error_response(&error);
+        let response = put_plan_error_response(&snapshot, &error);
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
     }
@@ -196,7 +229,10 @@ fn partial_put_validates_declared_body_length_and_existing_target() {
     let error = plan_put_request(&snapshot, &range, DavPutResourceState::Missing)
         .expect_err("partial PUT needs a current representation");
     assert!(matches!(error, DavPutPlanError::PartialTargetMissing));
-    assert_eq!(put_plan_error_response(&error).status, StatusCode::CONFLICT);
+    assert_eq!(
+        put_plan_error_response(&snapshot, &error).status,
+        StatusCode::CONFLICT
+    );
 }
 
 #[test]
@@ -218,7 +254,7 @@ fn partial_put_can_require_a_matching_strong_if_match() {
             .expect_err("strong If-Match is required");
         assert!(matches!(error, DavPutPlanError::PreconditionRequired));
         assert_eq!(
-            put_plan_error_response(&error).status,
+            put_plan_error_response(&snapshot, &error).status,
             StatusCode::PRECONDITION_REQUIRED
         );
     }
@@ -315,8 +351,9 @@ fn put_plan_enforces_etag_preconditions_and_collection_target() {
         ),
         Err(DavPutPlanError::CollectionTarget)
     ));
-    let response = put_plan_error_response(&DavPutPlanError::CollectionTarget);
+    let response = put_plan_error_response(&snapshot, &DavPutPlanError::CollectionTarget);
     assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.headers.get("Allow").unwrap(), "OPTIONS, PUT");
     assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 }
 
@@ -360,7 +397,7 @@ fn put_plan_applies_if_unmodified_since_and_retains_validators_on_412() {
         },
     )
     .expect_err("stale PUT should fail");
-    let response = put_plan_error_response(&error);
+    let response = put_plan_error_response(&snapshot, &error);
     assert_eq!(response.status, StatusCode::PRECONDITION_FAILED);
     assert_eq!(response.headers.get(ETAG).expect("ETag"), "\"v1\"");
     assert_eq!(
@@ -384,7 +421,7 @@ fn put_plan_preserves_protocol_and_representation_error_boundaries() {
         DavPutPlanError::Protocol(error)
             if error.kind() == DavProtocolErrorKind::BadRequest
     ));
-    let response = put_plan_error_response(&protocol_error);
+    let response = put_plan_error_response(&snapshot, &protocol_error);
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 
@@ -404,7 +441,7 @@ fn put_plan_preserves_protocol_and_representation_error_boundaries() {
         representation_error,
         DavPutPlanError::InvalidRepresentation
     ));
-    let response = put_plan_error_response(&representation_error);
+    let response = put_plan_error_response(&snapshot, &representation_error);
     assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(response.headers.get("Cache-Control").unwrap(), "no-store");
 }

@@ -2,12 +2,7 @@
 
 use std::time::Duration;
 
-use http::StatusCode;
-
-use crate::{
-    DavMultiStatusError, DavMultiStatusLimits, DavRequestedProperty, DavXmlElement, DavXmlNode,
-    dav_multistatus_bytes, encode_href,
-};
+use crate::{DavRequestedProperty, DavXmlElement, DavXmlNode, encode_href};
 
 /// One `<D:propstat>` group in a multistatus response.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +27,16 @@ pub enum DavErrorCondition {
     LockTokenMatchesRequestUri,
     /// RFC 4918 `propfind-finite-depth` precondition.
     PropfindFiniteDepth,
+    /// RFC 3253 checked-in content mutation precondition.
+    CannotModifyVersionControlledContent,
+    /// RFC 3253 checked-in dead-property mutation precondition.
+    CannotModifyVersionControlledProperty,
+    /// RFC 3253 immutable version mutation precondition.
+    CannotModifyVersion,
+    /// RFC 3253 immutable version rename precondition.
+    CannotRenameVersion,
+    /// RFC 3253 optional immutable version delete precondition.
+    NoVersionDelete,
 }
 
 /// One `<D:response>` entry in a multistatus response.
@@ -93,21 +98,6 @@ pub struct DavLockXml {
     pub deep: bool,
     /// Encoded href of the lock root.
     pub root_href: String,
-}
-
-/// One version entry in a `DeltaV` version-tree response.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DavVersionXml {
-    /// Encoded version href.
-    pub href: String,
-    /// Protocol-visible version name.
-    pub version_name: String,
-    /// Creator display name.
-    pub creator: String,
-    /// Content length.
-    pub content_length: i64,
-    /// HTTP-date formatted modification time.
-    pub last_modified: String,
 }
 
 /// Creates a `DAV:` element using the conventional `D` prefix.
@@ -238,34 +228,6 @@ pub fn dav_lock_response_element(locks: &[DavLockXml]) -> DavXmlElement {
     prop
 }
 
-/// Creates a complete bounded `DeltaV` version-tree Multi-Status document.
-///
-/// # Errors
-///
-/// Returns an error when the bounded Multi-Status document cannot be encoded.
-pub fn dav_version_multistatus_bytes(
-    versions: Vec<DavVersionXml>,
-    limits: DavMultiStatusLimits,
-) -> Result<Vec<u8>, DavMultiStatusError> {
-    dav_multistatus_bytes(
-        versions.into_iter().map(|version| {
-            DavMultiStatusItem::properties(
-                version.href,
-                vec![DavPropStat {
-                    status: StatusCode::OK.as_u16(),
-                    properties: vec![
-                        dav_text_element("version-name", version.version_name),
-                        dav_text_element("creator-displayname", version.creator),
-                        dav_text_element("getcontentlength", version.content_length.to_string()),
-                        dav_text_element("getlastmodified", version.last_modified),
-                    ],
-                }],
-            )
-        }),
-        limits,
-    )
-}
-
 fn active_lock_element(lock: &DavLockXml) -> DavXmlElement {
     let mut active = dav_element("activelock");
     let mut lockscope = dav_element("lockscope");
@@ -333,6 +295,15 @@ pub(crate) fn error_condition_parts(condition: &DavErrorCondition) -> (&'static 
         }
         DavErrorCondition::LockTokenMatchesRequestUri => ("lock-token-matches-request-uri", None),
         DavErrorCondition::PropfindFiniteDepth => ("propfind-finite-depth", None),
+        DavErrorCondition::CannotModifyVersionControlledContent => {
+            ("cannot-modify-version-controlled-content", None)
+        }
+        DavErrorCondition::CannotModifyVersionControlledProperty => {
+            ("cannot-modify-version-controlled-property", None)
+        }
+        DavErrorCondition::CannotModifyVersion => ("cannot-modify-version", None),
+        DavErrorCondition::CannotRenameVersion => ("cannot-rename-version", None),
+        DavErrorCondition::NoVersionDelete => ("no-version-delete", None),
     }
 }
 

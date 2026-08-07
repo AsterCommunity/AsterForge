@@ -1,22 +1,23 @@
 use std::marker::PhantomData;
 
 use aster_forge_webdav::{
-    DavBackendError, DavBackendErrorKind, DavCapabilityContext, DavCapabilityDeclaration,
-    DavCapabilityEvaluationError, DavCapabilityPlanError, DavCapabilityProfile,
-    DavCapabilityProvider, DavCapabilityTarget, DavCheckoutInPlaceSupport, DavClass1Profile,
-    DavClass1Support, DavClass2And3Profile, DavClass2Support, DavClass3Profile, DavClass3Support,
-    DavCollectionSyncExtension, DavCollectionSyncSupport, DavExtensionPackage, DavExtensionSet,
-    DavLockingCapability, DavMethod, DavMethodGateError, DavMethodSet, DavNonDavProfile,
-    DavOperation, DavPartialPutCapability, DavPartialPutSupport, DavPatchBodyPolicy,
-    DavPatchCapability, DavPatchFormat, DavPatchSupport, DavPath, DavPreferExtension,
-    DavPreferSupport, DavPreferenceSet, DavPrivateUpdateRangeCapability,
+    DavAutoVersion, DavBackendError, DavBackendErrorKind, DavBodyPolicy, DavCapabilityContext,
+    DavCapabilityDeclaration, DavCapabilityEvaluationError, DavCapabilityPlanError,
+    DavCapabilityProfile, DavCapabilityProvider, DavCapabilityTarget, DavCheckoutInPlaceSupport,
+    DavClass1Profile, DavClass1Support, DavClass2And3Profile, DavClass2Support, DavClass3Profile,
+    DavClass3Support, DavCollectionSyncExtension, DavCollectionSyncSupport, DavExtensionPackage,
+    DavExtensionSet, DavLiveProperty, DavLockingCapability, DavMethod, DavMethodGateError,
+    DavMethodSet, DavNonDavProfile, DavOperation, DavPartialPutCapability, DavPartialPutSupport,
+    DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat, DavPatchSupport, DavPath,
+    DavPreferExtension, DavPreferSupport, DavPreferenceSet, DavPrivateUpdateRangeCapability,
     DavPrivateUpdateRangeSupport, DavQuotaExtension, DavQuotaSupport, DavReportType,
     DavResourceState, DavResourceStateSet, DavSearchCapabilities, DavSearchExtension,
     DavSearchGrammar, DavSearchSupport, DavVersionControlExtension, DavVersionControlSupport,
-    DavVersionHistorySupport, DavWithPartialPut, DavWithPatch, DavWithPrivateUpdateRange,
-    DavWorkspaceExtension, DavWorkspaceSupport, DavWriteCapabilities, DavWritePrecondition,
-    dav_capability_profile, gate_method, method_not_allowed_response, options_response,
-    plan_capabilities, plan_capabilities_with_provider,
+    DavVersionHistorySupport, DavVersioningCapabilities, DavVersioningState, DavWithPartialPut,
+    DavWithPatch, DavWithPrivateUpdateRange, DavWorkspaceExtension, DavWorkspaceSupport,
+    DavWriteCapabilities, DavWritePrecondition, dav_capability_profile, gate_method,
+    method_not_allowed_response, options_response, plan_capabilities,
+    plan_capabilities_with_provider,
 };
 use http::StatusCode;
 use http::header::{ALLOW, CACHE_CONTROL};
@@ -378,6 +379,15 @@ fn every_package_plans_on_an_applicable_resource_and_projects_its_catalog() {
             .expect("every package has an applicable resource");
         let mut declaration = declaration(resource, &[DavMethod::Options]);
         declaration.extensions = descriptor.prerequisites.with(package);
+        if declaration
+            .extensions
+            .contains(DavExtensionPackage::VersionControl)
+        {
+            declaration.versioning = DavVersioningCapabilities {
+                state: DavVersioningState::CheckedIn,
+                ..DavVersioningCapabilities::default()
+            };
+        }
         if package == DavExtensionPackage::Search {
             declaration.search = DavSearchCapabilities {
                 grammars: &[DavSearchGrammar::BASICSEARCH],
@@ -388,7 +398,20 @@ fn every_package_plans_on_an_applicable_resource_and_projects_its_catalog() {
         });
         assert!(snapshot.supports_extension(package));
         for property in descriptor.live_properties {
-            assert!(snapshot.supports_live_property(*property));
+            if package != DavExtensionPackage::VersionControl
+                || matches!(
+                    property,
+                    aster_forge_webdav::DavLiveProperty::Comment
+                        | aster_forge_webdav::DavLiveProperty::CreatorDisplayName
+                        | aster_forge_webdav::DavLiveProperty::SupportedMethodSet
+                        | aster_forge_webdav::DavLiveProperty::SupportedLivePropertySet
+                        | aster_forge_webdav::DavLiveProperty::SupportedReportSet
+                        | aster_forge_webdav::DavLiveProperty::CheckedIn
+                        | aster_forge_webdav::DavLiveProperty::AutoVersion
+                )
+            {
+                assert!(snapshot.supports_live_property(*property));
+            }
         }
         for report in descriptor.reports {
             assert!(snapshot.supports_report(*report));
@@ -412,12 +435,30 @@ fn maximum_compatible_package_set_plans_for_every_resource_state() {
         DavResourceState::RedirectReference,
         DavResourceState::AddMemberEndpoint,
     ] {
+        let versioning_resource = DavExtensionPackage::VersionControl
+            .descriptor()
+            .resources
+            .contains(resource);
         let packages = DavExtensionPackage::ALL
             .into_iter()
-            .filter(|package| package.descriptor().resources.contains(resource))
+            .filter(|package| {
+                package.descriptor().resources.contains(resource)
+                    && (versioning_resource
+                        || (*package != DavExtensionPackage::VersionControl
+                            && !package
+                                .descriptor()
+                                .prerequisites
+                                .contains(DavExtensionPackage::VersionControl)))
+            })
             .fold(DavExtensionSet::empty(), DavExtensionSet::with);
         let mut declaration = declaration(resource, &[DavMethod::Options]);
         declaration.extensions = packages;
+        if packages.contains(DavExtensionPackage::VersionControl) {
+            declaration.versioning = DavVersioningCapabilities {
+                state: DavVersioningState::CheckedIn,
+                ..DavVersioningCapabilities::default()
+            };
+        }
         if packages.contains(DavExtensionPackage::Search) {
             declaration.search = DavSearchCapabilities {
                 grammars: &[DavSearchGrammar::BASICSEARCH],
@@ -469,6 +510,10 @@ fn deltav_dependencies_and_extension_only_methods_are_validated() {
         DavExtensionPackage::VersionHistory,
         DavExtensionPackage::Workspace,
     ]);
+    valid.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::Versionable,
+        ..DavVersioningCapabilities::default()
+    };
     let snapshot = plan_capabilities(valid).expect("complete workspace prerequisites");
     assert!(snapshot.supports(DavMethod::Mkworkspace));
     assert_eq!(
@@ -487,9 +532,28 @@ fn deltav_dependencies_and_extension_only_methods_are_validated() {
         })
     );
 
+    let mut immutable_with_method = declaration(
+        DavResourceState::File,
+        &[DavMethod::Options, DavMethod::VersionControl],
+    );
+    immutable_with_method.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    immutable_with_method.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::Version,
+        ..DavVersioningCapabilities::default()
+    };
+    assert_eq!(
+        plan_capabilities(immutable_with_method),
+        Err(DavCapabilityPlanError::VersionControlMethodNotApplicable)
+    );
+
     let mut supported_but_disallowed = declaration(DavResourceState::File, &[DavMethod::Options]);
     supported_but_disallowed.extensions =
         DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    supported_but_disallowed.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::Versionable,
+        ..DavVersioningCapabilities::default()
+    };
     let supported_but_disallowed =
         plan_capabilities(supported_but_disallowed).expect("package support snapshot");
     assert!(supported_but_disallowed.supports(DavMethod::VersionControl));
@@ -763,6 +827,190 @@ fn options_405_and_dispatch_observe_the_same_snapshot() {
 }
 
 #[test]
+fn deltav_resource_states_keep_method_body_property_and_report_discovery_on_one_snapshot() {
+    for state in [
+        DavVersioningState::Versionable,
+        DavVersioningState::CheckedIn,
+        DavVersioningState::CheckedOut,
+        DavVersioningState::Version,
+    ] {
+        let mut methods = vec![DavMethod::Options, DavMethod::Report];
+        if state != DavVersioningState::Version {
+            methods.push(DavMethod::VersionControl);
+        }
+        let mut declaration = declaration(DavResourceState::File, &methods);
+        declaration.extensions =
+            DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+        declaration.versioning = DavVersioningCapabilities {
+            state,
+            ..DavVersioningCapabilities::default()
+        };
+        let snapshot = plan_capabilities(declaration).expect("DeltaV snapshot");
+
+        let options = options_response(&snapshot);
+        let rejected = method_not_allowed_response(&snapshot);
+        assert_eq!(options.headers.get(ALLOW), Some(snapshot.allow_header()));
+        assert_eq!(rejected.headers.get(ALLOW), Some(snapshot.allow_header()));
+        assert_eq!(
+            snapshot.dispatches(DavMethod::Report),
+            snapshot.allows(DavMethod::Report)
+        );
+        assert_eq!(
+            snapshot.body_policy(DavMethod::Report, 512),
+            Ok(Some(DavBodyPolicy::BoundedXml { maximum: 512 }))
+        );
+        assert!(snapshot.supports(DavMethod::Report));
+        assert!(snapshot.supports_report(DavReportType::ExpandProperty));
+        assert_eq!(
+            snapshot.supports_report(DavReportType::VersionTree),
+            state != DavVersioningState::Versionable
+        );
+
+        let version_control = state != DavVersioningState::Version;
+        assert_eq!(
+            snapshot.supports(DavMethod::VersionControl),
+            version_control
+        );
+        assert_eq!(snapshot.allows(DavMethod::VersionControl), version_control);
+        assert_eq!(
+            snapshot.dispatches(DavMethod::VersionControl),
+            version_control
+        );
+        assert_eq!(
+            snapshot.body_policy(DavMethod::VersionControl, 512),
+            if version_control {
+                Ok(Some(DavBodyPolicy::BoundedXml { maximum: 512 }))
+            } else {
+                Err(DavMethodGateError::MethodNotAllowed)
+            }
+        );
+
+        assert_eq!(
+            snapshot.supports_live_property(DavLiveProperty::CheckedIn),
+            state == DavVersioningState::CheckedIn
+        );
+        assert_eq!(
+            snapshot.supports_live_property(DavLiveProperty::CheckedOut),
+            state == DavVersioningState::CheckedOut
+        );
+        assert_eq!(
+            snapshot.supports_live_property(DavLiveProperty::VersionName),
+            state == DavVersioningState::Version
+        );
+        assert_eq!(
+            snapshot.supports_live_property(DavLiveProperty::AutoVersion),
+            matches!(
+                state,
+                DavVersioningState::CheckedIn | DavVersioningState::CheckedOut
+            )
+        );
+        assert_eq!(
+            options.headers.get("DAV").expect("DAV header"),
+            "1, version-control"
+        );
+    }
+}
+
+#[test]
+fn deltav_runtime_facts_reject_inapplicable_auto_checkout_and_delete_policy() {
+    let locking_methods = [DavMethod::Options, DavMethod::Lock, DavMethod::Unlock];
+    let mut invalid_state = declaration(DavResourceState::File, &locking_methods);
+    invalid_state.locking = DavLockingCapability::Class2;
+    invalid_state.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    invalid_state.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::CheckedIn,
+        auto_version: DavAutoVersion::Checkout,
+        write_locked: true,
+        auto_checkout_lock: true,
+        allow_version_delete: false,
+    };
+    assert_eq!(
+        plan_capabilities(invalid_state),
+        Err(DavCapabilityPlanError::AutoCheckoutLockNotApplicable)
+    );
+
+    let mut invalid_mode = declaration(DavResourceState::File, &locking_methods);
+    invalid_mode.locking = DavLockingCapability::Class2;
+    invalid_mode.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    invalid_mode.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::CheckedOut,
+        auto_version: DavAutoVersion::CheckoutCheckin,
+        write_locked: true,
+        auto_checkout_lock: true,
+        allow_version_delete: false,
+    };
+    assert_eq!(
+        plan_capabilities(invalid_mode.clone()),
+        Err(DavCapabilityPlanError::AutoCheckoutLockWithoutApplicableMode)
+    );
+    invalid_mode.versioning.auto_version = DavAutoVersion::None;
+    assert_eq!(
+        plan_capabilities(invalid_mode),
+        Err(DavCapabilityPlanError::AutoCheckoutLockWithoutApplicableMode)
+    );
+
+    let mut invalid_delete = declaration(DavResourceState::File, &[DavMethod::Options]);
+    invalid_delete.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    invalid_delete.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::Versionable,
+        allow_version_delete: true,
+        ..DavVersioningCapabilities::default()
+    };
+    assert_eq!(
+        plan_capabilities(invalid_delete),
+        Err(DavCapabilityPlanError::VersionDeletePolicyNotApplicable)
+    );
+
+    let mut write_locked_without_class2 =
+        declaration(DavResourceState::File, &[DavMethod::Options]);
+    write_locked_without_class2.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    write_locked_without_class2.versioning = DavVersioningCapabilities {
+        state: DavVersioningState::CheckedIn,
+        write_locked: true,
+        ..DavVersioningCapabilities::default()
+    };
+    assert_eq!(
+        plan_capabilities(write_locked_without_class2),
+        Err(DavCapabilityPlanError::WriteLockWithoutClass2)
+    );
+
+    let mut package_without_target = declaration(DavResourceState::File, &[DavMethod::Options]);
+    package_without_target.extensions =
+        DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    assert_eq!(
+        plan_capabilities(package_without_target),
+        Err(DavCapabilityPlanError::VersionControlWithoutTarget)
+    );
+
+    let mut target_without_package = declaration(DavResourceState::File, &[DavMethod::Options]);
+    target_without_package.versioning.state = DavVersioningState::CheckedIn;
+    assert_eq!(
+        plan_capabilities(target_without_package),
+        Err(DavCapabilityPlanError::VersioningTargetWithoutPackage)
+    );
+
+    for state in [DavVersioningState::Versionable, DavVersioningState::Version] {
+        let mut invalid_auto_version = declaration(DavResourceState::File, &[DavMethod::Options]);
+        invalid_auto_version.extensions =
+            DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+        invalid_auto_version.versioning = DavVersioningCapabilities {
+            state,
+            auto_version: DavAutoVersion::Checkout,
+            ..DavVersioningCapabilities::default()
+        };
+        assert_eq!(
+            plan_capabilities(invalid_auto_version),
+            Err(DavCapabilityPlanError::AutoVersionNotApplicable),
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
 fn unmapped_targets_keep_allow_narrow_while_dispatching_not_found_methods() {
     let mut declaration = declaration(
         DavResourceState::Unmapped,
@@ -842,6 +1090,10 @@ impl DavCapabilityProvider for CompleteProvider {
             DavExtensionPackage::CollectionSync,
             DavExtensionPackage::Prefer,
         ]);
+        declaration.versioning = DavVersioningCapabilities {
+            state: DavVersioningState::CheckedIn,
+            ..DavVersioningCapabilities::default()
+        };
         declaration.search = DavSearchCapabilities {
             grammars: &[DavSearchGrammar::BASICSEARCH],
         };
@@ -853,6 +1105,7 @@ impl DavCapabilityProvider for CompleteProvider {
             declaration.methods =
                 DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Propfind]);
             declaration.search = DavSearchCapabilities::default();
+            declaration.versioning = DavVersioningCapabilities::default();
         }
         Ok(declaration)
     }
@@ -906,6 +1159,10 @@ impl DavCapabilityProvider for WorkspaceProvider {
             DavExtensionPackage::VersionHistory,
             DavExtensionPackage::Workspace,
         ]);
+        declaration.versioning = DavVersioningCapabilities {
+            state: DavVersioningState::CheckedIn,
+            ..DavVersioningCapabilities::default()
+        };
         Ok(declaration)
     }
 }

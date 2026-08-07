@@ -13,8 +13,9 @@ use crate::response::no_store_empty_response;
 use crate::{
     DavCapabilitySnapshot, DavConditionalOutcome, DavConditionalPlan, DavConditionalPlanError,
     DavConditionalResource, DavMethod, DavPartialPutCapability, DavPath,
-    DavPrivateUpdateRangeCapability, DavProtocolError, DavResponse, DavWritePrecondition,
-    href_for_dav_path, plan_http_conditionals,
+    DavPrivateUpdateRangeCapability, DavProtocolError, DavResponse, DavVersioningPrecondition,
+    DavWritePrecondition, href_for_dav_path, plan_http_conditionals, plan_versioning_method,
+    versioning_precondition_response,
 };
 
 /// Resolved state of the PUT request target.
@@ -74,6 +75,8 @@ pub enum DavPutPlanError {
     PartialTargetMissing,
     #[error("PUT cannot replace a collection")]
     CollectionTarget,
+    #[error(transparent)]
+    Versioning(#[from] DavVersioningPrecondition),
 }
 
 /// Failure while composing the successful PUT response.
@@ -94,6 +97,7 @@ pub fn plan_put_request(
     if !snapshot.allows(DavMethod::Put) {
         return Err(DavPutPlanError::MethodNotAllowed);
     }
+    plan_versioning_method(snapshot, DavMethod::Put)?;
     let resource = match state {
         DavPutResourceState::Missing => DavConditionalResource::missing(),
         DavPutResourceState::File {
@@ -139,12 +143,15 @@ pub fn plan_put_request(
     })
 }
 
-/// Maps a PUT planning failure to its protocol response.
+/// Maps a PUT planning failure through the same snapshot used for method planning.
 #[must_use]
-pub fn put_plan_error_response(error: &DavPutPlanError) -> DavResponse {
+pub fn put_plan_error_response(
+    snapshot: &DavCapabilitySnapshot,
+    error: &DavPutPlanError,
+) -> DavResponse {
     match error {
         DavPutPlanError::MethodNotAllowed | DavPutPlanError::CollectionTarget => {
-            no_store_empty_response(StatusCode::METHOD_NOT_ALLOWED)
+            crate::method_not_allowed_response(snapshot)
         }
         DavPutPlanError::Protocol(error) => crate::protocol_error_response(error),
         DavPutPlanError::PreconditionFailed(plan) => {
@@ -162,6 +169,8 @@ pub fn put_plan_error_response(error: &DavPutPlanError) -> DavResponse {
             no_store_empty_response(StatusCode::PRECONDITION_REQUIRED)
         }
         DavPutPlanError::PartialTargetMissing => no_store_empty_response(StatusCode::CONFLICT),
+        DavPutPlanError::Versioning(error) => versioning_precondition_response(snapshot, *error)
+            .unwrap_or_else(|_| no_store_empty_response(StatusCode::INTERNAL_SERVER_ERROR)),
     }
 }
 

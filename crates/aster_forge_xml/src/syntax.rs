@@ -74,11 +74,44 @@ pub(crate) fn validate_namespace_binding(prefix: &str, uri: &str) -> Result<(), 
         || (prefix == "xml" && uri != XML_NAMESPACE_URI)
         || (prefix != "xml" && uri == XML_NAMESPACE_URI)
         || (!prefix.is_empty() && uri.is_empty())
+        || !is_valid_xml_namespace_name(uri)
     {
         Err(XmlSafetyError::Malformed.into())
     } else {
         Ok(())
     }
+}
+
+/// Returns whether a namespace name is a lexically valid URI reference.
+///
+/// The empty value is retained for the XML Namespaces default-namespace undeclaration. Callers
+/// whose protocol requires a concrete namespace must reject it separately.
+#[must_use]
+pub fn is_valid_xml_namespace_name(uri: &str) -> bool {
+    if uri.chars().any(|character| {
+        character.is_control()
+            || character.is_whitespace()
+            || matches!(
+                character,
+                '<' | '>' | '"' | '{' | '}' | '|' | '\\' | '^' | '`'
+            )
+    }) {
+        return false;
+    }
+
+    let mut bytes = uri.as_bytes().iter();
+    while let Some(byte) = bytes.next() {
+        if *byte != b'%' {
+            continue;
+        }
+        let (Some(first), Some(second)) = (bytes.next(), bytes.next()) else {
+            return false;
+        };
+        if !first.is_ascii_hexdigit() || !second.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn map_quick_xml_error(error: quick_xml::Error) -> Error {

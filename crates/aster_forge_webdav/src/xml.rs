@@ -8,8 +8,11 @@ use std::io::{Read, Write};
 
 use aster_forge_xml::{
     BorrowedDocument, ElementRef, Error as ForgeXmlError, NodeRef, OwnedDocument, ParseOptions,
-    XmlSafetyError, XmlSafetyPolicy, XmlStreamWriter, XmlWriteAttribute,
+    XmlSafetyError, XmlSafetyPolicy, XmlStreamWriter, XmlWriteAttribute, is_valid_xml_local_name,
+    is_valid_xml_namespace_name,
 };
+
+use crate::deltav::{DavExpandPropertySelection, DavParsedReport};
 
 const DAV_NAMESPACE: &str = "DAV:";
 
@@ -398,13 +401,29 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
     }
 }
 
-pub(crate) fn parse_report_request(body: &[u8]) -> Result<DavRequestedProperty, DavXmlError> {
-    let document = parse_document(body)?;
+pub(crate) fn parse_report_request(
+    body: &[u8],
+    maximum_input_bytes: usize,
+    maximum_xml_depth: usize,
+    maximum_selection_depth: usize,
+    maximum_selection_properties: usize,
+) -> Result<DavParsedReport, DavXmlError> {
+    let options = webdav_parse_options()
+        .max_size(maximum_input_bytes)
+        .max_depth(maximum_xml_depth);
+    let document = parse_document_with_options(body, &options)?;
     let root = document.root();
     if is_dav_element(root, "version-tree") {
-        validate_version_tree_prop(root)?;
+        return Ok(DavParsedReport::VersionTree(parse_version_tree_prop(root)?));
     }
-    Ok(requested_property(root))
+    if is_dav_element(root, "expand-property") {
+        return Ok(DavParsedReport::ExpandProperty(parse_expand_property(
+            root,
+            maximum_selection_depth,
+            maximum_selection_properties,
+        )?));
+    }
+    Ok(DavParsedReport::Other(requested_property(root)))
 }
 
 /// Validates an optional RFC 3253 VERSION-CONTROL request body.
@@ -433,16 +452,108 @@ fn parse_document(bytes: &[u8]) -> Result<BorrowedDocument<'_>, DavXmlError> {
         .map_err(|error| map_forge_xml_error(&error))
 }
 
+fn parse_document_with_options<'a>(
+    bytes: &'a [u8],
+    options: &ParseOptions,
+) -> Result<BorrowedDocument<'a>, DavXmlError> {
+    BorrowedDocument::parse_with_options(bytes, options)
+        .map_err(|error| map_forge_xml_error(&error))
+}
+
 fn is_dav_element<S: AsRef<[u8]>>(element: ElementRef<'_, S>, local_name: &str) -> bool {
     element.name() == local_name && element.namespace() == Some(DAV_NAMESPACE)
 }
 
-fn validate_version_tree_prop<S: AsRef<[u8]>>(root: ElementRef<'_, S>) -> Result<(), DavXmlError> {
+fn parse_version_tree_prop<S: AsRef<[u8]>>(
+    root: ElementRef<'_, S>,
+) -> Result<Option<Vec<DavRequestedProperty>>, DavXmlError> {
     require_element_content(root)?;
     if let Some(prop) = unique_dav_child(root, "prop")? {
         require_property_names(prop)?;
+        return Ok(Some(
+            prop.child_elements().map(requested_property).collect(),
+        ));
     }
-    Ok(())
+    Ok(None)
+}
+
+fn parse_expand_property<S: AsRef<[u8]>>(
+    root: ElementRef<'_, S>,
+    maximum_depth: usize,
+    maximum_properties: usize,
+) -> Result<Vec<DavExpandPropertySelection>, DavXmlError> {
+    require_element_content(root)?;
+    if root
+        .child_elements()
+        .any(|child| !is_dav_element(child, "property"))
+    {
+        return Err(DavXmlError::InvalidGrammar);
+    }
+    let mut count = 0usize;
+    root.child_elements()
+        .filter(|child| is_dav_element(*child, "property"))
+        .map(|property| {
+            parse_expand_property_selection(
+                property,
+                1,
+                maximum_depth,
+                maximum_properties,
+                &mut count,
+            )
+        })
+        .collect()
+}
+
+fn parse_expand_property_selection<S: AsRef<[u8]>>(
+    property: ElementRef<'_, S>,
+    depth: usize,
+    maximum_depth: usize,
+    maximum_properties: usize,
+    count: &mut usize,
+) -> Result<DavExpandPropertySelection, DavXmlError> {
+    if depth > maximum_depth {
+        return Err(DavXmlError::TooDeep);
+    }
+    *count = count.checked_add(1).ok_or(DavXmlError::TooLarge)?;
+    if *count > maximum_properties {
+        return Err(DavXmlError::TooLarge);
+    }
+    require_element_content(property)?;
+    if property
+        .child_elements()
+        .any(|child| !is_dav_element(child, "property"))
+    {
+        return Err(DavXmlError::InvalidGrammar);
+    }
+    let name = property
+        .attribute("name")
+        .filter(|name| is_valid_xml_local_name(name))
+        .ok_or(DavXmlError::InvalidGrammar)?;
+    let namespace = property.attribute("namespace").unwrap_or(DAV_NAMESPACE);
+    if namespace.is_empty() || !is_valid_xml_namespace_name(namespace) {
+        return Err(DavXmlError::InvalidGrammar);
+    }
+    let nested = property
+        .child_elements()
+        .filter(|child| is_dav_element(*child, "property"))
+        .map(|child| {
+            parse_expand_property_selection(
+                child,
+                depth + 1,
+                maximum_depth,
+                maximum_properties,
+                count,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(DavExpandPropertySelection {
+        property: DavRequestedProperty {
+            name: name.to_owned(),
+            namespace: Some(namespace.to_owned()),
+            prefix: None,
+        },
+        nested,
+    })
 }
 
 fn unique_dav_child<'document, S: AsRef<[u8]>>(

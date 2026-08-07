@@ -145,12 +145,35 @@ fn rejects_invalid_document_state_namespaces_names_and_values() {
     assert_invalid_data(writer.start_element("root", [("xmlns:xml", "urn:wrong")]));
     assert_invalid_data(writer.start_element("root", [("xmlns:xmlns", "urn:x")]));
     assert_invalid_data(writer.start_element("root", [("xmlns:p", "")]));
+    for namespace in [
+        "urn:bad namespace",
+        "urn:bad<namespace",
+        "urn:bad>namespace",
+        "urn:bad\"namespace",
+        "urn:bad\\namespace",
+        "urn:bad\u{7f}namespace",
+        "urn:bad%",
+        "urn:bad%2",
+        "urn:bad%ZZ",
+        "urn:%0G",
+    ] {
+        assert_invalid_data(writer.start_element("root", [("xmlns:p", namespace)]));
+    }
     assert_invalid_data(writer.start_element(
         "root",
         [("xmlns:p", "http://www.w3.org/XML/1998/namespace")],
     ));
     assert_invalid_data(writer.start_element("root", [("xmlns", "http://www.w3.org/2000/xmlns/")]));
     assert_invalid_data(writer.start_element("root", [("x", "\u{0}")]));
+
+    let mut encoded = XmlStreamWriter::new(Vec::new()).expect("encoded namespace writer");
+    encoded
+        .empty_element("p:root", [("xmlns:p", "urn:valid%20namespace")])
+        .expect("valid percent-encoded namespace");
+    assert_eq!(
+        finish(encoded),
+        br#"<p:root xmlns:p="urn:valid%20namespace"/>"#
+    );
 
     writer.start("root").expect("valid root after failures");
     assert_invalid_data(writer.comment("a--b"));

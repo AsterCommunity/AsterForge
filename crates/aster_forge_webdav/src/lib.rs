@@ -52,12 +52,12 @@ pub use backend::{
 };
 pub use capability::{
     DavAccessControlExtension, DavAccessControlSupport, DavActivityExtension, DavActivitySupport,
-    DavAddMemberExtension, DavAddMemberSupport, DavBaselineExtension, DavBaselineSupport,
-    DavBindingsExtension, DavBindingsSupport, DavCapabilityContext, DavCapabilityDeclaration,
-    DavCapabilityEvaluationError, DavCapabilityPlanError, DavCapabilityProfile,
-    DavCapabilityProvider, DavCapabilitySnapshot, DavCapabilityTarget, DavCheckoutInPlaceExtension,
-    DavCheckoutInPlaceSupport, DavClass1Profile, DavClass1Support, DavClass2And3Profile,
-    DavClass2Profile, DavClass2Support, DavClass3Profile, DavClass3Support,
+    DavAddMemberExtension, DavAddMemberSupport, DavAutoVersion, DavBaselineExtension,
+    DavBaselineSupport, DavBindingsExtension, DavBindingsSupport, DavCapabilityContext,
+    DavCapabilityDeclaration, DavCapabilityEvaluationError, DavCapabilityPlanError,
+    DavCapabilityProfile, DavCapabilityProvider, DavCapabilitySnapshot, DavCapabilityTarget,
+    DavCheckoutInPlaceExtension, DavCheckoutInPlaceSupport, DavClass1Profile, DavClass1Support,
+    DavClass2And3Profile, DavClass2Profile, DavClass2Support, DavClass3Profile, DavClass3Support,
     DavCollectionSyncExtension, DavCollectionSyncSupport, DavCompatibilityCapabilities,
     DavComplianceClasses, DavCurrentPrincipalExtension, DavCurrentPrincipalSupport,
     DavExtendedMkcolExtension, DavExtendedMkcolSupport, DavExtensionMarker, DavLabelExtension,
@@ -71,10 +71,10 @@ pub use capability::{
     DavSearchSupport, DavUpdateExtension, DavUpdateSupport, DavVersionControlExtension,
     DavVersionControlSupport, DavVersionControlledCollectionExtension,
     DavVersionControlledCollectionSupport, DavVersionHistoryExtension, DavVersionHistorySupport,
-    DavWithExtension, DavWithPartialPut, DavWithPatch, DavWithPrivateUpdateRange,
-    DavWorkingResourceExtension, DavWorkingResourceSupport, DavWorkspaceExtension,
-    DavWorkspaceSupport, DavWriteCapabilities, DavWritePrecondition, plan_capabilities,
-    plan_capabilities_with_provider,
+    DavVersioningCapabilities, DavVersioningState, DavWithExtension, DavWithPartialPut,
+    DavWithPatch, DavWithPrivateUpdateRange, DavWorkingResourceExtension,
+    DavWorkingResourceSupport, DavWorkspaceExtension, DavWorkspaceSupport, DavWriteCapabilities,
+    DavWritePrecondition, plan_capabilities, plan_capabilities_with_provider,
 };
 pub use conditional::{
     DavConditionalEvaluationError, DavConditionalOutcome, DavConditionalPlan,
@@ -82,10 +82,17 @@ pub use conditional::{
     plan_conditionals_with_backends, plan_http_conditionals,
 };
 pub use deltav::{
-    DavReportErrorResponsePolicy, DavReportPlanError, plan_report_request,
-    report_plan_error_response, validate_version_control_request,
-    version_control_request_error_response, version_control_response,
-    version_tree_non_file_response, version_tree_response, version_tree_response_with_limits,
+    DavExpandPropertyError, DavExpandPropertyProvider, DavExpandPropertyRequest,
+    DavExpandPropertySelection, DavExpandPropertyValue, DavReportErrorResponsePolicy,
+    DavReportLimits, DavReportPlanError, DavReportRequest, DavVersionControlAction,
+    DavVersionControlPlan, DavVersionControlPlanError, DavVersionControlPort,
+    DavVersionControlResult, DavVersionProperty, DavVersionPropertyResult, DavVersionReportItem,
+    DavVersionTreeRequest, DavVersioningMethodPlan, DavVersioningPrecondition,
+    execute_expand_property, execute_version_control, expand_property_error_response,
+    plan_report_request, plan_report_request_with_limits, plan_version_control_request,
+    plan_versioning_method, report_plan_error_response, version_control_plan_error_response,
+    version_control_response, version_tree_response, version_tree_response_with_limits,
+    versioning_precondition_response,
 };
 pub use event::{
     DavEvent, DavEventOutcome, DavEventSink, DavObservationError, DavOperation,
@@ -175,9 +182,8 @@ pub use xml::{
     parse_propfind_request, parse_proppatch_request,
 };
 pub use xml_response::{
-    DavErrorCondition, DavLockXml, DavMultiStatusItem, DavPropStat, DavVersionXml,
-    dav_dead_property_element, dav_element, dav_error_element, dav_lock_discovery_element,
-    dav_lock_response_element, dav_property_child_element, dav_property_name_element,
-    dav_property_text_element, dav_supported_lock_element, dav_text_element,
-    dav_version_multistatus_bytes,
+    DavErrorCondition, DavLockXml, DavMultiStatusItem, DavPropStat, dav_dead_property_element,
+    dav_element, dav_error_element, dav_lock_discovery_element, dav_lock_response_element,
+    dav_property_child_element, dav_property_name_element, dav_property_text_element,
+    dav_supported_lock_element, dav_text_element,
 };

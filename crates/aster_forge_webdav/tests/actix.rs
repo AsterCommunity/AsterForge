@@ -10,9 +10,10 @@ use aster_forge_webdav::{
     DavCompatibilityCapabilities, DavComplianceClasses, DavConditionalOutcome,
     DavConditionalResource, DavExtensionPackage, DavExtensionSet, DavLockingCapability, DavMethod,
     DavMethodSet, DavMultiStatusItem, DavMultiStatusLimits, DavMultiStatusSourceError,
-    DavNonDavProfile, DavPath, DavResourceState, DavResponse, DavResponseBody,
-    DavSearchCapabilities, DavWriteCapabilities, multistatus_stream_response,
-    multistatus_stream_response_with_cancellation, plan_capabilities,
+    DavNonDavProfile, DavPath, DavRequestedProperty, DavResourceState, DavResponse,
+    DavResponseBody, DavSearchCapabilities, DavVersionProperty, DavVersionReportItem,
+    DavVersionTreeRequest, DavWriteCapabilities, Depth, multistatus_stream_response,
+    multistatus_stream_response_with_cancellation, plan_capabilities, version_tree_response,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -209,6 +210,41 @@ async fn actix_adapter_streams_multistatus_and_propagates_typed_stream_failures(
     assert_eq!(error.to_string(), "WebDAV response stream failed");
 }
 
+#[actix_web::test]
+async fn actix_adapter_preserves_bounded_deltav_status_headers_and_body() {
+    let property = DavRequestedProperty {
+        name: "version-name".to_owned(),
+        namespace: Some("DAV:".to_owned()),
+        prefix: Some("D".to_owned()),
+    };
+    let response = version_tree_response(
+        &DavVersionTreeRequest {
+            properties: Some(vec![property.clone()]),
+            depth: Depth::Zero,
+        },
+        vec![DavVersionReportItem {
+            href: "/versions/1".to_owned(),
+            properties: vec![DavVersionProperty::text(property, "V1")],
+        }],
+    )
+    .expect("bounded DeltaV response");
+    let response = aster_forge_webdav::actix::into_response(response);
+    assert_eq!(response.status(), StatusCode::MULTI_STATUS);
+    assert_eq!(
+        response
+            .headers()
+            .get("Content-Type")
+            .expect("content type"),
+        "application/xml; charset=utf-8"
+    );
+    let body = actix_web::body::to_bytes(response.into_body())
+        .await
+        .expect("DeltaV body");
+    let body = String::from_utf8(body.to_vec()).expect("UTF-8 XML");
+    assert!(body.contains("/versions/1"), "{body}");
+    assert!(body.contains("V1"), "{body}");
+}
+
 #[test]
 fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
     let matching_none_match = actix_web::test::TestRequest::default()
@@ -292,6 +328,7 @@ fn unknown_methods_still_parse_and_validate_the_request_target_first() {
 fn actix_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
     plan_capabilities(DavCapabilityDeclaration {
         resource: DavResourceState::File,
+        versioning: aster_forge_webdav::DavVersioningCapabilities::default(),
         methods: DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Get]),
         locking: DavLockingCapability::Disabled,
         extensions: aster_forge_webdav::DavExtensionSet::empty(),
@@ -319,6 +356,10 @@ fn body_snapshot() -> aster_forge_webdav::DavCapabilitySnapshot {
     );
     declaration.compliance.class1 = true;
     declaration.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+    declaration.versioning = aster_forge_webdav::DavVersioningCapabilities {
+        state: aster_forge_webdav::DavVersioningState::CheckedIn,
+        ..aster_forge_webdav::DavVersioningCapabilities::default()
+    };
     plan_capabilities(declaration).expect("body capability snapshot")
 }
 

@@ -32,7 +32,7 @@ pub use stream::{
     StreamAttribute, StreamAttributes, StreamCData, StreamComment, StreamEnd, StreamName,
     StreamProcessingInstruction, StreamStart, StreamText, XmlStreamEvent, XmlStreamReader,
 };
-pub use syntax::is_valid_xml_local_name;
+pub use syntax::{is_valid_xml_local_name, is_valid_xml_namespace_name};
 pub use writer::{XmlStreamWriter, XmlWriteAttribute, XmlWriteOptions};
 
 /// The default maximum nesting depth accepted from untrusted XML.

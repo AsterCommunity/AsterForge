@@ -25,6 +25,19 @@ fn snapshot(
         declaration.locking = DavLockingCapability::Class2;
     }
     declaration.extensions = DavExtensionSet::from_packages(packages);
+    if declaration
+        .extensions
+        .contains(DavExtensionPackage::VersionControl)
+    {
+        declaration.versioning = aster_forge_webdav::DavVersioningCapabilities {
+            state: if methods.contains(&DavMethod::VersionControl) {
+                aster_forge_webdav::DavVersioningState::Versionable
+            } else {
+                aster_forge_webdav::DavVersioningState::CheckedIn
+            },
+            ..aster_forge_webdav::DavVersioningCapabilities::default()
+        };
+    }
     plan_capabilities(declaration).expect("preference snapshot")
 }
 
@@ -34,6 +47,10 @@ fn prefer(value: &'static str) -> HeaderMap {
     headers
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "The fixture maps every extension-only method through the canonical descriptor catalog."
+)]
 fn snapshot_allowing(method: DavMethod) -> aster_forge_webdav::DavCapabilitySnapshot {
     let resources = [
         DavResourceState::Collection,
@@ -116,6 +133,19 @@ fn snapshot_allowing(method: DavMethod) -> aster_forge_webdav::DavCapabilitySnap
                 .with(DavExtensionPackage::Prefer)
         },
     );
+    if declaration
+        .extensions
+        .contains(DavExtensionPackage::VersionControl)
+    {
+        declaration.versioning = aster_forge_webdav::DavVersioningCapabilities {
+            state: if method == DavMethod::VersionControl {
+                aster_forge_webdav::DavVersioningState::Versionable
+            } else {
+                aster_forge_webdav::DavVersioningState::CheckedIn
+            },
+            ..aster_forge_webdav::DavVersioningCapabilities::default()
+        };
+    }
     if declaration.extensions.contains(DavExtensionPackage::Search) {
         declaration.search = aster_forge_webdav::DavSearchCapabilities {
             grammars: &[aster_forge_webdav::DavSearchGrammar::BASICSEARCH],

@@ -294,6 +294,11 @@ impl DavMethodSet {
     }
 
     #[must_use]
+    pub const fn without(self, method: DavMethod) -> Self {
+        Self(self.0 & !(1u64 << method.index()))
+    }
+
+    #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }

@@ -59,6 +59,10 @@ fn live_snapshot() -> DavCapabilitySnapshot {
         DavExtensionPackage::AddMember,
         DavExtensionPackage::Prefer,
     ]);
+    declaration.versioning = aster_forge_webdav::DavVersioningCapabilities {
+        state: aster_forge_webdav::DavVersioningState::CheckedIn,
+        ..aster_forge_webdav::DavVersioningCapabilities::default()
+    };
     declaration.search = DavSearchCapabilities {
         grammars: &LIVE_SEARCH_GRAMMARS,
     };
@@ -167,6 +171,15 @@ fn snapshot_for(
     );
     declaration.compliance.class1 = true;
     declaration.extensions = DavExtensionSet::from_packages(packages);
+    if declaration
+        .extensions
+        .contains(DavExtensionPackage::VersionControl)
+    {
+        declaration.versioning = aster_forge_webdav::DavVersioningCapabilities {
+            state: aster_forge_webdav::DavVersioningState::CheckedIn,
+            ..aster_forge_webdav::DavVersioningCapabilities::default()
+        };
+    }
     if declaration.extensions.contains(DavExtensionPackage::Search) {
         declaration.search = DavSearchCapabilities {
             grammars: &[DavSearchGrammar::BASICSEARCH],
