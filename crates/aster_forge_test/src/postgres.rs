@@ -89,6 +89,32 @@ impl PostgresTestContainer {
     /// Panics when the database name is invalid, shared state fails, or the admin connection,
     /// `CREATE DATABASE`, or connection shutdown fails.
     pub async fn create_database(&self, name: &str) -> PostgresTestDatabase {
+        self.create_database_inner(name, None).await
+    }
+
+    /// Creates and registers an isolated database cloned from `template`.
+    ///
+    /// Products still own the template contents, migrations, and seed data. This helper only
+    /// provides the product-neutral `PostgreSQL` database lifecycle and safe identifier handling.
+    ///
+    /// # Panics
+    ///
+    /// Panics when either database name is invalid, shared state fails, or the admin connection,
+    /// `CREATE DATABASE ... TEMPLATE ...`, or connection shutdown fails.
+    pub async fn create_database_from_template(
+        &self,
+        name: &str,
+        template: &str,
+    ) -> PostgresTestDatabase {
+        assert_valid_database_name(template);
+        self.create_database_inner(name, Some(template)).await
+    }
+
+    async fn create_database_inner(
+        &self,
+        name: &str,
+        template: Option<&str>,
+    ) -> PostgresTestDatabase {
         assert_valid_database_name(name);
         let lock = ContainerStateLock::acquire(&self.suite, "postgres");
         let mut state = lock.load();
@@ -97,8 +123,9 @@ impl PostgresTestContainer {
         drop(lock);
 
         let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;
+        let create_database = create_database_statement(name, template);
         admin
-            .execute_unprepared(&format!("CREATE DATABASE {}", quote_identifier(name)))
+            .execute_unprepared(&create_database)
             .await
             .unwrap_or_else(|error| {
                 panic!("failed to create PostgreSQL test database {name}: {error}")
@@ -208,6 +235,19 @@ fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+fn create_database_statement(name: &str, template: Option<&str>) -> String {
+    template.map_or_else(
+        || format!("CREATE DATABASE {}", quote_identifier(name)),
+        |template| {
+            format!(
+                "CREATE DATABASE {} TEMPLATE {}",
+                quote_identifier(name),
+                quote_identifier(template)
+            )
+        },
+    )
+}
+
 fn assert_valid_database_name(name: &str) {
     assert!(
         !name.is_empty()
@@ -221,7 +261,9 @@ fn assert_valid_database_name(name: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{assert_valid_database_name, database_url, quote_identifier};
+    use super::{
+        assert_valid_database_name, create_database_statement, database_url, quote_identifier,
+    };
 
     #[test]
     fn database_url_replaces_admin_database() {
@@ -234,6 +276,18 @@ mod tests {
     #[test]
     fn identifier_quoting_escapes_quotes() {
         assert_eq!(quote_identifier("test\"name"), "\"test\"\"name\"");
+    }
+
+    #[test]
+    fn database_creation_supports_an_optional_template() {
+        assert_eq!(
+            create_database_statement("isolated", None),
+            "CREATE DATABASE \"isolated\""
+        );
+        assert_eq!(
+            create_database_statement("isolated", Some("template")),
+            "CREATE DATABASE \"isolated\" TEMPLATE \"template\""
+        );
     }
 
     #[test]
