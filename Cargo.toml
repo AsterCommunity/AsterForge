@@ -60,7 +60,7 @@ multiple_unsafe_ops_per_block = "deny"
 undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
-actix-web = "4.14.0"
+actix-web = "4.14.1"
 actix-governor = "0.10"
 aes-gcm = "0.11"
 async-trait = "0.1"
