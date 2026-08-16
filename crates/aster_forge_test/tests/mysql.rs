@@ -1,7 +1,7 @@
 #![cfg(feature = "mysql")]
 
 use aster_forge_test::{
-    mysql::{MYSQL_TEST_TABLE_DEFINITION_CACHE, MysqlTestContainer},
+    mysql::{MYSQL_TEST_MAX_CONNECTIONS, MYSQL_TEST_TABLE_DEFINITION_CACHE, MysqlTestContainer},
     suite::TestContainerSuite,
 };
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
@@ -36,6 +36,21 @@ async fn shared_mysql_configures_table_definition_cache_for_parallel_schemas() {
     assert!(
         table_definition_cache >= MYSQL_TEST_TABLE_DEFINITION_CACHE,
         "MySQL table definition cache must cover parallel isolated test schemas"
+    );
+
+    let max_connections: u64 = database
+        .query_one_raw(Statement::from_string(
+            DbBackend::MySql,
+            "SELECT @@GLOBAL.max_connections",
+        ))
+        .await
+        .expect("MySQL max connections should be readable")
+        .expect("MySQL max connections query should return one row")
+        .try_get_by_index(0)
+        .expect("MySQL max connections should decode");
+    assert!(
+        max_connections >= MYSQL_TEST_MAX_CONNECTIONS,
+        "MySQL max connections must cover nextest process pools"
     );
 
     database

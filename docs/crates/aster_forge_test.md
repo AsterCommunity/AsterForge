@@ -106,6 +106,7 @@ snapshot。
 - `ReuseDirective::Always`：同一 checkout 的多次测试运行复用同一容器。**容器数据在运行之间保留**，测试 key / 数据库名必须带进程唯一前缀（例如 pid + 自增计数）。
 - 容器镜像 tag 固定（redis:7-alpine、postgres:16、mysql:8.4），升级 tag 是有意识的变更。
 - MySQL helper 会在每次启动或复用时配置足够大的 `table_definition_cache`，避免大型测试二进制并行创建隔离 schema 时耗尽 prepared statement 的自动 reprepare 次数。
+- MySQL helper 同时配置 `max_connections`，覆盖 nextest process-per-test 下每个测试进程的 writer/reader pool；这两个值都属于 endpoint identity，配置契约变化会强制重新探测并更新 reusable container。
 
 ## 状态机与错误边界
 

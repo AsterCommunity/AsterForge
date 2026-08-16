@@ -17,6 +17,8 @@ use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunne
 /// Large test binaries may create hundreds of isolated schemas concurrently. `MySQL`'s default
 /// cache is too small for that workload and can exhaust prepared-statement reprepare attempts.
 pub const MYSQL_TEST_TABLE_DEFINITION_CACHE: u64 = 32_768;
+/// Maximum simultaneous connections for nextest's process-per-test database pools.
+pub const MYSQL_TEST_MAX_CONNECTIONS: u64 = 1_024;
 
 /// Handle to the suite's shared `MySQL` container.
 pub struct MysqlTestContainer {
@@ -39,7 +41,10 @@ impl MysqlTestContainer {
         let mut state = lock.load();
         let stale_resources = state.prune_stale();
         state.register_pid(std::process::id());
-        let endpoint_identity = format!("mysql:8.4/{}", suite.container_name("mysql"));
+        let endpoint_identity = format!(
+            "mysql:8.4/table-cache={MYSQL_TEST_TABLE_DEFINITION_CACHE}/max-connections={MYSQL_TEST_MAX_CONNECTIONS}/{}",
+            suite.container_name("mysql")
+        );
 
         if let Some(port) = state
             .endpoint()
@@ -82,6 +87,11 @@ impl MysqlTestContainer {
         ))
         .await
         .expect("failed to configure MySQL test table definition cache");
+        root.execute_unprepared(&format!(
+            "SET GLOBAL max_connections = {MYSQL_TEST_MAX_CONNECTIONS}"
+        ))
+        .await
+        .expect("failed to configure MySQL test max connections");
         root.close()
             .await
             .expect("failed to close MySQL readiness probe connection");
