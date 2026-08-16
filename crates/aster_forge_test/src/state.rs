@@ -18,6 +18,8 @@ pub struct SharedContainerState {
     pids: Vec<u32>,
     #[serde(default)]
     resources_by_pid: HashMap<u32, Vec<String>>,
+    #[serde(default)]
+    shared_resources: Vec<String>,
 }
 
 impl SharedContainerState {
@@ -53,6 +55,29 @@ impl SharedContainerState {
         self.normalize();
     }
 
+    /// Records a suite-scoped resource that must survive the producer process.
+    ///
+    /// Products use this for durable test fixtures such as a migrated template database. Unlike
+    /// per-process resources, these entries are never returned by [`Self::prune_stale`]; the
+    /// product owns fingerprint-based invalidation and explicit cleanup.
+    pub fn remember_shared_resource(&mut self, resource: &str) {
+        if !self.shared_resources.iter().any(|name| name == resource) {
+            self.shared_resources.push(resource.to_string());
+        }
+        self.normalize();
+    }
+
+    /// Removes a suite-scoped resource after explicit product cleanup.
+    pub fn forget_shared_resource(&mut self, resource: &str) {
+        self.shared_resources.retain(|name| name != resource);
+        self.normalize();
+    }
+
+    /// Returns suite-scoped resources retained independently of a producer PID.
+    pub fn shared_resources(&self) -> &[String] {
+        &self.shared_resources
+    }
+
     /// Returns the resources currently attributed to live processes.
     pub fn live_resources(&self) -> Vec<&str> {
         self.resources_by_pid
@@ -85,6 +110,8 @@ impl SharedContainerState {
         self.pids.dedup();
         self.resources_by_pid
             .retain(|pid, _| self.pids.binary_search(pid).is_ok());
+        self.shared_resources.sort_unstable();
+        self.shared_resources.dedup();
     }
 }
 
@@ -283,6 +310,22 @@ mod tests {
         assert_eq!(state.live_resources(), vec!["db_b"]);
         state.forget_resource(42, "db_b");
         assert!(state.live_resources().is_empty());
+    }
+
+    #[test]
+    fn state_registry_keeps_shared_resources_after_producer_exit() {
+        let mut state = SharedContainerState::default();
+        state.remember_resource(u32::MAX, "db_owned_by_dead_process");
+        state.remember_shared_resource("schema_template");
+
+        assert_eq!(
+            state.prune_stale(),
+            vec!["db_owned_by_dead_process".to_string()]
+        );
+        assert_eq!(state.shared_resources(), ["schema_template"]);
+
+        state.forget_shared_resource("schema_template");
+        assert!(state.shared_resources().is_empty());
     }
 
     #[test]

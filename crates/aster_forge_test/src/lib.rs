@@ -10,6 +10,8 @@
 pub mod temp;
 
 #[cfg(feature = "containers")]
+pub mod fixture;
+#[cfg(feature = "containers")]
 pub mod state;
 #[cfg(feature = "containers")]
 pub mod suite;

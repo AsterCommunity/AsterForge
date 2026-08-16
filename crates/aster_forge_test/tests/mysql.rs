@@ -6,6 +6,14 @@ use aster_forge_test::{
 };
 use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
 
+fn unique_database_name(role: &str) -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should follow the Unix epoch")
+        .as_nanos();
+    format!("forge_{role}_{}_{nonce}", std::process::id())
+}
+
 #[tokio::test]
 async fn shared_mysql_configures_table_definition_cache_for_parallel_schemas() {
     let suite = TestContainerSuite::new("forge-test-mysql-cache");
@@ -34,4 +42,26 @@ async fn shared_mysql_configures_table_definition_cache_for_parallel_schemas() {
         .close()
         .await
         .expect("MySQL test connection should close");
+}
+
+#[tokio::test]
+async fn mysql_shared_database_has_explicit_lifecycle() {
+    let suite = TestContainerSuite::new("forge-test-mysql-shared-database");
+    let container = MysqlTestContainer::start(&suite).await;
+    let database_name = unique_database_name("template");
+
+    container.create_shared_database(&database_name).await;
+    let database = Database::connect(container.database_url(&database_name))
+        .await
+        .expect("shared MySQL database should accept connections");
+    database
+        .execute_unprepared("CREATE TABLE fixture_marker (id BIGINT PRIMARY KEY)")
+        .await
+        .expect("shared MySQL database should be writable");
+    database
+        .close()
+        .await
+        .expect("shared MySQL database connection should close");
+
+    container.drop_shared_database(&database_name).await;
 }

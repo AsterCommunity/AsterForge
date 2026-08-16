@@ -25,6 +25,13 @@ pub struct PostgresTestDatabase {
     url: String,
     admin_url: String,
     suite: TestContainerSuite,
+    ownership: DatabaseOwnership,
+}
+
+#[derive(Clone, Copy)]
+enum DatabaseOwnership {
+    Process,
+    Shared,
 }
 
 impl PostgresTestContainer {
@@ -82,6 +89,15 @@ impl PostgresTestContainer {
         &self.admin_url
     }
 
+    /// Returns a stable identity for the running suite container.
+    ///
+    /// The resolved admin URL includes the checkout-scoped host port and therefore changes when
+    /// the reusable container belongs to a different suite instance.
+    #[must_use]
+    pub fn container_identity(&self) -> &str {
+        &self.admin_url
+    }
+
     /// Creates and registers an isolated database for a product test.
     ///
     /// # Panics
@@ -89,7 +105,8 @@ impl PostgresTestContainer {
     /// Panics when the database name is invalid, shared state fails, or the admin connection,
     /// `CREATE DATABASE`, or connection shutdown fails.
     pub async fn create_database(&self, name: &str) -> PostgresTestDatabase {
-        self.create_database_inner(name, None).await
+        self.create_database_inner(name, None, DatabaseOwnership::Process)
+            .await
     }
 
     /// Creates and registers an isolated database cloned from `template`.
@@ -107,18 +124,72 @@ impl PostgresTestContainer {
         template: &str,
     ) -> PostgresTestDatabase {
         assert_valid_database_name(template);
-        self.create_database_inner(name, Some(template)).await
+        self.create_database_inner(name, Some(template), DatabaseOwnership::Process)
+            .await
+    }
+
+    /// Creates a suite-scoped database for a product-owned reusable fixture.
+    ///
+    /// Unlike [`Self::create_database`], this resource survives the producer process. Products
+    /// must use a separate locked fixture-state protocol to validate or invalidate its contents.
+    pub async fn create_shared_database(&self, name: &str) -> PostgresTestDatabase {
+        self.create_database_inner(name, None, DatabaseOwnership::Shared)
+            .await
+    }
+
+    /// Drops a suite-scoped fixture database and unregisters it.
+    pub async fn drop_shared_database(&self, name: &str) {
+        assert_valid_database_name(name);
+        let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;
+        admin
+            .execute_unprepared(&format!(
+                "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                quote_identifier(name)
+            ))
+            .await
+            .unwrap_or_else(|error| {
+                panic!("failed to drop shared PostgreSQL test database {name}: {error}")
+            });
+        admin.close().await.unwrap_or_else(|error| {
+            panic!("failed to close PostgreSQL shared database admin connection: {error}")
+        });
+
+        self.forget_shared_resource(name);
+    }
+
+    /// Registers a suite-scoped product fixture that must outlive the producer process.
+    ///
+    /// This is for product-owned migrated template databases. Products must pair it with their
+    /// own fingerprint-based invalidation and call [`Self::forget_shared_resource`] after
+    /// dropping a superseded fixture.
+    pub fn remember_shared_resource(&self, resource: &str) {
+        let lock = ContainerStateLock::acquire(&self.suite, "postgres");
+        let mut state = lock.load();
+        state.remember_shared_resource(resource);
+        lock.save(&state);
+    }
+
+    /// Removes a suite-scoped product fixture after it was explicitly cleaned up.
+    pub fn forget_shared_resource(&self, resource: &str) {
+        let lock = ContainerStateLock::acquire(&self.suite, "postgres");
+        let mut state = lock.load();
+        state.forget_shared_resource(resource);
+        lock.save(&state);
     }
 
     async fn create_database_inner(
         &self,
         name: &str,
         template: Option<&str>,
+        ownership: DatabaseOwnership,
     ) -> PostgresTestDatabase {
         assert_valid_database_name(name);
         let lock = ContainerStateLock::acquire(&self.suite, "postgres");
         let mut state = lock.load();
-        state.remember_resource(std::process::id(), name);
+        match ownership {
+            DatabaseOwnership::Process => state.remember_resource(std::process::id(), name),
+            DatabaseOwnership::Shared => state.remember_shared_resource(name),
+        }
         lock.save(&state);
         drop(lock);
 
@@ -140,6 +211,7 @@ impl PostgresTestContainer {
             url: database_url(&self.admin_url, name),
             admin_url: self.admin_url.clone(),
             suite: self.suite.clone(),
+            ownership,
         }
     }
 
@@ -219,7 +291,12 @@ impl PostgresTestDatabase {
 
         let lock = ContainerStateLock::acquire(&self.suite, "postgres");
         let mut state = lock.load();
-        state.forget_resource(std::process::id(), &self.name);
+        match self.ownership {
+            DatabaseOwnership::Process => {
+                state.forget_resource(std::process::id(), &self.name);
+            }
+            DatabaseOwnership::Shared => state.forget_shared_resource(&self.name),
+        }
         lock.save(&state);
     }
 }

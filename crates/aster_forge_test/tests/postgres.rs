@@ -16,7 +16,7 @@ async fn postgres_database_can_clone_a_product_owned_template() {
     let suite = TestContainerSuite::new("forge-test-postgres-template");
     let container = PostgresTestContainer::start(&suite).await;
     let template = container
-        .create_database(&unique_database_name("template"))
+        .create_shared_database(&unique_database_name("template"))
         .await;
     let template_connection = template.connect().await;
     template_connection

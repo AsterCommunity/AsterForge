@@ -80,6 +80,12 @@ impl MysqlTestContainer {
         &self.root_url
     }
 
+    /// Returns a stable identity for the running suite container.
+    #[must_use]
+    pub fn container_identity(&self) -> &str {
+        &self.root_url
+    }
+
     /// Builds a URL for a database created inside this container.
     #[must_use]
     pub fn database_url(&self, database: &str) -> String {
@@ -110,4 +116,76 @@ impl MysqlTestContainer {
         state.forget_resource(std::process::id(), resource);
         lock.save(&state);
     }
+
+    /// Registers a suite-scoped product fixture that must outlive the producer process.
+    ///
+    /// This is for product-owned migrated template schemas. Products must pair it with their own
+    /// fingerprint-based invalidation and call [`Self::forget_shared_resource`] after dropping a
+    /// superseded fixture.
+    pub fn remember_shared_resource(&self, resource: &str) {
+        let lock = ContainerStateLock::acquire(&self.suite, "mysql");
+        let mut state = lock.load();
+        state.remember_shared_resource(resource);
+        lock.save(&state);
+    }
+
+    /// Removes a suite-scoped product fixture after it was explicitly cleaned up.
+    pub fn forget_shared_resource(&self, resource: &str) {
+        let lock = ContainerStateLock::acquire(&self.suite, "mysql");
+        let mut state = lock.load();
+        state.forget_shared_resource(resource);
+        lock.save(&state);
+    }
+
+    /// Creates a suite-scoped database for a product-owned reusable fixture.
+    ///
+    /// Products own user grants, migrations, and fingerprint validation. This helper owns only
+    /// the root-level database lifecycle and shared-resource registration.
+    pub async fn create_shared_database(&self, name: &str) {
+        assert_valid_database_name(name);
+        self.remember_shared_resource(name);
+
+        let root = connect_with_retry(&self.root_url, "MySQL").await;
+        root.execute_unprepared(&format!("CREATE DATABASE {}", quote_identifier(name)))
+            .await
+            .unwrap_or_else(|error| {
+                panic!("failed to create shared MySQL test database {name}: {error}")
+            });
+        root.close().await.unwrap_or_else(|error| {
+            panic!("failed to close MySQL shared database admin connection: {error}")
+        });
+    }
+
+    /// Drops a suite-scoped fixture database and unregisters it.
+    pub async fn drop_shared_database(&self, name: &str) {
+        assert_valid_database_name(name);
+        let root = connect_with_retry(&self.root_url, "MySQL").await;
+        root.execute_unprepared(&format!(
+            "DROP DATABASE IF EXISTS {}",
+            quote_identifier(name)
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("failed to drop shared MySQL test database {name}: {error}")
+        });
+        root.close().await.unwrap_or_else(|error| {
+            panic!("failed to close MySQL shared database admin connection: {error}")
+        });
+        self.forget_shared_resource(name);
+    }
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("`{}`", value.replace('`', "``"))
+}
+
+fn assert_valid_database_name(name: &str) {
+    assert!(
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+        "MySQL test database name must be 1-64 ASCII alphanumeric or '_' characters: {name:?}"
+    );
 }
