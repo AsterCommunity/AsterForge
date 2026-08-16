@@ -41,6 +41,9 @@ impl MysqlTestContainer {
         let mut state = lock.load();
         let stale_resources = state.prune_stale_before_current_execution();
         state.register_current_process();
+        for resource in &stale_resources {
+            state.remember_current_process_resource(resource);
+        }
         let endpoint_identity = format!(
             "mysql:8.4/table-cache={MYSQL_TEST_TABLE_DEFINITION_CACHE}/max-connections={MYSQL_TEST_MAX_CONNECTIONS}/{}",
             suite.container_name("mysql")
@@ -148,6 +151,19 @@ impl MysqlTestContainer {
         let lock = ContainerStateLock::acquire(&self.suite, "mysql");
         let mut state = lock.load();
         state.forget_resource(std::process::id(), resource);
+        lock.save(&state);
+    }
+
+    /// Removes multiple resources after the product test harness cleaned all of them up.
+    pub fn forget_resources(&self, resources: &[String]) {
+        if resources.is_empty() {
+            return;
+        }
+        let lock = ContainerStateLock::acquire(&self.suite, "mysql");
+        let mut state = lock.load();
+        for resource in resources {
+            state.forget_resource(std::process::id(), resource);
+        }
         lock.save(&state);
     }
 
