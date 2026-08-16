@@ -135,12 +135,8 @@ impl SuiteFixtureLock {
     #[must_use]
     pub fn acquire(suite: &TestContainerSuite, fixture: &str) -> Self {
         assert_valid_fixture_name(fixture);
-        let state_path = suite
-            .state_dir()
-            .join(format!("{}-fixture-{fixture}.json", suite.name()));
-        let lock_path = suite
-            .state_dir()
-            .join(format!("{}-fixture-{fixture}.lock", suite.name()));
+        let state_path = suite.fixture_state_path(fixture);
+        let lock_path = suite.fixture_lock_path(fixture);
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)

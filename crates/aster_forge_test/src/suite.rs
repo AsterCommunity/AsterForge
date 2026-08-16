@@ -76,6 +76,20 @@ impl TestContainerSuite {
         self.state_dir
             .join(format!("{}-{}-{service}.json", self.name, self.instance))
     }
+
+    pub(crate) fn fixture_lock_path(&self, fixture: &str) -> PathBuf {
+        self.state_dir.join(format!(
+            "{}-{}-fixture-{fixture}.lock",
+            self.name, self.instance
+        ))
+    }
+
+    pub(crate) fn fixture_state_path(&self, fixture: &str) -> PathBuf {
+        self.state_dir.join(format!(
+            "{}-{}-fixture-{fixture}.json",
+            self.name, self.instance
+        ))
+    }
 }
 
 fn instance_id() -> &'static str {
@@ -115,5 +129,17 @@ mod tests {
         assert!(container.starts_with("aster-test-forge-test-"));
         assert!(container.ends_with("-redis"));
         assert_ne!(suite.lock_path("redis"), suite.state_path("redis"));
+        assert_ne!(
+            suite.fixture_lock_path("database-template"),
+            suite.fixture_state_path("database-template")
+        );
+        assert!(
+            suite
+                .fixture_state_path("database-template")
+                .file_name()
+                .expect("fixture state path should have a file name")
+                .to_string_lossy()
+                .contains(&suite.instance)
+        );
     }
 }
