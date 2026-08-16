@@ -6,9 +6,9 @@
 //! databases are pruned on later runs.
 
 use crate::database::connect_with_retry;
-use crate::state::{ContainerLease, ContainerStateLock};
+use crate::state::{ContainerLease, ContainerStateLock, SharedContainerEndpoint};
 use crate::suite::TestContainerSuite;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, Database};
 use testcontainers::core::{ContainerAsync, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
 
@@ -23,7 +23,7 @@ pub struct MysqlTestContainer {
     root_url: String,
     suite: TestContainerSuite,
     stale_resources: Vec<String>,
-    _container: ContainerAsync<GenericImage>,
+    _container: Option<ContainerAsync<GenericImage>>,
     _lease: ContainerLease,
 }
 
@@ -39,7 +39,29 @@ impl MysqlTestContainer {
         let mut state = lock.load();
         let stale_resources = state.prune_stale();
         state.register_pid(std::process::id());
-        lock.save(&state);
+        let endpoint_identity = format!("mysql:8.4/{}", suite.container_name("mysql"));
+
+        if let Some(port) = state
+            .endpoint()
+            .filter(|endpoint| endpoint.matches(&endpoint_identity))
+            .map(SharedContainerEndpoint::port)
+        {
+            let root_url = root_url(port);
+            if let Ok(root) = Database::connect(&root_url).await
+                && root.close().await.is_ok()
+            {
+                lock.save(&state);
+                drop(lock);
+                return Self {
+                    root_url,
+                    suite: suite.clone(),
+                    stale_resources,
+                    _container: None,
+                    _lease: ContainerLease::new(suite.clone(), "mysql"),
+                };
+            }
+            state.clear_endpoint();
+        }
 
         let container = GenericImage::new("mysql", "8.4")
             .with_exposed_port(IntoContainerPort::tcp(3306))
@@ -53,7 +75,7 @@ impl MysqlTestContainer {
             .get_host_port_ipv4(IntoContainerPort::tcp(3306))
             .await
             .expect("MySQL test port should be exposed");
-        let root_url = format!("mysql://root:rootpass@127.0.0.1:{port}/mysql");
+        let root_url = root_url(port);
         let root = connect_with_retry(&root_url, "MySQL").await;
         root.execute_unprepared(&format!(
             "SET GLOBAL table_definition_cache = {MYSQL_TEST_TABLE_DEFINITION_CACHE}"
@@ -63,13 +85,15 @@ impl MysqlTestContainer {
         root.close()
             .await
             .expect("failed to close MySQL readiness probe connection");
+        state.set_endpoint(SharedContainerEndpoint::new(endpoint_identity, port));
+        lock.save(&state);
         drop(lock);
 
         Self {
             root_url,
             suite: suite.clone(),
             stale_resources,
-            _container: container,
+            _container: Some(container),
             _lease: ContainerLease::new(suite.clone(), "mysql"),
         }
     }
@@ -141,6 +165,10 @@ impl MysqlTestContainer {
     ///
     /// Products own user grants, migrations, and fingerprint validation. This helper owns only
     /// the root-level database lifecycle and shared-resource registration.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the name is invalid or database creation, connection, or shutdown fails.
     pub async fn create_shared_database(&self, name: &str) {
         assert_valid_database_name(name);
         self.remember_shared_resource(name);
@@ -157,6 +185,10 @@ impl MysqlTestContainer {
     }
 
     /// Drops a suite-scoped fixture database and unregisters it.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the name is invalid or database cleanup, connection, or shutdown fails.
     pub async fn drop_shared_database(&self, name: &str) {
         assert_valid_database_name(name);
         let root = connect_with_retry(&self.root_url, "MySQL").await;
@@ -173,6 +205,10 @@ impl MysqlTestContainer {
         });
         self.forget_shared_resource(name);
     }
+}
+
+fn root_url(port: u16) -> String {
+    format!("mysql://root:rootpass@127.0.0.1:{port}/mysql")
 }
 
 fn quote_identifier(value: &str) -> String {

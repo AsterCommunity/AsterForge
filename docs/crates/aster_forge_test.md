@@ -113,6 +113,7 @@ snapshot。
 
 - `ContainerStateLock`：fs2 独占文件锁，保护 read-modify-write 周期。
 - `SharedContainerState`：登记存活测试进程 PID 和它们创建的资源名（如 per-test 数据库）。
+- `SharedContainerEndpoint`：保存 reusable container 最近一次通过探针的 image/container identity 与 host port；新测试进程先直接探测该 endpoint，失效时才重新走 Docker attach/start。
 - `ContainerLease`：Drop 时 prune 已退出进程的条目。测试进程异常退出时，下一次运行的 `start()` 也会 prune，孤儿资源最终会被回收。
 - `SuiteFixtureLock` / `SuiteFixtureState`：用于跨 nextest 进程复用产品拥有的迁移 template 或 schema snapshot。它保存 fixture/backend identity、container identity、migration/schema fingerprint、resource 和 producer version，并以临时文件 + rename 发布完整状态；产品在持锁期间验证或重建 fixture。
 - PostgreSQL 孤儿库在删除前会转记到当前测试进程；即使回收过程再次中断，下一次运行仍能继续清理。

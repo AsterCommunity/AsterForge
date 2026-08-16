@@ -128,6 +128,10 @@ pub struct SuiteFixtureLock {
 
 impl SuiteFixtureLock {
     /// Acquires the cross-process lock for one suite fixture.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixture name is invalid or the lock file cannot be opened or locked.
     #[must_use]
     pub fn acquire(suite: &TestContainerSuite, fixture: &str) -> Self {
         assert_valid_fixture_name(fixture);
@@ -139,6 +143,7 @@ impl SuiteFixtureLock {
             .join(format!("{}-fixture-{fixture}.lock", suite.name()));
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
@@ -161,6 +166,10 @@ impl SuiteFixtureLock {
     }
 
     /// Loads the last fully published state, or `None` when no fixture has been published.
+    ///
+    /// # Panics
+    ///
+    /// Panics when state cannot be read, decoded, or validated.
     #[must_use]
     pub fn load(&self) -> Option<SuiteFixtureState> {
         if !self.state_path.exists() {
@@ -191,6 +200,10 @@ impl SuiteFixtureLock {
     }
 
     /// Atomically publishes a completed fixture state while this guard is held.
+    ///
+    /// # Panics
+    ///
+    /// Panics when state is invalid or its temporary file cannot be written or published.
     pub fn publish(&self, state: &SuiteFixtureState) {
         state.assert_valid();
         let payload = serde_json::to_vec(state)
@@ -249,6 +262,10 @@ impl SuiteFixtureLock {
     }
 
     /// Clears published state after product cleanup of a superseded fixture.
+    ///
+    /// # Panics
+    ///
+    /// Panics when an existing state file cannot be removed.
     pub fn clear(&self) {
         match fs::remove_file(&self.state_path) {
             Ok(()) => {}

@@ -138,6 +138,10 @@ impl PostgresTestContainer {
     }
 
     /// Drops a suite-scoped fixture database and unregisters it.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the name is invalid or database cleanup, connection, or shutdown fails.
     pub async fn drop_shared_database(&self, name: &str) {
         assert_valid_database_name(name);
         let admin = connect_with_retry(&self.admin_url, "PostgreSQL").await;

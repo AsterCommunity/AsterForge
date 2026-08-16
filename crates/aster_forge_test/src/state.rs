@@ -20,6 +20,45 @@ pub struct SharedContainerState {
     resources_by_pid: HashMap<u32, Vec<String>>,
     #[serde(default)]
     shared_resources: Vec<String>,
+    #[serde(default)]
+    endpoint: Option<SharedContainerEndpoint>,
+}
+
+/// Last verified endpoint of one reusable suite container.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SharedContainerEndpoint {
+    identity: String,
+    port: u16,
+}
+
+impl SharedContainerEndpoint {
+    /// Creates endpoint state for a concrete image/container contract.
+    ///
+    /// # Panics
+    ///
+    /// Panics when identity is empty or multiline, or when port is zero.
+    #[must_use]
+    pub fn new(identity: impl Into<String>, port: u16) -> Self {
+        let identity = identity.into();
+        assert!(
+            !identity.is_empty() && !identity.contains(['\r', '\n']),
+            "shared container endpoint identity must be a non-empty single-line value"
+        );
+        assert_ne!(port, 0, "shared container endpoint port must be non-zero");
+        Self { identity, port }
+    }
+
+    /// Returns whether this endpoint belongs to the requested container contract.
+    #[must_use]
+    pub fn matches(&self, identity: &str) -> bool {
+        self.identity == identity
+    }
+
+    /// Returns the published host port.
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.port
+    }
 }
 
 impl SharedContainerState {
@@ -74,8 +113,25 @@ impl SharedContainerState {
     }
 
     /// Returns suite-scoped resources retained independently of a producer PID.
+    #[must_use]
     pub fn shared_resources(&self) -> &[String] {
         &self.shared_resources
+    }
+
+    /// Returns the last verified reusable-container endpoint.
+    #[must_use]
+    pub fn endpoint(&self) -> Option<&SharedContainerEndpoint> {
+        self.endpoint.as_ref()
+    }
+
+    /// Publishes the last verified reusable-container endpoint.
+    pub fn set_endpoint(&mut self, endpoint: SharedContainerEndpoint) {
+        self.endpoint = Some(endpoint);
+    }
+
+    /// Clears an endpoint that no longer accepts a readiness probe.
+    pub fn clear_endpoint(&mut self) {
+        self.endpoint = None;
     }
 
     /// Returns the resources currently attributed to live processes.
@@ -284,7 +340,9 @@ fn platform_process_is_running(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerLease, ContainerStateLock, SharedContainerState};
+    use super::{
+        ContainerLease, ContainerStateLock, SharedContainerEndpoint, SharedContainerState,
+    };
     use crate::suite::TestContainerSuite;
 
     #[test]
@@ -326,6 +384,19 @@ mod tests {
 
         state.forget_shared_resource("schema_template");
         assert!(state.shared_resources().is_empty());
+    }
+
+    #[test]
+    fn state_registry_round_trips_a_verified_endpoint() {
+        let mut state = SharedContainerState::default();
+        state.set_endpoint(SharedContainerEndpoint::new("mysql:8.4/container-a", 33061));
+
+        let endpoint = state.endpoint().expect("endpoint should be present");
+        assert!(endpoint.matches("mysql:8.4/container-a"));
+        assert_eq!(endpoint.port(), 33061);
+
+        state.clear_endpoint();
+        assert!(state.endpoint().is_none());
     }
 
     #[test]
