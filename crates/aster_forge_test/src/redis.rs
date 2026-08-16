@@ -84,8 +84,8 @@ impl RedisTestContainer {
         // the old Redis endpoint after a restart.
         let lock = ContainerStateLock::acquire(suite, "redis-fixed");
         let mut state = lock.load();
-        let _ = state.prune_stale();
-        state.register_pid(std::process::id());
+        let _ = state.prune_stale_before_current_execution();
+        state.register_current_process();
         lock.save(&state);
         let host_port = TcpListener::bind(("127.0.0.1", 0))
             .expect("reserve Redis test host port")

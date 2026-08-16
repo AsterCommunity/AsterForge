@@ -44,10 +44,10 @@ impl PostgresTestContainer {
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "postgres");
         let mut state = lock.load();
-        let stale_resources = state.prune_stale();
-        state.register_pid(std::process::id());
+        let stale_resources = state.prune_stale_before_current_execution();
+        state.register_current_process();
         for resource in &stale_resources {
-            state.remember_resource(std::process::id(), resource);
+            state.remember_current_process_resource(resource);
         }
         lock.save(&state);
 
@@ -191,7 +191,7 @@ impl PostgresTestContainer {
         let lock = ContainerStateLock::acquire(&self.suite, "postgres");
         let mut state = lock.load();
         match ownership {
-            DatabaseOwnership::Process => state.remember_resource(std::process::id(), name),
+            DatabaseOwnership::Process => state.remember_current_process_resource(name),
             DatabaseOwnership::Shared => state.remember_shared_resource(name),
         }
         lock.save(&state);

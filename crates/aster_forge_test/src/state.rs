@@ -2,7 +2,9 @@
 //!
 //! Test binaries from several processes may share one reusable container. The state file records
 //! which process created which resources (for example per-test databases), so a later run can
-//! clean up resources whose owner process already exited.
+//! clean up resources whose owner process already exited. During nextest runs, dead process
+//! entries remain associated with the current run until a later run can reclaim them without
+//! interleaving destructive cleanup with active schema provisioning.
 
 use crate::suite::TestContainerSuite;
 use fs2::FileExt;
@@ -11,13 +13,15 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 
-/// Serializable registry of live test processes and the resources they created.
+/// Serializable registry of test processes and the resources they created.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct SharedContainerState {
     #[serde(default)]
     pids: Vec<u32>,
     #[serde(default)]
     resources_by_pid: HashMap<u32, Vec<String>>,
+    #[serde(default)]
+    execution_id_by_pid: HashMap<u32, String>,
     #[serde(default)]
     shared_resources: Vec<String>,
     #[serde(default)]
@@ -64,8 +68,24 @@ impl SharedContainerEndpoint {
 impl SharedContainerState {
     /// Registers a live process id.
     pub fn register_pid(&mut self, pid: u32) {
+        self.register_pid_for_execution(pid, None);
+    }
+
+    /// Registers the current test process and its nextest run, when present.
+    pub fn register_current_process(&mut self) {
+        let execution_id = current_execution_id();
+        self.register_pid_for_execution(std::process::id(), execution_id.as_deref());
+    }
+
+    fn register_pid_for_execution(&mut self, pid: u32, execution_id: Option<&str>) {
         if !self.pids.contains(&pid) {
             self.pids.push(pid);
+        }
+        if let Some(execution_id) = execution_id {
+            self.execution_id_by_pid
+                .insert(pid, execution_id.to_string());
+        } else {
+            self.execution_id_by_pid.remove(&pid);
         }
         self.normalize();
     }
@@ -73,6 +93,16 @@ impl SharedContainerState {
     /// Records a resource (for example a per-test database name) owned by `pid`.
     pub fn remember_resource(&mut self, pid: u32, resource: &str) {
         self.register_pid(pid);
+        self.remember_registered_resource(pid, resource);
+    }
+
+    /// Records a resource owned by the current test process and nextest run.
+    pub fn remember_current_process_resource(&mut self, resource: &str) {
+        self.register_current_process();
+        self.remember_registered_resource(std::process::id(), resource);
+    }
+
+    fn remember_registered_resource(&mut self, pid: u32, resource: &str) {
         let resources = self.resources_by_pid.entry(pid).or_default();
         if !resources.iter().any(|name| name == resource) {
             resources.push(resource.to_string());
@@ -134,7 +164,9 @@ impl SharedContainerState {
         self.endpoint = None;
     }
 
-    /// Returns the resources currently attributed to live processes.
+    /// Returns resources attributed to registered processes.
+    ///
+    /// This can include resources from processes that exited during the current nextest run.
     pub fn live_resources(&self) -> Vec<&str> {
         self.resources_by_pid
             .values()
@@ -145,11 +177,40 @@ impl SharedContainerState {
 
     /// Removes entries whose process no longer exists and returns the orphaned resources.
     pub fn prune_stale(&mut self) -> Vec<String> {
+        self.prune_stale_for_execution(std::process::id(), None)
+    }
+
+    /// Prunes resources from previous executions while retaining dead processes from this
+    /// nextest run until the run finishes.
+    ///
+    /// Deferring same-run cleanup avoids interleaving large schema drops with schema creation in
+    /// process-per-test database suites. A later run has a different `NEXTEST_RUN_ID` and reclaims
+    /// the retained resources deterministically.
+    pub fn prune_stale_before_current_execution(&mut self) -> Vec<String> {
+        let execution_id = current_execution_id();
+        self.prune_stale_for_execution(std::process::id(), execution_id.as_deref())
+    }
+
+    fn prune_stale_for_execution(
+        &mut self,
+        current_pid: u32,
+        current_execution_id: Option<&str>,
+    ) -> Vec<String> {
         let stale_pids = self
             .pids
             .iter()
             .copied()
-            .filter(|pid| !process_is_running(*pid))
+            .filter(|pid| {
+                let recorded_execution_id = self.execution_id_by_pid.get(pid).map(String::as_str);
+                let reused_by_current_process =
+                    *pid == current_pid && recorded_execution_id != current_execution_id;
+                let is_running = process_is_running(*pid);
+                let dead_in_current_execution = !is_running
+                    && current_execution_id.is_some()
+                    && recorded_execution_id == current_execution_id;
+
+                reused_by_current_process || (!is_running && !dead_in_current_execution)
+            })
             .collect::<Vec<_>>();
         let orphaned = stale_pids
             .iter()
@@ -165,6 +226,8 @@ impl SharedContainerState {
         self.pids.sort_unstable();
         self.pids.dedup();
         self.resources_by_pid
+            .retain(|pid, _| self.pids.binary_search(pid).is_ok());
+        self.execution_id_by_pid
             .retain(|pid, _| self.pids.binary_search(pid).is_ok());
         self.shared_resources.sort_unstable();
         self.shared_resources.dedup();
@@ -279,7 +342,7 @@ impl ContainerStateLock {
     }
 }
 
-/// Lease that prunes dead-process entries from a service's state file on drop.
+/// Lease that prunes reclaimable process entries from a service's state file on drop.
 ///
 /// Test containers hold the lease so abnormal test binary exits still let the next run reclaim
 /// orphaned resources.
@@ -302,9 +365,15 @@ impl Drop for ContainerLease {
     fn drop(&mut self) {
         let lock = ContainerStateLock::acquire(&self.suite, &self.service);
         let mut state = lock.load();
-        let _ = state.prune_stale();
+        let _ = state.prune_stale_before_current_execution();
         lock.save(&state);
     }
+}
+
+fn current_execution_id() -> Option<String> {
+    std::env::var("NEXTEST_RUN_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 fn process_is_running(pid: u32) -> bool {
@@ -412,6 +481,40 @@ mod tests {
     }
 
     #[test]
+    fn prune_defers_dead_resources_from_the_current_execution() {
+        let mut state = SharedContainerState::default();
+        state.register_pid_for_execution(u32::MAX, Some("run-a"));
+        state.remember_registered_resource(u32::MAX, "db_run_a");
+
+        assert!(
+            state
+                .prune_stale_for_execution(std::process::id(), Some("run-a"))
+                .is_empty()
+        );
+        assert_eq!(state.live_resources(), vec!["db_run_a"]);
+
+        assert_eq!(
+            state.prune_stale_for_execution(std::process::id(), Some("run-b")),
+            vec!["db_run_a".to_string()]
+        );
+        assert!(state.live_resources().is_empty());
+    }
+
+    #[test]
+    fn prune_reclaims_a_reused_current_pid_from_an_older_execution() {
+        let current_pid = std::process::id();
+        let mut state = SharedContainerState::default();
+        state.register_pid_for_execution(current_pid, Some("run-a"));
+        state.remember_registered_resource(current_pid, "db_run_a");
+
+        assert_eq!(
+            state.prune_stale_for_execution(current_pid, Some("run-b")),
+            vec!["db_run_a".to_string()]
+        );
+        assert!(state.live_resources().is_empty());
+    }
+
+    #[test]
     fn lock_round_trips_state_through_json_file() {
         let suite = TestContainerSuite::new("forge-state-test");
         let lock = ContainerStateLock::acquire(&suite, "roundtrip");
@@ -433,7 +536,7 @@ mod tests {
         {
             let lock = ContainerStateLock::acquire(&suite, "leased");
             let mut state = lock.load();
-            state.remember_resource(std::process::id(), "db_live");
+            state.remember_current_process_resource("db_live");
             lock.save(&state);
         }
 

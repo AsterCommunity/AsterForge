@@ -27,8 +27,8 @@ impl SmtpTestContainer {
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "mailpit");
         let mut state = lock.load();
-        let _ = state.prune_stale();
-        state.register_pid(std::process::id());
+        let _ = state.prune_stale_before_current_execution();
+        state.register_current_process();
         lock.save(&state);
         let container = GenericImage::new("axllent/mailpit", "v1.21.8")
             .with_exposed_port(IntoContainerPort::tcp(1025))

@@ -39,8 +39,8 @@ impl MysqlTestContainer {
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "mysql");
         let mut state = lock.load();
-        let stale_resources = state.prune_stale();
-        state.register_pid(std::process::id());
+        let stale_resources = state.prune_stale_before_current_execution();
+        state.register_current_process();
         let endpoint_identity = format!(
             "mysql:8.4/table-cache={MYSQL_TEST_TABLE_DEFINITION_CACHE}/max-connections={MYSQL_TEST_MAX_CONNECTIONS}/{}",
             suite.container_name("mysql")
@@ -139,7 +139,7 @@ impl MysqlTestContainer {
     pub fn remember_resource(&self, resource: &str) {
         let lock = ContainerStateLock::acquire(&self.suite, "mysql");
         let mut state = lock.load();
-        state.remember_resource(std::process::id(), resource);
+        state.remember_current_process_resource(resource);
         lock.save(&state);
     }
 

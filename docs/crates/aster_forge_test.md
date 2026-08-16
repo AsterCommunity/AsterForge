@@ -116,6 +116,7 @@ snapshot。
 - `SharedContainerState`：登记存活测试进程 PID 和它们创建的资源名（如 per-test 数据库）。
 - `SharedContainerEndpoint`：保存 reusable container 最近一次通过探针的 image/container identity 与 host port；新测试进程先直接探测该 endpoint，失效时才重新走 Docker attach/start。
 - `ContainerLease`：Drop 时 prune 已退出进程的条目。测试进程异常退出时，下一次运行的 `start()` 也会 prune，孤儿资源最终会被回收。
+- nextest 子进程按 `NEXTEST_RUN_ID` 登记 execution ownership；同一 run 内已经退出的进程资源延迟保留，避免数据库 suite 在建 schema 的同时持续 drop 前序 schema。下一次 run 会用新的 run id 一次性识别并回收这些资源。
 - `SuiteFixtureLock` / `SuiteFixtureState`：用于跨 nextest 进程复用产品拥有的迁移 template 或 schema snapshot。它保存 fixture/backend identity、container identity、migration/schema fingerprint、resource 和 producer version，并以临时文件 + rename 发布完整状态；产品在持锁期间验证或重建 fixture。
 - PostgreSQL 孤儿库在删除前会转记到当前测试进程；即使回收过程再次中断，下一次运行仍能继续清理。
 - 共享容器的 `start()` 只在真实服务探针通过后返回：PostgreSQL/MySQL 使用数据库连接，Redis 完成认证并执行 `PING`，Mailpit 同时检查 SMTP 与 HTTP API；不把镜像日志文案或仅建立 TCP 连接当作 readiness 契约。
