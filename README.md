@@ -13,6 +13,7 @@
 <p align="center">
   <a href="https://forge.astercosm.com/"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-VitePress-0F766E?logo=vitepress&logoColor=white"></a>
   <a href="https://codecov.io/github/AsterCommunity/AsterForge"><img alt="Coverage" src="https://codecov.io/github/AsterCommunity/AsterForge/graph/badge.svg?token=IefDQVj2y6"></a>
+<a href="https://app.fossa.com/projects/git%2Bgithub.com%2FAsterCommunity%2FAsterForge?ref=badge_shield" alt="FOSSA Status"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2FAsterCommunity%2FAsterForge.svg?type=shield"/></a>
   <a href="https://forge.astercosm.com/guide/index"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
   <a href="https://forge.astercosm.com/en/index"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
   <a href="https://forge.astercosm.com/crates/aster_forge_actix_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
@@ -23,6 +24,9 @@
 <p align="center">
   English | <a href="README.zh.md">中文</a>
 </p>
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FAsterCommunity%2FAsterForge.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FAsterCommunity%2FAsterForge?ref=badge_large)
 
 ## What is AsterForge?
 
