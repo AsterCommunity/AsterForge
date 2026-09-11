@@ -167,6 +167,29 @@ fn stream_enforces_input_depth_attribute_text_and_event_limits() {
 }
 
 #[test]
+fn nested_namespace_bindings_do_not_reuse_the_attribute_limit() {
+    let input = br#"<r xmlns:a="urn:a"><a:c xmlns:b="urn:b"><b:d/></a:c></r>"#;
+    let policy = XmlSafetyPolicy {
+        max_depth: 4,
+        max_attributes_per_element: 1,
+        ..XmlSafetyPolicy::untrusted()
+    };
+    let mut reader =
+        XmlStreamReader::new(BufReader::new(input.as_slice()), policy).expect("policy");
+    let mut events = 0;
+    loop {
+        match reader
+            .read_event()
+            .expect("nested namespace bindings are valid")
+        {
+            XmlStreamEvent::Eof => break,
+            _ => events += 1,
+        }
+    }
+    assert_eq!(events, 5);
+}
+
+#[test]
 fn stream_rejects_doctype_unknown_prefix_and_multiple_roots() {
     for input in [
         b"<!DOCTYPE root><root/>".as_slice(),

@@ -105,10 +105,11 @@ pub use extension::{
     DavResourceStateSet, extension_body_kind, extension_methods,
 };
 pub use lock::{
-    DavLockPlan, DavLockPlanError, enforce_parent_unlocked, enforce_unlocked,
-    lock_acquire_success_response, lock_conflict_response, lock_discovery_element,
-    lock_limit_response, lock_refresh_success_response, lock_xml_error_response, plan_lock_request,
-    unlock_success_response, unlock_token_mismatch_response, unsubmitted_lock_conflicts,
+    DavLockEnforcementError, DavLockPlan, DavLockPlanError, enforce_parent_unlocked,
+    enforce_unlocked, lock_acquire_success_response, lock_conflict_response,
+    lock_discovery_element, lock_limit_response, lock_refresh_success_response,
+    lock_xml_error_response, plan_lock_request, unlock_success_response,
+    unlock_token_mismatch_response, unsubmitted_lock_conflicts,
 };
 pub use multistatus::{
     DavMultiStatusError, DavMultiStatusErrorKind, DavMultiStatusLimits, DavMultiStatusProgress,
@@ -154,12 +155,12 @@ pub use request::{
 };
 pub use resource::{
     DavCopyMoveMethod, DavCopyMovePlan, DavMutationFailure, DavMutationPlanError,
-    DavMutationResponseError, collection_created_response, delete_success_response,
-    enforce_parent_collection, is_descendant_path, mutation_multistatus_response,
-    mutation_multistatus_response_with_limits, mutation_plan_error_response,
-    mutation_success_response, plan_copy_move_request, replace_relative_prefix,
-    resource_identity_path, same_resource_path, validate_collection_create_target,
-    validate_delete_target,
+    DavMutationResponseError, DavParentCollectionError, collection_created_response,
+    delete_success_response, enforce_parent_collection, is_descendant_path,
+    mutation_multistatus_response, mutation_multistatus_response_with_limits,
+    mutation_plan_error_response, mutation_success_response, plan_copy_move_request,
+    replace_relative_prefix, resource_identity_path, same_resource_path,
+    validate_collection_create_target, validate_delete_target,
 };
 pub use response::{
     DavBodyError, DavDownloadBody, DavDownloadPlan, DavDownloadPlanError, DavMultiRangeLimits,

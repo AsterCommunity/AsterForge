@@ -10,8 +10,9 @@ use crate::protocol::DavProtocolError;
 use crate::{
     DavBodyError, DavBodyPolicy, DavCapabilityContext, DavCapabilityProvider,
     DavCapabilitySnapshot, DavCapabilityTarget, DavConditionalPlan, DavConditionalResource,
-    DavFileSystem, DavIfEvaluationError, DavLockSystem, DavMethod, DavMutationCredentials, DavPath,
-    DavRequestHead, DavRequestOrigin, DavRequestTarget, DavResponse, DavResponseBody, IfHeader,
+    DavFileSystem, DavIfEvaluationError, DavLockEnforcementError, DavLockSystem, DavMethod,
+    DavMutationCredentials, DavParentCollectionError, DavPath, DavRequestHead, DavRequestOrigin,
+    DavRequestTarget, DavResponse, DavResponseBody, IfHeader,
 };
 
 /// Request body prepared according to the selected `WebDAV` method contract.
@@ -80,32 +81,29 @@ pub fn request_target<'a>(
     DavRequestHead::parse_target(&uri, mount_path, &origin)
 }
 
-/// Resolves the product declaration and maps the validated capability snapshot to Actix.
+/// Resolves and validates the product capability declaration.
 ///
 /// # Errors
 ///
-/// Returns an error response when provider lookup or capability validation fails.
+/// Returns a typed failure when provider lookup or capability validation fails.
 pub async fn capability_snapshot<Provider: DavCapabilityProvider>(
     provider: &Provider,
     target: &DavCapabilityTarget,
     context: &DavCapabilityContext,
-) -> Result<DavCapabilitySnapshot, HttpResponse> {
-    crate::plan_capabilities_with_provider(provider, target, context)
-        .await
-        .map_err(|error| into_response(crate::capability_evaluation_error_response(&error)))
+) -> Result<DavCapabilitySnapshot, crate::DavCapabilityEvaluationError> {
+    crate::plan_capabilities_with_provider(provider, target, context).await
 }
 
 /// Applies the resource-aware dispatch gate to an Actix request method.
 ///
 /// # Errors
 ///
-/// Returns a 405 response when the snapshot does not dispatch the request method.
+/// Returns [`crate::DavMethodGateError`] when the snapshot does not dispatch the request method.
 pub fn gate_request_method(
     request: &HttpRequest,
     snapshot: &DavCapabilitySnapshot,
-) -> Result<DavMethod, HttpResponse> {
+) -> Result<DavMethod, crate::DavMethodGateError> {
     crate::gate_method(DavMethod::from_name(request.method().as_str()), snapshot)
-        .map_err(|_| into_response(crate::method_not_allowed_response(snapshot)))
 }
 
 /// Converts a transport-neutral response into an Actix response.
@@ -151,20 +149,20 @@ pub fn protocol_error_response(error: DavProtocolError) -> HttpResponse {
     into_response(crate::protocol_error_response(&error))
 }
 
-/// Copies Actix headers into the transport-neutral map and maps malformed input to a response.
+/// Copies Actix headers into the transport-neutral map.
 ///
 /// # Errors
 ///
-/// Returns an error response when an Actix header cannot be represented by `http` 1.x.
-pub fn converted_headers(source: &actix_header::HeaderMap) -> Result<HeaderMap, HttpResponse> {
-    convert_header_map(source).map_err(protocol_error_response)
+/// Returns [`DavProtocolError`] when an Actix header cannot be represented by `http` 1.x.
+pub fn converted_headers(source: &actix_header::HeaderMap) -> Result<HeaderMap, DavProtocolError> {
+    convert_header_map(source)
 }
 
 /// Resolves and enforces a parsed `WebDAV` `If` header through the canonical backend ports.
 ///
 /// # Errors
 ///
-/// Returns an error response when DAV `If` evaluation or backend access fails.
+/// Returns [`DavIfEvaluationError`] when DAV `If` evaluation or backend access fails.
 pub async fn enforce_if_header_with_backends(
     if_header: Option<&IfHeader>,
     filesystem: &dyn DavFileSystem,
@@ -173,8 +171,8 @@ pub async fn enforce_if_header_with_backends(
     prefix: &str,
     request_scheme: &str,
     request_host: &str,
-) -> Result<(), HttpResponse> {
-    match crate::enforce_if_header_with_backends(
+) -> Result<(), DavIfEvaluationError> {
+    crate::enforce_if_header_with_backends(
         if_header,
         filesystem,
         lock_system,
@@ -184,20 +182,13 @@ pub async fn enforce_if_header_with_backends(
         request_host,
     )
     .await
-    {
-        Ok(()) => Ok(()),
-        Err(DavIfEvaluationError::Protocol(error)) => Err(protocol_error_response(error)),
-        Err(DavIfEvaluationError::Backend(error)) => {
-            Err(into_response(crate::backend_error_response(&error)))
-        }
-    }
 }
 
-/// Enforces resource lock submission and maps the protocol response to Actix.
+/// Enforces resource lock submission and returns a compact typed failure.
 ///
 /// # Errors
 ///
-/// Returns an error response when a conflicting lock exists or lock lookup fails.
+/// Returns [`DavLockEnforcementError`] when a conflicting lock exists or lock lookup fails.
 pub async fn enforce_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -206,7 +197,7 @@ pub async fn enforce_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<DavMutationCredentials, HttpResponse> {
+) -> Result<DavMutationCredentials, DavLockEnforcementError> {
     crate::enforce_unlocked(
         lock_system,
         path,
@@ -217,14 +208,13 @@ pub async fn enforce_unlocked(
         request_host,
     )
     .await
-    .map_err(into_response)
 }
 
-/// Enforces lock submission for the canonical parent and maps the response to Actix.
+/// Enforces lock submission for the canonical parent and returns a compact typed failure.
 ///
 /// # Errors
 ///
-/// Returns an error response when the parent is locked or lock lookup fails.
+/// Returns [`DavLockEnforcementError`] when the parent is locked or lock lookup fails.
 pub async fn enforce_parent_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -232,7 +222,7 @@ pub async fn enforce_parent_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<DavMutationCredentials, HttpResponse> {
+) -> Result<DavMutationCredentials, DavLockEnforcementError> {
     crate::enforce_parent_unlocked(
         lock_system,
         path,
@@ -242,22 +232,71 @@ pub async fn enforce_parent_unlocked(
         request_host,
     )
     .await
-    .map_err(into_response)
 }
 
 /// Converts Actix headers and runs the method-aware conditional request planner.
 ///
 /// # Errors
 ///
-/// Returns an error response when header conversion or conditional planning fails.
+/// Returns a compact typed failure when header conversion or conditional planning fails.
 pub fn plan_http_conditionals(
     headers: &actix_header::HeaderMap,
     method: DavMethod,
     resource: DavConditionalResource<'_>,
-) -> Result<DavConditionalPlan, HttpResponse> {
+) -> Result<DavConditionalPlan, crate::DavConditionalPlanError> {
     let headers = converted_headers(headers)?;
     crate::plan_http_conditionals(method, &headers, resource)
-        .map_err(|error| into_response(crate::conditional_plan_error_response(&error)))
+}
+
+/// Maps capability evaluation failures to Actix at the handler boundary.
+#[must_use]
+pub fn capability_error_response(error: &crate::DavCapabilityEvaluationError) -> HttpResponse {
+    into_response(crate::capability_evaluation_error_response(error))
+}
+
+/// Maps a rejected method gate to the canonical 405 Actix response.
+#[must_use]
+pub fn method_gate_error_response(snapshot: &DavCapabilitySnapshot) -> HttpResponse {
+    into_response(crate::method_not_allowed_response(snapshot))
+}
+
+/// Maps conditional planning failures to Actix at the handler boundary.
+#[must_use]
+pub fn conditional_plan_error_response(error: &crate::DavConditionalPlanError) -> HttpResponse {
+    into_response(crate::conditional_plan_error_response(error))
+}
+
+/// Maps lock-enforcement failures to Actix at the handler boundary.
+#[must_use]
+pub fn lock_enforcement_error_response(
+    error: DavLockEnforcementError,
+    prefix: &str,
+) -> HttpResponse {
+    match error {
+        DavLockEnforcementError::Backend(error) => {
+            into_response(crate::backend_error_response(&error))
+        }
+        DavLockEnforcementError::Conflict { path } => into_response(
+            crate::lock_conflict_response(prefix, &path)
+                .unwrap_or_else(|_| DavResponse::empty(http::StatusCode::INTERNAL_SERVER_ERROR)),
+        ),
+    }
+}
+
+/// Maps parent-collection enforcement failures to Actix at the handler boundary.
+#[must_use]
+pub fn parent_collection_error_response(error: DavParentCollectionError) -> HttpResponse {
+    match error {
+        DavParentCollectionError::MethodNotAllowed => into_response(
+            crate::mutation_plan_error_response(crate::DavMutationPlanError::MethodNotAllowed),
+        ),
+        DavParentCollectionError::Conflict => into_response(crate::mutation_plan_error_response(
+            crate::DavMutationPlanError::Conflict,
+        )),
+        DavParentCollectionError::Backend(error) => {
+            into_response(crate::backend_error_response(&error))
+        }
+    }
 }
 
 /// Copies Actix header types into the transport-neutral `http` 1.x map.

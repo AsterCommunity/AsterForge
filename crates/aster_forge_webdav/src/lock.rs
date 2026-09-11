@@ -39,11 +39,22 @@ pub enum DavLockPlanError {
     Xml(#[from] DavXmlError),
 }
 
+/// Failure while enforcing lock-token submission for a mutation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DavLockEnforcementError {
+    /// The lock backend could not be queried.
+    #[error(transparent)]
+    Backend(#[from] DavBackendError),
+    /// A conflicting lock did not have a matching submitted token.
+    #[error("a conflicting lock token was not submitted for `{path:?}`")]
+    Conflict { path: DavPath },
+}
+
 /// Rejects an operation when a conflicting lock token was not submitted for its lock root.
 ///
 /// # Errors
 ///
-/// Returns a protocol response when lock lookup fails or a conflicting lock is not submitted.
+/// Returns a typed failure when lock lookup fails or a conflicting lock is not submitted.
 pub async fn enforce_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -52,7 +63,7 @@ pub async fn enforce_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<DavMutationCredentials, DavResponse> {
+) -> Result<DavMutationCredentials, DavLockEnforcementError> {
     let evaluation = evaluate_lock_conflicts(
         lock_system,
         path,
@@ -63,10 +74,9 @@ pub async fn enforce_unlocked(
         request_host,
     )
     .await
-    .map_err(|error| crate::backend_error_response(&error))?;
+    .map_err(DavLockEnforcementError::from)?;
     if let Some(lock) = evaluation.unsubmitted.into_iter().next() {
-        return Err(lock_conflict_response(prefix, &lock.path)
-            .unwrap_or_else(|_| DavResponse::empty(StatusCode::INTERNAL_SERVER_ERROR)));
+        return Err(DavLockEnforcementError::Conflict { path: *lock.path });
     }
     Ok(evaluation.credentials)
 }
@@ -154,7 +164,7 @@ pub async fn unsubmitted_lock_conflicts(
 ///
 /// # Errors
 ///
-/// Returns a protocol response when the parent lock lookup or submission check fails.
+/// Returns a typed failure when the parent lock lookup or submission check fails.
 pub async fn enforce_parent_unlocked(
     lock_system: &dyn DavLockSystem,
     path: &DavPath,
@@ -162,7 +172,7 @@ pub async fn enforce_parent_unlocked(
     if_header: Option<&IfHeader>,
     request_scheme: &str,
     request_host: &str,
-) -> Result<DavMutationCredentials, DavResponse> {
+) -> Result<DavMutationCredentials, DavLockEnforcementError> {
     let Some(parent_path) = path.parent() else {
         return Ok(DavMutationCredentials::default());
     };

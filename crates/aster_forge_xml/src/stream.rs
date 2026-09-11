@@ -353,7 +353,14 @@ impl<R: BufRead> XmlStreamReader<R> {
         reader.config_mut().trim_text(false);
         reader
             .resolver_mut()
-            .set_max_namespace_bindings(policy.max_attributes_per_element);
+            // quick-xml 0.42 bounds namespace bindings currently in scope, while Forge's
+            // attribute limit applies to one element. Keep the limits independent and derive
+            // the in-scope bound from the maximum active depth and per-element declarations.
+            .set_max_namespace_bindings(
+                policy
+                    .max_depth
+                    .saturating_mul(policy.max_attributes_per_element),
+            );
         Ok(Self {
             reader,
             buffer: Vec::new(),

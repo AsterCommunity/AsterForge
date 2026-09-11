@@ -356,7 +356,10 @@ Forge 负责：
 - `DavLockSystem` 的 discovery、batch discovery 和 conflict lookup 都返回 typed backend failure；产品 adapter 不得把查询失败降级成空锁集合，Forge 会让 `If`、mutation guard 和 `lockdiscovery` fail closed。
 - 批量 dead-property 读取只向 backend 传递 `DavPath`；产品 adapter 自行解析数据库身份并执行批量查询。
 - Actix transport 与 transport-neutral `http` 类型的显式转换。Actix 仍使用 `http 0.2` 而 Forge 公共模型使用 `http 1.x`，URI/header 跨版本转换保持显式边界。
-- Actix adapter 统一完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard 映射。
+- Actix adapter 在 handler 边界完成 header conversion、协议/后端错误响应和 HTTP ETag/`If` guard
+  映射；`capability_snapshot`、method gate、lock guard、conditional planner 和 parent-collection
+  guard 本身只返回紧凑的 typed error，不把 `HttpResponse` 放进 `Result` 的错误分支。这样不会为
+  常规控制流错误引入 `Box<HttpResponse>` 堆分配，也不会扩大 async Future 的错误变体。
 - OPTIONS、405、body-policy failure 和 download response 的 product-neutral response shell。
 - resource-aware capability declaration/snapshot、RFC class 与扩展 prerequisite 校验、静态
   package/property/report descriptor、canonical `Allow`/`DAV`/`DASL`/`Accept-Patch` rendering

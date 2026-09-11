@@ -5,12 +5,12 @@ use std::time::{Duration, SystemTime};
 use aster_forge_webdav::{
     DavBackendError, DavBackendErrorKind, DavConditionalEvaluationError, DavConditionalOutcome,
     DavConditionalResource, DavFileSystem, DavIfEvaluationError, DavLock, DavLockAcquireRequest,
-    DavLockAcquireResult, DavLockError, DavLockPreflightError, DavLockSystem, DavMetaData,
-    DavMethod, DavMutationCredentials, DavPath, DavResponseBody, FsError, FsFuture, LsFuture,
-    enforce_if_header_with_backends, enforce_parent_collection, enforce_parent_unlocked,
-    enforce_unlocked, parse_if_header, plan_conditionals_with_backends, unsubmitted_lock_conflicts,
+    DavLockAcquireResult, DavLockEnforcementError, DavLockError, DavLockPreflightError,
+    DavLockSystem, DavMetaData, DavMethod, DavMutationCredentials, DavParentCollectionError,
+    DavPath, FsError, FsFuture, LsFuture, enforce_if_header_with_backends,
+    enforce_parent_collection, enforce_parent_unlocked, enforce_unlocked, parse_if_header,
+    plan_conditionals_with_backends, unsubmitted_lock_conflicts,
 };
-use http::StatusCode;
 use http::header::{HeaderMap, HeaderValue};
 
 #[derive(Clone)]
@@ -400,8 +400,10 @@ fn lock_guard_requires_a_token_scoped_to_the_conflicting_lock_root() {
         )
         .await
         .expect_err("a token tagged for another resource must not unlock this target");
-        assert_eq!(response.status, StatusCode::LOCKED);
-        assert!(matches!(response.body, DavResponseBody::Bytes(_)));
+        assert!(matches!(
+            response,
+            DavLockEnforcementError::Conflict { path } if path.as_str() == "/locked/"
+        ));
 
         let credentials = match enforce_unlocked(
             &lock_system,
@@ -415,10 +417,9 @@ fn lock_guard_requires_a_token_scoped_to_the_conflicting_lock_root() {
         .await
         {
             Ok(credentials) => credentials,
-            Err(response) => panic!(
-                "a token tagged for the lock root should unlock the target, got {}",
-                response.status
-            ),
+            Err(error) => {
+                panic!("a token tagged for the lock root should unlock the target, got {error:?}")
+            }
         };
         assert_eq!(
             credentials.submitted_lock_tokens,
@@ -463,10 +464,9 @@ fn lock_guard_does_not_forward_negated_or_unrelated_tokens_as_credentials() {
         .await
         {
             Ok(credentials) => credentials,
-            Err(response) => panic!(
-                "the positively submitted root token should satisfy the lock, got {}",
-                response.status
-            ),
+            Err(error) => {
+                panic!("the positively submitted root token should satisfy the lock, got {error:?}")
+            }
         };
 
         assert_eq!(
@@ -496,10 +496,9 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
         .await
         {
             Ok(credentials) => credentials,
-            Err(response) => panic!(
-                "the parent-scoped token should allow the mutation, got {}",
-                response.status
-            ),
+            Err(error) => {
+                panic!("the parent-scoped token should allow the mutation, got {error:?}")
+            }
         };
         assert_eq!(
             credentials.submitted_lock_tokens,
@@ -533,10 +532,9 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
         .await
         {
             Ok(credentials) => credentials,
-            Err(response) => panic!(
-                "canonical parent must not be percent-decoded again, got {}",
-                response.status
-            ),
+            Err(error) => {
+                panic!("canonical parent must not be percent-decoded again, got {error:?}")
+            }
         };
         assert_eq!(
             credentials.submitted_lock_tokens,
@@ -563,10 +561,7 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
         .await;
         match root_result {
             Ok(credentials) => assert!(credentials.submitted_lock_tokens.is_empty()),
-            Err(response) => panic!(
-                "the mount root has no parent to check, got {}",
-                response.status
-            ),
+            Err(error) => panic!("the mount root has no parent to check, got {error:?}"),
         }
         assert!(
             root_locks
@@ -684,11 +679,11 @@ fn lock_guard_fails_closed_when_conflict_lookup_fails() {
         )
         .await
         .expect_err("backend lock lookup failure must reject the mutation");
-        assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(
-            response.headers.get(http::header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static("no-store"))
-        );
+        assert!(matches!(
+            response,
+            DavLockEnforcementError::Backend(error)
+                if error.kind == DavBackendErrorKind::Internal
+        ));
     });
 }
 
@@ -705,7 +700,10 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
             enforce_parent_collection(&filesystem, &DavPath::new("/").expect("mount root"))
                 .await
                 .expect_err("the mount root cannot be created below itself");
-        assert_eq!(root_error.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(matches!(
+            root_error,
+            DavParentCollectionError::MethodNotAllowed
+        ));
 
         assert!(
             enforce_parent_collection(&filesystem, &DavPath::new("/new.txt").expect("root child"))
@@ -743,7 +741,7 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
             )
             .await
             .expect_err("a file or missing resource cannot be a collection parent");
-            assert_eq!(response.status, StatusCode::CONFLICT);
+            assert!(matches!(response, DavParentCollectionError::Conflict));
         }
 
         let response = enforce_parent_collection(
@@ -752,6 +750,10 @@ fn parent_collection_guard_covers_root_collection_missing_and_backend_boundaries
         )
         .await
         .expect_err("backend errors must retain their protocol classification");
-        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        assert!(matches!(
+            response,
+            DavParentCollectionError::Backend(error)
+                if error.kind == aster_forge_webdav::DavBackendErrorKind::Forbidden
+        ));
     });
 }
