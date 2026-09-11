@@ -264,13 +264,11 @@ impl WindowsSyncRootConnection {
 
     fn disconnect_inner(&mut self) -> Result<WindowsDisconnectOutcome> {
         self.disconnect_with(|connection_key| {
-            unsafe {
-                // SAFETY: `connection_key` came directly from a successful `CfConnectSyncRoot`
-                // call owned by this value. A previous failed call leaves the key active and
-                // retryable; only a successful call moves the state to `Disconnected`.
-                CfDisconnectSyncRoot(CF_CONNECTION_KEY(connection_key.get()))
-            }
-            .map_err(Into::into)
+            // SAFETY: `connection_key` came directly from a successful `CfConnectSyncRoot`
+            // call owned by this value. A previous failed call leaves the key active and
+            // retryable; only a successful call moves the state to `Disconnected`.
+            unsafe { CfDisconnectSyncRoot(CF_CONNECTION_KEY(connection_key.get())) }
+                .map_err(Into::into)
         })
     }
 
@@ -353,10 +351,10 @@ pub fn connect_sync_root(
         waiters: waiters.clone(),
     });
     let context_pointer = (&raw const *context).cast::<c_void>();
+    // SAFETY: the callback table is static and sentinel-terminated; the context has a stable
+    // Box allocation that remains alive until `CfDisconnectSyncRoot` returns successfully;
+    // the UTF-16 path remains alive for the complete synchronous connect call.
     let connection_key = unsafe {
-        // SAFETY: the callback table is static and sentinel-terminated; the context has a stable
-        // Box allocation that remains alive until `CfDisconnectSyncRoot` returns successfully;
-        // the UTF-16 path remains alive for the complete synchronous connect call.
         CfConnectSyncRoot(
             PCWSTR(path.as_ptr()),
             CALLBACK_TABLE.as_ptr(),
@@ -1401,12 +1399,10 @@ fn execute_fetch_transfer(
         length,
         status,
     );
-    unsafe {
-        // SAFETY: both operation structures are fully initialized for one synchronous
-        // `TRANSFER_DATA`. A non-null buffer belongs to the caller-owned transfer and remains alive
-        // until `CfExecute` returns; failure paths pass null. No native pointer escapes the call.
-        CfExecute(&raw const operation_info, &raw mut operation_parameters)
-    }
+    // SAFETY: both operation structures are fully initialized for one synchronous
+    // `TRANSFER_DATA`. A non-null buffer belongs to the caller-owned transfer and remains alive
+    // until `CfExecute` returns; failure paths pass null. No native pointer escapes the call.
+    unsafe { CfExecute(&raw const operation_info, &raw mut operation_parameters) }
 }
 
 fn fetch_transfer_operation(
