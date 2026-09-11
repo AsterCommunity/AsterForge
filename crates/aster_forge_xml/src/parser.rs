@@ -8,8 +8,8 @@ use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::syntax::{
-    XML_NAMESPACE_URI, map_quick_xml_error_at, split_qualified_name, utf8,
-    validate_namespace_binding, validate_qualified_name,
+    XML_NAMESPACE_URI, map_quick_xml_error_at, split_qualified_name, validate_namespace_binding,
+    validate_qualified_name,
 };
 use crate::{DEFAULT_XML_MAX_DEPTH, Error, XmlSafetyError};
 
@@ -284,7 +284,7 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
             }
             Event::End(end) => {
                 let end_name = end.name();
-                let qualified_name = utf8(end_name.as_ref())?;
+                let qualified_name = end_name.as_ref();
                 let frame = state.frames.pop().ok_or(XmlSafetyError::Malformed)?;
                 if frame.qualified_name != qualified_name {
                     return Err(XmlSafetyError::Malformed.into());
@@ -295,13 +295,13 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
                 }
             }
             Event::Text(text) => {
-                let raw = utf8(text.as_ref())?;
+                let raw = text.as_ref();
                 let value = unescape(raw).map_err(|error| Error::InvalidXml(error.to_string()))?;
                 state.count_text(value.as_ref(), options.safety)?;
             }
-            Event::CData(text) => state.count_text(utf8(text.as_ref())?, options.safety)?,
+            Event::CData(text) => state.count_text(text.as_ref(), options.safety)?,
             Event::GeneralRef(reference) => {
-                let value = decode_reference(reference.as_ref(), &reference)?;
+                let value = decode_reference(&reference)?;
                 state.count_text(value.as_ref(), options.safety)?;
             }
             Event::Decl(_) => {
@@ -317,13 +317,7 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
                     return Err(XmlSafetyError::Malformed.into());
                 }
             }
-            Event::Comment(comment) => {
-                utf8(comment.as_ref())?;
-            }
-            Event::PI(pi) => {
-                utf8(pi.target())?;
-                utf8(pi.content())?;
-            }
+            Event::Comment(_) | Event::PI(_) => {}
             Event::Eof => {
                 if !state.frames.is_empty() || !state.root_complete {
                     return Err(XmlSafetyError::Malformed.into());
@@ -335,7 +329,7 @@ fn scan_xml(bytes: &[u8], options: &ParseOptions) -> Result<Option<String>, Erro
 }
 
 fn scan_element(
-    reader: &Reader<&[u8]>,
+    _reader: &Reader<&[u8]>,
     state: &mut ScanState,
     start: &BytesStart<'_>,
     policy: XmlSafetyPolicy,
@@ -344,7 +338,7 @@ fn scan_element(
         return Err(XmlSafetyError::Malformed.into());
     }
     let start_name = start.name();
-    let qualified_name = utf8(start_name.as_ref())?;
+    let qualified_name = start_name.as_ref();
     let (prefix, local_name) = validate_qualified_name(qualified_name)?;
     let binding_start = state.bindings.len();
     let mut attribute_count = 0usize;
@@ -357,12 +351,12 @@ fn scan_element(
             return Err(XmlSafetyError::TooManyAttributes.into());
         }
         let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
-        let name = utf8(attribute.key.as_ref())?;
+        let name = attribute.key.as_ref();
         validate_qualified_name(name)?;
         if name == "xmlns" || name.starts_with("xmlns:") {
             let namespace_prefix = name.strip_prefix("xmlns:").unwrap_or("");
             let uri = attribute
-                .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+                .normalized_value(XmlVersion::Explicit1_0)
                 .map_err(|error| Error::InvalidXml(error.to_string()))?;
             validate_namespace_binding(namespace_prefix, &uri)?;
             state.bindings.push(NamespaceBinding {
@@ -379,7 +373,7 @@ fn scan_element(
     }
     for attribute in start.attributes() {
         let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
-        let name = utf8(attribute.key.as_ref())?;
+        let name = attribute.key.as_ref();
         if name == "xmlns" || name.starts_with("xmlns:") {
             continue;
         }
@@ -402,7 +396,6 @@ fn scan_element(
 }
 
 fn decode_reference<'a>(
-    bytes: &'a [u8],
     reference: &quick_xml::events::BytesRef<'a>,
 ) -> Result<Cow<'a, str>, Error> {
     if let Some(character) = reference
@@ -411,7 +404,7 @@ fn decode_reference<'a>(
     {
         return Ok(Cow::Owned(character.to_string()));
     }
-    Ok(Cow::Borrowed(match utf8(bytes)? {
+    Ok(Cow::Borrowed(match reference.as_ref() {
         "amp" => "&",
         "lt" => "<",
         "gt" => ">",

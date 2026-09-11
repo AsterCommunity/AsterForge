@@ -5,10 +5,6 @@ use crate::{Error, XmlSafetyError};
 pub(crate) const XML_NAMESPACE_URI: &str = "http://www.w3.org/XML/1998/namespace";
 pub(crate) const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
 
-pub(crate) fn utf8(bytes: &[u8]) -> Result<&str, Error> {
-    std::str::from_utf8(bytes).map_err(|_| XmlSafetyError::InvalidEncoding.into())
-}
-
 pub(crate) fn validate_qualified_name(name: &str) -> Result<(Option<&str>, &str), Error> {
     let (prefix, local) = split_qualified_name(name);
     if !valid_name(local)

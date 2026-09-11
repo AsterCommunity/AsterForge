@@ -9,12 +9,11 @@ use crate::{CryptoError, Result};
 use argon2::{
     Algorithm, Argon2, Params, Version,
     password_hash::{
-        Error as PasswordHashError, Output, PasswordHash, PasswordHasher, PasswordVerifier,
-        SaltString,
+        Error as PasswordHashError, PasswordHasher, PasswordVerifier,
+        phc::{Output, PasswordHash},
     },
 };
 use hmac::{Hmac, KeyInit, Mac};
-use rand_core_06::OsRng;
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 
@@ -311,9 +310,8 @@ pub fn hash_password(password: &str) -> Result<String> {
 /// Returns an error when the policy's Argon2 parameters are invalid or the password-hash operation
 /// fails.
 pub fn hash_password_with_policy(password: &str, policy: &PasswordHashPolicy) -> Result<String> {
-    let salt = SaltString::generate(&mut OsRng);
     password_hasher(policy.work_factor)?
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(CryptoError::password_hash)
 }
@@ -353,7 +351,7 @@ pub fn verify_password_with_policy(
             is_valid: true,
             needs_rehash,
         }),
-        Err(PasswordHashError::Password) => Ok(PasswordHashVerification {
+        Err(PasswordHashError::PasswordInvalid) => Ok(PasswordHashVerification {
             is_valid: false,
             needs_rehash: false,
         }),
@@ -370,7 +368,7 @@ fn password_hasher(work_factor: PasswordHashWorkFactor) -> Result<Argon2<'static
 }
 
 fn validate_stored_password_hash(
-    parsed: &PasswordHash<'_>,
+    parsed: &PasswordHash,
     limits: PasswordHashVerificationLimits,
 ) -> Result<Params> {
     if parsed.algorithm.as_str() != "argon2id" {
@@ -431,18 +429,14 @@ fn validate_stored_password_hash(
 }
 
 fn password_hash_needs_rehash(
-    parsed: &PasswordHash<'_>,
+    parsed: &PasswordHash,
     params: &Params,
     current: PasswordHashWorkFactor,
 ) -> Result<bool> {
     let salt = parsed
         .salt
         .ok_or_else(|| CryptoError::password_hash("password hash is missing a salt"))?;
-    let mut salt_bytes = [0_u8; 64];
-    let salt_length = salt
-        .decode_b64(&mut salt_bytes)
-        .map_err(CryptoError::password_hash)?
-        .len();
+    let salt_length = salt.as_ref().len();
     let output_length = params
         .output_len()
         .unwrap_or(DEFAULT_PASSWORD_HASH_OUTPUT_LENGTH);
@@ -533,7 +527,6 @@ pub fn new_sha256() -> Sha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argon2::password_hash::SaltString;
     use sha2::Digest;
 
     fn lightweight_policy() -> PasswordHashPolicy {
@@ -553,7 +546,7 @@ mod tests {
     ) -> String {
         password_hasher(work_factor)
             .unwrap()
-            .hash_password(password.as_bytes(), &SaltString::encode_b64(salt).unwrap())
+            .hash_password_with_salt(password.as_bytes(), salt)
             .unwrap()
             .to_string()
     }

@@ -437,18 +437,15 @@ impl<W: Write> XmlStreamWriter<W> {
             }
             for attribute in start.attributes() {
                 let attribute = attribute.map_err(|error| Error::InvalidData(error.to_string()))?;
-                let attribute_name = std::str::from_utf8(attribute.key.as_ref())
-                    .map_err(|_| Error::InvalidData("attribute name is not UTF-8".into()))?;
+                let attribute_name = attribute.key.as_ref();
                 self.validate_attribute_namespace(attribute_name)?;
             }
             for (index, left) in start.attributes().enumerate() {
                 let left = left.map_err(|error| Error::InvalidData(error.to_string()))?;
-                let left_name = std::str::from_utf8(left.key.as_ref())
-                    .map_err(|_| Error::InvalidData("attribute name is not UTF-8".into()))?;
+                let left_name = left.key.as_ref();
                 for right in start.attributes().skip(index + 1) {
                     let right = right.map_err(|error| Error::InvalidData(error.to_string()))?;
-                    let right_name = std::str::from_utf8(right.key.as_ref())
-                        .map_err(|_| Error::InvalidData("attribute name is not UTF-8".into()))?;
+                    let right_name = right.key.as_ref();
                     if self.attributes_share_expanded_name(left_name, right_name) {
                         return Err(Error::InvalidData(format!(
                             "attributes `{left_name}` and `{right_name}` have the same expanded name"

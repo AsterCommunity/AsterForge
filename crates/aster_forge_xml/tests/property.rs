@@ -89,8 +89,7 @@ fn assert_forge_model(element: ElementRef<'_, &[u8]>, model: &ElementModel) {
     assert_eq!(element.text().unwrap_or_default(), model.text);
     assert_eq!(element.attributes().count(), model.attributes.len());
     for (name, value) in &model.attributes {
-        let normalized = normalize_attribute_value(value);
-        assert_eq!(element.attribute(name), Some(normalized.as_str()));
+        assert_eq!(element.attribute(name), Some(value.as_str()));
     }
     let actual_children: Vec<_> = element.child_elements().collect();
     assert_eq!(actual_children.len(), model.children.len());
@@ -109,8 +108,7 @@ fn assert_roxmltree_model(node: roxmltree::Node<'_, '_>, model: &ElementModel) {
     assert_eq!(direct_text, model.text);
     assert_eq!(node.attributes().len(), model.attributes.len());
     for (name, value) in &model.attributes {
-        let normalized = normalize_attribute_value(value);
-        assert_eq!(node.attribute(name.as_str()), Some(normalized.as_str()));
+        assert_eq!(node.attribute(name.as_str()), Some(value.as_str()));
     }
     let actual_children: Vec<_> = node
         .children()
@@ -120,16 +118,6 @@ fn assert_roxmltree_model(node: roxmltree::Node<'_, '_>, model: &ElementModel) {
     for (actual, expected) in actual_children.into_iter().zip(&model.children) {
         assert_roxmltree_model(actual, expected);
     }
-}
-
-fn normalize_attribute_value(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| match character {
-            '\n' | '\r' | '\t' => ' ',
-            character => character,
-        })
-        .collect()
 }
 
 proptest! {
