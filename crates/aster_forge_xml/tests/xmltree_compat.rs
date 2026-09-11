@@ -86,7 +86,7 @@ fn xmltree_snapshot(element: &xmltree::Element) -> ElementSnapshot {
     }
 }
 
-fn inside(source: &[u8], slice: &[u8]) -> bool {
+fn inside(source: &[u8], slice: &str) -> bool {
     let source_start = source.as_ptr() as usize;
     let source_end = source_start + source.len();
     let slice_start = slice.as_ptr() as usize;
@@ -123,12 +123,9 @@ fn forge_arena_borrows_plain_values_from_the_source() {
     let document = BorrowedDocument::parse(source.as_slice()).expect("fixture should parse");
     let root = document.root();
 
-    assert!(inside(source, root.qualified_name().as_bytes()));
-    assert!(inside(
-        source,
-        root.attribute("plain").expect("attribute").as_bytes()
-    ));
-    assert!(inside(source, root.text().expect("text").as_bytes()));
+    assert!(inside(source, root.qualified_name()));
+    assert!(inside(source, root.attribute("plain").expect("attribute")));
+    assert!(inside(source, &root.text().expect("text")));
     assert_eq!(document.allocated_value_count(), 0);
 }
 

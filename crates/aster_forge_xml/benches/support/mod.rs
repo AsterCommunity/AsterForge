@@ -102,10 +102,7 @@ pub(crate) fn walk_quick_xml_ns_buffered(input: &[u8]) -> usize {
                         ))
                         .wrapping_add(
                             attribute
-                                .decoded_and_normalized_value(
-                                    XmlVersion::Explicit1_0,
-                                    reader.decoder(),
-                                )
+                                .normalized_value(XmlVersion::Explicit1_0)
                                 .expect("benchmark value is valid")
                                 .len(),
                         );
@@ -119,9 +116,9 @@ pub(crate) fn walk_quick_xml_ns_buffered(input: &[u8]) -> usize {
                     ));
             }
             Event::Text(text) => {
-                let decoded = text.decode().expect("benchmark text is valid");
+                let decoded = text.as_ref();
                 checksum = checksum.wrapping_add(
-                    unescape(&decoded)
+                    unescape(decoded)
                         .expect("benchmark text entities are valid")
                         .len(),
                 );
@@ -135,8 +132,7 @@ pub(crate) fn walk_quick_xml_ns_buffered(input: &[u8]) -> usize {
                 );
             }
             Event::CData(text) => {
-                checksum =
-                    checksum.wrapping_add(text.decode().expect("benchmark CDATA is valid").len());
+                checksum = checksum.wrapping_add(text.as_ref().len());
             }
             Event::Comment(_) | Event::PI(_) | Event::Decl(_) | Event::DocType(_) => {}
             Event::Eof => break,
@@ -160,7 +156,7 @@ pub(crate) fn walk_forge_stream(input: &[u8]) -> usize {
     loop {
         match reader.read_event().expect("benchmark fixture is valid XML") {
             XmlStreamEvent::Start(start) | XmlStreamEvent::Empty(start) => {
-                let name = start.name().expect("benchmark name is valid");
+                let name = start.name();
                 checksum = checksum
                     .wrapping_add(name.qualified().len())
                     .wrapping_add(name.namespace().map_or(0, str::len));
@@ -174,7 +170,7 @@ pub(crate) fn walk_forge_stream(input: &[u8]) -> usize {
                 }
             }
             XmlStreamEvent::End(end) => {
-                let name = end.name().expect("benchmark name is valid");
+                let name = end.name();
                 checksum = checksum
                     .wrapping_add(name.qualified().len())
                     .wrapping_add(name.namespace().map_or(0, str::len));

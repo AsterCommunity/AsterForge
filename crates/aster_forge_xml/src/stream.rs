@@ -5,7 +5,6 @@ use std::io::{BufRead, Take, Write};
 
 use aster_forge_utils::numbers::usize_to_u64;
 use quick_xml::XmlVersion;
-use quick_xml::encoding::Decoder;
 use quick_xml::escape::unescape;
 use quick_xml::events::attributes::{Attribute, Attributes as QuickAttributes};
 use quick_xml::events::{BytesCData, BytesEnd, BytesPI, BytesStart, BytesText, Event};
@@ -13,7 +12,7 @@ use quick_xml::name::{NamespaceResolver, PrefixDeclaration, ResolveResult};
 use quick_xml::reader::NsReader;
 use quick_xml::writer::Writer;
 
-use crate::syntax::{map_quick_xml_error, utf8};
+use crate::syntax::map_quick_xml_error;
 use crate::{Error, ValidatedXml, XmlSafetyError, XmlSafetyPolicy};
 
 /// A namespace-resolved XML name borrowed from one streaming event.
@@ -51,24 +50,21 @@ pub struct StreamStart<'a> {
     raw: BytesStart<'a>,
     namespace: Option<&'a str>,
     resolver: &'a NamespaceResolver,
-    decoder: Decoder,
     cached_attribute_values: &'a [CachedAttributeValue],
 }
 
 impl StreamStart<'_> {
     /// Resolves the start element's qualified, local, and namespace names.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the encoded element name is not valid UTF-8.
-    pub fn name(&self) -> Result<StreamName<'_>, Error> {
-        let qualified = utf8(self.raw.name().into_inner())?;
-        let local = utf8(self.raw.local_name().into_inner())?;
-        Ok(StreamName {
+    #[must_use]
+    pub fn name(&self) -> StreamName<'_> {
+        let qualified = self.raw.name().into_inner();
+        let local = self.raw.local_name().into_inner();
+        StreamName {
             qualified,
             local,
             namespace: self.namespace,
-        })
+        }
     }
 
     #[must_use]
@@ -76,7 +72,6 @@ impl StreamStart<'_> {
         StreamAttributes {
             inner: self.raw.attributes(),
             resolver: self.resolver,
-            decoder: self.decoder,
             cached_values: self.cached_attribute_values,
             cached_index: 0,
             index: 0,
@@ -124,7 +119,6 @@ impl StreamStart<'_> {
 pub struct StreamAttributes<'a> {
     inner: QuickAttributes<'a>,
     resolver: &'a NamespaceResolver,
-    decoder: Decoder,
     cached_values: &'a [CachedAttributeValue],
     cached_index: usize,
     index: usize,
@@ -152,7 +146,6 @@ impl<'a> Iterator for StreamAttributes<'a> {
                 .map(|raw| StreamAttribute {
                     raw,
                     resolver: self.resolver,
-                    decoder: self.decoder,
                     cached_value,
                 })
                 .map_err(|error| Error::InvalidXml(error.to_string()))
@@ -164,7 +157,6 @@ impl<'a> Iterator for StreamAttributes<'a> {
 pub struct StreamAttribute<'a> {
     raw: Attribute<'a>,
     resolver: &'a NamespaceResolver,
-    decoder: Decoder,
     cached_value: Option<&'a str>,
 }
 
@@ -173,10 +165,10 @@ impl<'a> StreamAttribute<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the encoded name is invalid or its namespace cannot be resolved.
+    /// Returns an error when its namespace cannot be resolved.
     pub fn name(&self) -> Result<StreamName<'_>, Error> {
-        let qualified = utf8(self.raw.key.into_inner())?;
-        let local = utf8(self.raw.key.local_name().into_inner())?;
+        let qualified = self.raw.key.into_inner();
+        let local = self.raw.key.local_name().into_inner();
         let namespace = resolve_namespace(
             self.resolver.resolve_attribute(self.raw.key).0,
             "attribute namespace",
@@ -192,13 +184,13 @@ impl<'a> StreamAttribute<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the attribute value has invalid encoding or entity syntax.
+    /// Returns an error when the attribute value has invalid entity syntax.
     pub fn value(&self) -> Result<Cow<'_, str>, Error> {
         if let Some(value) = self.cached_value {
             return Ok(Cow::Borrowed(value));
         }
         self.raw
-            .decoded_and_normalized_value(XmlVersion::Explicit1_0, self.decoder)
+            .normalized_value(XmlVersion::Explicit1_0)
             .map_err(|error| Error::InvalidXml(error.to_string()))
     }
 
@@ -206,13 +198,13 @@ impl<'a> StreamAttribute<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the attribute value has invalid encoding or entity syntax.
+    /// Returns an error when the attribute value has invalid entity syntax.
     pub fn into_value(self) -> Result<Cow<'a, str>, Error> {
         if let Some(value) = self.cached_value {
             return Ok(Cow::Borrowed(value));
         }
         self.raw
-            .decoded_and_normalized_value(XmlVersion::Explicit1_0, self.decoder)
+            .normalized_value(XmlVersion::Explicit1_0)
             .map_err(|error| Error::InvalidXml(error.to_string()))
     }
 }
@@ -227,17 +219,15 @@ pub struct StreamEnd<'a> {
 impl StreamEnd<'_> {
     /// Resolves the end element's qualified, local, and namespace names.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the encoded element name is not valid UTF-8.
-    pub fn name(&self) -> Result<StreamName<'_>, Error> {
-        let qualified = utf8(self.raw.name().into_inner())?;
-        let local = utf8(self.raw.local_name().into_inner())?;
-        Ok(StreamName {
+    #[must_use]
+    pub fn name(&self) -> StreamName<'_> {
+        let qualified = self.raw.name().into_inner();
+        let local = self.raw.local_name().into_inner();
+        StreamName {
             qualified,
             local,
             namespace: self.namespace,
-        })
+        }
     }
 }
 
@@ -285,22 +275,20 @@ pub struct StreamProcessingInstruction<'a> {
 impl StreamProcessingInstruction<'_> {
     /// Returns the processing-instruction target.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the target is not valid UTF-8.
-    pub fn target(&self) -> Result<&str, Error> {
-        utf8(self.raw.target())
+    #[must_use]
+    pub fn target(&self) -> &str {
+        self.raw.target()
     }
 
     /// Returns trimmed processing-instruction content when present.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the content is not valid UTF-8.
-    pub fn content(&self) -> Result<Option<&str>, Error> {
-        let content = utf8(self.raw.content())?
+    #[must_use]
+    pub fn content(&self) -> Option<&str> {
+        let content = self
+            .raw
+            .content()
             .trim_start_matches(|character: char| character.is_ascii_whitespace());
-        Ok((!content.is_empty()).then_some(content))
+        (!content.is_empty()).then_some(content)
     }
 }
 
@@ -365,7 +353,14 @@ impl<R: BufRead> XmlStreamReader<R> {
         reader.config_mut().trim_text(false);
         reader
             .resolver_mut()
-            .set_max_declarations_per_element(policy.max_attributes_per_element);
+            // quick-xml 0.42 bounds namespace bindings currently in scope, while Forge's
+            // attribute limit applies to one element. Keep the limits independent and derive
+            // the in-scope bound from the maximum active depth and per-element declarations.
+            .set_max_namespace_bindings(
+                policy
+                    .max_depth
+                    .saturating_mul(policy.max_attributes_per_element),
+            );
         Ok(Self {
             reader,
             buffer: Vec::new(),
@@ -423,7 +418,6 @@ impl<R: BufRead> XmlStreamReader<R> {
                     raw: start,
                     namespace,
                     resolver: self.reader.resolver(),
-                    decoder: self.reader.decoder(),
                     cached_attribute_values: &self.cached_attribute_values,
                 }))
             }
@@ -439,7 +433,6 @@ impl<R: BufRead> XmlStreamReader<R> {
                     raw: start,
                     namespace,
                     resolver: self.reader.resolver(),
-                    decoder: self.reader.decoder(),
                     cached_attribute_values: &self.cached_attribute_values,
                 }))
             }
@@ -451,7 +444,6 @@ impl<R: BufRead> XmlStreamReader<R> {
                     self.reader.resolver().resolve_element(end.name()).0,
                     "element namespace",
                 )?;
-                utf8(end.name().into_inner())?;
                 self.state.depth -= 1;
                 if self.state.depth == 0 {
                     self.state.root_complete = true;
@@ -467,25 +459,17 @@ impl<R: BufRead> XmlStreamReader<R> {
                 Ok(XmlStreamEvent::Text(StreamText { value }))
             }
             Event::CData(cdata) => {
-                let value = cdata
-                    .decode()
-                    .map_err(|_| XmlSafetyError::InvalidEncoding)?;
+                let value = Cow::Owned(cdata.as_ref().to_owned());
                 count_text(&mut self.state, &value)?;
                 Ok(XmlStreamEvent::CData(StreamCData { value }))
             }
             Event::Comment(comment) => {
-                let value = comment
-                    .decode()
-                    .map_err(|_| XmlSafetyError::InvalidEncoding)?;
+                let value = Cow::Owned(comment.as_ref().to_owned());
                 Ok(XmlStreamEvent::Comment(StreamComment { value }))
             }
-            Event::PI(pi) => {
-                utf8(pi.target())?;
-                utf8(pi.content())?;
-                Ok(XmlStreamEvent::ProcessingInstruction(
-                    StreamProcessingInstruction { raw: pi },
-                ))
-            }
+            Event::PI(pi) => Ok(XmlStreamEvent::ProcessingInstruction(
+                StreamProcessingInstruction { raw: pi },
+            )),
             Event::GeneralRef(reference) => {
                 let value = decode_reference(&reference)?;
                 count_text(&mut self.state, &value)?;
@@ -594,20 +578,19 @@ impl<R: BufRead> XmlStreamReader<R> {
                     return false;
                 };
                 match prefix {
-                    PrefixDeclaration::Default => attribute.key.as_ref() == b"xmlns",
+                    PrefixDeclaration::Default => attribute.key.as_ref() == "xmlns",
                     PrefixDeclaration::Named(prefix) => {
-                        attribute.key.as_ref().strip_prefix(b"xmlns:") == Some(prefix)
+                        attribute.key.as_ref().strip_prefix("xmlns:") == Some(prefix)
                     }
                 }
             });
             if already_declared {
                 continue;
             }
-            let namespace = utf8(namespace.into_inner())?;
+            let namespace = namespace.into_inner();
             match prefix {
                 PrefixDeclaration::Default => captured_start.push_attribute(("xmlns", namespace)),
                 PrefixDeclaration::Named(prefix) => {
-                    let prefix = utf8(prefix)?;
                     let name = format!("xmlns:{prefix}");
                     captured_start.push_attribute((name.as_str(), namespace));
                 }
@@ -718,20 +701,17 @@ fn begin_element<'a, R: BufRead>(
         reader.resolver().resolve_element(start.name()).0,
         "element namespace",
     )?;
-    utf8(start.name().into_inner())?;
-
     for (index, attribute) in start.attributes().enumerate() {
         let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
         if index >= state.policy.max_attributes_per_element {
             return Err(XmlSafetyError::TooManyAttributes.into());
         }
-        utf8(attribute.key.into_inner())?;
         resolve_namespace(
             reader.resolver().resolve_attribute(attribute.key).0,
             "attribute namespace",
         )?;
         let value = attribute
-            .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+            .normalized_value(XmlVersion::Explicit1_0)
             .map_err(|error| Error::InvalidXml(error.to_string()))?;
         if let Cow::Owned(value) = value {
             cached_attribute_values.push(CachedAttributeValue { index, value });
@@ -766,24 +746,17 @@ fn count_text(state: &mut StreamState, value: &str) -> Result<(), Error> {
 fn resolve_namespace<'a>(result: ResolveResult<'a>, label: &str) -> Result<Option<&'a str>, Error> {
     match result {
         ResolveResult::Unbound => Ok(None),
-        ResolveResult::Bound(namespace) => utf8(namespace.into_inner()).map(Some),
+        ResolveResult::Bound(namespace) => Ok(Some(namespace.into_inner())),
         ResolveResult::Unknown(prefix) => Err(Error::InvalidXml(format!(
-            "unknown {label} prefix `{}`",
-            String::from_utf8_lossy(&prefix)
+            "unknown {label} prefix `{prefix}`"
         ))),
     }
 }
 
 fn decode_text<'a>(text: &BytesText<'a>) -> Result<Cow<'a, str>, Error> {
-    match text.decode().map_err(|_| XmlSafetyError::InvalidEncoding)? {
-        Cow::Borrowed(value) => {
-            unescape(value).map_err(|error| Error::InvalidXml(error.to_string()))
-        }
-        Cow::Owned(value) => unescape(&value)
-            .map(Cow::into_owned)
-            .map(Cow::Owned)
-            .map_err(|error| Error::InvalidXml(error.to_string())),
-    }
+    unescape(text.as_ref())
+        .map(|value| Cow::Owned(value.into_owned()))
+        .map_err(|error| Error::InvalidXml(error.to_string()))
 }
 
 fn decode_reference<'a>(
@@ -795,7 +768,7 @@ fn decode_reference<'a>(
     {
         return Ok(Cow::Owned(character.to_string()));
     }
-    Ok(Cow::Borrowed(match utf8(reference.as_ref())? {
+    Ok(Cow::Borrowed(match reference.as_ref() {
         "amp" => "&",
         "lt" => "<",
         "gt" => ">",

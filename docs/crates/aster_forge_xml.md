@@ -79,14 +79,14 @@ let mut reader = XmlStreamReader::new(BufReader::new(body.as_slice()), XmlSafety
 
 loop {
     match reader.read_event()? {
-        XmlStreamEvent::Start(start) if start.name()?.matches("href", Some("DAV:")) => {
+        XmlStreamEvent::Start(start) if start.name().matches("href", Some("DAV:")) => {
             assert_eq!(reader.read_text_current()?, "/a");
         }
-        XmlStreamEvent::Start(start) if start.name()?.matches("unknown", Some("urn:extension")) => {
+        XmlStreamEvent::Start(start) if start.name().matches("unknown", Some("urn:extension")) => {
             let retained = reader.capture_current(64 * 1024)?;
             assert_eq!(retained.document().root().namespace(), Some("urn:extension"));
         }
-        XmlStreamEvent::Start(start) if start.name()?.matches("ignored", None) => reader.skip_current()?,
+        XmlStreamEvent::Start(start) if start.name().matches("ignored", None) => reader.skip_current()?,
         XmlStreamEvent::Eof => break,
         _ => {}
     }
@@ -94,6 +94,11 @@ loop {
 ```
 
 `XmlStreamReader` 复用 event buffer，只保留当前事件、namespace resolver 和与深度成正比的 namespace state，不保留完整 token 列表或 DOM。`capture_current(max_bytes)` 只 materialize 当前 subtree，并自动补齐祖先作用域内、该 subtree 独立解析所需的 namespace declaration；`skip_current()` 继续执行完整安全和 well-formedness 检查，但不会保留被跳过节点。
+
+事件 name、processing-instruction 和文本内容在 `quick-xml 0.42` 中直接以 UTF-8 字符串暴露，因此
+`StreamStart::name`、`StreamEnd::name`、`StreamProcessingInstruction::target/content` 不再返回
+额外的 UTF-8 解码错误；属性值仍通过 `normalized_value` 执行 XML entity 与属性规范化。writer 会用
+字符引用保留属性中的换行、回车和制表符，使 writer → parser 往返不丢失这些值。
 
 ## Streaming writer
 

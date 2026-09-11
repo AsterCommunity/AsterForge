@@ -5,9 +5,9 @@ use http::{HeaderValue, StatusCode};
 
 use crate::response::no_store_empty_response;
 use crate::{
-    DavErrorCondition, DavFileSystem, DavMultiStatusError, DavMultiStatusItem,
+    DavBackendError, DavErrorCondition, DavFileSystem, DavMultiStatusError, DavMultiStatusItem,
     DavMultiStatusLimits, DavPath, DavResourceKind, DavResponse, Depth, FsError,
-    backend_error_response, dav_multistatus_bytes, href_for_dav_path,
+    dav_multistatus_bytes, href_for_dav_path,
 };
 
 /// COPY or MOVE operation selected by the request method.
@@ -39,6 +39,20 @@ pub enum DavMutationPlanError {
     PreconditionFailed,
 }
 
+/// Failure while checking the canonical parent collection of a mutation target.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DavParentCollectionError {
+    /// The target is the mount root and therefore has no mutable parent.
+    #[error("resource mutation is not supported for this target")]
+    MethodNotAllowed,
+    /// The canonical parent is missing or is not a collection.
+    #[error("resource mutation conflicts with the current hierarchy")]
+    Conflict,
+    /// The filesystem backend could not resolve the parent.
+    #[error(transparent)]
+    Backend(#[from] DavBackendError),
+}
+
 /// Rejects collection creation for the DAV root resource.
 ///
 /// # Errors
@@ -59,25 +73,21 @@ pub fn validate_collection_create_target(path: &str) -> Result<(), DavMutationPl
 ///
 /// # Errors
 ///
-/// Returns a protocol response when parent metadata lookup fails or the parent is unsuitable.
+/// Returns a typed failure when parent metadata lookup fails or the parent is unsuitable.
 pub async fn enforce_parent_collection(
     filesystem: &dyn DavFileSystem,
     target: &DavPath,
-) -> Result<(), DavResponse> {
+) -> Result<(), DavParentCollectionError> {
     let Some(parent) = target.parent() else {
-        return Err(mutation_plan_error_response(
-            DavMutationPlanError::MethodNotAllowed,
-        ));
+        return Err(DavParentCollectionError::MethodNotAllowed);
     };
     if parent == DavPath::root() {
         return Ok(());
     }
     match filesystem.metadata(&parent).await {
         Ok(metadata) if metadata.is_dir() => Ok(()),
-        Ok(_) | Err(FsError::NotFound) => {
-            Err(mutation_plan_error_response(DavMutationPlanError::Conflict))
-        }
-        Err(error) => Err(backend_error_response(&error.into())),
+        Ok(_) | Err(FsError::NotFound) => Err(DavParentCollectionError::Conflict),
+        Err(error) => Err(DavParentCollectionError::Backend(error.into())),
     }
 }
 

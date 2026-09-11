@@ -193,7 +193,7 @@ impl SharedContainerState {
 
     /// Removes resources owned by exited processes, including processes from this nextest run.
     ///
-    /// PostgreSQL uses this rolling policy because retaining every isolated database until the
+    /// `PostgreSQL` uses this rolling policy because retaining every isolated database until the
     /// next run can exhaust ephemeral CI disks. Live processes and suite-scoped resources remain
     /// registered, so concurrent tests and reusable templates are not disturbed.
     pub(crate) fn prune_stale_during_current_execution(&mut self) -> Vec<String> {

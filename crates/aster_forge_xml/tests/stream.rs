@@ -16,7 +16,7 @@ fn streams_namespace_resolved_names_attributes_and_text() {
     let XmlStreamEvent::Start(root) = reader.read_event().expect("root") else {
         panic!("expected root start");
     };
-    assert!(root.name().expect("name").matches("root", Some("DAV:")));
+    assert!(root.name().matches("root", Some("DAV:")));
     assert_eq!(
         root.attribute_ns("id", Some("urn:attr"))
             .expect("attribute")
@@ -27,7 +27,7 @@ fn streams_namespace_resolved_names_attributes_and_text() {
     let XmlStreamEvent::Start(name) = reader.read_event().expect("name") else {
         panic!("expected name start");
     };
-    assert!(name.name().expect("name").matches("name", Some("DAV:")));
+    assert!(name.name().matches("name", Some("DAV:")));
     let text = reader.read_text_current().expect("direct text");
     assert_eq!(text, "a&b");
 
@@ -73,7 +73,7 @@ fn skips_unselected_subtrees_without_a_token_stack() {
     let XmlStreamEvent::Start(keep) = reader.read_event().expect("keep") else {
         panic!("expected keep start");
     };
-    assert_eq!(keep.name().expect("name").local(), "keep");
+    assert_eq!(keep.name().local(), "keep");
     assert_eq!(reader.read_text_current().expect("keep text"), "yes");
 }
 
@@ -86,12 +86,7 @@ fn captures_only_selected_subtree_and_injects_in_scope_namespaces() {
     let XmlStreamEvent::Start(color) = reader.read_event().expect("color") else {
         panic!("expected color start");
     };
-    assert!(
-        color
-            .name()
-            .expect("name")
-            .matches("color", Some("urn:property"))
-    );
+    assert!(color.name().matches("color", Some("urn:property")));
 
     let captured = reader.capture_current(1024).expect("captured subtree");
     let root = captured.document().root();
@@ -172,6 +167,29 @@ fn stream_enforces_input_depth_attribute_text_and_event_limits() {
 }
 
 #[test]
+fn nested_namespace_bindings_do_not_reuse_the_attribute_limit() {
+    let input = br#"<r xmlns:a="urn:a"><a:c xmlns:b="urn:b"><b:d/></a:c></r>"#;
+    let policy = XmlSafetyPolicy {
+        max_depth: 4,
+        max_attributes_per_element: 1,
+        ..XmlSafetyPolicy::untrusted()
+    };
+    let mut reader =
+        XmlStreamReader::new(BufReader::new(input.as_slice()), policy).expect("policy");
+    let mut events = 0;
+    loop {
+        match reader
+            .read_event()
+            .expect("nested namespace bindings are valid")
+        {
+            XmlStreamEvent::Eof => break,
+            _ => events += 1,
+        }
+    }
+    assert_eq!(events, 5);
+}
+
+#[test]
 fn stream_rejects_doctype_unknown_prefix_and_multiple_roots() {
     for input in [
         b"<!DOCTYPE root><root/>".as_slice(),
@@ -227,12 +245,7 @@ fn streams_and_selectively_captures_a_hundred_thousand_element_document() {
 
     loop {
         match reader.read_event().expect("stream event") {
-            XmlStreamEvent::Start(start)
-                if start
-                    .name()
-                    .expect("name")
-                    .matches("response", Some("DAV:")) =>
-            {
+            XmlStreamEvent::Start(start) if start.name().matches("response", Some("DAV:")) => {
                 responses += 1;
                 if responses == items / 2 {
                     captured = Some(reader.capture_current(256).expect("capture one response"));

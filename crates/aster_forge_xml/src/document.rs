@@ -13,8 +13,8 @@ use quick_xml::escape::unescape;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::syntax::{
-    XML_NAMESPACE_URI, map_quick_xml_error_at, split_qualified_name, utf8,
-    validate_namespace_binding, validate_qualified_name,
+    XML_NAMESPACE_URI, map_quick_xml_error_at, split_qualified_name, validate_namespace_binding,
+    validate_qualified_name,
 };
 use crate::{Error, ParseOptions, XmlSafetyError, XmlSafetyPolicy};
 
@@ -796,19 +796,20 @@ impl<'a> DocumentBuilder<'a> {
                 }
                 Event::End(_) => self.end_element(event_end)?,
                 Event::Text(text) => {
-                    let raw = utf8(text.as_ref())?;
+                    let raw = text.as_ref();
                     let value =
                         unescape(raw).map_err(|error| Error::InvalidXml(error.to_string()))?;
                     self.text_node(value, false)?;
                 }
-                Event::CData(text) => self.text_node(Cow::Borrowed(utf8(text.as_ref())?), true)?,
+                Event::CData(text) => self.text_node(Cow::Borrowed(text.as_ref()), true)?,
                 Event::Comment(comment) => {
-                    let value = self.source_value(utf8(comment.as_ref())?)?;
+                    let value = self.source_value(comment.as_ref())?;
                     self.push_content(NodeKind::Comment(value))?;
                 }
                 Event::PI(pi) => {
-                    let target = self.source_value(utf8(pi.target())?)?;
-                    let content = utf8(pi.content())?
+                    let target = self.source_value(pi.target())?;
+                    let content = pi
+                        .content()
                         .trim_start_matches(|character: char| character.is_ascii_whitespace());
                     let content = (!content.is_empty())
                         .then(|| self.source_value(content))
@@ -823,7 +824,7 @@ impl<'a> DocumentBuilder<'a> {
                         Cow::Owned(character.to_string())
                     } else {
                         Cow::Owned(
-                            match utf8(reference.as_ref())? {
+                            match reference.as_ref() {
                                 "amp" => "&",
                                 "lt" => "<",
                                 "gt" => ">",
@@ -905,7 +906,7 @@ impl<'a> DocumentBuilder<'a> {
     )]
     fn build_element(
         &mut self,
-        reader: &Reader<&[u8]>,
+        _reader: &Reader<&[u8]>,
         start: &BytesStart<'a>,
         source_start: u64,
         source_end: u64,
@@ -914,7 +915,7 @@ impl<'a> DocumentBuilder<'a> {
             return Err(XmlSafetyError::Malformed.into());
         }
         let start_name = start.name();
-        let qualified_name = utf8(start_name.as_ref())?;
+        let qualified_name = start_name.as_ref();
         let (prefix, _) = validate_qualified_name(qualified_name)?;
         let parent_scope = self.open.last().and_then(|id| {
             let NodeKind::Element(element) = &self.nodes[id.index()].kind else {
@@ -932,12 +933,12 @@ impl<'a> DocumentBuilder<'a> {
                 return Err(XmlSafetyError::TooManyAttributes.into());
             }
             let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
-            let name = utf8(attribute.key.as_ref())?;
+            let name = attribute.key.as_ref();
             validate_qualified_name(name)?;
             if name == "xmlns" || name.starts_with("xmlns:") {
                 let namespace_prefix = name.strip_prefix("xmlns:").unwrap_or("");
                 let uri = attribute
-                    .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+                    .normalized_value(XmlVersion::Explicit1_0)
                     .map_err(|error| Error::InvalidXml(error.to_string()))?;
                 validate_namespace_binding(namespace_prefix, &uri)?;
                 let prefix_value = if namespace_prefix.is_empty() {
@@ -979,7 +980,7 @@ impl<'a> DocumentBuilder<'a> {
         let attribute_start = arena_len(self.attributes.len(), "attributes")?;
         for attribute in start.attributes() {
             let attribute = attribute.map_err(|error| Error::InvalidXml(error.to_string()))?;
-            let name = utf8(attribute.key.as_ref())?;
+            let name = attribute.key.as_ref();
             if name == "xmlns" || name.starts_with("xmlns:") {
                 continue;
             }
@@ -994,7 +995,7 @@ impl<'a> DocumentBuilder<'a> {
                 return Err(XmlSafetyError::Malformed.into());
             }
             let value = attribute
-                .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+                .normalized_value(XmlVersion::Explicit1_0)
                 .map_err(|error| Error::InvalidXml(error.to_string()))?;
             let qualified_name = self.source_value(name)?;
             let value = self.cow_value(value)?;

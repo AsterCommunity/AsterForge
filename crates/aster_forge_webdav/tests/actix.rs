@@ -286,7 +286,7 @@ fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
     let malformed_if_match = actix_web::test::TestRequest::default()
         .insert_header(("If-Match", "bare-etag"))
         .to_http_request();
-    let response = aster_forge_webdav::actix::plan_http_conditionals(
+    let error = aster_forge_webdav::actix::plan_http_conditionals(
         malformed_if_match.headers(),
         DavMethod::Put,
         DavConditionalResource {
@@ -295,7 +295,8 @@ fn header_and_precondition_adapter_preserves_success_and_error_contracts() {
             last_modified: None,
         },
     )
-    .expect_err("malformed If-Match should map to an Actix response");
+    .expect_err("malformed If-Match should return a typed error");
+    let response = aster_forge_webdav::actix::conditional_plan_error_response(&error);
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let converted = aster_forge_webdav::actix::converted_headers(malformed_if_match.headers())
@@ -384,8 +385,13 @@ fn actix_dispatch_gate_uses_snapshot_allow_for_known_and_unknown_methods() {
             .uri("/webdav/file.txt")
             .to_http_request(),
     ] {
-        let response = aster_forge_webdav::actix::gate_request_method(&request, &snapshot)
+        let error = aster_forge_webdav::actix::gate_request_method(&request, &snapshot)
             .expect_err("method should be rejected");
+        let response = aster_forge_webdav::actix::method_gate_error_response(&snapshot);
+        assert_eq!(
+            error,
+            aster_forge_webdav::DavMethodGateError::MethodNotAllowed
+        );
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(
             response.headers().get("Allow").expect("Allow header"),
@@ -436,7 +442,8 @@ async fn actix_capability_adapter_distinguishes_invalid_declarations_and_backend
         &context,
     )
     .await
-    .expect_err("invalid declaration should map to a response");
+    .expect_err("invalid declaration should return a typed error");
+    let invalid = aster_forge_webdav::actix::capability_error_response(&invalid);
     assert_eq!(invalid.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     let forbidden = aster_forge_webdav::actix::capability_snapshot(
@@ -445,7 +452,8 @@ async fn actix_capability_adapter_distinguishes_invalid_declarations_and_backend
         &context,
     )
     .await
-    .expect_err("provider failure should map to a response");
+    .expect_err("provider failure should return a typed error");
+    let forbidden = aster_forge_webdav::actix::capability_error_response(&forbidden);
     assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
 }
 
