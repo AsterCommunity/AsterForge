@@ -177,7 +177,7 @@ impl SharedContainerState {
 
     /// Removes entries whose process no longer exists and returns the orphaned resources.
     pub fn prune_stale(&mut self) -> Vec<String> {
-        self.prune_stale_for_execution(std::process::id(), None)
+        self.prune_stale_for_execution(std::process::id(), None, false)
     }
 
     /// Prunes resources from previous executions while retaining dead processes from this
@@ -188,13 +188,24 @@ impl SharedContainerState {
     /// the retained resources deterministically.
     pub fn prune_stale_before_current_execution(&mut self) -> Vec<String> {
         let execution_id = current_execution_id();
-        self.prune_stale_for_execution(std::process::id(), execution_id.as_deref())
+        self.prune_stale_for_execution(std::process::id(), execution_id.as_deref(), true)
+    }
+
+    /// Removes resources owned by exited processes, including processes from this nextest run.
+    ///
+    /// PostgreSQL uses this rolling policy because retaining every isolated database until the
+    /// next run can exhaust ephemeral CI disks. Live processes and suite-scoped resources remain
+    /// registered, so concurrent tests and reusable templates are not disturbed.
+    pub(crate) fn prune_stale_during_current_execution(&mut self) -> Vec<String> {
+        let execution_id = current_execution_id();
+        self.prune_stale_for_execution(std::process::id(), execution_id.as_deref(), false)
     }
 
     fn prune_stale_for_execution(
         &mut self,
         current_pid: u32,
         current_execution_id: Option<&str>,
+        defer_current_execution: bool,
     ) -> Vec<String> {
         let stale_pids = self
             .pids
@@ -205,11 +216,12 @@ impl SharedContainerState {
                 let reused_by_current_process =
                     *pid == current_pid && recorded_execution_id != current_execution_id;
                 let is_running = process_is_running(*pid);
-                let dead_in_current_execution = !is_running
+                let deferred_from_current_execution = defer_current_execution
+                    && !is_running
                     && current_execution_id.is_some()
                     && recorded_execution_id == current_execution_id;
 
-                reused_by_current_process || (!is_running && !dead_in_current_execution)
+                reused_by_current_process || (!is_running && !deferred_from_current_execution)
             })
             .collect::<Vec<_>>();
         let orphaned = stale_pids
@@ -488,16 +500,32 @@ mod tests {
 
         assert!(
             state
-                .prune_stale_for_execution(std::process::id(), Some("run-a"))
+                .prune_stale_for_execution(std::process::id(), Some("run-a"), true)
                 .is_empty()
         );
         assert_eq!(state.live_resources(), vec!["db_run_a"]);
 
         assert_eq!(
-            state.prune_stale_for_execution(std::process::id(), Some("run-b")),
+            state.prune_stale_for_execution(std::process::id(), Some("run-b"), true),
             vec!["db_run_a".to_string()]
         );
         assert!(state.live_resources().is_empty());
+    }
+
+    #[test]
+    fn prune_during_current_execution_reclaims_dead_resources_and_keeps_live_resources() {
+        let current_pid = std::process::id();
+        let mut state = SharedContainerState::default();
+        state.register_pid_for_execution(current_pid, Some("run-a"));
+        state.remember_registered_resource(current_pid, "db_live");
+        state.register_pid_for_execution(u32::MAX, Some("run-a"));
+        state.remember_registered_resource(u32::MAX, "db_dead");
+
+        assert_eq!(
+            state.prune_stale_for_execution(current_pid, Some("run-a"), false),
+            vec!["db_dead".to_string()]
+        );
+        assert_eq!(state.live_resources(), vec!["db_live"]);
     }
 
     #[test]
@@ -508,7 +536,7 @@ mod tests {
         state.remember_registered_resource(current_pid, "db_run_a");
 
         assert_eq!(
-            state.prune_stale_for_execution(current_pid, Some("run-b")),
+            state.prune_stale_for_execution(current_pid, Some("run-b"), true),
             vec!["db_run_a".to_string()]
         );
         assert!(state.live_resources().is_empty());

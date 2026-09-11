@@ -105,6 +105,7 @@ snapshot。
 - 容器命名：`aster-test-{suite}-{instance}-{service}`。`instance` 是当前 checkout 路径的 hash，所以同一机器上多个 worktree 各自持有独立容器，互不干扰。
 - `ReuseDirective::Always`：同一 checkout 的多次测试运行复用同一容器。**容器数据在运行之间保留**，测试 key / 数据库名必须带进程唯一前缀（例如 pid + 自增计数）。
 - 容器镜像 tag 固定（redis:7-alpine、postgres:16、mysql:8.4），升级 tag 是有意识的变更。
+- PostgreSQL helper 显式为容器配置 1 GiB `/dev/shm`，避免 GitHub-hosted Docker 的 64 MiB 默认值在长时间并行数据库测试中耗尽 dynamic shared memory。
 - MySQL helper 会在每次启动或复用时配置足够大的 `table_definition_cache`，避免大型测试二进制并行创建隔离 schema 时耗尽 prepared statement 的自动 reprepare 次数。
 - MySQL helper 同时配置 `max_connections`，覆盖 nextest process-per-test 下每个测试进程的 writer/reader pool；这两个值都属于 endpoint identity，配置契约变化会强制重新探测并更新 reusable container。
 
@@ -116,7 +117,7 @@ snapshot。
 - `SharedContainerState`：登记存活测试进程 PID 和它们创建的资源名（如 per-test 数据库）。
 - `SharedContainerEndpoint`：保存 reusable container 最近一次通过探针的 image/container identity 与 host port；新测试进程先直接探测该 endpoint，失效时才重新走 Docker attach/start。
 - `ContainerLease`：Drop 时 prune 已退出进程的条目。测试进程异常退出时，下一次运行的 `start()` 也会 prune，孤儿资源最终会被回收。
-- nextest 子进程按 `NEXTEST_RUN_ID` 登记 execution ownership；同一 run 内已经退出的进程资源延迟保留，避免数据库 suite 在建 schema 的同时持续 drop 前序 schema。下一次 run 会用新的 run id 一次性识别并回收这些资源。
+- nextest 子进程按 `NEXTEST_RUN_ID` 登记 execution ownership。PostgreSQL 在同一 run 内滚动回收已退出进程的隔离库，保留仍存活进程和 suite-scoped template；MySQL 继续延迟保留同一 run 的资源，避免建 schema 时持续 drop 前序 schema，并在下一次 run 统一回收。
 - `SuiteFixtureLock` / `SuiteFixtureState`：用于跨 nextest 进程复用产品拥有的迁移 template 或 schema snapshot。它保存 fixture/backend identity、container identity、migration/schema fingerprint、resource 和 producer version，并以临时文件 + rename 发布完整状态；产品在持锁期间验证或重建 fixture。
 - fixture lock/state 文件与容器状态一样包含 checkout instance hash；并行 worktree 不会争抢或覆盖彼此的 template metadata。
 - PostgreSQL / MySQL 孤儿库在删除前会转记到当前测试进程；即使回收过程再次中断，下一次运行仍能继续清理。产品完成整批 MySQL 清理后调用 `forget_resources()` 一次性解除登记。

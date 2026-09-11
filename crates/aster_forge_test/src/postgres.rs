@@ -8,8 +8,11 @@ use crate::database::connect_with_retry;
 use crate::state::{ContainerLease, ContainerStateLock};
 use crate::suite::TestContainerSuite;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
-use testcontainers::core::{ContainerAsync, IntoContainerPort};
+use testcontainers::core::{ContainerAsync, ContainerRequest, IntoContainerPort};
 use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunner};
+
+const POSTGRES_TEST_SHM_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
+const POSTGRES_CONTAINER_SERVICE: &str = "postgres-shm-1g";
 
 /// Handle to the suite's shared `PostgreSQL` container.
 pub struct PostgresTestContainer {
@@ -44,20 +47,14 @@ impl PostgresTestContainer {
     pub async fn start(suite: &TestContainerSuite) -> Self {
         let lock = ContainerStateLock::acquire(suite, "postgres");
         let mut state = lock.load();
-        let stale_resources = state.prune_stale_before_current_execution();
+        let stale_resources = state.prune_stale_during_current_execution();
         state.register_current_process();
         for resource in &stale_resources {
             state.remember_current_process_resource(resource);
         }
         lock.save(&state);
 
-        let container = GenericImage::new("postgres", "16")
-            .with_exposed_port(IntoContainerPort::tcp(5432))
-            .with_container_name(suite.container_name("postgres"))
-            .with_reuse(ReuseDirective::Always)
-            .with_env_var("POSTGRES_USER", "postgres")
-            .with_env_var("POSTGRES_PASSWORD", "postgres")
-            .with_env_var("POSTGRES_DB", "postgres")
+        let container = postgres_container_request(suite)
             .start()
             .await
             .expect("failed to start PostgreSQL test container");
@@ -246,6 +243,17 @@ impl PostgresTestContainer {
     }
 }
 
+fn postgres_container_request(suite: &TestContainerSuite) -> ContainerRequest<GenericImage> {
+    GenericImage::new("postgres", "16")
+        .with_exposed_port(IntoContainerPort::tcp(5432))
+        .with_container_name(suite.container_name(POSTGRES_CONTAINER_SERVICE))
+        .with_reuse(ReuseDirective::Always)
+        .with_shm_size(POSTGRES_TEST_SHM_SIZE_BYTES)
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_DB", "postgres")
+}
+
 impl PostgresTestDatabase {
     /// Returns the isolated database name.
     #[must_use]
@@ -343,8 +351,11 @@ fn assert_valid_database_name(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        assert_valid_database_name, create_database_statement, database_url, quote_identifier,
+        POSTGRES_CONTAINER_SERVICE, POSTGRES_TEST_SHM_SIZE_BYTES, assert_valid_database_name,
+        create_database_statement, database_url, postgres_container_request, quote_identifier,
     };
+    use crate::suite::TestContainerSuite;
+    use testcontainers::{core::ExecCommand, runners::AsyncRunner};
 
     #[test]
     fn database_url_replaces_admin_database() {
@@ -357,6 +368,46 @@ mod tests {
     #[test]
     fn identifier_quoting_escapes_quotes() {
         assert_eq!(quote_identifier("test\"name"), "\"test\"\"name\"");
+    }
+
+    #[test]
+    fn postgres_container_request_sets_versioned_name_and_shared_memory() {
+        let suite = TestContainerSuite::new("forge-postgres-request");
+        let request = postgres_container_request(&suite);
+        let expected_name = suite.container_name(POSTGRES_CONTAINER_SERVICE);
+
+        assert_eq!(request.shm_size(), Some(POSTGRES_TEST_SHM_SIZE_BYTES));
+        assert_eq!(
+            request.container_name().as_deref(),
+            Some(expected_name.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_container_exposes_configured_shared_memory() {
+        let suite = TestContainerSuite::new("forge-postgres-shm");
+        let container = postgres_container_request(&suite)
+            .start()
+            .await
+            .expect("PostgreSQL test container should start");
+        let mut command = container
+            .exec(ExecCommand::new(["df", "-B1", "--output=size", "/dev/shm"]))
+            .await
+            .expect("shared-memory capacity command should start");
+        let stdout = command
+            .stdout_to_vec()
+            .await
+            .expect("shared-memory capacity command should finish");
+        let output = String::from_utf8(stdout).expect("df output should be UTF-8");
+        let capacity = output
+            .lines()
+            .find_map(|line| line.trim().parse::<u64>().ok())
+            .expect("df output should contain the shared-memory capacity");
+
+        assert!(
+            capacity >= POSTGRES_TEST_SHM_SIZE_BYTES,
+            "PostgreSQL test container shared memory must be at least {POSTGRES_TEST_SHM_SIZE_BYTES} bytes, got {capacity}"
+        );
     }
 
     #[test]
