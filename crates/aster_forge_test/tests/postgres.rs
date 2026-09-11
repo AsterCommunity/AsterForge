@@ -58,3 +58,14 @@ async fn postgres_database_can_clone_a_product_owned_template() {
     cloned.cleanup().await;
     template.cleanup().await;
 }
+
+#[tokio::test]
+async fn concurrent_postgres_container_starts_share_one_reusable_container() {
+    let suite = TestContainerSuite::new("forge-test-postgres-concurrent-start");
+    let (first, second) = tokio::join!(
+        PostgresTestContainer::start(&suite),
+        PostgresTestContainer::start(&suite)
+    );
+
+    assert_eq!(first.container_identity(), second.container_identity());
+}

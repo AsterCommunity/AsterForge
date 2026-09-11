@@ -54,10 +54,14 @@ impl PostgresTestContainer {
         }
         lock.save(&state);
 
-        let container = postgres_container_request(suite)
-            .start()
-            .await
-            .expect("failed to start PostgreSQL test container");
+        drop(lock);
+
+        // Several nextest processes can enter this path at once. Docker's reusable-container
+        // lookup and create operation is not atomic, so one process may briefly observe a name
+        // conflict while another is creating the shared container. Retry those startup errors
+        // until the first process has published a reusable container that this process can attach
+        // to.
+        let container = start_postgres_container_with_retry(suite).await;
         let port = container
             .get_host_port_ipv4(IntoContainerPort::tcp(5432))
             .await
@@ -68,7 +72,6 @@ impl PostgresTestContainer {
             .close()
             .await
             .expect("failed to close PostgreSQL readiness probe connection");
-        drop(lock);
 
         let fixture = Self {
             admin_url,
@@ -241,6 +244,26 @@ impl PostgresTestContainer {
             .await
             .unwrap_or_else(|error| panic!("failed to close PostgreSQL admin connection: {error}"));
     }
+}
+
+async fn start_postgres_container_with_retry(
+    suite: &TestContainerSuite,
+) -> ContainerAsync<GenericImage> {
+    let mut last_error = None;
+    for _attempt in 0..240 {
+        match postgres_container_request(suite).start().await {
+            Ok(container) => return container,
+            Err(error) => {
+                last_error = Some(error.to_string());
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+
+    panic!(
+        "failed to start PostgreSQL test container after retries: {}",
+        last_error.unwrap_or_else(|| "unknown container startup error".to_string())
+    );
 }
 
 fn postgres_container_request(suite: &TestContainerSuite) -> ContainerRequest<GenericImage> {
