@@ -1,9 +1,25 @@
-//! Axum Prometheus endpoint adapter.
+//! Axum observability endpoint adapter.
 
-use axum::{http::StatusCode, response::IntoResponse};
+use axum::Router;
 
-/// Exposes the shared Prometheus registry as an Axum handler.
-pub fn prometheus_metrics() -> impl IntoResponse {
+/// Adds `/metrics` when Prometheus support is enabled; otherwise returns the router unchanged.
+pub fn configure_prometheus_route<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    #[cfg(feature = "prometheus")]
+    {
+        router.route("/metrics", axum::routing::get(prometheus_metrics))
+    }
+    #[cfg(not(feature = "prometheus"))]
+    {
+        router
+    }
+}
+
+#[cfg(feature = "prometheus")]
+async fn prometheus_metrics() -> impl axum::response::IntoResponse {
+    use axum::{http::StatusCode, response::IntoResponse};
     if !aster_forge_metrics::prometheus::is_initialized() {
         tracing::debug!("metrics probe failed because metrics are not initialized");
         return (
@@ -12,7 +28,6 @@ pub fn prometheus_metrics() -> impl IntoResponse {
         )
             .into_response();
     }
-
     match aster_forge_metrics::prometheus::export_metrics() {
         Ok(body) => (
             StatusCode::OK,
@@ -20,9 +35,6 @@ pub fn prometheus_metrics() -> impl IntoResponse {
             body,
         )
             .into_response(),
-        Err(error) => {
-            tracing::debug!(error = %error, "metrics probe export failed");
-            (StatusCode::SERVICE_UNAVAILABLE, error.clone()).into_response()
-        }
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, error.clone()).into_response(),
     }
 }
