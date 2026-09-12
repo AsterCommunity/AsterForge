@@ -62,7 +62,7 @@ undocumented_unsafe_blocks = "deny"
 [workspace.dependencies]
 actix-web = "4.15.0"
 actix-governor = "0.10"
-axum = "0.8.4"
+axum = "0.8.9"
 aes-gcm = "0.11"
 async-trait = "0.1"
 argon2 = "0.6.0"
