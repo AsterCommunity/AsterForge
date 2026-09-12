@@ -11,7 +11,7 @@ hero:
       link: /en/guide/
     - theme: alt
       text: Chinese crate docs
-      link: /crates/aster_forge_actix_middleware
+      link: /crates/aster_forge_middleware
 ---
 
 AsterForge is the shared runtime foundation for Aster products. It is not only a collection of helper functions; it owns product-neutral infrastructure mechanics that should behave the same across AsterDrive, AsterYggdrasil, and future services.

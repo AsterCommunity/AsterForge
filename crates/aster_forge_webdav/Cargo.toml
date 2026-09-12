@@ -11,9 +11,11 @@ publish = false
 [features]
 default = []
 actix = ["dep:actix-web"]
+axum = ["dep:axum"]
 
 [dependencies]
 actix-web = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
 aster_forge_utils = { path = "../aster_forge_utils" }
 aster_forge_xml = { path = "../aster_forge_xml" }
 async-trait.workspace = true

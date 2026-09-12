@@ -1,6 +1,6 @@
-# aster_forge_actix_observability
+# aster_forge_observability
 
-`aster_forge_actix_observability` 提供 Actix Web 专用的观测 endpoint glue。它不负责记录指标，也不持有 metrics backend；这些职责属于 `aster_forge_metrics`。这个 crate 只解决一个问题：产品 route 模块不需要散落 backend-specific `#[cfg]`，也不需要重复写 `/metrics` 导出 handler。
+`aster_forge_observability` 提供 Actix Web 和 Axum 的观测 endpoint glue。它不负责记录指标，也不持有 metrics backend；这些职责属于 `aster_forge_metrics`。
 
 ## 适用场景
 

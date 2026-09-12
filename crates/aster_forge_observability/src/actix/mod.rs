@@ -1,21 +1,9 @@
-//! Actix Web observability endpoints for Aster services.
+//! Actix observability endpoint adapter.
 //!
-//! This crate owns route-level observability glue that is specific to Actix Web, such as the
+//! This crate owns route-level observability glue with Actix and Axum adapters, such as the
 //! Prometheus text exposition endpoint. Metrics recording traits and concrete backend state remain
 //! in `aster_forge_metrics`; product route modules can call these helpers without carrying
 //! backend-specific `#[cfg]` blocks.
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::unwrap_used,
-        clippy::unreachable,
-        clippy::expect_used,
-        clippy::panic,
-        clippy::unimplemented,
-        clippy::todo
-    )
-)]
-
 use actix_web::Scope;
 
 /// Adds a Prometheus `/metrics` endpoint to an Actix route scope when enabled.

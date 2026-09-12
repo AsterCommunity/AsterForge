@@ -322,6 +322,10 @@ impl PrometheusMetrics {
     }
 
     #[cfg(not(feature = "allocator-metrics"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "The disabled allocator-metrics branch mirrors the enabled method signature."
+    )]
     fn refresh_allocator_metrics(&self) {}
 }
 

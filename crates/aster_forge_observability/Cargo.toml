@@ -1,5 +1,5 @@
 [package]
-name = "aster_forge_actix_observability"
+name = "aster_forge_observability"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,11 +9,14 @@ authors.workspace = true
 publish = false
 
 [features]
-default = []
+default = ["actix"]
+actix = ["dep:actix-web"]
 prometheus = ["aster_forge_metrics/backend-prometheus"]
+axum = ["dep:axum"]
 
 [dependencies]
-actix-web.workspace = true
+actix-web = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
 aster_forge_metrics = { path = "../aster_forge_metrics" }
 tracing.workspace = true
 

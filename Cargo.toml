@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "crates/aster_forge_actix_middleware",
-    "crates/aster_forge_actix_observability",
+    "crates/aster_forge_middleware",
+    "crates/aster_forge_observability",
     "crates/aster_forge_audit",
     "crates/aster_forge_api_docs_macros",
     "crates/aster_forge_api",
@@ -62,6 +62,7 @@ undocumented_unsafe_blocks = "deny"
 [workspace.dependencies]
 actix-web = "4.15.0"
 actix-governor = "0.10"
+axum = "0.8.4"
 aes-gcm = "0.11"
 async-trait = "0.1"
 argon2 = "0.6.0"
@@ -105,11 +106,12 @@ testcontainers = { version = "0.28", features = ["reusable-containers"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tokio-util = "0.7"
+tower = "0.5"
 tracing = { version = "0.1.44", default-features = false }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tikv-jemalloc-ctl = "0.7"
-utoipa = { version = "5.5.0", features = ["chrono", "actix_extras", "repr"] }
+utoipa = { version = "5.5.0", features = ["chrono", "repr"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 windows = { version = "0.62.2", default-features = false }

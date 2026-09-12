@@ -1,6 +1,6 @@
-# aster_forge_actix_middleware
+# aster_forge_middleware
 
-`aster_forge_actix_middleware` 收纳 Actix Web 绑定的共享中间件。它的边界很窄：只放与 HTTP 框架相关、但不依赖产品业务实体的 middleware。
+`aster_forge_middleware` 收纳共享 HTTP 中间件，并通过 `actix` / `axum` feature 提供框架适配。
 
 ## 适用场景
 

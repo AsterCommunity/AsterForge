@@ -515,36 +515,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aster_forge_actix_middleware"
-version = "0.1.0"
-dependencies = [
- "actix-governor",
- "actix-web",
- "aster_forge_metrics",
- "aster_forge_utils",
- "base64 0.23.1",
- "futures",
- "governor",
- "ipnet",
- "rand 0.10.2",
- "sea-orm",
- "serde_json",
- "subtle",
- "thiserror 2.0.20",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aster_forge_actix_observability"
-version = "0.1.0"
-dependencies = [
- "actix-web",
- "aster_forge_metrics",
- "tracing",
-]
-
-[[package]]
 name = "aster_forge_alloc"
 version = "0.1.0"
 dependencies = [
@@ -831,6 +801,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_middleware"
+version = "0.1.0"
+dependencies = [
+ "actix-governor",
+ "actix-web",
+ "aster_forge_metrics",
+ "aster_forge_utils",
+ "axum",
+ "base64 0.23.1",
+ "futures",
+ "governor",
+ "http 1.5.0",
+ "ipnet",
+ "rand 0.10.2",
+ "sea-orm",
+ "serde_json",
+ "subtle",
+ "thiserror 2.0.20",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "aster_forge_observability"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "aster_forge_metrics",
+ "axum",
+ "tracing",
+]
+
+[[package]]
 name = "aster_forge_panic"
 version = "0.1.0"
 dependencies = [
@@ -934,6 +938,7 @@ dependencies = [
  "aster_forge_utils",
  "aster_forge_xml",
  "async-trait",
+ "axum",
  "bytes",
  "chrono",
  "futures",
@@ -1068,10 +1073,13 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http 1.5.0",
  "http-body",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "itoa",
  "matchit",
  "memchr",
@@ -1079,10 +1087,15 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1101,6 +1114,7 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -6246,7 +6260,6 @@ checksum = "6ba0b99ee52df3028635d93840c797102da61f8a7bb3cf751032455895b52ef8"
 dependencies = [
  "proc-macro2",
  "quote",
- "regex",
  "syn 2.0.119",
 ]
 

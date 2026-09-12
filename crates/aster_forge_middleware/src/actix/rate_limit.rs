@@ -110,7 +110,7 @@ impl TrustedProxyIpKeyExtractor {
     /// Resolves the client IP for a request and direct peer IP.
     #[must_use]
     pub fn real_ip(&self, req: &ServiceRequest, peer: IpAddr) -> IpAddr {
-        crate::client_ip::real_ip_from_trusted_headers(req.headers(), peer, &self.trusted)
+        crate::actix::client_ip::real_ip_from_trusted_headers(req.headers(), peer, &self.trusted)
     }
 }
 
