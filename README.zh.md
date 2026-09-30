@@ -74,7 +74,7 @@ aster_forge_runtime::AsterRuntime::builder()
 
 ```bash
 cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
-  templates/aster-service \
+  templates/aster-service-actix \
   --name aster_product_service \
   --define server_port=3000
 ```

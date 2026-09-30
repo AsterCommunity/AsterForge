@@ -2,7 +2,7 @@ import { expect, test } from "playwright/test";
 
 test("serves the app shell and frontend routes", async ({ page }) => {
 	await page.addInitScript(() => {
-		window.localStorage.setItem("aster-service.language", "en-US");
+		window.localStorage.setItem("aster-service-actix.language", "en-US");
 	});
 	await page.goto("/");
 	await expect(

@@ -33,7 +33,7 @@ async fn foundation_migration_runs_on_configured_backend() {
 async fn exercise_postgres() {
     let container = GenericImage::new("postgres", "16")
         .with_exposed_port(5432.tcp())
-        .with_container_name("aster-service-postgres-tests")
+        .with_container_name("aster-service-actix-postgres-tests")
         .with_reuse(ReuseDirective::Always)
         .with_env_var("POSTGRES_USER", "postgres")
         .with_env_var("POSTGRES_PASSWORD", "postgres")
@@ -54,7 +54,7 @@ async fn exercise_postgres() {
 async fn exercise_mysql() {
     let container = GenericImage::new("mysql", "8.4")
         .with_exposed_port(3306.tcp())
-        .with_container_name("aster-service-mysql-tests")
+        .with_container_name("aster-service-actix-mysql-tests")
         .with_reuse(ReuseDirective::Always)
         .with_env_var("MYSQL_DATABASE", "aster_service")
         .with_env_var("MYSQL_USER", "aster")

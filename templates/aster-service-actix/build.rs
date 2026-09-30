@@ -7,8 +7,8 @@ use std::path::Path;
 
 const BUILD_TIME_ENV: &str = "ASTER_BUILD_TIME";
 const FRONTEND_DIST_ENV: &str = "ASTER_FRONTEND_DIST_DIR";
-const FALLBACK_MARKER_FILE: &str = ".aster-service-frontend-fallback";
-const FALLBACK_MARKER_CONTENT: &str = "aster-service-frontend-fallback-v1\n";
+const FALLBACK_MARKER_FILE: &str = ".aster-service-actix-frontend-fallback";
+const FALLBACK_MARKER_CONTENT: &str = "aster-service-actix-frontend-fallback-v1\n";
 const LEGACY_FALLBACK_TEXT: &str = "The service is running. Build";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -139,7 +139,7 @@ fn create_fallback_files(manifest_dir: &str, dist_path: &Path) -> io::Result<()>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="%ASTER_SERVICE_DESCRIPTION%" />
     <meta http-equiv="Content-Security-Policy" content="%ASTER_SERVICE_CSP%" />
-    <meta name="aster-service-version" content="%ASTER_SERVICE_VERSION%" />
+    <meta name="aster-service-actix-version" content="%ASTER_SERVICE_VERSION%" />
     <title>%ASTER_SERVICE_TITLE%</title>
     <style>
       :root {

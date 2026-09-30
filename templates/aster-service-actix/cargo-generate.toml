@@ -1,5 +1,5 @@
 [template]
-description = "A minimal Aster service wired to AsterForge runtime components."
+description = "A minimal Actix Aster service wired to AsterForge runtime components."
 ignore = [
     "target",
     ".git",
@@ -14,7 +14,7 @@ ignore = [
 [placeholders.package_description]
 type = "string"
 prompt = "Cargo package description"
-default = "Aster service wired to AsterForge runtime components."
+default = "Actix Aster service wired to AsterForge runtime components."
 
 [placeholders.server_port]
 type = "string"

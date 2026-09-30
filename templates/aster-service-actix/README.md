@@ -1,6 +1,6 @@
 # {{project-name}}
 
-This service was generated from the AsterForge `aster-service` template.
+This service was generated from the AsterForge `aster-service-actix` template.
 
 ## Resources
 

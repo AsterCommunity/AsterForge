@@ -4,7 +4,10 @@ use aster_forge_cache::CacheConfig;
 use aster_forge_test::temp::SqliteTestDatabase;
 
 /// Builds a clean test [`AppState`](crate::runtime::AppState).
-pub async fn setup() -> ({{crate_name}}::runtime::AppState, SqliteTestDatabase) {
+pub async fn setup() -> (
+    {{crate_name}}::runtime::AppState,
+    SqliteTestDatabase,
+) {
     let database = SqliteTestDatabase::new("service-state");
     let mut config = {{crate_name}}::config::AppConfig::default();
     config.database.url = database.url().into();

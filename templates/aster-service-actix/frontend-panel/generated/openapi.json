@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "generated-aster-service",
+    "title": "generated-aster-service-actix",
     "description": "Generated Aster service OpenAPI document.",
     "license": {
       "name": "MIT"

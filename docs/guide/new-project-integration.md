@@ -8,14 +8,14 @@ Forge 提供 `cargo generate` 模板，适合新 Aster 服务从一开始就按 
 
 ```bash
 cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
-  templates/aster-service \
+  templates/aster-service-actix \
   --name aster_product_service
 ```
 
 在 Forge 仓库本地开发时，也可以从仓库根目录直接生成：
 
 ```bash
-cargo generate --path templates/aster-service \
+cargo generate --path templates/aster-service-actix \
   --name aster_product_service \
   --define server_port=3000
 ```

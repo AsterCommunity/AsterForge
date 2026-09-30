@@ -1,0 +1,123 @@
+name: Actix Service Template CI
+
+on:
+  push:
+    paths:
+      - 'templates/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/template.yml'
+    branches: [master]
+  pull_request:
+    paths:
+      - 'templates/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/template.yml'
+    branches: [master, develop]
+
+concurrency:
+  group: template-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  GENERATED_ROOT: /tmp/aster-service-actix-generated
+  GENERATED_PROJECT: /tmp/aster-service-actix-generated/aster-service-actix-ci
+
+jobs:
+  generate-and-verify:
+    name: Generate and verify Actix service template
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - name: Install cargo-generate
+        run: cargo install cargo-generate --version 0.25.0 --locked
+
+      - name: Generate project from template
+        run: >-
+          cargo generate
+          --path templates/aster-service-actix
+          --name aster-service-actix-ci
+          --destination "$GENERATED_ROOT"
+          --define package_description="CI-generated Actix service"
+          --define server_port=3000
+          --vcs none
+
+      - name: Verify generated project shape
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: |
+          test -f Cargo.toml
+          test -f crates/aster_service_actix_ci_migration/Cargo.toml
+          test ! -e migration
+          test ! -e frontend-panel/node_modules
+          test ! -e frontend-panel/dist
+          ! rg -n 'aster_forge_actix_|@typescript/native-preview|\btsgo\b|cargo run -p migration|use migration::|\bmigration::Migrator' . \
+            -g '!frontend-panel/bun.lock'
+
+      - name: Resolve generated dependency lockfile
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo generate-lockfile
+
+      - name: Cargo metadata
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo metadata --locked --no-deps --format-version 1
+
+      - name: Rust format check
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo fmt --all -- --check
+
+      - name: Rust workspace check
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo check --locked --workspace --all-targets --all-features
+
+      - name: Rust workspace Clippy
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rust workspace tests
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo test --locked --workspace --all-features
+
+      - name: Isolated metrics route test
+        working-directory: ${{ env.GENERATED_PROJECT }}
+        run: cargo test --locked --all-features --test health_routes metrics_route_exports_prometheus_text
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install frontend dependencies
+        working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
+        run: bun install --frozen-lockfile
+
+      - name: Frontend typecheck and lint
+        working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
+        run: bun run check
+
+      - name: Frontend unit tests
+        working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
+        run: bun run test
+
+      - name: Frontend production build
+        working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
+        run: bun run build

@@ -11,7 +11,7 @@ fn generate_openapi() {
     let mut doc = ApiDoc::openapi();
     // Keep tracked generated artifacts template-stable across different cargo-generate inputs.
     // Runtime Swagger UI still uses the real Cargo package metadata from `ApiDoc::openapi()`.
-    doc.info.title = "generated-aster-service".to_string();
+    doc.info.title = "generated-aster-service-actix".to_string();
     doc.info.description = Some("Generated Aster service OpenAPI document.".to_string());
     let json = format!(
         "{}\n",
