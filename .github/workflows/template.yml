@@ -52,14 +52,15 @@ jobs:
           tool: cargo-generate@0.25.0
 
       - name: Generate project from template
-        run: >-
-          cargo generate
-          --path templates/aster-service-actix
-          --name aster-service-actix-ci
-          --destination "$GENERATED_ROOT"
-          --define package_description="CI-generated Actix service"
-          --define server_port=3000
-          --vcs none
+        run: |
+          mkdir -p "$GENERATED_ROOT"
+          cargo generate \
+            --path templates/aster-service-actix \
+            --name aster-service-actix-ci \
+            --destination "$GENERATED_ROOT" \
+            --define package_description="CI-generated Actix service" \
+            --define server_port=3000 \
+            --vcs none
 
       - name: Verify generated project shape
         working-directory: ${{ env.GENERATED_PROJECT }}
