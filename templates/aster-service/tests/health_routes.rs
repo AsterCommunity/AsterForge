@@ -261,7 +261,18 @@ async fn base_http_middleware_adds_request_id_and_security_headers() {
 #[actix_web::test]
 async fn metrics_route_exports_prometheus_text() {
     let (state, _database) = common::setup().await;
+    state
+        .metrics
+        .record_config_reload("test", "reloaded", "ok", 1, 0.001);
+    state.metrics.set_background_tasks_pending(1);
     let app = create_test_app!(state);
+
+    let ready = test::call_service(
+        &app,
+        test::TestRequest::get().uri("/health/ready").to_request(),
+    )
+    .await;
+    assert_eq!(ready.status(), StatusCode::OK);
 
     let response = test::call_service(
         &app,

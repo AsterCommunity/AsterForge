@@ -4,10 +4,6 @@ use aster_forge_cache::CacheConfig;
 use aster_forge_test::temp::SqliteTestDatabase;
 
 /// Builds a clean test [`AppState`](crate::runtime::AppState).
-#[expect(
-    dead_code,
-    reason = "Individual generated integration tests opt into this shared setup helper as needed."
-)]
 pub async fn setup() -> ({{crate_name}}::runtime::AppState, SqliteTestDatabase) {
     let database = SqliteTestDatabase::new("service-state");
     let mut config = {{crate_name}}::config::AppConfig::default();
@@ -32,9 +28,9 @@ macro_rules! create_test_app {
             App::new()
                 .wrap(actix_web::middleware::Compress::default())
                 .wrap(actix_web::middleware::Logger::default())
-                .wrap(aster_forge_actix_middleware::request_id::RequestIdMiddleware)
-                .wrap(aster_forge_actix_middleware::security_headers::default_headers())
-                .wrap(aster_forge_actix_middleware::metrics::MetricsMiddleware)
+                .wrap(aster_forge_middleware::actix::request_id::RequestIdMiddleware)
+                .wrap(aster_forge_middleware::actix::security_headers::default_headers())
+                .wrap(aster_forge_middleware::actix::metrics::MetricsMiddleware)
                 .app_data(web::Data::new(state.clone()))
                 .app_data(web::Data::from(state.metrics.clone()))
                 .configure({% endraw %}{{crate_name}}{% raw %}::api::configure),

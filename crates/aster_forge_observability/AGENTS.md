@@ -1,17 +1,17 @@
 # AGENTS.md
 
-This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `aster_forge_actix_observability`. See [`../../docs/crates/aster_forge_actix_observability.md`](../../docs/crates/aster_forge_actix_observability.md) for the complete integration contract.
+This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `aster_forge_observability`. See [`../../docs/crates/aster_forge_observability.md`](../../docs/crates/aster_forge_observability.md) for the complete integration contract.
 
 ## Before Making Changes
 
 - Read this crate's `Cargo.toml`, `src/lib.rs`, crate documentation, and the backend/export contract in `aster_forge_metrics`.
-- If the change concerns request recording, inspect `aster_forge_actix_middleware` instead of mixing middleware with endpoint glue.
+- If the change concerns request recording, inspect `aster_forge_middleware` instead of mixing middleware with endpoint glue.
 
 ## Ownership Boundaries
 
 - This crate owns Actix route-level observability glue, currently centered on conditionally registering the Prometheus `/metrics` endpoint.
 - Recorder traits, the registry, export implementation, and system metrics belong to `aster_forge_metrics`.
-- HTTP request metrics middleware belongs to `aster_forge_actix_middleware`.
+- HTTP request metrics middleware belongs to `aster_forge_middleware`.
 - Dashboards, alerts, authentication policy, product route structure, and business-metric semantics remain product-owned.
 
 ## Change Constraints
@@ -24,9 +24,9 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 ## Validation
 
 ```bash
-cargo test -p aster_forge_actix_observability
-cargo test -p aster_forge_actix_observability --features prometheus
-cargo clippy -p aster_forge_actix_observability --all-targets --all-features -- -D warnings
+cargo test -p aster_forge_observability
+cargo test -p aster_forge_observability --features prometheus
+cargo clippy -p aster_forge_observability --all-targets --all-features -- -D warnings
 ```
 
 Cover the feature-disabled route absence, unavailable behavior before backend initialization, and the content type and body after initialization.

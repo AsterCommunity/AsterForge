@@ -67,7 +67,7 @@ aes-gcm = "0.11"
 async-trait = "0.1"
 argon2 = "0.6.0"
 base64 = { version = "0.23", default-features = false, features = ["std"] }
-bloomfilter = "3.0.1"
+bloomfilter = "3.0.2"
 bytes = "1"
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
@@ -76,7 +76,7 @@ fs2 = "0.4"
 fuser = "0.18.0"
 futures = "0.3"
 governor = "0.10"
-headers = "0.4.1"
+headers = "0.4.2"
 hmac = "0.13"
 hkdf = "0.13"
 http = "1"
@@ -91,11 +91,11 @@ proc-macro2 = "1"
 quick-xml = { version = "0.42", default-features = false }
 quote = "1"
 openidconnect = { version = "4.0.1", default-features = false }
-rand = { version = "0.10.2", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-redis = { version = "1.7.0", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+redis = { version = "1.7.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 reqwest = { version = "0.13", features = ["json"] }
-sea-orm = { version = "2.0.3", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
-sea-orm-migration = { version = "2.0.3", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+sea-orm = { version = "2.0.4", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11"

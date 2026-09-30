@@ -21,4 +21,4 @@ The Chinese crate pages are the complete reference for now:
 
 - [Integration principles](/guide/integration-principles)
 - [Reference projects](/guide/reference-projects)
-- [Crate docs](/crates/aster_forge_actix_middleware)
+- [Crate docs](/crates/aster_forge_middleware)

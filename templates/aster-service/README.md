@@ -40,7 +40,7 @@ components:
 - Mail outbox shutdown component.
 - Audit lifecycle component.
 - Database shutdown and health component.
-- Migration crate with Forge-owned infrastructure tables.
+- Product-owned `{{crate_name}}_migration` crate with Forge-owned infrastructure tables.
 - Optional Prometheus metrics export when the `metrics` feature is enabled.
 - Debug allocation tracking by default and jemalloc feature flags for production tuning.
 - Debug OpenAPI document and Swagger UI when the `openapi` feature is enabled.
@@ -108,9 +108,10 @@ Use Forge for reusable mechanics:
 
 ## Migrations
 
-The generated workspace includes a `migration` crate. The first migration creates Forge-owned
-infrastructure tables for runtime leases, scheduled tasks, system config, mail outbox, and audit
-logs. Product tables should be added as new migration modules in that crate.
+The generated workspace includes `crates/{{crate_name}}_migration`. The first migration creates
+Forge-owned infrastructure tables for runtime leases, scheduled tasks, system config, mail outbox,
+and audit logs. Product tables should be added as new migration modules in that crate. Run its CLI
+with `cargo run -p {{crate_name}}_migration -- <command>`.
 
 ## OpenAPI
 
@@ -138,6 +139,9 @@ bun run generate-api
 The generated SDK is written to `frontend-panel/src/types/api.generated.ts`; application code
 imports the stable wrapper from `frontend-panel/src/types/api.ts`.
 
+Frontend type checking uses the stable TypeScript 7 `tsc` CLI. The generated `bunfig.toml` enforces
+a 24-hour minimum package release age, so normal Bun installs and updates avoid same-day releases.
+
 Add product route annotations with `aster_forge_api_docs_macros::path(...)`, then register those
 handlers and schemas in `src/api/openapi.rs`. Release builds do not expand the route annotations
 unless the product intentionally changes that policy.
@@ -150,7 +154,7 @@ Prometheus metrics are available when the `metrics` feature is enabled:
 cargo run --features metrics
 ```
 
-The service then exposes `/health/metrics` through `aster_forge_actix_observability`. Forge records
+The service then exposes `/health/metrics` through `aster_forge_observability::actix`. Forge records
 low-cardinality HTTP, database, health, background task, external-operation, allocator heap,
 process RSS, CPU, and uptime metrics through shared recorder traits.
 
@@ -181,7 +185,7 @@ The generated project includes:
 - `.github/workflows/docker-image.yml`: GHCR image publishing for default and `metrics` variants.
 
 The backend integration matrix uses reusable testcontainers and runs the Forge foundation
-migration against PostgreSQL and MySQL. Docker must be available when running those tests locally
+`{{crate_name}}_migration` against PostgreSQL and MySQL. Docker must be available when running those tests locally
 with `ASTER_TEST_DATABASE_BACKEND=postgres` or `mysql`.
 
 Build the container image with:
@@ -211,10 +215,16 @@ The image healthcheck probes `/health/ready`.
 
 ## Local Forge Development
 
-The template depends on the AsterForge project through Git:
+The workspace owns all registry versions, Git sources, and path dependencies. Member manifests
+inherit them with `workspace = true` and add only consumer-specific features. Forge dependencies
+therefore share one source declaration and resolve to one Git revision in `Cargo.lock`:
 
 ```toml
+[workspace.dependencies]
 aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_runtime" }
+
+[dependencies]
+aster_forge_runtime.workspace = true
 ```
 
 When working on Forge and a generated product on the same machine, temporarily replace those Git

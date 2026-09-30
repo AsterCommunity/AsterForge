@@ -10,7 +10,7 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 ## Ownership Boundaries
 
 - This crate owns product-neutral recorder traits, noop implementations, metric descriptors and catalogs, single-backend selection, and the optional Prometheus exporter and system updater.
-- The Actix `/metrics` route belongs to `aster_forge_actix_observability`; HTTP middleware belongs to `aster_forge_actix_middleware`.
+- The Actix `/metrics` route belongs to `aster_forge_observability`; HTTP middleware belongs to `aster_forge_middleware`.
 - Products own the decision to record business metrics, dashboards, alerts, and product label semantics.
 
 ## Change Constraints

@@ -10,7 +10,7 @@
 
 不适合放在这里的内容：
 
-- HTTP request metrics middleware；它属于 `aster_forge_actix_middleware`。
+- HTTP request metrics middleware；它属于 `aster_forge_middleware::actix`。
 - metrics recorder trait、Prometheus registry、产品自定义 metric 注册；它们属于 `aster_forge_metrics`。
 - 产品 dashboard、告警规则、业务指标命名策略。
 
@@ -19,14 +19,14 @@
 ```toml
 [features]
 metrics = [
-    "aster_forge_actix_observability/prometheus",
+    "aster_forge_observability/prometheus",
     "aster_forge_metrics/allocator-metrics",
     "aster_forge_metrics/backend-prometheus",
     "aster_forge_metrics/runtime-health",
 ]
 
 [dependencies]
-aster_forge_actix_observability = { git = "https://github.com/AsterCommunity/AsterForge" }
+aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge" }
 aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
@@ -40,11 +40,11 @@ pub fn routes() -> actix_web::Scope {
         .route("", actix_web::web::get().to(health))
         .route("/ready", actix_web::web::get().to(ready));
 
-    aster_forge_actix_observability::configure_prometheus_route(scope)
+    aster_forge_observability::actix::configure_prometheus_route(scope)
 }
 ```
 
-当 `aster_forge_actix_observability/prometheus` feature 未启用时，`configure_prometheus_route` 返回原始 scope，不注册 `/metrics`。当 feature 启用时，它注册 `/metrics`，并从 `aster_forge_metrics::prometheus` 导出 Prometheus text exposition body。
+当 `aster_forge_observability/prometheus` feature 未启用时，`configure_prometheus_route` 返回原始 scope，不注册 `/metrics`。当 feature 启用时，它注册 `/metrics`，并从 `aster_forge_metrics::prometheus` 导出 Prometheus text exposition body。
 
 ## 启动顺序
 

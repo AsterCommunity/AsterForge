@@ -93,14 +93,14 @@ fn create_metrics_recorder() -> aster_forge_metrics::SharedMetricsRecorder {
 ```
 
 HTTP `/metrics` route 不应该在产品仓库重复实现。Actix Web 产品推荐使用
-`aster_forge_actix_observability::configure_prometheus_route(scope)`：
+`aster_forge_observability::actix::configure_prometheus_route(scope)`：
 
 ```rust
 pub fn routes() -> actix_web::Scope {
     let scope = actix_web::web::scope("/health")
         .route("", actix_web::web::get().to(health));
 
-    aster_forge_actix_observability::configure_prometheus_route(scope)
+    aster_forge_observability::actix::configure_prometheus_route(scope)
 }
 ```
 

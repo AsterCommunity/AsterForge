@@ -11,7 +11,7 @@ hero:
       link: /guide/
     - theme: alt
       text: 查看模块
-      link: /crates/aster_forge_actix_middleware
+      link: /crates/aster_forge_middleware
 
 features:
   - title: Runtime component 优先

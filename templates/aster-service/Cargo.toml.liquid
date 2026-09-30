@@ -1,15 +1,61 @@
 [package]
 name = "{{project-name}}"
-version = "0.1.0"
+version.workspace = true
 description = "{{package_description}}"
-edition = "2024"
-rust-version = "1.95.0"
-license = "MIT"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 repository = ""
 build = "build.rs"
 
 [workspace]
-members = [".", "migration"]
+members = [".", "crates/{{crate_name}}_migration"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95.0"
+license = "MIT"
+
+[workspace.dependencies]
+actix-web = "4.15.0"
+async-trait = "0.1"
+aster_forge_alloc = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_alloc" }
+aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
+aster_forge_api_docs_macros = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api_docs_macros" }
+aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_audit" }
+aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_cache" }
+aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_config" }
+aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db" }
+aster_forge_db_migration = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db_migration" }
+aster_forge_logging = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_logging" }
+aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_mail" }
+aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_metrics" }
+aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_middleware" }
+aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_observability" }
+aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_panic" }
+aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_runtime" }
+aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks" }
+aster_forge_test = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_test" }
+aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
+chrono = "0.4.45"
+config = { version = "0.15", default-features = false }
+rust-embed = "8"
+sea-orm = { version = "2.0.4", default-features = false }
+sea-orm-migration = { version = "2.0.4", default-features = false }
+serde = "1.0.229"
+serde_json = "1.0.151"
+testcontainers = "0.28"
+thiserror = "2"
+tikv-jemallocator = "0.7"
+tokio = "1"
+tokio-util = "0.7"
+toml = "1.1"
+tracing = "0.1.44"
+utoipa = "5.5.0"
+utoipa-swagger-ui = "9.0.2"
+{{crate_name}}_migration = { path = "crates/{{crate_name}}_migration" }
 
 [workspace.lints.clippy]
 # Keep lint suppressions explicit and detect stale expectations during Clippy runs.
@@ -22,7 +68,7 @@ workspace = true
 [features]
 default = []
 metrics = [
-    "aster_forge_actix_observability/prometheus",
+    "aster_forge_observability/prometheus",
     "aster_forge_metrics/allocator-metrics",
     "aster_forge_metrics/backend-prometheus",
     "aster_forge_metrics/runtime-health",
@@ -88,42 +134,42 @@ panic = "abort"
 strip = true
 
 [dependencies]
-actix-web = "4"
-aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_middleware", features = ["metrics"] }
-aster_forge_actix_observability = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_observability" }
-aster_forge_alloc = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_alloc" }
-aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
-aster_forge_api_docs_macros = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api_docs_macros" }
-aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_audit", features = ["mail-outbox-dependency"] }
-aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_cache", features = ["memory", "redis", "runtime-component"] }
-aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_config", features = ["redis-pubsub"] }
-aster_forge_db = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_db", features = ["runtime-component", "mail-outbox"] }
-aster_forge_logging = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_logging" }
-aster_forge_mail = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_mail", features = ["runtime-component"] }
-aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_metrics" }
-aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_panic" }
-aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_runtime" }
-aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks", features = ["runtime-component"] }
-aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
-migration = { path = "migration" }
-sea-orm = { version = "2.0.0", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-config = { version = "0.15", default-features = false, features = ["toml"] }
-rust-embed = { version = "8", features = ["interpolate-folder-path"] }
-thiserror = "2"
-tikv-jemallocator = { version = "0.7", optional = true }
-tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "time"] }
-tokio-util = "0.7"
-toml = "1.1"
-tracing = "0.1"
-utoipa = { version = "5.5.0", features = ["actix_extras"], optional = true }
-utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"], optional = true }
+actix-web.workspace = true
+aster_forge_alloc.workspace = true
+aster_forge_api.workspace = true
+aster_forge_api_docs_macros.workspace = true
+aster_forge_audit = { workspace = true, features = ["mail-outbox-dependency"] }
+aster_forge_cache = { workspace = true, features = ["memory", "redis", "runtime-component"] }
+aster_forge_config = { workspace = true, features = ["redis-pubsub"] }
+aster_forge_db = { workspace = true, features = ["runtime-component", "mail-outbox"] }
+aster_forge_logging.workspace = true
+aster_forge_mail = { workspace = true, features = ["runtime-component"] }
+aster_forge_metrics.workspace = true
+aster_forge_middleware = { workspace = true, features = ["metrics"] }
+aster_forge_observability.workspace = true
+aster_forge_panic.workspace = true
+aster_forge_runtime.workspace = true
+aster_forge_tasks = { workspace = true, features = ["runtime-component"] }
+aster_forge_utils.workspace = true
+config = { workspace = true, features = ["toml"] }
+rust-embed = { workspace = true, features = ["interpolate-folder-path"] }
+sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tikv-jemallocator = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "time"] }
+tokio-util.workspace = true
+toml.workspace = true
+tracing.workspace = true
+utoipa = { workspace = true, features = ["actix_extras"], optional = true }
+utoipa-swagger-ui = { workspace = true, features = ["actix-web"], optional = true }
+{{crate_name}}_migration.workspace = true
 
 [dev-dependencies]
-aster_forge_test = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_test" }
-sea-orm-migration = { version = "2.0.0", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
-testcontainers = { version = "0.27", features = ["reusable-containers"] }
+aster_forge_test.workspace = true
+sea-orm-migration = { workspace = true, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+testcontainers = { workspace = true, features = ["reusable-containers"] }
 
 [build-dependencies]
-chrono = "0.4"
+chrono.workspace = true

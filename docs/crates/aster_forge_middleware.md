@@ -22,20 +22,20 @@
 
 ```toml
 [dependencies]
-aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge" }
+aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
 默认 feature 不启用 HTTP metrics middleware，适合只需要 CSRF、CORS、rate limit、request id 和 security headers 的产品。
 
-如果产品要使用 `aster_forge_actix_middleware::metrics::MetricsMiddleware`，需要显式开启：
+如果产品要使用 `aster_forge_middleware::actix::metrics::MetricsMiddleware`，需要显式开启：
 
 ```toml
-aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", features = ["metrics"] }
+aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", features = ["metrics"] }
 ```
 
 ## Rate Limit
 
-模块：`aster_forge_actix_middleware::rate_limit`
+模块：`aster_forge_middleware::actix::rate_limit`
 
 主要类型和函数：
 
@@ -69,7 +69,7 @@ Forge 负责产品无关的 rate-limit 机械行为：
 ```rust
 use actix_governor::GovernorConfig;
 use actix_web::http::StatusCode;
-use aster_forge_actix_middleware::rate_limit::{
+use aster_forge_middleware::actix::rate_limit::{
     TrustedProxyIpKeyExtractor, build_ip_governor_config_with_rejection_response,
 };
 use governor::middleware::NoOpMiddleware;
@@ -103,7 +103,7 @@ fn build_config(
 典型协议端点接入：
 
 ```rust
-use aster_forge_actix_middleware::rate_limit::NormalizedStringRateLimiter;
+use aster_forge_middleware::actix::rate_limit::NormalizedStringRateLimiter;
 use std::num::{NonZeroU32, NonZeroU64};
 
 let limiter = NormalizedStringRateLimiter::new(
@@ -122,7 +122,7 @@ if let Some(rejection) = limiter.check("User@Example.com") {
 
 ## Client IP
 
-模块：`aster_forge_actix_middleware::client_ip`
+模块：`aster_forge_middleware::actix::client_ip`
 
 主要函数：
 
@@ -135,7 +135,7 @@ header 解析逻辑的场景。可信 peer 的左侧 forwarded 值支持裸 IPv4
 `IPv4:port` 与 `[IPv6]:port` 形式；非法值回退到 direct peer。
 
 ```rust
-use aster_forge_actix_middleware::client_ip::real_ip_from_headers;
+use aster_forge_middleware::actix::client_ip::real_ip_from_headers;
 
 let peer = req.peer_addr().map(|socket| socket.ip());
 let client_ip = peer.map(|peer| {
@@ -155,7 +155,7 @@ let client_ip = peer.map(|peer| {
 
 ## Metrics
 
-模块：`aster_forge_actix_middleware::metrics`
+模块：`aster_forge_middleware::actix::metrics`
 
 主要类型：
 
@@ -165,7 +165,7 @@ let client_ip = peer.map(|peer| {
 接入方式：
 
 ```rust
-use aster_forge_actix_middleware::metrics::MetricsMiddleware;
+use aster_forge_middleware::actix::metrics::MetricsMiddleware;
 use aster_forge_metrics::SharedMetricsRecorder;
 
 app.app_data(web::Data::new(metrics as SharedMetricsRecorder))
@@ -181,12 +181,12 @@ route label 优先使用 Actix matched pattern。未匹配路由会被归入低�
 - 其他 -> `unmatched`
 
 真实 recorder 和 backend 由 `aster_forge_metrics` 负责；Actix `/metrics` endpoint 由
-`aster_forge_actix_observability` 负责。产品侧只需要把 shared recorder 放进 app data，并保持业务
+`aster_forge_observability` 负责。产品侧只需要把 shared recorder 放进 app data，并保持业务
 label 低基数。
 
 ## Runtime CORS
 
-模块：`aster_forge_actix_middleware::cors`
+模块：`aster_forge_middleware::actix::cors`
 
 主要类型：
 
@@ -226,7 +226,7 @@ Forge 负责产品无关的 Actix CORS 机械行为：
 
 ```rust
 use actix_web::{Error, dev::ServiceRequest, web};
-use aster_forge_actix_middleware::cors::{
+use aster_forge_middleware::actix::cors::{
     CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, RuntimeCors,
     RuntimeCorsConfig, RuntimeCorsPolicy,
 };
@@ -273,7 +273,7 @@ HTTP(S) origin、public site URL 和 CSRF 来源解析不受这个 CORS 专用�
 
 ## CSRF
 
-模块：`aster_forge_actix_middleware::csrf`
+模块：`aster_forge_middleware::actix::csrf`
 
 主要 API：
 
@@ -310,7 +310,7 @@ Forge 只做产品无关的 CSRF 机制：
 use std::sync::OnceLock;
 
 use actix_web::{HttpRequest, dev::ServiceRequest};
-use aster_forge_actix_middleware::csrf::{
+use aster_forge_middleware::actix::csrf::{
     CsrfError, CsrfTokenNames, RequestSourceMode,
     ensure_double_submit_token_with_names,
     ensure_service_request_source_allowed,
@@ -349,7 +349,7 @@ fn csrf_header_for_cors() -> &'static str {
 
 ## Request ID
 
-模块：`aster_forge_actix_middleware::request_id`
+模块：`aster_forge_middleware::actix::request_id`
 
 主要类型：
 
@@ -359,7 +359,7 @@ fn csrf_header_for_cors() -> &'static str {
 接入方式：
 
 ```rust
-use aster_forge_actix_middleware::request_id::RequestIdMiddleware;
+use aster_forge_middleware::actix::request_id::RequestIdMiddleware;
 
 app.wrap(RequestIdMiddleware)
 ```
@@ -374,7 +374,7 @@ app.wrap(RequestIdMiddleware)
 
 ## Security headers
 
-模块：`aster_forge_actix_middleware::security_headers`
+模块：`aster_forge_middleware::actix::security_headers`
 
 主要 API：
 
@@ -386,7 +386,7 @@ app.wrap(RequestIdMiddleware)
 接入方式：
 
 ```rust
-use aster_forge_actix_middleware::security_headers::default_headers;
+use aster_forge_middleware::actix::security_headers::default_headers;
 
 app.wrap(default_headers())
 ```

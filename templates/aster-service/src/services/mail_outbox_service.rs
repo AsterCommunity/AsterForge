@@ -14,10 +14,6 @@ const MAIL_OUTBOX_DISPATCH_CONFIG: aster_forge_mail::MailOutboxDispatchConfig =
     );
 
 /// Dispatches due mail outbox rows using the Forge DB-backed state machine.
-#[expect(
-    dead_code,
-    reason = "The generated template exposes this dispatch hook before product-specific scheduling wires it."
-)]
 pub async fn dispatch_due_with(
     db: &sea_orm::DatabaseConnection,
     mail_sender: &std::sync::Arc<dyn aster_forge_mail::MailSender>,

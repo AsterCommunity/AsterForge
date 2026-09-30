@@ -1,0 +1,20 @@
+[package]
+name = "{{crate_name}}_migration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+aster_forge_db = { workspace = true, features = ["all"] }
+aster_forge_db_migration.workspace = true
+sea-orm-migration = { workspace = true, features = ["cli", "sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lib]
+doctest = false

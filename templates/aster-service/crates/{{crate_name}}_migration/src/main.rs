@@ -1,4 +1,4 @@
-use migration::Migrator;
+use {{crate_name}}_migration::Migrator;
 use sea_orm_migration::cli;
 
 #[tokio::main]

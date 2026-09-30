@@ -68,8 +68,8 @@ src/
 
 ```toml
 [dependencies]
-aster_forge_actix_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_middleware", features = ["metrics"] }
-aster_forge_actix_observability = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_actix_observability" }
+aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_middleware", features = ["metrics"] }
+aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_observability" }
 aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
 aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_audit", features = ["db-writer", "mail-outbox-dependency"] }
 aster_forge_cache = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_cache", features = ["memory", "runtime-component"] }
@@ -95,15 +95,15 @@ aster_forge_xml = { git = "https://github.com/AsterCommunity/AsterForge", packag
 - task runtime：只用 retry、dedupe、steps、spec 时不需要 feature；需要 worker、scheduled task 或 runtime component 时启用 `aster_forge_tasks` 的 `runtime-component`。
 - external auth：`aster_forge_external_auth` 的 `github`、`google`、`microsoft`、`qq` 等连接器。
 - external auth 持久化：产品 entity 直接保存 Forge provider kind / protocol 时启用 `aster_forge_external_auth/sea-orm`；表和 migration 仍归产品。
-- metrics：产品自己的 `metrics` feature 应转发到 `aster_forge_metrics/backend-prometheus`、`aster_forge_metrics/runtime-health`、`aster_forge_metrics/allocator-metrics` 和 `aster_forge_actix_observability/prometheus`。
+- metrics：产品自己的 `metrics` feature 应转发到 `aster_forge_metrics/backend-prometheus`、`aster_forge_metrics/runtime-health`、`aster_forge_metrics/allocator-metrics` 和 `aster_forge_observability/prometheus`。
 - OpenAPI：产品自己的 `openapi` feature 再转发到 Forge crate。
 
 Feature 边界要保持显式。默认 feature 只应该带最小可用内核，不能因为某个产品接入方便就把 Redis、SeaORM 表、runtime worker、mail drain 或 OpenAPI schema 静默拖进来。
 
 | crate | 默认 feature | 常见显式 feature | 说明 |
 | --- | --- | --- | --- |
-| `aster_forge_actix_middleware` | 无 | `metrics` | CSRF、CORS、rate limit、request id 默认可用；HTTP metrics 需要显式启用。 |
-| `aster_forge_actix_observability` | 无 | `prometheus` | Actix `/metrics` endpoint glue；未启用时 route helper 是 no-op。 |
+| `aster_forge_middleware` | `actix` | `metrics`、`axum` | 共享 HTTP middleware；框架适配位于显式 `actix` / `axum` 模块。 |
+| `aster_forge_observability` | `actix` | `prometheus`、`axum` | `/metrics` endpoint glue；未启用时 route helper 是 no-op。 |
 | `aster_forge_audit` | 无 | `db-writer`, `mail-outbox-dependency` | lifecycle 默认不依赖 DB/mail；共享 buffered DB writer 和 `audit_logs -> mail_outbox` shutdown 顺序分别显式启用。 |
 | `aster_forge_cache` | `memory` | `redis`, `runtime-component` | Redis 后端显式启用；runtime health component 单独启用。 |
 | `aster_forge_config` | 无 | `redis-pubsub`, `sea-orm`, `openapi` | 配置 reload 通知后端和数据库转换能力分开启用。 |
@@ -452,10 +452,10 @@ impl From<aster_forge_db::DbError> for ProductError {
 Forge 自身改 public API 或 feature split 后，至少跑一次 feature matrix smoke check，防止“默认 feature 可用”和“显式 feature 可用”被互相污染：
 
 ```bash
-cargo check -p aster_forge_actix_middleware --no-default-features --all-targets
-cargo check -p aster_forge_actix_middleware --no-default-features --features metrics --all-targets
-cargo check -p aster_forge_actix_observability --no-default-features --all-targets
-cargo check -p aster_forge_actix_observability --no-default-features --features prometheus --all-targets
+cargo check -p aster_forge_middleware --no-default-features --all-targets
+cargo check -p aster_forge_middleware --no-default-features --features actix,metrics --all-targets
+cargo check -p aster_forge_observability --no-default-features --all-targets
+cargo check -p aster_forge_observability --no-default-features --features actix,prometheus --all-targets
 cargo check -p aster_forge_cache --no-default-features --all-targets
 cargo check -p aster_forge_cache --no-default-features --features memory --all-targets
 cargo check -p aster_forge_cache --no-default-features --features redis --all-targets

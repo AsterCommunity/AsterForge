@@ -28,7 +28,7 @@ pub async fn prepare_database_handles(
     };
     let writer = aster_forge_db::connect_with_metrics(&config, metrics.clone()).await?;
 
-    migration::Migrator::up(&writer, None).await?;
+    {{crate_name}}_migration::Migrator::up(&writer, None).await?;
 
     aster_forge_db::connect_reader_for_writer_with_metrics(&config, writer, metrics)
         .await

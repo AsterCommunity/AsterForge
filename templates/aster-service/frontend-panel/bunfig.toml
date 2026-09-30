@@ -1,0 +1,3 @@
+[install]
+# Reject newly published direct and transitive versions during dependency resolution.
+minimumReleaseAge = 86400

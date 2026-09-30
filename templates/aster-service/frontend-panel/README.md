@@ -7,12 +7,16 @@ UI pieces in separate modules instead of wiring everything through `main.tsx`.
 ## Commands
 
 ```bash
-bun install
+bun install --frozen-lockfile
 bun run dev
 bun run check
 bun run test
 bun run build
 ```
+
+Type checking uses the stable TypeScript 7 `tsc` CLI. Dependency resolution enforces a 24-hour
+minimum release age through `bunfig.toml`; keep updates on established upstream packages and do not
+bypass that supply-chain delay merely to take a same-day release.
 
 ## OpenAPI types
 

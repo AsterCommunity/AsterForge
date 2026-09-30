@@ -17,7 +17,7 @@ RUN apk add --no-cache build-base pkgconfig sqlite-dev curl
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
-COPY migration/ migration/
+COPY crates/{{crate_name}}_migration/ crates/{{crate_name}}_migration/
 COPY build.rs ./
 
 # Pre-build dependencies as a cache layer. The command may fail before all template sources are

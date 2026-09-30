@@ -1,4 +1,4 @@
-# {{project-name}} Migrations
+# `{{crate_name}}_migration`
 
 This crate owns the database migration chain for the generated service.
 
@@ -39,37 +39,37 @@ behavior.
 Run all pending migrations:
 
 ```bash
-cargo run -p migration -- up
+cargo run -p {{crate_name}}_migration -- up
 ```
 
 Check migration status:
 
 ```bash
-cargo run -p migration -- status
+cargo run -p {{crate_name}}_migration -- status
 ```
 
 Rollback the latest migration:
 
 ```bash
-cargo run -p migration -- down
+cargo run -p {{crate_name}}_migration -- down
 ```
 
 Rollback a fixed number of migrations:
 
 ```bash
-cargo run -p migration -- down -n 2
+cargo run -p {{crate_name}}_migration -- down -n 2
 ```
 
 Drop all tables and reapply all migrations in local development:
 
 ```bash
-cargo run -p migration -- fresh
+cargo run -p {{crate_name}}_migration -- fresh
 ```
 
 Reset all applied migrations:
 
 ```bash
-cargo run -p migration -- reset
+cargo run -p {{crate_name}}_migration -- reset
 ```
 
 ## Runtime Startup

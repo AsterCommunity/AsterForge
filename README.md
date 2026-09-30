@@ -15,7 +15,7 @@
   <a href="https://codecov.io/github/AsterCommunity/AsterForge"><img alt="Coverage" src="https://codecov.io/github/AsterCommunity/AsterForge/graph/badge.svg?token=IefDQVj2y6"></a>
   <a href="https://forge.astercosm.com/guide/index"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
   <a href="https://forge.astercosm.com/en/index"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
-  <a href="https://forge.astercosm.com/crates/aster_forge_actix_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
+  <a href="https://forge.astercosm.com/crates/aster_forge_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
   <img alt="Rust 1.94+" src="https://img.shields.io/badge/rust-1.94%2B-B7410E?logo=rust&logoColor=white">
   <img alt="License MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-0F172A">
 </p>
@@ -89,7 +89,7 @@ Build and CI follow the AsterDrive model: a pinned toolchain with a split dev pr
 - [Chinese guide](https://forge.astercosm.com/guide/index)
 - [New project integration guide](https://forge.astercosm.com/guide/new-project-integration)
 - [English overview](https://forge.astercosm.com/en/index)
-- [Crate reference pages](https://forge.astercosm.com/crates/aster_forge_actix_middleware)
+- [Crate reference pages](https://forge.astercosm.com/crates/aster_forge_middleware)
 - [Reference projects](https://forge.astercosm.com/guide/reference-projects)
 
 For now, the Chinese crate pages are the authoritative integration reference; the English pages serve as entry points while the crate-by-crate documentation is being mirrored.

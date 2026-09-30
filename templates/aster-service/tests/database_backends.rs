@@ -97,7 +97,7 @@ async fn wait_for_database(database_url: &str) -> DatabaseConnection {
 }
 
 async fn exercise_foundation_migration(db: &DatabaseConnection) {
-    migration::Migrator::up(db, None)
+    {{crate_name}}_migration::Migrator::up(db, None)
         .await
         .expect("apply foundation migration");
     let manager = SchemaManager::new(db);
@@ -112,7 +112,7 @@ async fn exercise_foundation_migration(db: &DatabaseConnection) {
         );
     }
 
-    migration::Migrator::down(db, None)
+    {{crate_name}}_migration::Migrator::down(db, None)
         .await
         .expect("roll back foundation migration");
     for table in FOUNDATION_TABLES {

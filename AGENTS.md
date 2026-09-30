@@ -102,7 +102,7 @@ Integrate Forge in foundation order instead of treating it as a loose utility co
 - Entry-point foundation: `aster_forge_runtime`, `aster_forge_logging`, `aster_forge_metrics`, `aster_forge_panic`, and `aster_forge_alloc`.
 - Data and coordination: `aster_forge_db`, `aster_forge_cache`, and `aster_forge_config`.
 - Background mechanics: `aster_forge_tasks`, `aster_forge_mail`, and `aster_forge_audit`.
-- Web and API: `aster_forge_api`, `aster_forge_api_docs_macros`, `aster_forge_actix_middleware`, and `aster_forge_external_auth`.
+- Web and API: `aster_forge_api`, `aster_forge_api_docs_macros`, `aster_forge_middleware`, and `aster_forge_external_auth`.
 - Utility and storage foundation: `aster_forge_validation`, `aster_forge_utils`, `aster_forge_crypto`, `aster_forge_file_classification`, and `aster_forge_storage_core`.
 
 Be more careful when integrating high-impact modules because they affect startup, shutdown, error handling, concurrency, test isolation, and data consistency. Prefer the final intended shape; do not retain compatibility facades that have no boundary value.

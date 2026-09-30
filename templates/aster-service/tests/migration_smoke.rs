@@ -7,7 +7,7 @@ use sea_orm_migration::prelude::SchemaManager;
 
 #[test]
 fn foundation_migration_is_registered_first() {
-    let migrations = migration::Migrator::migrations();
+    let migrations = {{crate_name}}_migration::Migrator::migrations();
 
     assert_eq!(migrations.len(), 1);
     assert_eq!(
@@ -23,7 +23,7 @@ async fn foundation_migration_applies_and_rolls_back_on_sqlite() {
         .await
         .expect("connect sqlite migration test database");
 
-    migration::Migrator::up(&db, None)
+    {{crate_name}}_migration::Migrator::up(&db, None)
         .await
         .expect("apply foundation migration");
     let manager = SchemaManager::new(&db);
@@ -44,7 +44,7 @@ async fn foundation_migration_applies_and_rolls_back_on_sqlite() {
         );
     }
 
-    migration::Migrator::down(&db, None)
+    {{crate_name}}_migration::Migrator::down(&db, None)
         .await
         .expect("roll back foundation migration");
     for table in [
