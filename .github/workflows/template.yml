@@ -46,8 +46,10 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
 
-      - name: Install cargo-generate
-        run: cargo install cargo-generate --version 0.25.0 --locked
+      - name: Install cargo-generate binary
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate@0.25.0
 
       - name: Generate project from template
         run: >-
