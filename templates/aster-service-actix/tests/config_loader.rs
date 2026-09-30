@@ -1,6 +1,7 @@
 //! Static configuration loader integration tests.
 
 use aster_forge_test::temp::TestTempDir;
+use {{crate_name}} as service;
 use std::fs;
 use std::sync::{Mutex, MutexGuard};
 
@@ -8,7 +9,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn default_config_uses_generated_data_paths() {
-    let config = {{crate_name}}::config::AppConfig::default();
+    let config = service::config::AppConfig::default();
 
     assert_eq!(config.server.temp_dir, ".tmp");
     assert_eq!(
@@ -28,11 +29,11 @@ fn default_config_file_is_created_under_data_dir() {
 
     unsafe {
         std::env::set_var(
-            {{crate_name}}::config::CONFIG_ENV_VAR,
+            service::config::CONFIG_ENV_VAR,
             &config_path,
         );
     }
-    let loaded = {{crate_name}}::config::load().expect("load config");
+    let loaded = service::config::load().expect("load config");
     let generated = fs::read_to_string(&config_path).expect("read generated config");
 
     assert_eq!(
@@ -84,11 +85,11 @@ file = "service.log"
 
     unsafe {
         std::env::set_var(
-            {{crate_name}}::config::CONFIG_ENV_VAR,
+            service::config::CONFIG_ENV_VAR,
             &config_path,
         );
     }
-    let loaded = {{crate_name}}::config::load().expect("load config");
+    let loaded = service::config::load().expect("load config");
 
     assert_eq!(
         loaded.server.temp_dir,
@@ -113,11 +114,11 @@ fn environment_overrides_static_config() {
     let _guard = EnvGuard::capture();
 
     unsafe {
-        std::env::remove_var({{crate_name}}::config::CONFIG_ENV_VAR);
+        std::env::remove_var(service::config::CONFIG_ENV_VAR);
         std::env::set_var("ASTER__SERVER__HOST", "0.0.0.0");
     }
 
-    let loaded = {{crate_name}}::config::load().expect("load config");
+    let loaded = service::config::load().expect("load config");
 
     assert_eq!(loaded.server.host, "0.0.0.0");
 }
@@ -133,7 +134,7 @@ impl EnvGuard {
         let lock = ENV_LOCK.lock().expect("env lock poisoned");
         Self {
             _lock: lock,
-            config_path: std::env::var_os({{crate_name}}::config::CONFIG_ENV_VAR),
+            config_path: std::env::var_os(service::config::CONFIG_ENV_VAR),
             server_host: std::env::var_os("ASTER__SERVER__HOST"),
         }
     }
@@ -143,7 +144,7 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         unsafe {
             restore_env_var(
-                {{crate_name}}::config::CONFIG_ENV_VAR,
+                service::config::CONFIG_ENV_VAR,
                 self.config_path.clone(),
             );
             restore_env_var("ASTER__SERVER__HOST", self.server_host.clone());
