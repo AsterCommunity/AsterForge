@@ -28,10 +28,7 @@ fn default_config_file_is_created_under_data_dir() {
     let config_path = dir.join("data").join("config.toml");
 
     unsafe {
-        std::env::set_var(
-            service::config::CONFIG_ENV_VAR,
-            &config_path,
-        );
+        std::env::set_var(service::config::CONFIG_ENV_VAR, &config_path);
     }
     let loaded = service::config::load().expect("load config");
     let generated = fs::read_to_string(&config_path).expect("read generated config");
@@ -84,10 +81,7 @@ file = "service.log"
     .expect("write config");
 
     unsafe {
-        std::env::set_var(
-            service::config::CONFIG_ENV_VAR,
-            &config_path,
-        );
+        std::env::set_var(service::config::CONFIG_ENV_VAR, &config_path);
     }
     let loaded = service::config::load().expect("load config");
 
@@ -143,10 +137,7 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         unsafe {
-            restore_env_var(
-                service::config::CONFIG_ENV_VAR,
-                self.config_path.clone(),
-            );
+            restore_env_var(service::config::CONFIG_ENV_VAR, self.config_path.clone());
             restore_env_var("ASTER__SERVER__HOST", self.server_host.clone());
         }
     }
