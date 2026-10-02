@@ -40,6 +40,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify template manifests are hidden from Cargo
+        run: |
+          if rg --files --hidden templates -g Cargo.toml; then
+            echo "::error::Template Cargo manifests must use the .liquid suffix to stay out of Cargo Git dependency scans."
+            exit 1
+          fi
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -67,6 +74,8 @@ jobs:
         run: |
           test -f Cargo.toml
           test -f crates/aster_service_actix_ci_migration/Cargo.toml
+          test ! -e Cargo.toml.liquid
+          test ! -e crates/aster_service_actix_ci_migration/Cargo.toml.liquid
           test ! -e migration
           test ! -e frontend-panel/node_modules
           test ! -e frontend-panel/dist

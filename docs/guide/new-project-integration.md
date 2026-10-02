@@ -22,6 +22,8 @@ cargo generate --path templates/aster-service-actix \
 
 模板生成的是一个可编译的产品骨架，不是业务完整实现。它已经接好 `AsterRuntime`、Actix HTTP、database handles、migration crate、background task shutdown、mail outbox shutdown drain、audit lifecycle 和基础健康接口；产品侧仍然要补自己的产品表 migration、配置 registry、API、权限、audit action/detail、task payload/result 和邮件模板渲染。
 
+模板源中的 Cargo 清单统一使用 `Cargo.toml.liquid`，包括 migration 子 crate，避免 Cargo 扫描 Forge Git 依赖时解析未渲染的占位符。`cargo generate` 会在生成项目中渲染清单并去掉 `.liquid` 后缀。
+
 模板的构建和 CI 约束与 AsterDrive 对齐：`rust-toolchain.toml` 固定 Rust 1.95 并安装 `rustfmt`、`clippy`、`llvm-tools-preview`；开发 profile 对 workspace 代码使用 O0、对第三方依赖使用 O1；debug/test 缺少前端产物时只在 Cargo `OUT_DIR` 生成隔离 fallback，release 构建则要求先完成真实前端构建。`ASTER_BUILD_TIME` 可以由构建环境显式传入，前端嵌入路径通过构建期 `ASTER_FRONTEND_DIST_DIR` 选择，不再把 fallback 写回源码目录。
 
 生成项目会跟踪 `frontend-panel/generated/openapi.json` 和 `frontend-panel/src/types/api.generated.ts`。Rust CI 分成 format/clippy、OpenAPI 与 SDK drift、coverage、PostgreSQL/MySQL integration backend 四组 job；API schema 变化后必须同时运行 OpenAPI 测试和 `bun run generate-api`。
