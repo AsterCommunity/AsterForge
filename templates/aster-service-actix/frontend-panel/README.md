@@ -30,3 +30,7 @@ bun run generate-api
 Generated OpenAPI types are written to `src/types/api.generated.ts`. Application code should import
 from `src/types/api.ts`, which mirrors the wrapper style used by the reference Aster frontends. CI
 regenerates both files and rejects drift.
+
+The generator runs in a pinned TypeScript 6 environment through `bunx`: openapi-typescript still
+uses the JavaScript compiler API that TypeScript 7 no longer exports. Frontend type checking and
+builds continue to use TypeScript 7.

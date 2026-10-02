@@ -36,6 +36,8 @@ aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", featur
 
 `openapi` 只在 `debug_assertions` 下启用 `utoipa` 派生，避免 release binary 拉入文档生成负担。
 
+Forge 的 OpenAPI 类型使用 `utoipa` 6。产品侧也应使用同一主版本；如果提供 Swagger UI，使用 `utoipa-swagger-ui` 10，避免同时引入 utoipa 5 和 6 导致 schema trait 或文档类型不匹配。生成文档默认仍为 OpenAPI 3.1.0，升级依赖不会自动切换到 3.2.0。
+
 ## 分页参数
 
 常用类型：

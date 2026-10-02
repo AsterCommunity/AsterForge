@@ -115,6 +115,10 @@ with `cargo run -p {{crate_name}}_migration -- <command>`.
 
 ## OpenAPI
 
+The template uses Utoipa 6 and Swagger UI 10, matching Forge's schema traits. Keep these
+dependencies on compatible major versions; Utoipa 5 schemas cannot be used by Utoipa 6.
+Generated documents retain OpenAPI 3.1.0 by default.
+
 OpenAPI generation follows the same debug-only pattern used by Aster services:
 
 ```bash

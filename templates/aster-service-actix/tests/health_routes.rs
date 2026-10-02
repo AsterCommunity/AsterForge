@@ -5,6 +5,48 @@ mod common;
 
 use actix_web::{http::StatusCode, test};
 
+#[cfg(all(debug_assertions, feature = "openapi"))]
+#[actix_web::test]
+async fn openapi_and_swagger_routes_serve_documentation() {
+    let (state, _database) = common::setup().await;
+    let app = create_test_app!(state);
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api-docs/openapi.json")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let doc: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(doc["openapi"], "3.1.0");
+    assert!(doc["paths"]["/health"]["get"]["responses"]["200"].is_object());
+    assert!(doc["paths"]["/health/ready"]["get"]["responses"]["503"].is_object());
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get().uri("/swagger-ui/").to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = test::read_body(response).await;
+    let html = std::str::from_utf8(&body).expect("Swagger UI HTML should be UTF-8");
+    assert!(html.contains("swagger-ui-bundle.js"));
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/swagger-ui/swagger-initializer.js")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = test::read_body(response).await;
+    let script = std::str::from_utf8(&body).expect("Swagger UI initializer should be UTF-8");
+    assert!(script.contains("/api-docs/openapi.json"));
+}
+
 #[actix_web::test]
 async fn health_and_ready_routes_return_ok() {
     let (state, _database) = common::setup().await;

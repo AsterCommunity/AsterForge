@@ -122,6 +122,13 @@ jobs:
         working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
         run: bun install --frozen-lockfile
 
+      - name: Verify OpenAPI and SDK artifacts
+        working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
+        run: |
+          bun run generate-api
+          diff -u "$GITHUB_WORKSPACE/templates/aster-service-actix/frontend-panel/generated/openapi.json" generated/openapi.json
+          diff -u "$GITHUB_WORKSPACE/templates/aster-service-actix/frontend-panel/src/types/api.generated.ts" src/types/api.generated.ts
+
       - name: Frontend typecheck and lint
         working-directory: ${{ env.GENERATED_PROJECT }}/frontend-panel
         run: bun run check
