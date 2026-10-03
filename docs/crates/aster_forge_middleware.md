@@ -4,13 +4,13 @@
 
 ## 适用场景
 
-- 给每个请求生成或传递 request id。
+- 给每个请求生成并在服务内部传播 request id。
 - 注入基础安全响应头。
 - 提供 CSRF token 和 request source 校验 helper。
-- 提供 runtime CORS middleware 的 Actix 机械层。
+- 为 Actix 和 Axum 提供同一套动态 CORS 校验与响应头机制。
 - 提供可信代理真实 IP 提取和通用 keyed rate limiter。
-- 可选记录 Actix HTTP 请求指标。
-- 让 Drive、Yggdrasil 等 Actix 服务复用同一套 HTTP 基础行为。
+- 可选记录 Actix/Axum HTTP 请求指标。
+- 让 Drive、Yggdrasil、Gate 等产品复用 HTTP 基础机制，产品自行选择路由与策略。
 
 不适合放在这里的内容：
 
@@ -25,7 +25,7 @@
 aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-默认 feature 不启用 HTTP metrics middleware，适合只需要 CSRF、CORS、rate limit、request id 和 security headers 的产品。
+默认启用 `actix`，不启用 `metrics`。Axum 产品必须关闭默认 feature，避免引入 Actix。`shared` 核心不要求任何 transport feature。
 
 如果产品要使用 `aster_forge_middleware::actix::metrics::MetricsMiddleware`，需要显式开启：
 
@@ -33,9 +33,79 @@ aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge" 
 aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", features = ["metrics"] }
 ```
 
+## 能力与模块边界
+
+| 能力 | 共享核心 | Actix 适配 | Axum 适配 |
+| --- | --- | --- | --- |
+| CSRF | `shared::csrf`：token、常量时间比较、来源校验、错误分类 | `actix::csrf`：request/cookie helpers | `axum::csrf`：helpers、`CsrfConfig` + `csrf` |
+| Runtime CORS | `shared::cors`：policy、错误类型、同一份校验/响应头引擎 | `RuntimeCors` + `RuntimeCorsConfig` | `RuntimeCorsConfig` + `runtime_cors` |
+| Client IP | `aster_forge_utils::net`：IP/CIDR 与 forwarded 解析 | `actix::client_ip` | `axum::client_ip`：HTTP headers、ConnectInfo |
+| Rate limit | `shared::rate_limit`：governor quota、normalized string keys、retry metadata | `actix::rate_limit`：governor config/extractor | `axum::rate_limit`：IP/string middleware |
+| Request ID | 两端统一生成新的 UUID v4 | `RequestIdMiddleware` | `request_id` |
+| Security headers | `shared::security_headers`：默认值 | `default_headers()` | `security_headers` |
+| HTTP metrics | `aster_forge_metrics`：recorder | `MetricsMiddleware` | `metrics` |
+
+已有 Actix helper/type import 保持有效。CSRF 校验、CORS policy 和 keyed limiter 来自 `shared`，纯机械件的新接入优先使用 `shared::*`。Actix 的 `CsrfTokenNames` 只适配 HTTP 0.2 header 类型，保留 `header_name()` 的原有返回类型；共享核心与 Axum 使用 HTTP 1 header 类型。两种 adapter 共用同一份名称校验规则。
+
+## Axum 接入
+
+```toml
+aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["axum"] }
+# 需要 HTTP metrics 时再加入 "metrics"；Axum-only 依赖树不包含 actix-web/actix-governor。
+```
+
+最小接入：
+
+```rust
+use axum::{Router, middleware, routing::get};
+use aster_forge_middleware::axum::{request_id, security_headers};
+
+let app: Router = Router::new()
+    .route("/health", get(|| async { "ok" }))
+    .layer(middleware::from_fn(security_headers))
+    .layer(middleware::from_fn(request_id));
+```
+
+完整、可编译的 [Axum 中间件示例](https://github.com/AsterCommunity/AsterForge/blob/master/crates/aster_forge_middleware/examples/axum_middleware.rs) 同时安装 CSRF、动态 CORS、IP 限流、安全头和 request ID：
+
+```bash
+cargo run -p aster_forge_middleware --example axum_middleware --no-default-features --features axum
+# 可选 recorder 安装顺序也包含在示例中：
+cargo check -p aster_forge_middleware --example axum_middleware --no-default-features --features axum,metrics
+```
+
+示例中的 origin 和 quota 是产品示例配置，不是 Forge 默认策略。真实产品通过捕获的 `Arc<AppState>` 或每次请求的 extension 读取运行时配置，不要把 `AppState`、登录态或业务错误码塞进 Forge。
+
+安装与错误边界：
+
+- `from_fn_with_state(config, handler)` 的 `State` 是该中间件的配置，独立于产品 Router 的 `State<AppState>`。resolver 可以捕获 `Arc<AppState>`，按请求读取最新 snapshot。
+- Axum 最后添加的 `.layer(...)` 最先处理请求。示例的外到内顺序是：可选 `Extension(recorder)` → metrics → request ID → security headers → CORS → IP limit → 选定路由的 CSRF → handler。CORS preflight 在 CSRF 之前处理；短路响应仍经过外层 request ID、安全头和 metrics。
+- 需要从 extensions 读取产品状态或 recorder 时，把 `Extension(...)` 放在相应 middleware 外层。metrics 从 `SharedMetricsRecorder` extension 读取 recorder；缺失或 disabled 时透传。使用 `Router::layer` 可以同时统计 fallback 请求；matched pattern 优先，未知路径使用低基数标签。
+- `CsrfConfig::new(names, protect, source, map_error)` 的 predicate 表达产品的 cookie-authenticated 路由范围；安全方法总是跳过。source resolver 返回 `RequestSourcePolicy`，包含可信 scheme/host、规范化的 public origins 和 source mode。校验先检查来源，再做 double-submit。
+- `RuntimeCorsConfig::new(policy, exempt_path, map_error)` 每次跨源请求重新解析 policy。`enabled = false` 或 `CorsAllowedOrigins::None` 在解析 Origin 前透传；`List([])` 是显式空白名单，拒绝跨源请求。`Any` + credentials 会反射具体 origin，不发送 `*`。
+- `RuntimeCorsConfig::request_origin(...)` 默认返回 `None`，关闭 same-origin bypass。只有产品提供经过信任校验的规范化 origin 后才启用 bypass。Host、Forwarded、X-Forwarded-Proto 本身不能证明来源可信。Actix 保留已有 `connection_info()` 行为，产品必须在入口控制或清理代理头。
+- CSRF source、CORS policy/request-origin 和 keyed-limit key resolver 失败时可以返回 `Err(Box::new(product_response))`，该响应原样保留。CSRF/CORS 校验错误分别交给 `map_error`；CORS 正常策略拒绝与 Actix 一样返回 403。`InvalidRequest` / `InvalidResponse` 分别供产品映射到 4xx / 5xx。
+- IP 限流通过 `ConnectInfo<SocketAddr>` 获取 direct peer，服务要使用 `into_make_service_with_connect_info::<SocketAddr>()`。其他可信 transport 可以显式设置 `peer_resolver`。缺失 peer 时 client IP helper 返回 `None`，IP limiter 使用共享 localhost 桶且忽略所有 forwarded headers；UDS 产品应关闭 IP limit 或改用字符串 key。
+- `IpRateLimitConfig::new(enabled, seconds, burst, trusted_proxies, rejection)` 和 `KeyedRateLimitConfig::new(limiter, key, rejection)` 由产品提供 rejection response。使用 `RateLimitRejection::retry_after_seconds()` 写入 429 和 Retry-After；所有不足整秒的等待向上取整。配置克隆共享限流状态，disabled 时也跳过 peer/key resolver。
+- keyed/IP limiter 的 `retain_recent()` 可由产品 runtime 的维护任务调用，回收过期 key；Forge 不创建隐藏后台任务。
+- `/metrics` 路由仍属于 `aster_forge_observability::axum`，不由本 crate 注册。
+
+## Actix 接入示例
+
+[完整 Actix 示例](https://github.com/AsterCommunity/AsterForge/blob/master/crates/aster_forge_middleware/examples/actix_middleware.rs) 参考 AD 的 `runtime/components.rs`、CORS resolver 和 rate-limit response adapter：通过 `web::Data<AppState>` 按请求读取 policy，产品映射校验错误与 429，选定 API scope 保护 unsafe 写操作。
+
+```bash
+cargo run -p aster_forge_middleware --example actix_middleware
+cargo check -p aster_forge_middleware --example actix_middleware --features metrics
+```
+
+Actix 最后安装的 `.wrap(...)` 最先处理请求。示例从外到内为代理来源边界 → 可选 metrics → request ID → security headers → CORS → Governor → API scope CSRF → handler。两份示例都监听 `127.0.0.1:3000`，分别运行；示例 `/api/demo` 的 POST 使用 `example_csrf` cookie 与 `X-Example-CSRF` header，`/health` 不安装 CSRF。
+
+该示例直接监听 TCP、不信任任何代理，因此在 `connection_info()` 首次读取之前移除影响 scheme/host 的代理头。真实产品应从 direct peer 判定可信代理后处理这些头，并保留自己的 cookie/bearer 认证边界。AD 的业务错误码、认证、权限和 runtime component 继续归 AD；示例只展示 middleware 组合。
+
 ## Rate Limit
 
-模块：`aster_forge_middleware::actix::rate_limit`
+模块：`shared::rate_limit`（框架无关）与 `actix::rate_limit`（Actix governor 适配）；Axum 见上文。
 
 主要类型和函数：
 
@@ -55,7 +125,7 @@ Forge 负责产品无关的 rate-limit 机械行为：
 - 从非零 `(seconds_per_request, burst_size)` 构造 governor quota。
 - 允许产品注入自己的 `429` response factory，同时继续复用可信代理和 client IP 提取。
 - 提供按字符串 key 限流的 `NormalizedStringRateLimiter`，默认 trim 并 lowercase key。
-- 把 governor rejection 转成可复用的 `retry_after_seconds`；不足一秒的等待向上取整为 1 秒，避免 `Retry-After: 0` 诱导客户端立即重试。
+- 把 governor rejection 转成可复用的 `retry_after_seconds`；所有不足整秒的等待向上取整，最小为 1 秒，避免 `Retry-After: 0` 诱导客户端立即重试。
 
 产品侧仍然负责：
 
@@ -103,7 +173,7 @@ fn build_config(
 典型协议端点接入：
 
 ```rust
-use aster_forge_middleware::actix::rate_limit::NormalizedStringRateLimiter;
+use aster_forge_middleware::shared::rate_limit::NormalizedStringRateLimiter;
 use std::num::{NonZeroU32, NonZeroU64};
 
 let limiter = NormalizedStringRateLimiter::new(
@@ -273,7 +343,7 @@ HTTP(S) origin、public site URL 和 CSRF 来源解析不受这个 CORS 专用�
 
 ## CSRF
 
-模块：`aster_forge_middleware::actix::csrf`
+模块：`shared::csrf`（框架无关）与 `actix::csrf`（Actix request adapter）；Axum 见上文。
 
 主要 API：
 
@@ -364,7 +434,7 @@ use aster_forge_middleware::actix::request_id::RequestIdMiddleware;
 app.wrap(RequestIdMiddleware)
 ```
 
-中间件会优先使用已有请求头里的 request id；缺失时生成 UUID。handler 可以从 request extensions 中读取 `RequestId`，用于日志字段、错误响应或审计链路。
+两端中间件都为每个请求生成新的 UUID v4，不接受客户端传入的 `X-Request-ID`。这个边界避免把未经信任、未限制格式的请求值当成服务内部标识。handler 从 request extensions 中读取 `RequestId`，响应的 `X-Request-ID` 返回同一值（覆盖下游同名头），用于日志与错误链路。
 
 接入注意点：
 
@@ -391,7 +461,7 @@ use aster_forge_middleware::actix::security_headers::default_headers;
 app.wrap(default_headers())
 ```
 
-默认头用于普通后端管理界面和 API 服务：
+两端都只补缺失的响应头，保留产品已设置的 `no-referrer`、`DENY` 等策略。默认头用于普通后端管理界面和 API 服务：
 
 - `X-Frame-Options: SAMEORIGIN`
 - `Referrer-Policy: strict-origin-when-cross-origin`
@@ -404,13 +474,22 @@ app.wrap(default_headers())
 接入产品仓库后至少覆盖：
 
 - 无 request id 请求会生成 request id。
-- 已有 request id 会被保留。
+- 客户端传入的 request id 会被新的 UUID v4 替换，extension 与响应头一致。
 - CORS preflight allow/deny、普通跨源 allow/deny、same-origin bypass、`Vary` 头。
-- CSRF token 生成、cookie/header mismatch、来源 header 校验。
+- CSRF safe/unsafe 方法、cookie/header 缺失/空/不匹配、自定义名称、来源 header 优先级和长度边界。
 - metrics enabled 时成功和错误响应都会记录。
 - metrics disabled 或缺失 recorder 时不影响请求。
-- 默认安全头出现在响应里。
+- 默认安全头出现在成功和失败响应里，保留产品已设置的更严格策略。
 - 特殊路由如果不能使用默认安全头，需要有单独测试说明原因。
+
+仓库测试全部使用 lib unit tests（各模块 `#[cfg(test)] mod tests`），Axum 测试通过真实 `Router` + `tower::ServiceExt::oneshot` 验证。双 transport feature 还会运行跨框架 request ID/security/CORS 契约测试。限流并发验证共享 burst，额度恢复使用 governor fake clock，不依赖 sleep。
+
+```bash
+bash scripts/test-middleware-features.sh
+cargo clippy -p aster_forge_middleware --all-targets --all-features -- -D warnings
+```
+
+本地脚本覆盖无默认 feature、Actix、Axum、双 transport，以及各自带 metrics 的矩阵，并检查 Axum-only 正常依赖树无 Actix。示例也纳入编译；远端继续使用现有 workspace feature-matrix CI 执行 lib tests，不另建 CI job。
 
 ## 参考项目
 

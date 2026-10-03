@@ -6,12 +6,9 @@
 
 use actix_web::middleware::DefaultHeaders;
 
-/// Value used for the `X-Frame-Options` response header.
-pub const X_FRAME_OPTIONS_VALUE: &str = "SAMEORIGIN";
-/// Value used for the `Referrer-Policy` response header.
-pub const REFERRER_POLICY_VALUE: &str = "strict-origin-when-cross-origin";
-/// Value used for the `X-Content-Type-Options` response header.
-pub const X_CONTENT_TYPE_OPTIONS_VALUE: &str = "nosniff";
+pub use crate::shared::security_headers::{
+    REFERRER_POLICY_VALUE, X_CONTENT_TYPE_OPTIONS_VALUE, X_FRAME_OPTIONS_VALUE,
+};
 
 /// Builds the default security headers middleware.
 #[must_use]

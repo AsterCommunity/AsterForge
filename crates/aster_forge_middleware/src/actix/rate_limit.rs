@@ -14,7 +14,6 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
-use std::time::Duration;
 
 use actix_governor::{
     GovernorConfig, GovernorConfigBuilder, KeyExtractor, SimpleKeyExtractionError,
@@ -22,14 +21,14 @@ use actix_governor::{
 use actix_web::dev::ServiceRequest;
 use actix_web::http::header::ContentType;
 use actix_web::{HttpResponse, HttpResponseBuilder};
-use governor::clock::{Clock, DefaultClock, QuantaInstant};
+use governor::NotUntil;
+use governor::clock::QuantaInstant;
 use governor::middleware::NoOpMiddleware;
-use governor::state::keyed::DefaultKeyedStateStore;
-use governor::{NotUntil, Quota, RateLimiter};
 use ipnet::IpNet;
 
-type StringKeyedLimiter =
-    RateLimiter<String, DefaultKeyedStateStore<String>, DefaultClock, NoOpMiddleware>;
+pub use crate::shared::rate_limit::{
+    NormalizedStringRateLimiter, RateLimitRejection, retry_after_seconds,
+};
 
 /// Trusted-proxy-aware IP key extractor for `actix-governor`.
 ///
@@ -119,10 +118,12 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
     type KeyExtractionError = SimpleKeyExtractionError<&'static str>;
 
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
-        let peer = req
+        // A localhost fallback is a bucket key, never proof that a proxy sent these headers.
+        Ok(req
             .peer_addr()
-            .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |socket| socket.ip());
-        Ok(self.real_ip(req, peer))
+            .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |socket| {
+                self.real_ip(req, socket.ip())
+            }))
     }
 
     fn exceed_rate_limit_response(
@@ -138,18 +139,6 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
             .content_type(ContentType::plaintext())
             .body(format!("Too many requests, retry in {retry_after}s"))
     }
-}
-
-/// Returns the retry delay in whole seconds for a governor rejection.
-///
-/// Sub-second waits round up to one second so clients never see a zero delay
-/// that invites an immediate retry.
-#[must_use]
-pub fn retry_after_seconds(not_until: &NotUntil<QuantaInstant>) -> u64 {
-    not_until
-        .wait_time_from(DefaultClock::default().now())
-        .as_secs()
-        .max(1)
 }
 
 /// Builds an Actix governor config using the trusted-proxy-aware IP extractor.
@@ -206,83 +195,9 @@ where
         .expect("non-zero rate limit tier should always build")
 }
 
-/// A keyed string rate limiter with product-neutral key normalization.
-///
-/// The limiter trims surrounding whitespace and lowercases keys before checking
-/// the quota. This suits usernames, email addresses, provider IDs, and similar
-/// business-unique identifiers where accidental case differences should not
-/// bypass a rate limit.
-#[derive(Clone)]
-pub struct NormalizedStringRateLimiter {
-    enabled: bool,
-    limiter: Arc<StringKeyedLimiter>,
-}
-
-impl NormalizedStringRateLimiter {
-    /// Builds a limiter from a non-zero quota and enabled flag.
-    #[must_use]
-    pub fn new(enabled: bool, seconds_per_request: NonZeroU64, burst_size: NonZeroU32) -> Self {
-        Self {
-            enabled,
-            limiter: Arc::new(build_string_keyed_limiter(seconds_per_request, burst_size)),
-        }
-    }
-
-    /// Checks a raw key after trimming whitespace and lowercasing it.
-    #[must_use]
-    pub fn check(&self, raw_key: &str) -> Option<RateLimitRejection> {
-        if !self.enabled {
-            return None;
-        }
-
-        let key = raw_key.trim().to_ascii_lowercase();
-        self.limiter
-            .check_key(&key)
-            .err()
-            .map(|not_until| RateLimitRejection::from_not_until(&not_until))
-    }
-}
-
-/// Product-neutral rate-limit rejection metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RateLimitRejection {
-    retry_after_seconds: u64,
-}
-
-impl RateLimitRejection {
-    fn from_not_until(not_until: &NotUntil<QuantaInstant>) -> Self {
-        Self {
-            retry_after_seconds: retry_after_seconds(not_until),
-        }
-    }
-
-    /// Returns how many seconds clients should wait before retrying.
-    #[must_use]
-    pub const fn retry_after_seconds(self) -> u64 {
-        self.retry_after_seconds
-    }
-}
-
-#[expect(
-    clippy::expect_used,
-    reason = "NonZeroU64 seconds_per_request creates a non-zero duration"
-)]
-fn build_string_keyed_limiter(
-    seconds_per_request: NonZeroU64,
-    burst_size: NonZeroU32,
-) -> StringKeyedLimiter {
-    let quota = Quota::with_period(Duration::from_secs(seconds_per_request.get()))
-        .expect("non-zero rate limit tier should always build")
-        .allow_burst(burst_size);
-    RateLimiter::keyed(quota)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        NormalizedStringRateLimiter, TrustedProxyIpKeyExtractor,
-        build_ip_governor_config_with_rejection_response, retry_after_seconds,
-    };
+    use super::{TrustedProxyIpKeyExtractor, build_ip_governor_config_with_rejection_response};
     use actix_governor::{Governor, KeyExtractor};
     use actix_web::{App, HttpResponse, http::StatusCode, test as actix_test, web};
     use std::net::IpAddr;
@@ -339,6 +254,15 @@ mod tests {
             extractor.extract(&missing_peer).unwrap(),
             "127.0.0.1".parse::<IpAddr>().unwrap()
         );
+
+        let loopback_trusted = TrustedProxyIpKeyExtractor::new(&["127.0.0.1".into()]);
+        let missing_peer = actix_test::TestRequest::default()
+            .insert_header(("x-forwarded-for", "203.0.113.1"))
+            .to_srv_request();
+        assert_eq!(
+            loopback_trusted.extract(&missing_peer).unwrap(),
+            "127.0.0.1".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[actix_web::test]
@@ -382,48 +306,5 @@ mod tests {
         let body: serde_json::Value = actix_test::read_body_json(response).await;
         assert_eq!(body["code"], "rate_limited");
         assert!(body["retry_after"].as_u64().is_some_and(|value| value > 0));
-    }
-
-    #[test]
-    fn retry_after_seconds_rounds_sub_second_waits_up_to_one() {
-        let quota = governor::Quota::with_period(std::time::Duration::from_secs(1))
-            .unwrap()
-            .allow_burst(NonZeroU32::new(1).unwrap());
-        let limiter = governor::RateLimiter::keyed(quota);
-
-        assert!(limiter.check_key(&"key").is_ok());
-        let not_until = limiter
-            .check_key(&"key")
-            .expect_err("second immediate check should be rate limited");
-
-        // The remaining wait is strictly below one second (some nanoseconds have
-        // elapsed since the first check), so truncating whole seconds would
-        // report 0 and tell the client to retry immediately.
-        assert_eq!(retry_after_seconds(&not_until), 1);
-    }
-
-    #[test]
-    fn normalized_string_limiter_can_be_disabled() {
-        let limiter = NormalizedStringRateLimiter::new(
-            false,
-            NonZeroU64::new(60).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-        );
-
-        assert!(limiter.check("admin@example.com").is_none());
-        assert!(limiter.check("admin@example.com").is_none());
-    }
-
-    #[test]
-    fn normalized_string_limiter_trims_and_lowercases_keys() {
-        let limiter = NormalizedStringRateLimiter::new(
-            true,
-            NonZeroU64::new(60).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-        );
-
-        assert!(limiter.check("Admin@Example.com").is_none());
-        assert!(limiter.check("other@example.com").is_none());
-        assert!(limiter.check(" admin@example.com ").is_some());
     }
 }

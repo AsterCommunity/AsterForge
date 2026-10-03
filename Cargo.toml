@@ -70,6 +70,7 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 bloomfilter = "3.0.2"
 bytes = "1"
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
+cookie = { version = "0.16", features = ["percent-encode"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
 dashmap = "6"
 fs2 = "0.4"

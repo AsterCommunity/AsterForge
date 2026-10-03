@@ -6,7 +6,6 @@
 //! and maintaining `Vary`. Product crates provide a policy resolver, exempt-path predicate,
 //! allowed/exposed header lists, and error mapping.
 
-use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use actix_web::{
@@ -14,97 +13,16 @@ use actix_web::{
     body::{EitherBody, MessageBody},
     dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
     http::{
-        Method, header,
+        header,
         header::{HeaderMap, HeaderValue},
     },
 };
 use futures::future::{LocalBoxFuture, Ready, ok};
 
-/// Origin list accepted by a runtime CORS policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CorsAllowedOrigins {
-    /// Cross-origin requests are denied.
-    None,
-    /// Every origin is accepted.
-    Any,
-    /// Only the listed normalized origins are accepted.
-    List(Vec<String>),
-}
-
-/// Product-neutral runtime CORS policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeCorsPolicy {
-    /// Whether CORS processing is enabled.
-    pub enabled: bool,
-    /// Origins accepted when CORS processing is enabled.
-    pub allowed_origins: CorsAllowedOrigins,
-    /// Whether credentials are allowed.
-    pub allow_credentials: bool,
-    /// Browser preflight cache duration.
-    pub max_age_secs: u64,
-}
-
-impl RuntimeCorsPolicy {
-    /// Returns whether requests should be actively checked.
-    #[must_use]
-    pub fn enforces_requests(&self) -> bool {
-        self.enabled && !matches!(self.allowed_origins, CorsAllowedOrigins::None)
-    }
-
-    /// Returns whether a normalized origin is allowed.
-    #[must_use]
-    pub fn allows_origin(&self, origin: &str) -> bool {
-        match &self.allowed_origins {
-            CorsAllowedOrigins::None => false,
-            CorsAllowedOrigins::Any => true,
-            CorsAllowedOrigins::List(origins) => origins.iter().any(|allowed| allowed == origin),
-        }
-    }
-
-    /// Returns whether responses should use `Access-Control-Allow-Origin: *`.
-    #[must_use]
-    pub fn sends_wildcard_origin(&self) -> bool {
-        matches!(self.allowed_origins, CorsAllowedOrigins::Any) && !self.allow_credentials
-    }
-}
-
-/// CORS middleware failure category for product error mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CorsMiddlewareErrorKind {
-    /// The incoming request contains an invalid origin or preflight header.
-    InvalidRequest,
-    /// A response header produced or inherited by the middleware is invalid.
-    InvalidResponse,
-}
-
-/// Product-neutral CORS middleware error.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{message}")]
-pub struct CorsMiddlewareError {
-    kind: CorsMiddlewareErrorKind,
-    message: String,
-}
-
-impl CorsMiddlewareError {
-    fn new(kind: CorsMiddlewareErrorKind, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-        }
-    }
-
-    /// Returns the failure category.
-    #[must_use]
-    pub const fn kind(&self) -> CorsMiddlewareErrorKind {
-        self.kind
-    }
-
-    /// Returns the diagnostic message.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
+pub use crate::shared::cors::{
+    CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, RuntimeCorsPolicy,
+};
+use crate::shared::cors::{CorsDecision, CorsSettings};
 
 type PolicyResolver = dyn Fn(&ServiceRequest) -> Result<RuntimeCorsPolicy, Error>;
 type ExemptPathPredicate = dyn Fn(&str) -> bool;
@@ -112,10 +30,7 @@ type ErrorMapper = dyn Fn(CorsMiddlewareError) -> Error;
 
 /// Runtime CORS middleware configuration.
 pub struct RuntimeCorsConfig {
-    allowed_methods: Vec<&'static str>,
-    allowed_headers: Vec<&'static str>,
-    exposed_headers: Vec<&'static str>,
-    additional_origin_schemes: Vec<&'static str>,
+    settings: CorsSettings,
     policy: Rc<PolicyResolver>,
     exempt_path: Rc<ExemptPathPredicate>,
     map_error: Rc<ErrorMapper>,
@@ -130,10 +45,7 @@ impl RuntimeCorsConfig {
         M: Fn(CorsMiddlewareError) -> Error + 'static,
     {
         Self {
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            exposed_headers: Vec::new(),
-            additional_origin_schemes: Vec::new(),
+            settings: CorsSettings::default(),
             policy: Rc::new(policy),
             exempt_path: Rc::new(exempt_path),
             map_error: Rc::new(map_error),
@@ -143,21 +55,21 @@ impl RuntimeCorsConfig {
     /// Sets preflight-allowed methods.
     #[must_use]
     pub fn allowed_methods(mut self, methods: impl IntoIterator<Item = &'static str>) -> Self {
-        self.allowed_methods = methods.into_iter().collect();
+        self.settings.allowed_methods = methods.into_iter().collect();
         self
     }
 
     /// Sets preflight-allowed request headers.
     #[must_use]
     pub fn allowed_headers(mut self, headers: impl IntoIterator<Item = &'static str>) -> Self {
-        self.allowed_headers = headers.into_iter().collect();
+        self.settings.allowed_headers = headers.into_iter().collect();
         self
     }
 
     /// Sets response headers exposed to browser JavaScript.
     #[must_use]
     pub fn exposed_headers(mut self, headers: impl IntoIterator<Item = &'static str>) -> Self {
-        self.exposed_headers = headers.into_iter().collect();
+        self.settings.exposed_headers = headers.into_iter().collect();
         self
     }
 
@@ -170,7 +82,7 @@ impl RuntimeCorsConfig {
         mut self,
         schemes: impl IntoIterator<Item = &'static str>,
     ) -> Self {
-        self.additional_origin_schemes = schemes.into_iter().collect();
+        self.settings.additional_origin_schemes = schemes.into_iter().collect();
         self
     }
 }
@@ -178,10 +90,7 @@ impl RuntimeCorsConfig {
 impl Clone for RuntimeCorsConfig {
     fn clone(&self) -> Self {
         Self {
-            allowed_methods: self.allowed_methods.clone(),
-            allowed_headers: self.allowed_headers.clone(),
-            exposed_headers: self.exposed_headers.clone(),
-            additional_origin_schemes: self.additional_origin_schemes.clone(),
+            settings: self.settings.clone(),
             policy: Rc::clone(&self.policy),
             exempt_path: Rc::clone(&self.exempt_path),
             map_error: Rc::clone(&self.map_error),
@@ -247,270 +156,103 @@ where
                 return Ok(svc.call(req).await?.map_into_left_body());
             }
 
-            let Some(origin_header) = req.headers().get(header::ORIGIN).cloned() else {
+            if !req.headers().contains_key(header::ORIGIN) {
                 return Ok(svc.call(req).await?.map_into_left_body());
-            };
-
+            }
             let policy = (config.policy)(&req)?;
-
             if !policy.enforces_requests() {
                 return Ok(svc.call(req).await?.map_into_left_body());
             }
-
-            let origin = origin_header
-                .to_str()
-                .map_err(|_| {
-                    (config.map_error)(CorsMiddlewareError::new(
-                        CorsMiddlewareErrorKind::InvalidRequest,
-                        "invalid Origin header",
-                    ))
-                })
-                .and_then(|origin| {
-                    aster_forge_utils::url::normalize_origin_with_additional_schemes(
-                        origin,
-                        false,
-                        &config.additional_origin_schemes,
-                    )
-                    .map_err(|error| {
-                        (config.map_error)(CorsMiddlewareError::new(
-                            CorsMiddlewareErrorKind::InvalidRequest,
-                            error.to_string(),
-                        ))
-                    })
-                })?;
-
-            if request_is_same_origin(&req, &origin) {
-                return Ok(svc.call(req).await?.map_into_left_body());
-            }
-
-            if !policy.allows_origin(&origin) {
-                return Ok(forbidden(req).map_into_right_body());
-            }
-
-            if is_preflight_request(&req) {
-                if !requested_method_is_allowed(&req, &config)
-                    || !requested_headers_are_allowed(&req, &config, &config.map_error)?
-                {
-                    return Ok(forbidden(req).map_into_right_body());
+            // Actix's connection_info contract is retained. Products must sanitize proxy headers.
+            let request_origin = {
+                let conn = req.connection_info();
+                format!(
+                    "{}://{}",
+                    conn.scheme().to_ascii_lowercase(),
+                    conn.host().to_ascii_lowercase()
+                )
+            };
+            let headers = to_http_headers(req.headers(), CorsMiddlewareErrorKind::InvalidRequest)
+                .map_err(|error| (config.map_error)(error))?;
+            let decision = crate::shared::cors::evaluate(
+                req.method().as_str(),
+                &headers,
+                Some(&request_origin),
+                &policy,
+                &config.settings,
+            )
+            .map_err(|error| (config.map_error)(error))?;
+            match decision {
+                CorsDecision::Pass => Ok(svc.call(req).await?.map_into_left_body()),
+                CorsDecision::Reject => Ok(forbidden(req).map_into_right_body()),
+                CorsDecision::Preflight(headers) => {
+                    let mut response = HttpResponse::NoContent().finish();
+                    replace_headers(response.headers_mut(), &headers)
+                        .map_err(|error| (config.map_error)(error))?;
+                    Ok(req.into_response(response).map_into_right_body())
                 }
-
-                let mut response = HttpResponse::NoContent().finish();
-                apply_origin_headers(response.headers_mut(), &policy, &origin, &config.map_error)?;
-                apply_preflight_headers(
-                    response.headers_mut(),
-                    &policy,
-                    &config,
-                    &config.map_error,
-                )?;
-                return Ok(req.into_response(response).map_into_right_body());
+                CorsDecision::Actual(origin) => {
+                    let mut response = svc.call(req).await?.map_into_left_body();
+                    let mut headers = to_http_headers(
+                        response.headers(),
+                        CorsMiddlewareErrorKind::InvalidResponse,
+                    )
+                    .map_err(|error| (config.map_error)(error))?;
+                    crate::shared::cors::apply_origin_headers(&mut headers, &policy, &origin)
+                        .and_then(|()| {
+                            crate::shared::cors::apply_actual_headers(
+                                &mut headers,
+                                &config.settings,
+                            )
+                        })
+                        .map_err(|error| (config.map_error)(error))?;
+                    replace_headers(response.headers_mut(), &headers)
+                        .map_err(|error| (config.map_error)(error))?;
+                    Ok(response)
+                }
             }
-
-            let mut response = svc.call(req).await?.map_into_left_body();
-            apply_origin_headers(response.headers_mut(), &policy, &origin, &config.map_error)?;
-            apply_actual_headers(response.headers_mut(), &config, &config.map_error)?;
-            Ok(response)
         })
     }
 }
 
-fn is_preflight_request(req: &ServiceRequest) -> bool {
-    req.method() == Method::OPTIONS
-        && req
-            .headers()
-            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
-}
-
-fn request_is_same_origin(req: &ServiceRequest, origin: &str) -> bool {
-    let conn = req.connection_info();
-    let request_origin = format!(
-        "{}://{}",
-        conn.scheme().to_ascii_lowercase(),
-        conn.host().to_ascii_lowercase()
-    );
-    request_origin == origin
-}
-
-fn requested_method_is_allowed(req: &ServiceRequest, config: &RuntimeCorsConfig) -> bool {
-    let Some(method) = req.headers().get(header::ACCESS_CONTROL_REQUEST_METHOD) else {
-        return false;
-    };
-
-    let Ok(method) = method.to_str() else {
-        return false;
-    };
-
-    config.allowed_methods.contains(&method)
-}
-
-fn requested_headers_are_allowed(
-    req: &ServiceRequest,
-    config: &RuntimeCorsConfig,
-    map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
-) -> Result<bool, Error> {
-    let Some(request_headers) = req.headers().get(header::ACCESS_CONTROL_REQUEST_HEADERS) else {
-        return Ok(true);
-    };
-
-    let request_headers = request_headers.to_str().map_err(|_| {
-        map_error(CorsMiddlewareError::new(
-            CorsMiddlewareErrorKind::InvalidRequest,
-            "invalid Access-Control-Request-Headers",
-        ))
-    })?;
-
-    // Requested header names are lowercased before comparison (browsers send
-    // them that way), so the configured names must be normalized too —
-    // otherwise a configured "Content-Type" would never match a preflight.
-    let allowed_headers = config
-        .allowed_headers
-        .iter()
-        .map(|header| header.to_ascii_lowercase())
-        .collect::<BTreeSet<String>>();
-
-    for requested in request_headers.split(',') {
-        let requested = requested.trim().to_ascii_lowercase();
-        if requested.is_empty() {
-            continue;
-        }
-
-        let parsed: Result<header::HeaderName, _> = requested.parse();
-        if parsed.is_err() {
-            return Err(map_error(CorsMiddlewareError::new(
-                CorsMiddlewareErrorKind::InvalidRequest,
-                "invalid Access-Control-Request-Headers",
-            )));
-        }
-
-        if !allowed_headers.contains(requested.as_str()) {
-            return Ok(false);
-        }
+// Actix uses http 0.2; the shared engine and Axum use http 1.
+fn to_http_headers(
+    headers: &HeaderMap,
+    kind: CorsMiddlewareErrorKind,
+) -> Result<http::HeaderMap, CorsMiddlewareError> {
+    let mut result = http::HeaderMap::new();
+    for (name, value) in headers {
+        let name = http::HeaderName::from_bytes(name.as_str().as_bytes())
+            .map_err(|_| CorsMiddlewareError::new(kind, "invalid header name"))?;
+        let value = http::HeaderValue::from_bytes(value.as_bytes())
+            .map_err(|_| CorsMiddlewareError::new(kind, "invalid header value"))?;
+        result.append(name, value);
     }
-
-    Ok(true)
+    Ok(result)
 }
 
-fn apply_origin_headers(
+fn replace_headers(
     headers: &mut HeaderMap,
-    policy: &RuntimeCorsPolicy,
-    origin: &str,
-    map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
-) -> Result<(), Error> {
-    if !headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN) {
-        let value = if policy.sends_wildcard_origin() {
-            HeaderValue::from_static("*")
-        } else {
-            header_value(
-                origin,
-                "failed to serialize Access-Control-Allow-Origin",
-                map_error,
-            )?
-        };
-
-        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
-    }
-
-    if policy.allow_credentials && !headers.contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS) {
-        headers.insert(
-            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
-            HeaderValue::from_static("true"),
-        );
-    }
-
-    ensure_vary(headers, "Origin", map_error)?;
-    Ok(())
-}
-
-fn apply_preflight_headers(
-    headers: &mut HeaderMap,
-    policy: &RuntimeCorsPolicy,
-    config: &RuntimeCorsConfig,
-    map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
-) -> Result<(), Error> {
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        header_value(
-            &config.allowed_methods.join(", "),
-            "failed to serialize Access-Control-Allow-Methods",
-            map_error,
-        )?,
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        header_value(
-            &config.allowed_headers.join(", "),
-            "failed to serialize Access-Control-Allow-Headers",
-            map_error,
-        )?,
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_MAX_AGE,
-        header_value(
-            &policy.max_age_secs.to_string(),
-            "failed to serialize Access-Control-Max-Age",
-            map_error,
-        )?,
-    );
-    ensure_vary(headers, "Access-Control-Request-Method", map_error)?;
-    ensure_vary(headers, "Access-Control-Request-Headers", map_error)?;
-    Ok(())
-}
-
-fn apply_actual_headers(
-    headers: &mut HeaderMap,
-    config: &RuntimeCorsConfig,
-    map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
-) -> Result<(), Error> {
-    headers.insert(
-        header::ACCESS_CONTROL_EXPOSE_HEADERS,
-        header_value(
-            &config.exposed_headers.join(", "),
-            "failed to serialize Access-Control-Expose-Headers",
-            map_error,
-        )?,
-    );
-    Ok(())
-}
-
-fn ensure_vary(
-    headers: &mut HeaderMap,
-    value: &str,
-    map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
-) -> Result<(), Error> {
-    let mut vary_values = BTreeSet::new();
-
-    if let Some(existing) = headers.get(header::VARY) {
-        let existing = existing.to_str().map_err(|_| {
-            map_error(CorsMiddlewareError::new(
+    values: &http::HeaderMap,
+) -> Result<(), CorsMiddlewareError> {
+    let mut result = HeaderMap::new();
+    for (name, value) in values {
+        let name = header::HeaderName::from_bytes(name.as_str().as_bytes()).map_err(|_| {
+            CorsMiddlewareError::new(
                 CorsMiddlewareErrorKind::InvalidResponse,
-                "invalid Vary header",
-            ))
+                "invalid header name",
+            )
         })?;
-        for item in existing.split(',') {
-            let item = item.trim();
-            if !item.is_empty() {
-                vary_values.insert(item.to_string());
-            }
-        }
+        let value = HeaderValue::from_bytes(value.as_bytes()).map_err(|_| {
+            CorsMiddlewareError::new(
+                CorsMiddlewareErrorKind::InvalidResponse,
+                "invalid header value",
+            )
+        })?;
+        result.append(name, value);
     }
-
-    vary_values.insert(value.to_string());
-    let joined = vary_values.into_iter().collect::<Vec<_>>().join(", ");
-    let header_value = header_value(&joined, "failed to serialize Vary header", map_error)?;
-    headers.insert(header::VARY, header_value);
+    *headers = result;
     Ok(())
-}
-
-fn header_value(
-    value: &str,
-    error_message: &'static str,
-    map_error: &Rc<dyn Fn(CorsMiddlewareError) -> Error>,
-) -> Result<HeaderValue, Error> {
-    HeaderValue::from_str(value).map_err(|_| {
-        map_error(CorsMiddlewareError::new(
-            CorsMiddlewareErrorKind::InvalidResponse,
-            error_message,
-        ))
-    })
 }
 
 fn forbidden(req: ServiceRequest) -> ServiceResponse {
@@ -565,6 +307,47 @@ mod tests {
             "x-request-id",
         ])
         .exposed_headers(["content-length", "x-request-id"])
+    }
+
+    #[actix_web::test]
+    async fn shared_header_adapter_preserves_multiple_vary_and_cookie_values() {
+        let app = test::init_service(App::new().wrap(RuntimeCors::new(test_config())).route(
+            "/api/demo",
+            web::get().to(|| async {
+                HttpResponse::Ok()
+                    .append_header((header::VARY, "Accept-Encoding, origin"))
+                    .append_header((header::VARY, "Accept-Language"))
+                    .append_header((header::SET_COOKIE, "a=1"))
+                    .append_header((header::SET_COOKIE, "b=2"))
+                    .finish()
+            }),
+        ))
+        .await;
+        let response = test::call_service(
+            &app,
+            test::TestRequest::get()
+                .uri("/api/demo")
+                .insert_header((header::ORIGIN, "https://panel.example.com"))
+                .to_request(),
+        )
+        .await;
+        let vary = response
+            .headers()
+            .get(header::VARY)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(vary.contains("Accept-Encoding"));
+        assert!(vary.contains("Accept-Language"));
+        assert_eq!(vary.to_ascii_lowercase().matches("origin").count(), 1);
+        assert_eq!(
+            response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .map(|value| value.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["a=1", "b=2"]
+        );
     }
 
     #[actix_web::test]

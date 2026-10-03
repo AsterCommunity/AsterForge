@@ -19,3 +19,12 @@
 pub mod actix;
 #[cfg(feature = "axum")]
 pub mod axum;
+
+/// Framework-neutral middleware kernels shared by both transports.
+pub mod shared;
+
+#[cfg(all(test, feature = "metrics", any(feature = "actix", feature = "axum")))]
+mod test_support;
+
+#[cfg(all(test, feature = "actix", feature = "axum"))]
+mod contract_tests;

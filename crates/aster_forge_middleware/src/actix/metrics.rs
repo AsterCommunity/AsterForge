@@ -118,77 +118,12 @@ fn unmatched_route(req: &ServiceRequest) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
 
+    use crate::test_support::RecordingMetrics;
     use actix_web::{App, HttpResponse, error, test as actix_test, web};
-    use aster_forge_metrics::{MetricsRecorder, SharedMetricsRecorder};
+    use aster_forge_metrics::MetricsRecorder;
 
     use super::{MetricsMiddleware, unmatched_route};
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct HttpMetricRecord {
-        method: String,
-        route: String,
-        status: u16,
-        duration_seconds: f64,
-    }
-
-    struct RecordingMetrics {
-        enabled: bool,
-        records: Mutex<Vec<HttpMetricRecord>>,
-    }
-
-    impl RecordingMetrics {
-        fn enabled() -> Arc<Self> {
-            Arc::new(Self {
-                enabled: true,
-                records: Mutex::new(Vec::new()),
-            })
-        }
-
-        fn disabled() -> Arc<Self> {
-            Arc::new(Self {
-                enabled: false,
-                records: Mutex::new(Vec::new()),
-            })
-        }
-
-        fn shared(self: &Arc<Self>) -> SharedMetricsRecorder {
-            self.clone()
-        }
-
-        fn records(&self) -> Vec<HttpMetricRecord> {
-            self.records.lock().expect("metrics records lock").clone()
-        }
-    }
-
-    impl aster_forge_metrics::DbMetricsRecorder for RecordingMetrics {
-        fn enabled(&self) -> bool {
-            self.enabled
-        }
-
-        fn record_db_query(&self, _metric: &aster_forge_metrics::DbQueryMetric) {}
-    }
-
-    impl MetricsRecorder for RecordingMetrics {
-        fn record_http_request(
-            &self,
-            method: &str,
-            route: &str,
-            status: u16,
-            duration_seconds: f64,
-        ) {
-            self.records
-                .lock()
-                .expect("metrics records lock")
-                .push(HttpMetricRecord {
-                    method: method.to_string(),
-                    route: route.to_string(),
-                    status,
-                    duration_seconds,
-                });
-        }
-    }
 
     #[test]
     fn unmatched_route_groups_unknown_paths() {

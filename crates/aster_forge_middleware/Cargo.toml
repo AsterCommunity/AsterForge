@@ -12,6 +12,7 @@ publish = false
 actix-governor = { workspace = true, optional = true }
 actix-web = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
+cookie = { workspace = true, optional = true }
 aster_forge_metrics = { path = "../aster_forge_metrics", optional = true }
 aster_forge_utils = { path = "../aster_forge_utils" }
 base64.workspace = true
@@ -29,12 +30,22 @@ http.workspace = true
 [features]
 default = ["actix"]
 actix = ["dep:actix-governor", "dep:actix-web"]
-axum = ["dep:axum"]
+axum = ["dep:axum", "dep:cookie"]
 metrics = ["dep:aster_forge_metrics"]
 
 [dev-dependencies]
 sea-orm.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "axum_middleware"
+required-features = ["axum"]
+
+[[example]]
+name = "actix_middleware"
+required-features = ["actix"]
