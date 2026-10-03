@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use aster_forge_config::{
-    CONFIG_SYNC_BACKEND_REDIS, ConfigNotificationSource, ConfigSyncConfig,
+    CONFIG_SYNC_BACKEND_REDIS, ConfigCoreError, ConfigNotificationSource, ConfigSyncConfig,
     ConfigSyncConnectionObservation, ConfigSyncConnectionState, ConfigSyncEndpoint,
     build_config_sync_runtime_with_runtime_id,
 };
@@ -14,6 +14,97 @@ use tokio_util::sync::CancellationToken;
 fn test_suite() -> &'static TestContainerSuite {
     static SUITE: OnceLock<TestContainerSuite> = OnceLock::new();
     SUITE.get_or_init(|| TestContainerSuite::new("asterforge-config"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn single_failed_reload_recovers_on_a_healthy_redis_subscription() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Keep this test isolated from the recovery test that stops its Redis server.
+    let redis = AuthenticatedRedisTestContainer::start("config-retry-test").await;
+    let config = ConfigSyncConfig {
+        backend: CONFIG_SYNC_BACKEND_REDIS.to_string(),
+        endpoint: ConfigSyncEndpoint::credentials(
+            redis.base_url(),
+            None,
+            Some("config-retry-test".to_string()),
+        ),
+        topic: format!("asterforge.config.retry.{}", uuid::Uuid::new_v4().simple()),
+    };
+    let publisher = build_config_sync_runtime_with_runtime_id(&config, "aster_test", "publisher")
+        .expect("publisher runtime should build");
+    let subscriber = build_config_sync_runtime_with_runtime_id(&config, "aster_test", "subscriber")
+        .expect("subscriber runtime should build");
+    let authoritative = Arc::new(AtomicUsize::new(1));
+    let snapshot = Arc::new(AtomicUsize::new(0));
+    let reloads = Arc::new(AtomicUsize::new(0));
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let worker_observations = observations.clone();
+    let connection_observer = move |observation| {
+        worker_observations.lock().unwrap().push(observation);
+    };
+    let (reconciled_tx, mut reconciled_rx) = mpsc::unbounded_channel();
+    let reconcile_authoritative = authoritative.clone();
+    let reconcile_snapshot = snapshot.clone();
+    let worker_reloads = reloads.clone();
+    let shutdown = CancellationToken::new();
+    let worker_shutdown = shutdown.clone();
+    let worker = tokio::spawn(async move {
+        subscriber
+            .run_reload_subscription_with_reconcile_and_observers(
+                worker_shutdown,
+                move || {
+                    let authoritative = reconcile_authoritative.clone();
+                    let snapshot = reconcile_snapshot.clone();
+                    let reconciled_tx = reconciled_tx.clone();
+                    async move {
+                        let value = authoritative.load(Ordering::SeqCst);
+                        snapshot.store(value, Ordering::SeqCst);
+                        reconciled_tx.send(value).expect("test receiver stays open");
+                        Ok(())
+                    }
+                },
+                move |_| {
+                    worker_reloads.fetch_add(1, Ordering::SeqCst);
+                    async { Err(ConfigCoreError::store("temporary database read failure")) }
+                },
+                None,
+                Some(&connection_observer),
+            )
+            .await
+    });
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), reconciled_rx.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    authoritative.store(2, Ordering::SeqCst);
+    publisher
+        .publish_reload(["changed"], ConfigNotificationSource::Api)
+        .await
+        .expect("publish exactly one reload hint");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), reconciled_rx.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        2
+    );
+    assert_eq!(snapshot.load(Ordering::SeqCst), 2);
+    assert_eq!(reloads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        observations.lock().unwrap().len(),
+        1,
+        "the subscription stayed connected"
+    );
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(1), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 async fn wait_for_connection_state(

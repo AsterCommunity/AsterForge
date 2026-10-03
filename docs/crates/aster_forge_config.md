@@ -476,6 +476,11 @@ Forge 不感知产品环境变量名。结构化模式最终调用
 退避参数：250ms 起始、30s 上限、50%-100% 抖动；订阅稳定运行 30s 后失败计数重置。supervisor 只在 shutdown cancellation 时退出——单次 reload 失败、reconcile 失败、广播 lag、Redis 抖动都不会杀死 worker，避免一次故障让跨进程配置同步永久瘫痪。
 
 `run_config_reload_supervisor*` 在每次订阅成功后调用一次 `reconcile`，因此启动竞态和 Pub/Sub 断线期间丢失的通知（包括 lag 丢弃的事件）都由权威数据库全量加载补齐。Redis Pub/Sub 不重放历史消息；reconcile 是最终状态修复机制。
+reload 或 reconcile 读取失败后，supervisor 保留一个待校准状态并重试全量 `reconcile`，无需新通知或重连。读取重试与 transport 重连分别计数，使用相同的 250ms 起始、30s 上限和 50%-100% 抖动；连续通知不会推迟既有重试或重置退避。只有全量 reconcile 成功才清除待校准状态，后续单个 key 的 reload 成功不能证明此前遗漏的配置和派生缓存全部恢复。恢复连接时成功的 reconcile 也会清除既有重试。
+
+没有 reconcile 回调的 `run_config_reload_worker*` / `run_reload_subscription*` 入口会合并失败通知的 key 提示并重新调用 reload：key 去重，任意空 key 列表或累计超过 1024 个 key 时改为全量 reload。合并提示保留最近一次失败通知的 origin/source 元数据，不代表通知逐条重放；回调始终重新读取权威存储。成功处理其他新通知不会丢弃既有失败提示。
+
+重试始终在原有 worker 内串行执行，不创建额外后台任务。shutdown 会中断重试等待及正在执行的 reload/reconcile future；产品回调必须允许取消、重复读取和部分工作完成后的再次执行。重试不会伪造 transport 连接状态，reconcile 仍不产生 pub/sub reload 观测；旧 worker 的 reload 重试继续产生实际回调的 reload 观测。
 Forge 不假设 transport 只能是 Redis；后续 RabbitMQ、NATS 或其他 broker 可以实现同一个 `ConfigChangeNotifier` 边界，并通过 `EventSubscriptionSource` 接入共享 supervisor 和 `build_config_sync_runtime()` 的 backend 分支。
 
 transport adapter 接收到原始 payload 时，应该先调用 `decode_config_reload_transport_payload(payload)`。解析失败只记录 warning 并继续监听，不应该让一个 malformed message 杀掉订阅 worker。
@@ -532,7 +537,7 @@ runtime
     .await?;
 ```
 
-连接 observer 的 `state` 只有 `connected`、`disconnected`、`reconnecting` 和 `recovered` 四种稳定值；`reconnect_attempt` 与 `backoff_seconds` 是观测字段，不应作为高基数 label。首次连接和每次恢复都会执行 reconcile。若 reconcile 本身失败，supervisor 会记录 warning 并保持当前订阅，后续通知仍可继续触发 reload。
+连接 observer 的 `state` 只有 `connected`、`disconnected`、`reconnecting` 和 `recovered` 四种稳定值；`reconnect_attempt` 与 `backoff_seconds` 是观测字段，不应作为高基数 label。首次连接和每次恢复都会执行 reconcile。若 reconcile 本身失败，supervisor 会记录 warning、保持当前订阅并安排独立的读取重试，后续通知仍可继续触发 reload。
 
 观测事件不会把配置 key 放进 label。key 名称只能出现在 debug 日志或审计详情里，不能进入 Prometheus label，否则多项目接入后 cardinality 会失控。
 
@@ -561,6 +566,7 @@ Forge 返回 `ConfigCoreError`。产品侧应该在 service/API 边界映射为�
 - 跨字段校验，例如 CORS `*` 与 credentials 的组合。
 - `requires_restart` 热更新不覆盖进程内旧值。
 - Redis reload 如果启用，只触发 reload，不直接携带值。
+- 单次通知、首次连接或重连后的临时读取失败，在没有新通知时也能恢复；受控时间覆盖退避增长/上限、状态清除、连续通知合并、namespace/origin 过滤、重连协调、取消等待和取消正在执行的回调。
 
 ## 参考项目
 

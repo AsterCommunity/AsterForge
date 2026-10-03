@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::time::Instant as RetryInstant;
 use tokio_util::sync::CancellationToken;
 
 use crate::{ConfigCoreError, Result};
@@ -116,12 +117,15 @@ fn default_config_reload_reconnect_policy() -> ConfigReloadReconnectPolicy {
 ///
 /// The loop never carries configuration values over pub/sub. A matching
 /// notification only tells this process to reload from its authoritative store.
-/// Reload errors are logged and the loop keeps listening, because one failed DB
-/// read should not permanently break cross-process synchronization.
+/// Failed reload hints are coalesced and retried with bounded exponential
+/// backoff, even if no further notification arrives. Callbacks must support
+/// repeated authoritative reads; an empty key list means reload all config.
+/// Shutdown drops in-flight callbacks, which must be safe to cancel and repeat.
 ///
-/// The loop is supervised like [`run_config_reload_supervisor`] with a no-op
-/// reconcile: subscription failures, stream endings, and broadcast lag trigger
-/// a bounded reconnect instead of exiting.
+/// The loop uses the transport supervision of [`run_config_reload_supervisor`],
+/// but has no authoritative reconcile callback. It retries received hints;
+/// repairing notifications lost during disconnection requires the supervisor
+/// API with a full reconcile callback.
 ///
 /// # Errors
 ///
@@ -164,13 +168,12 @@ where
     F: FnMut(ConfigReloadMessage) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let mut reconcile = || async { Ok(()) };
     run_config_reload_supervisor_inner(
         notifier,
         config,
         default_config_reload_reconnect_policy(),
         shutdown,
-        &mut reconcile,
+        None::<&mut fn() -> std::future::Ready<Result<()>>>,
         &mut reload,
         observer,
         None,
@@ -190,6 +193,12 @@ where
 /// Each one is observed, waited out with bounded exponential backoff (250 ms
 /// initial, 30 s cap, jittered; the failure counter resets after a subscription
 /// stays stable for 30 s), then followed by a fresh subscription and reconcile.
+/// Failed reloads or reconciliations schedule one authoritative reconcile retry
+/// with the same delay bounds, independent of transport health. Only successful
+/// reconciliation clears this pending work; a later key-specific reload cannot
+/// prove that all previously missed changes and derived caches are current.
+/// Shutdown cancels both retry waits and in-flight callbacks. Callbacks must be
+/// safe to drop and repeat after partially completed work.
 /// The loop only returns when `shutdown` is cancelled.
 ///
 /// # Errors
@@ -241,7 +250,7 @@ where
         config,
         default_config_reload_reconnect_policy(),
         shutdown,
-        &mut reconcile,
+        Some(&mut reconcile),
         &mut reload,
         reload_observer,
         connection_observer,
@@ -258,7 +267,7 @@ pub(super) async fn run_config_reload_supervisor_inner<N, R, RFut, F, Fut>(
     config: ConfigReloadWorkerConfig,
     reconnect_policy: ConfigReloadReconnectPolicy,
     shutdown: CancellationToken,
-    reconcile: &mut R,
+    mut reconcile: Option<&mut R>,
     reload: &mut F,
     reload_observer: Option<&dyn ConfigReloadObserver>,
     connection_observer: Option<&dyn ConfigSyncConnectionObserver>,
@@ -279,10 +288,32 @@ where
         updates_tx,
     );
     tokio::pin!(supervisor);
+    let mut retry = ConfigReloadRetry::default();
 
     loop {
         let update = tokio::select! {
+            biased;
             () = shutdown.cancelled() => return Ok(()),
+            () = retry.wait() => {
+                retry.deadline = None;
+                let Some(result) = await_config_callback(&shutdown, async {
+                        if let Some(reconcile) = reconcile.as_mut() {
+                            reconcile().await
+                        } else if let Some(message) = retry.message.clone() {
+                            process_config_reload_message(&config, message, reload, reload_observer)
+                                .await.map(|_| ())
+                        } else {
+                            Ok(())
+                        }
+                    }).await else { return Ok(()); };
+                if let Err(error) = result {
+                    tracing::warn!(%error, "failed to retry runtime config reload");
+                    retry.schedule(reconnect_policy);
+                } else {
+                    retry = ConfigReloadRetry::default();
+                }
+                continue;
+            }
             () = &mut supervisor => return Ok(()),
             update = updates_rx.recv() => update,
         };
@@ -294,47 +325,109 @@ where
                     observation.reconnect_attempt,
                     observation.backoff,
                 );
-                match observation.state {
-                    ConfigSyncConnectionState::Connected | ConfigSyncConnectionState::Recovered => {
-                        if observation.state == ConfigSyncConnectionState::Recovered {
-                            tracing::info!(
-                                reconnect_attempt = observation.reconnect_attempt,
-                                "config reload subscription recovered"
-                            );
-                        }
-                        if let Err(error) = reconcile().await {
-                            tracing::warn!(
-                                error = %error,
-                                "failed to reconcile runtime config after subscription connected"
-                            );
-                        } else {
-                            tracing::debug!(
-                                "runtime config reconciled after subscription connected"
-                            );
-                        }
-                    }
-                    ConfigSyncConnectionState::Disconnected => {
+                if matches!(
+                    observation.state,
+                    ConfigSyncConnectionState::Connected | ConfigSyncConnectionState::Recovered
+                ) && let Some(reconcile) = reconcile.as_mut()
+                {
+                    let Some(result) = await_config_callback(&shutdown, reconcile()).await else {
+                        return Ok(());
+                    };
+                    if let Err(error) = result {
                         tracing::warn!(
-                            reconnect_attempt = observation.reconnect_attempt,
-                            "config reload subscription disconnected"
+                            error = %error,
+                            "failed to reconcile runtime config after subscription connected"
                         );
-                    }
-                    ConfigSyncConnectionState::Reconnecting => {
-                        tracing::warn!(
-                            reconnect_attempt = observation.reconnect_attempt,
-                            backoff_ms = duration_millis_u64(observation.backoff),
-                            "waiting before config reload subscription reconnect"
-                        );
+                        retry.schedule(reconnect_policy);
+                    } else {
+                        retry = ConfigReloadRetry::default();
+                        tracing::debug!("runtime config reconciled after subscription connected");
                     }
                 }
             }
             Some(aster_forge_events::EventSubscriptionUpdate::Item(ConfigChangeEvent::Reload(
                 message,
             ))) => {
-                process_config_reload_message(&config, message, reload, reload_observer).await;
+                let Some(result) = await_config_callback(
+                    &shutdown,
+                    process_config_reload_message(
+                        &config,
+                        message.clone(),
+                        reload,
+                        reload_observer,
+                    ),
+                )
+                .await
+                else {
+                    return Ok(());
+                };
+                if result.is_err() {
+                    if reconcile.is_none() {
+                        retry.merge_message(message);
+                    }
+                    retry.schedule(reconnect_policy);
+                }
             }
             None => return Ok(()),
         }
+    }
+}
+
+async fn await_config_callback<T>(
+    shutdown: &CancellationToken,
+    callback: impl Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = shutdown.cancelled() => None,
+        result = callback => Some(result),
+    }
+}
+
+#[derive(Default)]
+struct ConfigReloadRetry {
+    deadline: Option<RetryInstant>,
+    attempt: u32,
+    message: Option<ConfigReloadMessage>,
+}
+
+impl ConfigReloadRetry {
+    fn schedule(&mut self, policy: ConfigReloadReconnectPolicy) {
+        // Further notifications must not postpone recovery or reset its backoff.
+        if self.deadline.is_none() {
+            self.attempt = self.attempt.saturating_add(1);
+            let delay = policy
+                .reconnect_delay(self.attempt)
+                .max(Duration::from_millis(1));
+            self.deadline = Some(RetryInstant::now() + delay);
+        }
+    }
+
+    async fn wait(&self) {
+        if let Some(deadline) = self.deadline {
+            tokio::time::sleep_until(deadline).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    fn merge_message(&mut self, mut message: ConfigReloadMessage) {
+        const MAX_PENDING_KEYS: usize = 1024;
+        if let Some(pending) = &self.message {
+            if pending.keys.is_empty() || message.keys.is_empty() {
+                message.keys.clear();
+            } else {
+                message.keys.extend(pending.keys.iter().cloned());
+                message.keys.sort();
+                message.keys.dedup();
+            }
+        }
+        // A long outage must not accumulate an unbounded list of failed hints.
+        // Empty keys already mean an authoritative full reload.
+        if message.keys.len() > MAX_PENDING_KEYS {
+            message.keys.clear();
+        }
+        self.message = Some(message);
     }
 }
 
@@ -343,13 +436,15 @@ async fn process_config_reload_message<F, Fut>(
     message: ConfigReloadMessage,
     reload: &mut F,
     observer: Option<&dyn ConfigReloadObserver>,
-) where
+) -> Result<ConfigReloadDecision>
+where
     F: FnMut(ConfigReloadMessage) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     let changed_keys = message.keys.len();
     let started = Instant::now();
-    match handle_config_reload_notification(config, message, reload).await {
+    let result = handle_config_reload_notification(config, message, reload).await;
+    match &result {
         Ok(ConfigReloadDecision::Reloaded) => {
             observe_config_reload(
                 observer,
@@ -364,7 +459,7 @@ async fn process_config_reload_message<F, Fut>(
             decision @ (ConfigReloadDecision::IgnoredNamespace
             | ConfigReloadDecision::IgnoredOrigin),
         ) => {
-            observe_config_reload(observer, decision, "ok", changed_keys, started);
+            observe_config_reload(observer, *decision, "ok", changed_keys, started);
         }
         Err(error) => {
             observe_config_reload(
@@ -380,6 +475,7 @@ async fn process_config_reload_message<F, Fut>(
             );
         }
     }
+    result
 }
 
 #[cfg(test)]
@@ -406,6 +502,22 @@ fn observe_config_sync_connection(
             reconnect_attempt,
             backoff,
         ));
+    }
+    match state {
+        ConfigSyncConnectionState::Connected => {}
+        ConfigSyncConnectionState::Recovered => {
+            tracing::info!(reconnect_attempt, "config reload subscription recovered");
+        }
+        ConfigSyncConnectionState::Disconnected => {
+            tracing::warn!(reconnect_attempt, "config reload subscription disconnected");
+        }
+        ConfigSyncConnectionState::Reconnecting => {
+            tracing::warn!(
+                reconnect_attempt,
+                backoff_ms = duration_millis_u64(backoff),
+                "waiting before config reload subscription reconnect"
+            );
+        }
     }
 }
 

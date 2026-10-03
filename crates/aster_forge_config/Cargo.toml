@@ -31,6 +31,7 @@ utoipa = { workspace = true, optional = true }
 
 [dev-dependencies]
 aster_forge_test = { path = "../aster_forge_test", features = ["redis"] }
+tokio = { workspace = true, features = ["test-util"] }
 uuid.workspace = true
 
 [[test]]

@@ -127,6 +127,8 @@ impl ConfigSyncRuntime {
     ///
     /// Disabled runtimes simply wait for shutdown, which lets callers spawn the
     /// same task unconditionally if that is more convenient.
+    /// Failed reload hints are coalesced and retried without requiring another
+    /// notification. Callbacks must tolerate repeated reads and cancellation.
     ///
     /// # Errors
     ///
@@ -180,6 +182,9 @@ impl ConfigSyncRuntime {
     ///
     /// `reconcile` runs after each successful subscription. Product code should
     /// reload its full snapshot and invalidate all derived configuration caches.
+    /// Failed reload or reconcile callbacks schedule a bounded reconcile retry,
+    /// even while the transport stays connected. Shutdown drops in-flight
+    /// callbacks, so reconciliation must be safe to cancel and repeat.
     ///
     /// # Errors
     ///

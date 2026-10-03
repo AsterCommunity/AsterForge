@@ -32,26 +32,26 @@ async fn wait_for_subscriber(notifier: &InMemoryConfigNotifier) {
     .unwrap();
 }
 
-enum SubscribeStep {
+pub(super) enum SubscribeStep {
     Fail(&'static str),
     Channel(broadcast::Sender<ConfigChangeEvent>),
     Pending,
 }
 
-struct ScriptedConfigNotifier {
+pub(super) struct ScriptedConfigNotifier {
     steps: Mutex<VecDeque<SubscribeStep>>,
     subscribe_attempts: AtomicUsize,
 }
 
 impl ScriptedConfigNotifier {
-    fn new(steps: impl IntoIterator<Item = SubscribeStep>) -> Self {
+    pub(super) fn new(steps: impl IntoIterator<Item = SubscribeStep>) -> Self {
         Self {
             steps: Mutex::new(steps.into_iter().collect()),
             subscribe_attempts: AtomicUsize::new(0),
         }
     }
 
-    fn subscribe_attempts(&self) -> usize {
+    pub(super) fn subscribe_attempts(&self) -> usize {
         self.subscribe_attempts.load(Ordering::SeqCst)
     }
 }
@@ -81,7 +81,7 @@ impl ConfigChangeNotifier for ScriptedConfigNotifier {
 }
 
 #[derive(Default)]
-struct TestConnectionObserver {
+pub(super) struct TestConnectionObserver {
     observations: Mutex<Vec<ConfigSyncConnectionObservation>>,
 }
 
@@ -92,7 +92,7 @@ impl super::ConfigSyncConnectionObserver for TestConnectionObserver {
 }
 
 impl TestConnectionObserver {
-    fn snapshot(&self) -> Vec<ConfigSyncConnectionObservation> {
+    pub(super) fn snapshot(&self) -> Vec<ConfigSyncConnectionObservation> {
         self.observations.lock().unwrap().clone()
     }
 }
@@ -527,7 +527,7 @@ async fn reload_supervisor_recovers_from_initial_subscribe_failures_and_reconcil
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             zero_reconnect_policy(),
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             Some(worker_observer.as_ref()),
@@ -610,7 +610,7 @@ async fn reload_supervisor_subscribes_before_reconcile_to_close_startup_race() {
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             zero_reconnect_policy(),
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             None,
@@ -674,7 +674,7 @@ async fn lagged_subscription_reconnects_and_reconciles_without_reload_observatio
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             zero_reconnect_policy(),
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             Some(worker_reload_observer.as_ref()),
             None,
@@ -734,7 +734,7 @@ async fn stable_subscription_resets_reconnect_attempt_sequence() {
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             policy,
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             Some(worker_observer.as_ref()),
@@ -801,7 +801,7 @@ async fn reload_supervisor_reconnects_after_subscription_closes_and_reconciles_a
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             zero_reconnect_policy(),
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             Some(worker_observer.as_ref()),
@@ -880,7 +880,7 @@ async fn reload_supervisor_keeps_subscription_after_reconcile_error() {
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             zero_reconnect_policy(),
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             None,
@@ -942,7 +942,7 @@ async fn reload_supervisor_shutdown_interrupts_reconnect_backoff() {
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             policy,
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             Some(worker_observer.as_ref()),
@@ -984,7 +984,7 @@ async fn reload_supervisor_shutdown_interrupts_pending_subscribe() {
             ConfigReloadWorkerConfig::new("aster_test", "node-a"),
             zero_reconnect_policy(),
             worker_shutdown,
-            &mut reconcile,
+            Some(&mut reconcile),
             &mut reload,
             None,
             None,
@@ -1162,7 +1162,7 @@ async fn reload_worker_keeps_listening_after_reload_error() {
 }
 
 #[derive(Default)]
-struct TestReloadObserver {
+pub(super) struct TestReloadObserver {
     observations: Mutex<Vec<super::ConfigReloadObservation>>,
 }
 
@@ -1173,7 +1173,7 @@ impl super::ConfigReloadObserver for TestReloadObserver {
 }
 
 impl TestReloadObserver {
-    fn snapshot(&self) -> Vec<super::ConfigReloadObservation> {
+    pub(super) fn snapshot(&self) -> Vec<super::ConfigReloadObservation> {
         self.observations.lock().unwrap().clone()
     }
 }

@@ -422,6 +422,7 @@ config_sync
 ```
 
 supervisor 会在 subscribe/recv 错误后使用有界指数退避和 50%-100% 抖动重连；shutdown 会立即中断连接等待和退避。transport 恢复后不会重放 Redis 历史消息，而是执行一次全量 reconcile。`ConfigSyncConnectionObserver` 可记录 `connected`、`disconnected`、`reconnecting`、`recovered` 四种低基数状态。
+reload 或 reconcile 临时读取失败时，同一个 worker 会保留待校准状态并退避重试全量 reconcile，无需下一条通知或重连。reconcile 成功后清除重试；产品回调需支持重复执行及 shutdown 取消，并在全量加载后清理全部派生配置缓存。
 
 ## 错误边界
 
