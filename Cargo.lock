@@ -690,6 +690,7 @@ dependencies = [
  "aster_forge_utils",
  "async-trait",
  "chrono",
+ "futures",
  "sea-orm",
  "serde",
  "serde_json",

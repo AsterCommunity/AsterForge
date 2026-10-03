@@ -168,7 +168,7 @@ impl ConfigRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the requested configuration key is not registered.
+    /// Returns [`ConfigCoreError`] when the requested configuration key is not registered.
     pub fn require(&self, key: &str) -> Result<&'static ConfigDefinition> {
         self.get(key)
             .ok_or_else(|| ConfigCoreError::UnknownKey(key.to_string()))
@@ -178,7 +178,7 @@ impl ConfigRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the registry contains duplicate configuration keys.
+    /// Returns [`ConfigCoreError`] when registry keys are empty or duplicated.
     pub fn validate_unique_keys(&self) -> Result<()> {
         let mut seen = BTreeSet::new();
         for definition in self.definitions {
@@ -201,7 +201,7 @@ impl ConfigRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when a definition category violates registry constraints.
+    /// Returns [`ConfigCoreError`] when a definition category violates registry constraints.
     pub fn validate_categories(&self, allowed_categories: &[&str]) -> Result<()> {
         for definition in self.definitions {
             if !allowed_categories.contains(&definition.category) {
@@ -214,25 +214,36 @@ impl ConfigRegistry {
         Ok(())
     }
 
-    /// Validates a storage string for a known key.
+    /// Validates only the structural storage shape for a known key.
+    ///
+    /// This does not run the product normalizer or dependency validator. A structurally valid
+    /// value can still violate product rules. Use [`Self::normalize_value`] or
+    /// [`Self::value_to_storage_for_key`] for the full validation pipeline before persistence.
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the stored value or a dependency rule is invalid.
-    pub fn validate_value(&self, key: &str, value: &str) -> Result<()> {
+    /// Returns [`ConfigCoreError`] when the key is unknown or the storage shape is invalid.
+    pub fn validate_value_structure(&self, key: &str, value: &str) -> Result<()> {
         let definition = self.require(key)?;
         validate_storage_value(definition.value_type, value)
     }
 
-    /// Normalizes a storage string for a known key.
+    /// Validates and normalizes a logical value for a known key.
     ///
-    /// The input is expected to already match the structural storage shape for
-    /// the definition's value type, for example a JSON string array for
-    /// `string_array`.
+    /// Runs, in order: key lookup, input structure validation, the optional product normalizer,
+    /// normalized output structure validation, and the optional dependency validator. The
+    /// dependency validator receives the normalized value and the caller-supplied lookup.
+    ///
+    /// The input must use the definition's logical storage shape, for example a JSON string
+    /// array for `string_array`. For encrypted secrets, validate plaintext here before the
+    /// product encodes its storage envelope; do not normalize ciphertext as plaintext.
+    /// This method has no persistence, snapshot, audit, or notification side effects.
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the definition normalizer rejects the value.
+    /// Returns [`ConfigCoreError`] when the key is unknown, either structure check fails, or
+    /// the product normalizer or dependency validator rejects the value. Later stages do not run
+    /// after a failure.
     pub fn normalize_value(
         &self,
         lookup: &dyn ConfigValueLookup,
@@ -257,9 +268,13 @@ impl ConfigRegistry {
 
     /// Converts an API-facing value into normalized storage for a known key.
     ///
+    /// Converts according to the registered type, then runs [`Self::normalize_value`]. Secret
+    /// encoding, persistence, audit, snapshot updates, and notification remain caller-owned.
+    ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the typed value cannot be normalized for storage.
+    /// Returns [`ConfigCoreError`] when the key is unknown, conversion or structure validation
+    /// fails, or the normalizer or dependency validator rejects the value.
     pub fn value_to_normalized_storage(
         &self,
         lookup: &dyn ConfigValueLookup,
@@ -275,11 +290,16 @@ impl ConfigRegistry {
     ///
     /// Registered keys use their declared [`ConfigValueType`] and run through the full registry
     /// normalization pipeline. Custom keys are treated as scalar strings by default, leaving their
-    /// visibility, permissions, and persistence policy to the product crate.
+    /// validation, visibility, permissions, and persistence policy to the product crate.
+    /// For registered keys the order is type conversion, input structure validation, normalizer,
+    /// output structure validation, then dependency validation. Secret encoding must follow this
+    /// pipeline; this method does not persist values or update runtime state.
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the key is unknown or its typed value is invalid.
+    /// Returns [`ConfigCoreError`] when conversion or structure validation fails, or a registered
+    /// key's normalizer or dependency validator rejects the value. Unknown keys use the custom
+    /// scalar-string path rather than returning an unknown-key error.
     pub fn value_to_storage_for_key(
         &self,
         lookup: &dyn ConfigValueLookup,
@@ -323,7 +343,8 @@ impl ConfigRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when definitions are duplicated or a default value is invalid.
+    /// Returns [`ConfigCoreError`] when a default fails structure validation, normalization,
+    /// or dependency validation.
     pub fn default_seed_records(&self) -> Result<Vec<ConfigSeedRecord>> {
         let mut lookup = BTreeMap::<String, String>::new();
         let mut rows = Vec::with_capacity(self.definitions.len());

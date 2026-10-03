@@ -145,6 +145,14 @@ pub const SITE_NAME: ConfigDefinition = ConfigDefinition {
 - 需要当前快照中其他 key 的约束放 `dependency_validator_fn`。
 - 默认值 seed 依赖其他 key 时，被依赖 key 必须排在 registry 前面。
 
+### 结构校验与完整校验
+
+`ConfigRegistry::validate_value_structure(key, value)` 只检查 key 已注册及其逻辑存储结构，例如有限数值、严格布尔值或 JSON string array。它不执行 normalizer 和 dependency validator；TTL `61` 可以通过 number 结构校验，仍然违反产品定义的 `1..=60` 范围。
+
+`normalize_value(lookup, key, value)` 是完整校验入口，按顺序执行：查找定义、输入结构校验、normalizer、输出结构校验、dependency validator。任一步失败就立即返回，后续阶段不执行。dependency validator 接收规范化后的值，`lookup` 由调用方提供，不会自动包含此次更新。`value_to_normalized_storage()` 先转换已注册 key 的 API 值，`value_to_storage_for_key()` 还允许 custom scalar string；已注册 key 随后都走相同的完整校验链。
+
+校验和转换不执行数据库写入、审计、快照更新或通知。需要加密的配置先对明文执行完整校验，再由产品编码为 storage envelope；不要把密文再次送进明文 normalizer。跨字段规则读取秘密时，产品提供能按规则解码的 lookup；并发更新或批量更新时，产品还需要提供一致的候选值视图和锁定策略，普通 runtime snapshot 不能保证跨字段事务一致性。
+
 ## 默认值 seed
 
 `ConfigRegistry::default_seed_records()` 会按 registry 顺序生成 `ConfigSeedRecord`，并对每个默认值执行结构验证、normalizer 和 dependency validator。产品 repository 只需要把 seed record 转成本地 ActiveModel：
@@ -162,17 +170,55 @@ for seed in CONFIG_REGISTRY.default_seed_records()? {
 
 推荐的系统配置更新顺序：
 
-1. 判断 key 是否允许直接更新。
-2. 判断 system key 是否禁止修改 visibility。
-3. 从 registry 查找 definition。
-4. 用 `ConfigRegistry::value_to_storage_for_key()` 把 API 值转成可保存的 storage value；注册 key 会走声明的类型和 normalizer，custom key 默认按 string 保存。
-5. 产品 repository upsert。
-6. 用 `ConfigRegistry::apply_definition()` 覆盖 metadata。
-7. 更新本进程 runtime snapshot。
-8. 记录审计。
-9. 多进程部署时发布 `ConfigReloadMessage`。
+1. 产品检查权限、key 是否允许直接更新，以及 system key 是否禁止修改 visibility。
+2. 用 `ConfigRegistry::value_to_storage_for_key()` 转换 API 值并完成已注册 key 的完整校验；custom key 的领域规则由产品补充。
+3. 产品按需要把规范化后的明文编码成秘密 storage envelope。`is_sensitive` 仅控制脱敏，不会自动加密。
+4. 在同一个数据库事务中调用 `upsert_prevalidated()` 写入 storage string，并记录产品审计；秘密审计值使用脱敏 helper。
+5. 提交事务。任何校验、编码、写入、审计或提交失败都不能提前更新快照或发布通知。
+6. 从已提交记录生成本进程 runtime 值，按产品需要解码秘密，再更新 snapshot 和派生状态；尊重 `requires_restart`。
+7. 多进程部署时发布仅含 key 的 reload 通知。
 
 custom key 不在 registry 中，通常按产品策略固定为 string 类型，并由产品自己决定 visibility 和权限边界。
+
+产品 service 示例（`authorize_config_write`、`encode_config_storage`、`write_config_audit` 和 `decode_runtime_row` 均由产品实现；`ProductError` 在产品边界接收 Forge 错误）：
+
+```rust
+authorize_config_write(actor, key, visibility)?;
+let lookup = runtime_config.snapshot();
+let normalized = CONFIG_REGISTRY.value_to_storage_for_key(&lookup, key, &value)?;
+let storage = encode_config_storage(key, &normalized)?;
+let definition = CONFIG_REGISTRY.get(key);
+let audit_value = aster_forge_config::config_value_audit_string(
+    definition.map_or(aster_forge_config::ConfigValueType::String, |d| d.value_type),
+    normalized.clone(),
+    definition.is_some_and(|d| d.is_sensitive),
+    |error| tracing::warn!(%error, "invalid config audit value"),
+);
+let saved = aster_forge_db::transaction::with_transaction(
+    writer_db,
+    async |txn| -> Result<aster_forge_db::system_config::Model, ProductError> {
+        let saved = SYSTEM_CONFIG_STORE
+            .upsert_prevalidated(txn, aster_forge_db::SystemConfigUpsert {
+                key,
+                value: &storage,
+                visibility,
+                updated_by: Some(actor.id),
+            })
+            .await?;
+        write_config_audit(txn, actor, &saved, &audit_value).await?;
+        Ok(saved)
+    },
+).await?;
+// with_transaction 返回成功时，写入与审计已经提交。
+runtime_config.apply(decode_runtime_row(saved.clone())?);
+config_sync.publish_reload([saved.key], aster_forge_config::ConfigNotificationSource::Api).await?;
+```
+
+`upsert_prevalidated` 的 prevalidated 是调用方前置条件，不是由类型系统证明的标记。binding、owned store 和 free function 均原样保存传入字符串，不做结构校验、normalizer 或依赖校验；绑定 registry 只提供记录元数据。需要原子写入与审计时使用 binding/free function 并传入事务，owned store 的写入使用其连接，不包含产品审计事务。
+
+提交后的解码、派生状态更新或通知失败不能撤销数据库提交。产品应区分“写入已提交但传播失败”与“写入失败”，记录并恢复传播，不能把通知失败当成事务回滚。针对会拒绝旧值的编码规则，提交前也应确认编码后的记录可解码。完整可执行边界测试见 [`system_config_write.rs`](https://github.com/AsterCommunity/AsterForge/blob/master/crates/aster_forge_db/tests/system_config_write.rs)。
+
+API 迁移：原 `ConfigRegistry::validate_value()` 改为 `validate_value_structure()`；三个层级的 `upsert()` 均改为 `upsert_prevalidated()`，其持久化行为不变。更新产品调用点时保留原有校验与秘密编码顺序。
 
 ## API 值和展示脱敏
 

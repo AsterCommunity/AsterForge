@@ -44,6 +44,7 @@ database-container-tests = []
 
 [dev-dependencies]
 aster_forge_test = { path = "../aster_forge_test", features = ["mysql", "postgres"] }
+futures.workspace = true
 serde_json.workspace = true
 url.workspace = true
 uuid.workspace = true

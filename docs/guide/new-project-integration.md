@@ -381,7 +381,7 @@ let config_sync = aster_forge_config::build_config_sync_runtime(
 )?;
 ```
 
-配置写入成功并更新本进程 runtime snapshot 后，再发 reload 信号：
+配置更新先通过 registry 完成逻辑值校验，再按需要编码秘密；使用 `SystemConfigDbBinding::upsert_prevalidated()` 在同一事务内写入配置和产品审计。成功提交后更新本进程 runtime snapshot，再发 reload 信号。绑定 registry 不会自动校验写入值，完整顺序见[配置更新流水线](../crates/aster_forge_config.md#更新流水线)：
 
 ```rust
 config_sync

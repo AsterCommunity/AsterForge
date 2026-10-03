@@ -6,6 +6,11 @@
 //! exposed to clients, and startup repairs system metadata without overwriting
 //! user-provided values. Product crates still own their configuration
 //! definitions, validation callbacks, audit records, and API presentation.
+//!
+//! Write boundary: `upsert_prevalidated` and `ensure_system_value_if_missing` persist the supplied
+//! storage string verbatim. Registry binding supplies metadata, not write validation. Callers must
+//! validate logical values first, then perform any product-owned secret encoding. Write and audit
+//! in one transaction; update snapshots and publish reload hints only after successful commit.
 
 use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
@@ -387,6 +392,7 @@ impl SystemConfigCursorSlice {
 /// A product normally has one static binding that supplies its registry and deprecated-key list.
 /// Repository code can then focus on product error mapping, authorization, and API cursor shape
 /// instead of repeatedly passing the same registry values into every call.
+/// Binding a registry does not make writes validated; see [`Self::upsert_prevalidated`].
 #[derive(Clone, Copy)]
 pub struct SystemConfigDbBinding {
     registry: &'static ConfigRegistry,
@@ -464,17 +470,25 @@ impl SystemConfigDbBinding {
         lock_by_key(db, key).await
     }
 
-    /// Upserts one row using this binding's registry metadata for known system keys.
+    /// Persists a prevalidated storage string using registry metadata for known system keys.
+    ///
+    /// # Preconditions
+    ///
+    /// The caller must complete structure, normalizer, and dependency validation on the logical
+    /// value before constructing the request, then encode any secret storage envelope. This
+    /// method writes `request.value` verbatim without any of those checks. Custom-key validation,
+    /// authorization, and audit remain product-owned. Pass a transaction for atomic write/audit;
+    /// update snapshots and notify only after commit. See [`upsert_prevalidated`].
     ///
     /// # Errors
     ///
     /// Returns an error when the database operation fails.
-    pub async fn upsert<C: ConnectionTrait>(
+    pub async fn upsert_prevalidated<C: ConnectionTrait>(
         &self,
         db: &C,
         request: SystemConfigUpsert<'_>,
     ) -> crate::Result<Model> {
-        upsert(db, self.registry, request).await
+        upsert_prevalidated(db, self.registry, request).await
     }
 
     /// Deletes a custom row.
@@ -487,6 +501,9 @@ impl SystemConfigDbBinding {
     }
 
     /// Inserts one system value if no row exists.
+    ///
+    /// The caller must validate the logical value and encode any secret before calling. `value`
+    /// is persisted verbatim without structure, normalizer, or dependency validation.
     ///
     /// # Errors
     ///
@@ -519,12 +536,16 @@ impl SystemConfigDbBinding {
     }
 }
 
-/// Product request to upsert one system or custom configuration value.
+/// Product request to persist one prevalidated system or custom configuration value.
+///
+/// This request does not prove validation at the type level. The product must validate the logical
+/// value and then perform any required secret encoding before passing it to `upsert_prevalidated`.
 #[derive(Debug, Clone, Copy)]
 pub struct SystemConfigUpsert<'a> {
     /// Config key.
     pub key: &'a str,
-    /// New storage value.
+    /// Prevalidated storage string, optionally encoded as a product-owned secret envelope.
+    /// Written verbatim; no structure check, normalizer, or dependency validator is invoked.
     pub value: &'a str,
     /// Visibility override for custom keys. System visibility comes from the registry.
     pub visibility: Option<ConfigVisibility>,
@@ -533,6 +554,8 @@ pub struct SystemConfigUpsert<'a> {
 }
 
 /// SeaORM-backed system configuration store.
+///
+/// The registry supplies metadata, not write validation. See [`Self::upsert_prevalidated`].
 #[derive(Clone)]
 pub struct SystemConfigDbStore {
     db: DatabaseConnection,
@@ -607,13 +630,25 @@ impl SystemConfigDbStore {
         lock_by_key(&self.db, key).await
     }
 
-    /// Upserts one row using registry metadata for known system keys.
+    /// Persists a prevalidated storage string using registry metadata for known system keys.
+    ///
+    /// # Preconditions
+    ///
+    /// The caller must complete structure, normalizer, and dependency validation on the logical
+    /// value, then encode any secret envelope. `request.value` is written verbatim without those
+    /// checks; custom-key validation and authorization remain product-owned. This method uses the
+    /// owned connection and does not coordinate audit, snapshots, or notifications. Use
+    /// [`SystemConfigDbBinding::upsert_prevalidated`] with a transaction for atomic write/audit,
+    /// then update snapshots and notify after commit.
     ///
     /// # Errors
     ///
     /// Returns an error when the database operation fails.
-    pub async fn upsert(&self, request: SystemConfigUpsert<'_>) -> crate::Result<Model> {
-        upsert(&self.db, self.registry, request).await
+    pub async fn upsert_prevalidated(
+        &self,
+        request: SystemConfigUpsert<'_>,
+    ) -> crate::Result<Model> {
+        upsert_prevalidated(&self.db, self.registry, request).await
     }
 
     /// Deletes a custom row.
@@ -626,6 +661,9 @@ impl SystemConfigDbStore {
     }
 
     /// Inserts one system value if no row exists.
+    ///
+    /// The caller must validate the logical value and encode any secret before calling. `value`
+    /// is persisted verbatim without structure, normalizer, or dependency validation.
     ///
     /// # Errors
     ///
@@ -760,12 +798,25 @@ pub async fn lock_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Result
         .ok_or_else(|| DbError::non_retryable(format!("config key '{key}' not found")))
 }
 
-/// Upserts one row using registry metadata for known system keys.
+/// Persists a prevalidated storage string using registry metadata for known system keys.
+///
+/// # Preconditions
+///
+/// Validate the logical value with [`ConfigRegistry::normalize_value`] or
+/// [`ConfigRegistry::value_to_storage_for_key`] before calling, then perform any product-owned
+/// secret encoding. `request.value` is written verbatim, including encoded envelopes: this method
+/// performs no structure validation, normalizer, or dependency validation. The registry selects
+/// metadata for inserts, not validation policy. Custom-key validation, permissions, and audit
+/// remain product-owned.
+///
+/// Pass a transaction as `db` to combine the write with product audit. This function neither
+/// commits that transaction nor updates snapshots or publishes reload notifications. Perform
+/// those runtime side effects only after a successful commit.
 ///
 /// # Errors
 ///
 /// Returns an error when the database operation fails.
-pub async fn upsert<C: ConnectionTrait>(
+pub async fn upsert_prevalidated<C: ConnectionTrait>(
     db: &C,
     registry: &'static ConfigRegistry,
     request: SystemConfigUpsert<'_>,
@@ -828,6 +879,10 @@ pub async fn delete_by_key<C: ConnectionTrait>(db: &C, key: &str) -> crate::Resu
 }
 
 /// Inserts one system value if no row exists.
+///
+/// The caller must validate the logical value and encode any secret before calling. `value`
+/// is persisted verbatim without structure, normalizer, or dependency validation. Unlike
+/// [`ensure_defaults`], this function does not obtain a normalized value from default seed records.
 ///
 /// # Errors
 ///
@@ -1174,7 +1229,7 @@ mod tests {
         let store = sqlite_store().await;
 
         store
-            .upsert(SystemConfigUpsert {
+            .upsert_prevalidated(SystemConfigUpsert {
                 key: DEPRECATED_KEY,
                 value: "old",
                 visibility: None,
@@ -1193,7 +1248,7 @@ mod tests {
         let db = sqlite_db_from_builders().await;
 
         BINDING
-            .upsert(
+            .upsert_prevalidated(
                 &db,
                 SystemConfigUpsert {
                     key: DEPRECATED_KEY,
@@ -1230,7 +1285,7 @@ mod tests {
 
         assert_eq!(BINDING.ensure_defaults(&db).await.unwrap(), 2);
         let system = BINDING
-            .upsert(
+            .upsert_prevalidated(
                 &db,
                 SystemConfigUpsert {
                     key: PRIMARY_KEY,
@@ -1245,7 +1300,7 @@ mod tests {
         assert_eq!(system.updated_by, Some(42));
 
         let custom = BINDING
-            .upsert(
+            .upsert_prevalidated(
                 &db,
                 SystemConfigUpsert {
                     key: "custom.banner",
@@ -1296,7 +1351,7 @@ mod tests {
         let store = sqlite_store().await;
 
         let system = store
-            .upsert(SystemConfigUpsert {
+            .upsert_prevalidated(SystemConfigUpsert {
                 key: PRIMARY_KEY,
                 value: "Custom Title",
                 visibility: None,
@@ -1311,7 +1366,7 @@ mod tests {
         assert_eq!(system.value_type, ConfigValueType::String);
 
         let custom = store
-            .upsert(SystemConfigUpsert {
+            .upsert_prevalidated(SystemConfigUpsert {
                 key: "custom_public_banner",
                 value: "hello",
                 visibility: Some(ConfigVisibility::Public),
@@ -1325,7 +1380,7 @@ mod tests {
         assert_eq!(custom.updated_by, Some(7));
 
         let updated_custom = store
-            .upsert(SystemConfigUpsert {
+            .upsert_prevalidated(SystemConfigUpsert {
                 key: "custom_public_banner",
                 value: "hello again",
                 visibility: Some(ConfigVisibility::Authenticated),
@@ -1349,7 +1404,7 @@ mod tests {
             ("visible_private", ConfigVisibility::Private),
         ] {
             store
-                .upsert(SystemConfigUpsert {
+                .upsert_prevalidated(SystemConfigUpsert {
                     key,
                     value: key,
                     visibility: Some(visibility),
@@ -1383,7 +1438,7 @@ mod tests {
         let store = sqlite_store().await;
         store.ensure_defaults().await.unwrap();
         store
-            .upsert(SystemConfigUpsert {
+            .upsert_prevalidated(SystemConfigUpsert {
                 key: "custom_delete_me",
                 value: "value",
                 visibility: None,
@@ -1461,7 +1516,7 @@ mod tests {
     #[tokio::test]
     async fn free_functions_work_with_any_connection() {
         let store = sqlite_store().await;
-        super::upsert(
+        super::upsert_prevalidated(
             &store.db,
             &REGISTRY,
             SystemConfigUpsert {

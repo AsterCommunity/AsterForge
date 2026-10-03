@@ -165,7 +165,9 @@ claim 语义：
 
 模块：`system_config`
 
-`SystemConfigDbBinding` / `SystemConfigDbStore` 提供 Aster 产品通用的 `system_config` 表结构、唯一索引、SeaORM entity、默认值 seed/repair、upsert、delete、lock、cursor 查询和可见 custom config 查询。配置定义、normalizer、dependency validator、runtime snapshot 和 reload diff 仍然归 `aster_forge_config`；这个 crate 只负责数据库持久化边界。
+`SystemConfigDbBinding` / `SystemConfigDbStore` 提供 Aster 产品通用的 `system_config` 表结构、唯一索引、SeaORM entity、默认值 seed/repair、`upsert_prevalidated`、delete、lock、cursor 查询和可见 custom config 查询。配置定义、normalizer、dependency validator、runtime snapshot 和 reload diff 仍然归 `aster_forge_config`；这个 crate 只负责数据库持久化边界。
+
+binding、owned store 和 `system_config::upsert_prevalidated()` 都原样保存传入的 storage string，不执行结构校验、normalizer 或 dependency validator。注册表只用于记录元数据；调用方必须先完成逻辑值校验，然后执行必要的产品秘密编码。`SystemConfigUpsert::value` 可以是与明文逻辑类型不同的加密 envelope，不能在 DB 层再次执行明文 normalizer。`is_sensitive` 只控制展示和审计脱敏，不自动加密。`ensure_system_value_if_missing()` 接收原始 storage string，遵守同样的前置条件；`ensure_defaults()` 则从 registry 获取已经完整规范化的默认 seed。
 
 表结构由 Forge 维护：
 
@@ -223,18 +225,32 @@ static SYSTEM_CONFIG_STORE: aster_forge_db::SystemConfigDbBinding =
 );
 
 SYSTEM_CONFIG_STORE.ensure_defaults(writer_db).await?;
-let row = SYSTEM_CONFIG_STORE
-    .upsert(
-        writer_db,
-        aster_forge_db::SystemConfigUpsert {
-            key,
-            value: &normalized_storage,
-            visibility,
-            updated_by,
-        },
-    )
-    .await?;
+authorize_config_write(actor, key, visibility)?;
+let lookup = runtime_config.snapshot();
+let normalized = CONFIG_REGISTRY.value_to_storage_for_key(&lookup, key, &value)?;
+let storage = encode_config_storage(key, &normalized)?; // 产品按需编码秘密。
+let row = aster_forge_db::transaction::with_transaction(
+    writer_db,
+    async |txn| -> Result<aster_forge_db::system_config::Model, ProductError> {
+        let row = SYSTEM_CONFIG_STORE
+            .upsert_prevalidated(txn, aster_forge_db::SystemConfigUpsert {
+                key,
+                value: &storage,
+                visibility,
+                updated_by,
+            })
+            .await?;
+        write_config_audit_redacted(txn, actor, &row).await?;
+        Ok(row)
+    },
+).await?;
+runtime_config.apply(decode_runtime_row(row.clone())?);
+config_sync.publish_reload([row.key], aster_forge_config::ConfigNotificationSource::Api).await?;
 ```
+
+示例中的权限、秘密编码/解码、审计和 `ProductError` 都由产品实现。写入和审计在事务内，快照和通知仅在成功提交后更新；`requires_restart` 配置保持旧运行值直到重启。提交后传播失败不能回滚数据库，产品需单独恢复传播。并发跨字段规则需要产品提供一致的 lookup 和锁定策略。完整校验链及示例见 [配置更新流水线](./aster_forge_config.md#更新流水线)。
+
+旧 `upsert()` 调用点应改为 `upsert_prevalidated()`；这是明确前置条件的 API 改名，不改变存储行为。
 
 如果产品确实需要把一个 owned `DatabaseConnection` 和 registry 绑成值对象，也可以使用 `SystemConfigDbStore::new(...)`。新产品通常优先用 `SystemConfigDbBinding`，因为 repository function 已经能从 runtime state 里拿到 reader/writer connection。
 
