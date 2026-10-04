@@ -40,15 +40,22 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description Minimal JSON error response returned by the generated skeleton. */
-        ErrorResponse: {
-            /** @description Stable product error code. */
-            code: string;
-            /** @description Human-readable error summary. */
-            message: string;
-            /** @description Cargo package name. */
-            service: string;
+        /**
+         * @description Product codes; Forge only checks the success/failure classification.
+         * @enum {string}
+         */
+        ApiErrorCode: "success" | "endpoint_not_found";
+        ApiResponse_TupleUnit_ApiErrorCode_TupleUnit: {
+            code: components["schemas"]["ApiErrorCode"];
+            data?: null;
+            error?: {
+                diagnostic?: null;
+                retryable: boolean;
+            };
+            msg: string;
         };
+        /** @description Product error adapter: injects the code/message and retains the stable ErrorResponse schema. */
+        ErrorResponse: components["schemas"]["ApiResponse_TupleUnit_ApiErrorCode_TupleUnit"];
         /** @description Basic status response returned by the generated skeleton. */
         StatusResponse: {
             /** @description Cargo package name. */

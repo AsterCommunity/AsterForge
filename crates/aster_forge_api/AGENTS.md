@@ -9,7 +9,7 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 
 ## Ownership Boundaries
 
-- This crate owns framework-neutral pagination queries and responses, cursor-parameter completeness checks, overfetch slicing, generic sort direction, and three-state PATCH values.
+- This crate owns framework-neutral typed REST envelopes, pagination queries and responses, cursor-parameter completeness checks, overfetch slicing, generic sort direction, and three-state PATCH values.
 - It does not own database queries, product field allowlists, default sort policy, permission filtering, HTTP status codes, error text, or product entities.
 - `SortOrder` is a shared API/DB contract. Do not create another structurally identical enum in DB or product code.
 
@@ -20,6 +20,9 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 - Handle limit, offset, length, and integer-conversion boundaries explicitly. Never truncate or lose sign silently.
 - Keep OpenAPI derives consistent with the existing debug-plus-feature pattern so release builds do not absorb documentation-generation overhead.
 - Serde wire shapes are compatibility contracts. Changes to field names, defaults, or three-state behavior require serialization tests and documentation updates.
+- Keep `lib.rs` focused on modules and public exports. Errors, cursors, pagination, PATCH fields, schema bounds, sorting and envelopes live in their respective files; tests stay beside the owning mechanism.
+- Envelope code classification comes from the product. Never supply business codes, HTTP mappings, retryability or diagnostic policy from the shared core. Validate success/error state on construction and deserialization.
+- Register full generic envelope instantiations in OpenAPI; Utoipa type aliases can erase generic arguments and collide. Validate actual components, references and generated SDKs, including multiple product codes and DTOs.
 
 ## Validation
 

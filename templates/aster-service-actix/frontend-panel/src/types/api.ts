@@ -78,7 +78,7 @@ export type ErrorResponse = components["schemas"] extends {
 }
 	? Schema
 	: {
-			service: string;
 			code: string;
-			message: string;
+			msg: string;
+			error?: { retryable: boolean };
 		};

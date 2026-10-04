@@ -5,9 +5,11 @@ use actix_web::HttpResponse;
 use crate::api::response::ErrorResponse;
 
 pub(super) async fn api_not_found() -> HttpResponse {
-    HttpResponse::NotFound().json(ErrorResponse {
-        service: env!("CARGO_PKG_NAME"),
-        code: "endpoint_not_found",
-        message: "endpoint not found",
-    })
+    match ErrorResponse::endpoint_not_found() {
+        Ok(error) => HttpResponse::NotFound().json(error),
+        Err(error) => {
+            tracing::error!(%error, "invalid product response code classification");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }

@@ -1,7 +1,7 @@
 //! Product error boundary.
 //!
-//! Keep product-facing status codes, response envelopes, localization, and audit wording outside
-//! Forge. This template only maps shared infrastructure errors into a small product error enum.
+//! Keep product-facing status codes, response policies, localization, and audit wording outside
+//! Forge. Shared envelope serialization belongs to Forge; product error mapping stays here.
 
 /// Product result type.
 pub type Result<T> = std::result::Result<T, AppError>;

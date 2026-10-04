@@ -26,7 +26,14 @@ export async function requestJson<TResponse>(
 		},
 	});
 	const text = await response.text();
-	const payload = text ? JSON.parse(text) : null;
+	let payload: unknown = null;
+	if (text) {
+		try {
+			payload = JSON.parse(text);
+		} catch {
+			if (response.ok) throw new Error("Invalid JSON response");
+		}
+	}
 
 	if (!response.ok) {
 		throw new HttpError(response.status, payload);

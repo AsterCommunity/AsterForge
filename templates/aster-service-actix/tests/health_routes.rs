@@ -119,7 +119,10 @@ async fn api_scope_returns_json_404_instead_of_frontend_fallback() {
 
     let body: serde_json::Value = test::read_body_json(response).await;
     assert_eq!(body["code"], "endpoint_not_found");
-    assert_eq!(body["message"], "endpoint not found");
+    assert_eq!(body["msg"], "endpoint not found");
+    assert_eq!(body["error"]["retryable"], false);
+    assert!(body.get("data").is_none());
+    assert!(body["error"].get("diagnostic").is_none());
 }
 
 #[actix_web::test]

@@ -62,28 +62,49 @@
   },
   "components": {
     "schemas": {
-      "ErrorResponse": {
+      "ApiErrorCode": {
+        "type": "string",
+        "description": "Product codes; Forge only checks the success/failure classification.",
+        "enum": [
+          "success",
+          "endpoint_not_found"
+        ]
+      },
+      "ApiResponse_TupleUnit_ApiErrorCode_TupleUnit": {
         "type": "object",
-        "description": "Minimal JSON error response returned by the generated skeleton.",
         "required": [
-          "service",
           "code",
-          "message"
+          "msg"
         ],
         "properties": {
           "code": {
-            "type": "string",
-            "description": "Stable product error code."
+            "$ref": "#/components/schemas/ApiErrorCode"
           },
-          "message": {
-            "type": "string",
-            "description": "Human-readable error summary."
+          "data": {
+            "type": "null"
           },
-          "service": {
-            "type": "string",
-            "description": "Cargo package name."
+          "error": {
+            "type": "object",
+            "required": [
+              "retryable"
+            ],
+            "properties": {
+              "diagnostic": {
+                "type": "null"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          },
+          "msg": {
+            "type": "string"
           }
         }
+      },
+      "ErrorResponse": {
+        "$ref": "#/components/schemas/ApiResponse_TupleUnit_ApiErrorCode_TupleUnit",
+        "description": "Product error adapter: injects the code/message and retains the stable ErrorResponse schema."
       },
       "StatusResponse": {
         "type": "object",
