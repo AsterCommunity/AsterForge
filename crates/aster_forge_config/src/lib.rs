@@ -69,11 +69,58 @@ pub use value::{
 /// product-specific keys and default functions. Keeping registration declarative
 /// makes it easier for services to hand the same registry to default
 /// initialization, validation, `OpenAPI` presentation, and admin UI metadata.
+/// Duplicate and empty keys in the static list are rejected at compile time.
 #[macro_export]
 macro_rules! define_config_registry {
     ($vis:vis static $name:ident = [$($definition:expr),* $(,)?];) => {
+        const _: () = $crate::__assert_unique_config_definition_keys(&[
+            $($definition),*
+        ]);
         $vis static $name: $crate::ConfigRegistry = $crate::ConfigRegistry::new(&[
             $($definition),*
         ]);
     };
+}
+
+/// Compile-time validation used by [`define_config_registry!`].
+///
+/// This is public only because exported macros expand in the caller's crate.
+/// Applications should use [`ConfigRegistry::validate_unique_keys`] when they
+/// construct a registry dynamically.
+#[doc(hidden)]
+#[allow(clippy::panic)]
+pub const fn __assert_unique_config_definition_keys(definitions: &[ConfigDefinition]) {
+    let mut index = 0;
+    while index < definitions.len() {
+        let key = definitions[index].key;
+        if key.is_empty() {
+            panic!("config definition key cannot be empty");
+        }
+
+        let mut other = index + 1;
+        while other < definitions.len() {
+            if const_str_eq(key, definitions[other].key) {
+                panic!("duplicate config definition key");
+            }
+            other += 1;
+        }
+        index += 1;
+    }
+}
+
+const fn const_str_eq(left: &str, right: &str) -> bool {
+    let left_bytes = left.as_bytes();
+    let right_bytes = right.as_bytes();
+    if left_bytes.len() != right_bytes.len() {
+        return false;
+    }
+
+    let mut index = 0;
+    while index < left_bytes.len() {
+        if left_bytes[index] != right_bytes[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }

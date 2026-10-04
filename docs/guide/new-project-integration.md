@@ -361,6 +361,9 @@ SYSTEM_CONFIG_STORE.ensure_defaults(writer_db).await?;
 let row = SYSTEM_CONFIG_STORE.find_by_key(reader_db, key).await?;
 ```
 
+静态 registry 宏会在编译期拒绝重复或空 key；如果 registry 由运行时数据构造，
+`default_seed_records()` 仍会在生成 seed 前执行唯一性校验。
+
 产品 API DTO 可以继续留在产品仓库，但 stored row 到展示 row 的字段搬运和 value 脱敏不要再手写：
 
 ```rust

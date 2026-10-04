@@ -1092,7 +1092,7 @@ mod tests {
     use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend, EntityTrait,
-        QueryFilter, Set,
+        PaginatorTrait, QueryFilter, Set,
     };
 
     const PRIMARY_KEY: &str = "primary_key";
@@ -1126,7 +1126,13 @@ mod tests {
         ..ConfigDefinition::private_system()
     };
 
+    const DUPLICATE: ConfigDefinition = ConfigDefinition {
+        key: PRIMARY_KEY,
+        ..PRIMARY
+    };
+
     static REGISTRY: ConfigRegistry = ConfigRegistry::new(&[PRIMARY, ARRAY]);
+    static DUPLICATE_REGISTRY: ConfigRegistry = ConfigRegistry::new(&[PRIMARY, DUPLICATE]);
     static DEPRECATED: &[&str] = &[DEPRECATED_KEY];
     static BINDING: SystemConfigDbBinding = SystemConfigDbBinding::new(&REGISTRY, DEPRECATED);
 
@@ -1222,6 +1228,45 @@ mod tests {
         assert_eq!(repaired.visibility, ConfigVisibility::Private);
         assert_eq!(repaired.category, "site.branding");
         assert_eq!(repaired.description, "Primary config");
+    }
+
+    #[tokio::test]
+    async fn ensure_defaults_rejects_duplicate_registry_without_inserting_rows() {
+        let db = sqlite_db_from_builders().await;
+
+        assert!(
+            super::ensure_defaults(&db, &DUPLICATE_REGISTRY, &[])
+                .await
+                .is_err()
+        );
+        assert_eq!(Entity::find().count(&db).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn system_config_unique_index_rejects_duplicate_keys() {
+        let db = sqlite_db_from_builders().await;
+        let now = Utc::now();
+
+        Entity::insert(super::build_system_active_model(
+            &PRIMARY,
+            "first".to_string(),
+            now,
+            None,
+        ))
+        .exec(&db)
+        .await
+        .unwrap();
+
+        let duplicate = Entity::insert(super::build_system_active_model(
+            &PRIMARY,
+            "second".to_string(),
+            now,
+            None,
+        ))
+        .exec(&db)
+        .await;
+        assert!(duplicate.is_err());
+        assert_eq!(Entity::find().count(&db).await.unwrap(), 1);
     }
 
     #[tokio::test]

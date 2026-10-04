@@ -110,6 +110,10 @@ aster_forge_config::define_config_registry! {
 }
 ```
 
+`define_config_registry!` 会在编译期拒绝重复或空的静态 key。直接使用
+`ConfigRegistry::new` 构造的 registry 仍然会在 `default_seed_records()` 入口做运行时校验，
+因此动态构造和数据库 `ensure_defaults` 也不会生成重复 seed。
+
 `ConfigDefinition::private_system()` 只是减少样板。每个配置项仍然应该显式声明稳定 key、值类型、默认值、category、前端 i18n key 和后端描述。
 
 ## Normalizer 注册

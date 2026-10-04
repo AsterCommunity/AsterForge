@@ -346,6 +346,8 @@ impl ConfigRegistry {
     /// Returns [`ConfigCoreError`] when a default fails structure validation, normalization,
     /// or dependency validation.
     pub fn default_seed_records(&self) -> Result<Vec<ConfigSeedRecord>> {
+        self.validate_unique_keys()?;
+
         let mut lookup = BTreeMap::<String, String>::new();
         let mut rows = Vec::with_capacity(self.definitions.len());
 
@@ -373,6 +375,7 @@ impl ConfigRegistry {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
         ConfigDefinition, ConfigRegistry, ConfigSeedRecord, ConfigValueLookup, ConfigValueType,
@@ -465,6 +468,13 @@ mod tests {
         ..PRIMARY
     };
 
+    static DEFAULT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_default() -> String {
+        DEFAULT_CALLS.fetch_add(1, Ordering::Relaxed);
+        "counted".to_string()
+    }
+
     #[test]
     fn registry_finds_definitions_by_key() {
         let registry = ConfigRegistry::new(&[PRIMARY]);
@@ -484,6 +494,45 @@ mod tests {
         let category_registry = ConfigRegistry::new(&[PRIMARY]);
         assert!(category_registry.validate_categories(&["general"]).is_ok());
         assert!(category_registry.validate_categories(&["other"]).is_err());
+    }
+
+    #[test]
+    fn default_seed_records_rejects_invalid_keys_before_generating_rows() {
+        DEFAULT_CALLS.store(0, Ordering::Relaxed);
+        const DUPLICATE_WITH_COUNTING_DEFAULT: ConfigDefinition = ConfigDefinition {
+            key: "primary",
+            default_fn: counting_default,
+            ..PRIMARY
+        };
+        let duplicate_registry = ConfigRegistry::new(&[PRIMARY, DUPLICATE]);
+        assert!(duplicate_registry.default_seed_records().is_err());
+
+        let duplicate_with_counting_default =
+            ConfigRegistry::new(&[PRIMARY, DUPLICATE_WITH_COUNTING_DEFAULT]);
+        assert!(
+            duplicate_with_counting_default
+                .default_seed_records()
+                .is_err()
+        );
+        assert_eq!(DEFAULT_CALLS.load(Ordering::Relaxed), 0);
+
+        const EMPTY: ConfigDefinition = ConfigDefinition { key: "", ..PRIMARY };
+        let empty_registry = ConfigRegistry::new(&[EMPTY]);
+        assert!(empty_registry.default_seed_records().is_err());
+
+        const WHITESPACE_ONLY: ConfigDefinition = ConfigDefinition {
+            key: "   ",
+            ..PRIMARY
+        };
+        let whitespace_registry = ConfigRegistry::new(&[WHITESPACE_ONLY]);
+        assert!(whitespace_registry.default_seed_records().is_err());
+
+        const TABBED: ConfigDefinition = ConfigDefinition {
+            key: "\t\n",
+            ..PRIMARY
+        };
+        let tabbed_registry = ConfigRegistry::new(&[TABBED]);
+        assert!(tabbed_registry.default_seed_records().is_err());
     }
 
     #[test]
