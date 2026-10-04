@@ -487,6 +487,74 @@ mod tests {
     }
 
     #[test]
+    fn static_key_validation_accepts_empty_and_single_definition_lists() {
+        const _: () = crate::__assert_unique_config_definition_keys(&[]);
+        const _: () = crate::__assert_unique_config_definition_keys(&[PRIMARY]);
+        crate::__assert_unique_config_definition_keys(&[]);
+        crate::__assert_unique_config_definition_keys(&[PRIMARY]);
+    }
+
+    #[test]
+    fn static_key_validation_distinguishes_lengths_bytes_and_unicode() {
+        const DEFINITIONS: &[ConfigDefinition] = &[
+            ConfigDefinition {
+                key: "a",
+                ..PRIMARY
+            },
+            ConfigDefinition {
+                key: "ab",
+                ..PRIMARY
+            },
+            ConfigDefinition {
+                key: "ac",
+                ..PRIMARY
+            },
+            ConfigDefinition {
+                key: "aB",
+                ..PRIMARY
+            },
+            ConfigDefinition {
+                key: "\u{e9}",
+                ..PRIMARY
+            },
+            ConfigDefinition {
+                key: "\u{ea}",
+                ..PRIMARY
+            },
+        ];
+        const _: () = crate::__assert_unique_config_definition_keys(DEFINITIONS);
+        crate::__assert_unique_config_definition_keys(DEFINITIONS);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate config definition key")]
+    fn static_key_validation_rejects_adjacent_duplicates() {
+        crate::__assert_unique_config_definition_keys(&[PRIMARY, DUPLICATE]);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate config definition key")]
+    fn static_key_validation_rejects_non_adjacent_duplicates() {
+        crate::__assert_unique_config_definition_keys(&[ENABLED, PRIMARY, DEPENDENT, DUPLICATE]);
+    }
+
+    #[test]
+    #[should_panic(expected = "config definition key cannot be empty")]
+    fn static_key_validation_rejects_empty_single_key() {
+        crate::__assert_unique_config_definition_keys(&[ConfigDefinition { key: "", ..PRIMARY }]);
+    }
+
+    #[test]
+    #[should_panic(expected = "config definition key cannot be empty")]
+    fn static_key_validation_rejects_empty_last_key() {
+        crate::__assert_unique_config_definition_keys(&[
+            PRIMARY,
+            ENABLED,
+            ConfigDefinition { key: "", ..PRIMARY },
+        ]);
+    }
+
+    #[test]
     fn registry_rejects_duplicate_keys_and_unknown_categories() {
         let duplicate_registry = ConfigRegistry::new(&[PRIMARY, DUPLICATE]);
         assert!(duplicate_registry.validate_unique_keys().is_err());
@@ -498,12 +566,22 @@ mod tests {
 
     #[test]
     fn default_seed_records_rejects_invalid_keys_before_generating_rows() {
-        DEFAULT_CALLS.store(0, Ordering::Relaxed);
         const DUPLICATE_WITH_COUNTING_DEFAULT: ConfigDefinition = ConfigDefinition {
             key: "primary",
             default_fn: counting_default,
             ..PRIMARY
         };
+        const EMPTY: ConfigDefinition = ConfigDefinition { key: "", ..PRIMARY };
+        const WHITESPACE_ONLY: ConfigDefinition = ConfigDefinition {
+            key: "   ",
+            ..PRIMARY
+        };
+        const TABBED: ConfigDefinition = ConfigDefinition {
+            key: "\t\n",
+            ..PRIMARY
+        };
+
+        DEFAULT_CALLS.store(0, Ordering::Relaxed);
         let duplicate_registry = ConfigRegistry::new(&[PRIMARY, DUPLICATE]);
         assert!(duplicate_registry.default_seed_records().is_err());
 
@@ -516,21 +594,12 @@ mod tests {
         );
         assert_eq!(DEFAULT_CALLS.load(Ordering::Relaxed), 0);
 
-        const EMPTY: ConfigDefinition = ConfigDefinition { key: "", ..PRIMARY };
         let empty_registry = ConfigRegistry::new(&[EMPTY]);
         assert!(empty_registry.default_seed_records().is_err());
 
-        const WHITESPACE_ONLY: ConfigDefinition = ConfigDefinition {
-            key: "   ",
-            ..PRIMARY
-        };
         let whitespace_registry = ConfigRegistry::new(&[WHITESPACE_ONLY]);
         assert!(whitespace_registry.default_seed_records().is_err());
 
-        const TABBED: ConfigDefinition = ConfigDefinition {
-            key: "\t\n",
-            ..PRIMARY
-        };
         let tabbed_registry = ConfigRegistry::new(&[TABBED]);
         assert!(tabbed_registry.default_seed_records().is_err());
     }

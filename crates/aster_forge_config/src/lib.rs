@@ -70,6 +70,48 @@ pub use value::{
 /// makes it easier for services to hand the same registry to default
 /// initialization, validation, `OpenAPI` presentation, and admin UI metadata.
 /// Duplicate and empty keys in the static list are rejected at compile time.
+///
+/// ```
+/// use aster_forge_config::ConfigDefinition;
+///
+/// const FIRST: ConfigDefinition = ConfigDefinition {
+///     key: "first",
+///     ..ConfigDefinition::private_system()
+/// };
+/// const SECOND: ConfigDefinition = ConfigDefinition { key: "second", ..FIRST };
+/// aster_forge_config::define_config_registry! {
+///     static REGISTRY = [FIRST, SECOND];
+/// }
+/// aster_forge_config::define_config_registry! {
+///     static EMPTY_REGISTRY = [];
+/// }
+/// assert!(REGISTRY.contains_key("second"));
+/// assert!(EMPTY_REGISTRY.validate_unique_keys().is_ok());
+/// ```
+///
+/// ```compile_fail,E0080
+/// use aster_forge_config::ConfigDefinition;
+///
+/// const DEFINITION: ConfigDefinition = ConfigDefinition {
+///     key: "duplicate",
+///     ..ConfigDefinition::private_system()
+/// };
+/// aster_forge_config::define_config_registry! {
+///     static REGISTRY = [DEFINITION, DEFINITION];
+/// }
+/// ```
+///
+/// ```compile_fail,E0080
+/// use aster_forge_config::ConfigDefinition;
+///
+/// const DEFINITION: ConfigDefinition = ConfigDefinition {
+///     key: "",
+///     ..ConfigDefinition::private_system()
+/// };
+/// aster_forge_config::define_config_registry! {
+///     static REGISTRY = [DEFINITION];
+/// }
+/// ```
 #[macro_export]
 macro_rules! define_config_registry {
     ($vis:vis static $name:ident = [$($definition:expr),* $(,)?];) => {
@@ -88,20 +130,18 @@ macro_rules! define_config_registry {
 /// Applications should use [`ConfigRegistry::validate_unique_keys`] when they
 /// construct a registry dynamically.
 #[doc(hidden)]
-#[allow(clippy::panic)]
 pub const fn __assert_unique_config_definition_keys(definitions: &[ConfigDefinition]) {
     let mut index = 0;
     while index < definitions.len() {
         let key = definitions[index].key;
-        if key.is_empty() {
-            panic!("config definition key cannot be empty");
-        }
+        assert!(!key.is_empty(), "config definition key cannot be empty");
 
         let mut other = index + 1;
         while other < definitions.len() {
-            if const_str_eq(key, definitions[other].key) {
-                panic!("duplicate config definition key");
-            }
+            assert!(
+                !const_str_eq(key, definitions[other].key),
+                "duplicate config definition key"
+            );
             other += 1;
         }
         index += 1;
