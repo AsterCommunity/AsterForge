@@ -381,6 +381,8 @@ Forge 提供两条 runtime cache 路径：
 
 已有产品如果已经有大量同步读取配置的 helper，应优先接入 `SyncRuntimeConfig`，不要为了使用公共 runtime cache 把读路径强行改成 async。
 
+`AsyncRuntimeConfig` 会用独立的异步更新锁串行化 `reload`、`apply` 和 `remove`。`reload` 在这条更新序列中完成权威存储读取和快照发布，因此较旧的慢加载不能覆盖后来的更新；快照读取仍然只访问 `RwLock`，不会等待数据库 I/O。加载失败或取消只会释放更新锁，不会发布不完整快照，后续更新可以继续执行。
+
 两条路径都保持同一套 `requires_restart` 语义：如果 key 已经存在，之后收到 `requires_restart=true` 的更新会被忽略（整条记录保留，含标志位本身），直到进程重启后加载新值。这套语义由入站行的标志决定，对所有写入路径一致生效——单行 `apply`、全量 `SyncRuntimeConfig::replace` 和 `AsyncRuntimeConfig::reload`（包括 pub/sub 通知触发的权威 reconcile）；被保留的 key 不会出现在 reload diff 里，监听器不会收到"restart-only 值已变化"的假信号。删除不在这套保护内：`remove` 和全量重载中消失的 key 都立即生效。
 
 产品如果保留本地 runtime，也应该保持同样语义，避免配置在不同服务中表现不一致。

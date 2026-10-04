@@ -12,7 +12,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     ConfigCoreError, ConfigSource, ConfigValueLookup, ConfigValueType, ConfigVisibility, Result,
@@ -413,6 +413,10 @@ where
 /// [`SyncRuntimeConfig`] instead.
 #[derive(Debug, Default)]
 pub struct AsyncRuntimeConfig {
+    /// Serializes snapshot mutations, including the storage read performed by
+    /// [`Self::reload`]. Snapshot readers use `snapshot` directly and never
+    /// wait for this lock or for storage I/O.
+    update_lock: Mutex<()>,
     snapshot: RwLock<AsyncConfigSnapshot>,
 }
 
@@ -421,6 +425,7 @@ impl AsyncRuntimeConfig {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            update_lock: Mutex::new(()),
             snapshot: RwLock::new(AsyncConfigSnapshot::default()),
         }
     }
@@ -439,6 +444,9 @@ impl AsyncRuntimeConfig {
     where
         S: AsyncConfigStore + ?Sized,
     {
+        // Keep the load and publication in one update sequence. Otherwise an
+        // older, slower load can publish after a newer reload/apply/remove.
+        let _update_guard = self.update_lock.lock().await;
         let mut next = AsyncConfigSnapshot::from_configs(store.load_all().await?);
         let mut guard = self.snapshot.write().await;
         preserve_restart_only_records(&guard.values, &mut next.values);
@@ -467,6 +475,7 @@ impl AsyncRuntimeConfig {
     /// If the incoming row requires restart and the key already exists, the
     /// update is ignored to preserve the in-process value until restart.
     pub async fn apply(&self, config: StoredConfig) -> Option<RuntimeConfigChange> {
+        let _update_guard = self.update_lock.lock().await;
         let mut guard = self.snapshot.write().await;
         if config.requires_restart && guard.values.contains_key(&config.key) {
             return None;
@@ -479,6 +488,7 @@ impl AsyncRuntimeConfig {
 
     /// Removes one key from the snapshot.
     pub async fn remove(&self, key: &str) -> Option<RuntimeConfigChange> {
+        let _update_guard = self.update_lock.lock().await;
         let mut guard = self.snapshot.write().await;
         guard
             .values
