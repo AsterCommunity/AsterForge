@@ -25,8 +25,6 @@ function getVersion(): string {
 const version = getVersion()
 
 const cratePages = [
-  ["Actix middleware", "/crates/aster_forge_actix_middleware"],
-  ["Actix observability", "/crates/aster_forge_actix_observability"],
   ["Alloc", "/crates/aster_forge_alloc"],
   ["API", "/crates/aster_forge_api"],
   ["API docs macros", "/crates/aster_forge_api_docs_macros"],
@@ -40,18 +38,23 @@ const cratePages = [
   ["Crypto", "/crates/aster_forge_crypto"],
   ["Database", "/crates/aster_forge_db"],
   ["Database migration", "/crates/aster_forge_db_migration"],
+  ["Events", "/crates/aster_forge_events"],
   ["External auth", "/crates/aster_forge_external_auth"],
   ["File classification", "/crates/aster_forge_file_classification"],
   ["HTTP", "/crates/aster_forge_http"],
   ["Logging", "/crates/aster_forge_logging"],
   ["Mail", "/crates/aster_forge_mail"],
   ["Metrics", "/crates/aster_forge_metrics"],
+  ["Middleware", "/crates/aster_forge_middleware"],
+  ["Observability", "/crates/aster_forge_observability"],
   ["Panic", "/crates/aster_forge_panic"],
   ["Runtime", "/crates/aster_forge_runtime"],
   ["Storage core", "/crates/aster_forge_storage_core"],
   ["Tasks", "/crates/aster_forge_tasks"],
+  ["Test", "/crates/aster_forge_test"],
   ["Utils", "/crates/aster_forge_utils"],
   ["Validation", "/crates/aster_forge_validation"],
+  ["WebDAV", "/crates/aster_forge_webdav"],
   ["XML", "/crates/aster_forge_xml"],
 ] as const
 
@@ -99,7 +102,7 @@ export default withMermaid(
       nav: [
         { text: "首页", link: "/" },
         { text: "总览", link: "/guide/" },
-        { text: "模块", link: "/crates/aster_forge_actix_middleware" },
+        { text: "模块", link: "/crates/aster_forge_alloc" },
         { text: "Rustdoc", link: "https://forge.astercosm.com/crates/rustdoc/" },
         { text: `版本 ${version}`, link: "https://github.com/AsterCommunity/AsterForge" },
       ],
@@ -131,7 +134,7 @@ export default withMermaid(
           nav: [
             { text: "Home", link: "/en/" },
             { text: "Guide", link: "/en/guide/" },
-            { text: "Chinese crate docs", link: "/crates/aster_forge_actix_middleware" },
+            { text: "Chinese crate docs", link: "/crates/aster_forge_alloc" },
             { text: "Rustdoc", link: "https://forge.astercosm.com/crates/rustdoc/" },
           ],
           sidebar: [
