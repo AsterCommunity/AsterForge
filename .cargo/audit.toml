@@ -4,10 +4,11 @@
 [advisories]
 ignore = [
     # rsa 0.9.10 Marvin Attack（计时侧信道，medium 5.9）
-    # 仅通过 openidconnect 4.x 引入，且只用于 OIDC JWKS 公钥验签；
+    # 通过 openidconnect 4.x 和可选 jsonwebtoken/rust_crypto 引入；
+    # OIDC 只用于 JWKS 公钥验签，aster_forge_auth 只暴露 HMAC，不调用 RSA；
     # Marvin Attack 需要攻击者可探测的 RSA 私钥解密/签名预言机，
     # 本项目任何代码路径都不持有 RSA 私钥，不存在解密预言机，不可利用。
-    # 上游无修复版本（No fixed upgrade is available），待 openidconnect 迁移后移除
+    # 上游无修复版本（No fixed upgrade is available），待相关上游迁移 RSA 依赖后移除
     "RUSTSEC-2023-0071",
 
     # paste 1.0.15 unmaintained

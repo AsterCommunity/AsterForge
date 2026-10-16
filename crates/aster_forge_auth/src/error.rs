@@ -6,6 +6,12 @@ pub type Result<T> = std::result::Result<T, AuthError>;
 /// Errors produced by the product-neutral authentication mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AuthError {
+    /// The product entrypoint has not successfully initialized the process-wide JWT provider.
+    #[error("JWT crypto provider has not been initialized")]
+    CryptoProviderNotInitialized,
+    /// The upstream JWT provider was already installed; Forge never overwrites or adopts it.
+    #[error("JWT crypto provider was already installed")]
+    CryptoProviderAlreadyInstalled,
     /// The caller supplied an invalid policy, key, identifier, or claim value.
     #[error("invalid authentication policy")]
     InvalidPolicy,

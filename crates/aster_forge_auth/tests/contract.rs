@@ -4,6 +4,8 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+mod support;
+
 const NOW: i64 = 1_700_000_000;
 const KEY: &[u8] = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 struct TestIds;
@@ -13,6 +15,7 @@ impl IdSource for TestIds {
     }
 }
 fn policy() -> JwtPolicy {
+    support::initialize_provider();
     JwtPolicy::new("issuer", "local-web", 60, 600).unwrap()
 }
 fn signer(at: i64) -> JwtSigner {
@@ -44,6 +47,7 @@ fn claims() -> Value {
     json!({"sub":"42","sid":"session-1","session_version":7,"token_type":"refresh","jti":"refresh-jti-secret","restriction":"none","iat":NOW,"exp":NOW+600,"iss":"issuer","aud":"local-web"})
 }
 fn signed(value: &Value) -> String {
+    support::initialize_provider();
     encode(
         &Header::new(Algorithm::HS256),
         value,

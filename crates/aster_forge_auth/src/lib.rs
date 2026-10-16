@@ -6,11 +6,17 @@
 //! accessed through [`RefreshSessionStore`], so this crate does not depend on `SeaORM` or a product
 //! schema.
 //!
+//! Select exactly one Cargo backend feature: `aws-lc-rs` (default) or `rust-crypto`.
+//! The product entrypoint must call [`initialize_jwt_crypto_provider`] before any JWT use,
+//! including direct `jsonwebtoken` calls. This installs a process-wide provider, not an
+//! instance-specific backend. Signing algorithms remain a runtime [`JwtPolicy`] choice.
+//!
 //! ```
 //! use aster_forge_auth::{AuthTokenType, JwtKey, JwtPolicy, JwtSigner, JwtVerifier,
 //!     Restriction, SessionId, SessionVersion, Subject};
 //!
 //! # fn main() -> aster_forge_auth::Result<()> {
+//! aster_forge_auth::initialize_jwt_crypto_provider()?;
 //! let key = JwtKey::hmac([42; 32])?; // Product loads a dedicated random signing key.
 //! let policy = JwtPolicy::new("product", "local-web", 900, 604_800)?;
 //! let signer = JwtSigner::with_system_clock(key.clone(), policy.clone());
@@ -36,10 +42,20 @@
     )
 )]
 
+#[cfg(all(feature = "aws-lc-rs", feature = "rust-crypto"))]
+compile_error!(
+    "aster_forge_auth: features `aws-lc-rs` and `rust-crypto` are mutually exclusive; disable default features to select `rust-crypto`"
+);
+#[cfg(not(any(feature = "aws-lc-rs", feature = "rust-crypto")))]
+compile_error!(
+    "aster_forge_auth: select exactly one JWT backend feature: `aws-lc-rs` or `rust-crypto`"
+);
+
 mod coordinator;
 mod error;
 mod ids;
 mod jwt;
+mod provider;
 mod refresh;
 mod time;
 
@@ -50,6 +66,7 @@ pub use jwt::{
     AuthTokenPair, AuthTokenType, JwtAlgorithm, JwtKey, JwtPolicy, JwtSigner, JwtVerifier,
     Restriction, SessionVersion, TokenClaims, VerifiedToken,
 };
+pub use provider::initialize_jwt_crypto_provider;
 pub use refresh::{
     ClientContext, RefreshDecision, RefreshError, RefreshOutcome, RefreshPolicy, RefreshRejection,
     RefreshRotationRequest, RefreshSession, RefreshSessionStore, RefreshStoreOutcome,

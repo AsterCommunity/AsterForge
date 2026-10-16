@@ -5,22 +5,26 @@ on:
     paths:
       - '**/*.rs'
       - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
       - 'Cargo.lock'
       - 'crates/aster_forge_xml/fuzz/Cargo.toml'
       - 'templates/**'
       - 'scripts/coverage-summary.mjs'
       - 'scripts/check-lint-attributes.pl'
+      - 'scripts/test-auth-features.sh'
       - '.github/workflows/rust.yml'
     branches: [master]
   pull_request:
     paths:
       - '**/*.rs'
       - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
       - 'Cargo.lock'
       - 'crates/aster_forge_xml/fuzz/Cargo.toml'
       - 'templates/**'
       - 'scripts/coverage-summary.mjs'
       - 'scripts/check-lint-attributes.pl'
+      - 'scripts/test-auth-features.sh'
       - '.github/workflows/rust.yml'
     branches: [master, develop]
 
@@ -88,7 +92,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude aster_forge_auth --all-targets --all-features -- -D warnings
 
       - name: Lint attribute policy
         run: perl scripts/check-lint-attributes.pl
@@ -147,6 +151,50 @@ jobs:
 
       - name: Test workspace feature matrix
         run: |
-          cargo hack test --workspace --all-targets --no-default-features --no-fail-fast
-          cargo hack test --workspace --all-targets --each-feature --no-fail-fast
-          cargo test --workspace --all-targets --all-features --no-fail-fast
+          # Auth requires exactly one backend; its valid and invalid combinations run below.
+          cargo hack test --workspace --exclude aster_forge_auth --all-targets --no-default-features --no-fail-fast
+          cargo hack test --workspace --exclude aster_forge_auth --all-targets --each-feature --no-fail-fast
+          cargo test --workspace --exclude aster_forge_auth --all-targets --all-features --no-fail-fast
+
+  auth-backends:
+    name: Auth (${{ matrix.os }}, ${{ matrix.backend }}, Rust 1.95.0)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        backend: [aws-lc-rs, rust-crypto]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: auth-${{ matrix.backend }}-1.95.0
+      - name: Test backend without optional password support
+        run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }} --all-targets
+      - name: Test backend with password support
+        run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --all-targets
+      - name: Test documentation examples
+        run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --doc
+      - name: Run session example
+        run: cargo run --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }} --example session_flow
+      - name: Clippy
+        run: cargo clippy --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --all-targets -- -D warnings
+      - name: Build API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --no-deps
+
+  auth-feature-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check isolated consumers and invalid backend combinations
+        run: bash scripts/test-auth-features.sh

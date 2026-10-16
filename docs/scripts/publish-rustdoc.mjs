@@ -14,7 +14,14 @@ const rustdocCleanUrlEntry = join(docsRoot, ".vitepress", "dist", "crates", "rus
 rmSync(rustdocOutput, { recursive: true, force: true })
 execFileSync(
   "cargo",
-  ["doc", "--workspace", "--all-features", "--no-deps", "--target-dir", rustdocTarget],
+  ["doc", "--workspace", "--exclude", "aster_forge_auth", "--all-features", "--no-deps", "--target-dir", rustdocTarget],
+  { cwd: repoRoot, stdio: "inherit" },
+)
+// Auth's backend features are mutually exclusive. Publish its full API with the default AWS-LC
+// backend and password support; CI also builds rustdoc with RustCrypto independently.
+execFileSync(
+  "cargo",
+  ["doc", "-p", "aster_forge_auth", "--features", "password", "--no-deps", "--target-dir", rustdocTarget],
   { cwd: repoRoot, stdio: "inherit" },
 )
 

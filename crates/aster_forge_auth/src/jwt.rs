@@ -321,7 +321,8 @@ impl JwtSigner {
     ///
     /// # Errors
     /// Returns a mechanism error for invalid key size, clock, expiry overflow, ID generation,
-    /// encoding, or token size. Issuing alone does not create a persisted session.
+    /// encoding, or token size. Returns `CryptoProviderNotInitialized` until the product has
+    /// initialized the JWT backend at startup. Issuing alone does not create a persisted session.
     pub fn issue(
         &self,
         subject: Subject,
@@ -329,6 +330,7 @@ impl JwtSigner {
         version: SessionVersion,
         restriction: Restriction,
     ) -> Result<AuthTokenPair> {
+        crate::provider::ensure_initialized()?;
         self.key.check(self.policy.algorithm)?;
         let now = self.clock.now_unix_seconds()?;
         if now < 0 {
@@ -409,7 +411,9 @@ impl JwtVerifier {
     /// # Errors
     /// Returns a classified error without token/key material. Products additionally check live
     /// account/version state and live `sid` state when promising immediate session revocation.
+    /// Returns `CryptoProviderNotInitialized` until the product initializes the JWT backend.
     pub fn verify(&self, token: &str, expected: AuthTokenType) -> Result<VerifiedToken> {
+        crate::provider::ensure_initialized()?;
         self.key.check(self.policy.algorithm)?;
         if token.len() > self.policy.max_token_bytes {
             return Err(AuthError::TokenTooLarge);

@@ -67,6 +67,7 @@ impl RefreshSessionStore for Store {
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn Error>> {
+    aster_forge_auth::initialize_jwt_crypto_provider()?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let policy = JwtPolicy::new("example-product", "local-web", 900, 604_800)?;
     let key = JwtKey::hmac([42; 32])?; // Fixture only; products load independent high-entropy keys.

@@ -15,11 +15,44 @@
 ```toml
 [dependencies]
 aster_forge_auth = { git = "https://github.com/AsterCommunity/AsterForge" }
+
+# 或在另一种产品配置中选择 RustCrypto（必须关闭默认 AWS-LC）
+aster_forge_auth = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["rust-crypto"] }
 ```
+
+上面两项是互斥的配置示例，只保留一项。后端 feature 必须恰好开启一个；都不开或同时开启 `aws-lc-rs` / `rust-crypto` 会由 `compile_error!` 拒绝，包括多个依赖合并 Forge features 的情况。默认 feature 是 `aws-lc-rs`，不能对 auth 使用 `--all-features`。workspace 根的 `jsonwebtoken` 关闭默认 features，不再强制后端，也不启用当前 HMAC API 不需要的 PEM/ASN.1 功能。
+
+| Cargo 后端 | HS256 | HS384 | HS512 | 非对称算法 |
+| --- | --- | --- | --- | --- |
+| `aws-lc-rs`（默认） | 支持 | 支持 | 支持 | Forge 未暴露 |
+| `rust-crypto` | 支持 | 支持 | 支持 | Forge 未暴露 |
 
 可选 `password` feature 提供实例级 `PasswordHashRuntime`：同步密码学原语仍在 crypto，blocking 执行和 semaphore 成本控制由 auth 提供；产品选择并发上限、使用等待或 `try_verify_password` 立即拒绝、凭据来源和错误映射。取消请求不会提前释放仍在执行的 blocking job 额度。
 
-默认内核不引入 HTTP 框架、SeaORM、Redis、OpenAPI 或产品实体。JWT 使用成熟的 `jsonwebtoken` / `aws_lc_rs` 后端，默认 HS256，显式支持 HS384/HS512。HMAC key 至少分别为 32/48/64 字节；长度检查不等于熵检查。产品加载高熵签名 key，负责轮换和用途隔离，不复用 AEAD master key。
+默认内核不引入 HTTP 框架、SeaORM、Redis、OpenAPI 或产品实体。JWT 签发/验签由 `jsonwebtoken` 完成。RustCrypto 的上游 feature 也会引入 RSA/EC/EdDSA 依赖，但 Forge 当前只暴露三种 HMAC，不支持把 HMAC key 当非对称密钥使用。RustCrypto JWT 依赖路径没有 AWS-LC，不代表产品其他 TLS/HTTP 依赖没有 AWS-LC；纯 Rust 不等于默认更安全，AWS-LC feature 也不等于 FIPS 合规。
+
+**Cargo 后端和产品 token 算法是两个独立选择。** `JwtPolicy::new` 默认 HS256；产品在组合入口用 `with_algorithm` 显式选择唯一算法，Forge 不读取 token header 来选择 policy，不提供逐算法 Cargo feature：
+
+```rust
+let policy = JwtPolicy::new("aster-gate", "aster-gate-web", 900, 604_800)?
+    .with_algorithm(JwtAlgorithm::Hs512);
+let key = JwtKey::hmac(product_hs512_key_bytes)?; // 独立高熵且至少 64 字节
+```
+
+HS256/384/512 的 HMAC key 至少分别为 32/48/64 字节；长度检查不等于熵检查。产品加载高熵签名 key，负责轮换和用途隔离，不复用 AEAD master key。相同算法、key 和 claims 在两个后端生成相同 token；只切换后端无需重新登录，也不会放宽算法/旧 key 的接受范围。JWT 内容是签名而非加密，不应放入秘密。
+
+## 启动初始化
+
+产品组合入口必须在启动 worker、签发/验证 JWT 或直接调用 `jsonwebtoken` 之前，调用一次 `initialize_jwt_crypto_provider()?`。现有 Drive 接入保留默认 AWS-LC，但升级时也要补上这次显式初始化；不可在请求路径或每次构建 signer 时调用。
+
+上游 provider 是进程级且不可替换，没有 signer/verifier 实例隔离。Forge 根据唯一编译 feature 显式安装对应 provider；其他依赖直接启用第二个 `jsonwebtoken` 后端时，Forge features 仍满足二选一，显式初始化仍然确定选择 Forge 配置的实现，不依赖上游自动选择。
+
+- 未完成 Forge 初始化：签发/验证返回 `AuthError::CryptoProviderNotInitialized`，不会进入上游 provider 自动选择路径。
+- Forge 已成功初始化后再次调用：返回 `CryptoProviderAlreadyInstalled`，已有 JWT 操作仍可用。
+- 其他依赖先显式安装或通过 JWT 调用触发自动初始化：Forge 初始化返回 `CryptoProviderAlreadyInstalled`，不覆盖、不接受现存 provider，Forge JWT 保持不可用。产品应在启动时失败。
+- 并发初始化只允许一名调用者成功。产品必须在单一组合入口初始化并完成后再提供服务，不能把初始化竞态当选择机制。
+
+上游未提供公开 provider 查询接口，无法可靠区分“其他依赖装了相同后端”和其他冲突，因此统一拒绝。本轮不支持自定义 provider。
 
 ## 最小接入
 
@@ -28,6 +61,7 @@ use aster_forge_auth::{AuthTokenType, JwtKey, JwtPolicy, JwtSigner, JwtVerifier,
     Restriction, SessionId, SessionVersion, Subject};
 
 fn example(signing_key_bytes: &[u8]) -> aster_forge_auth::Result<()> {
+    aster_forge_auth::initialize_jwt_crypto_provider()?; // 产品启动入口，只执行一次
     let key = JwtKey::hmac(signing_key_bytes)?;
     let policy = JwtPolicy::new("aster-drive", "aster-drive-web", 900, 604_800)?;
     let signer = JwtSigner::with_system_clock(key.clone(), policy.clone());
@@ -76,11 +110,13 @@ JWT 必需 `sub/sid/session_version/token_type/restriction/iat/exp/iss/aud`；re
 
 单会话立即撤销要求 `sid + 权威 session 状态检查`；只携带 sid 不足以兑现承诺。Drive 当前明确保留单会话撤销后的短期 access 到期窗口，同时账号级 generation/禁用/权限检查读取 writer，不依赖可能迟到的缓存。Gate 接入时必须保留其立即撤销和高危实时权限要求。
 
-`AuthError` 只描述机制失败，产品选择状态码、文案和审计 action。token、key 和 JTI 不出现在 Debug/Display。产品审计使用稳定 session/actor 标识，不能记录 refresh 凭据或 JTI。
+`AuthError` 只描述机制失败，产品选择状态码、文案和审计 action。provider 初始化错误是启动配置失败，不能映射成用户凭据失效或在请求里重试初始化。token、key 和 JTI 不出现在 Debug/Display。产品审计使用稳定 session/actor 标识，不能记录 refresh 凭据或 JTI。
 
 ## 测试要求
 
 - JWT 的必需字段、类型、空/超长/非法 ID、错 key/算法/用途/issuer/audience、未来/过期/nbf/时间溢出、畸形/超大 token、密钥长度和 redaction。
+- 两个后端分别执行同一套 JWT/refresh 测试，三种运行时算法验证固定签发向量、旧 token 互验、最小 key 长度和跨算法/算法族拒绝。
+- provider 状态测试用独立进程验证未初始化、重复/冲突、上游先初始化和并发初始化。独立消费项目验证 Forge 零/双 feature 编译失败、上游直接合并 features、RustCrypto JWT 依赖隔离。
 - 同实例真实等待、不同实例 CAS、重启后多轮历史 replay；旧 token 没有第二个成功响应。
 - 显式 stale/reuse 策略、窗口边界、伪造/缺失指纹、跨账号/会话、撤销/过期/禁用/version/restriction。
 - begin/CAS/revoke/audit/commit/重读失败，未提交状态回滚、无 token 泄漏，post-commit 事实不回滚。
@@ -90,10 +126,17 @@ JWT 必需 `sub/sid/session_version/token_type/restriction/iat/exp/iss/aud`；re
 ```bash
 cargo test -p aster_forge_auth --all-targets
 cargo test -p aster_forge_auth --doc
-cargo clippy -p aster_forge_auth --all-targets -- -D warnings
+cargo test -p aster_forge_auth --no-default-features --features aws-lc-rs,password --all-targets
+cargo test -p aster_forge_auth --no-default-features --features rust-crypto,password --all-targets
+cargo test -p aster_forge_auth --no-default-features --features rust-crypto --doc
+cargo clippy -p aster_forge_auth --features password --all-targets -- -D warnings
+cargo clippy -p aster_forge_auth --no-default-features --features rust-crypto,password --all-targets -- -D warnings
+bash scripts/test-auth-features.sh
 cargo check --workspace
 cargo test --workspace
 ```
+
+CI 在 Rust 1.95.0 的 Linux/macOS/Windows 分别执行两个后端的 tests、doctests、example、Clippy 和 rustdoc。workspace 的全 feature 检查排除 auth，再按上述合法组合单独检查；文档发布使用默认 AWS-LC + `password`，RustCrypto rustdoc 由 CI 单独编译。
 
 ## 参考项目
 

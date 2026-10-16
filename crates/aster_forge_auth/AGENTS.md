@@ -11,7 +11,12 @@ cargo test -p aster_forge_auth
 cargo test -p aster_forge_auth --all-targets
 cargo test -p aster_forge_auth --doc
 cargo clippy -p aster_forge_auth --all-targets -- -D warnings
+cargo test -p aster_forge_auth --no-default-features --features rust-crypto,password --all-targets
+cargo clippy -p aster_forge_auth --no-default-features --features rust-crypto,password --all-targets -- -D warnings
+bash scripts/test-auth-features.sh
 ```
+
+`aws-lc-rs`（默认）和 `rust-crypto` 必须恰好选择一个，零/双 feature 编译失败，不使用 `--all-features`。产品组合入口先调用一次 `initialize_jwt_crypto_provider()`；不得在请求路径隐式安装/覆盖上游进程 provider。算法由运行时 policy 显式选择，保持 HS256/384/512 和 key 长度绑定。进程级初始化测试使用独立子进程。
 
 refresh store 必须证明 CAS 是跨实例事实源；`RefreshCoordinator` 由产品实例持有，包含有界请求预算、取消和回收，不能每次请求重建，也不能替代数据库 CAS。
 

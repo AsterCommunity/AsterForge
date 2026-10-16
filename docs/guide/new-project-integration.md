@@ -93,6 +93,7 @@ aster_forge_xml = { git = "https://github.com/AsterCommunity/AsterForge", packag
 
 按需开启 feature：
 
+- 本地 JWT：`aster_forge_auth` 默认 `aws-lc-rs`；改用 RustCrypto 时设置 `default-features = false, features = ["rust-crypto"]`。两个后端 feature 必须二选一，零选/双选编译失败；产品启动入口调用一次 `initialize_jwt_crypto_provider()`，算法仍由运行时 `JwtPolicy::with_algorithm` 选择。见 [auth 后端与初始化边界](../crates/aster_forge_auth.md#cargo-与-features)。
 - cache 后端：`aster_forge_cache` 默认只启用 `memory`；需要 Redis 时显式启用 `redis`，需要 runtime health 组件时显式启用 `runtime-component`。
 - config 同步：`aster_forge_config` 的 `redis-pubsub`。
 - task runtime：只用 retry、dedupe、steps、spec 时不需要 feature；需要 worker、scheduled task 或 runtime component 时启用 `aster_forge_tasks` 的 `runtime-component`。
@@ -105,6 +106,7 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 
 | crate | 默认 feature | 常见显式 feature | 说明 |
 | --- | --- | --- | --- |
+| `aster_forge_auth` | `aws-lc-rs` | `rust-crypto`, `password` | JWT 后端二选一；`password` 独立可选，启动时显式初始化进程 provider。 |
 | `aster_forge_middleware` | `actix` | `metrics`、`axum` | 共享 HTTP middleware；框架适配位于显式 `actix` / `axum` 模块。 |
 | `aster_forge_observability` | `actix` | `prometheus`、`axum` | 显式注入的 exposition resource/Router；未编译 Prometheus 时无端点 API。 |
 | `aster_forge_audit` | 无 | `db-writer`, `mail-outbox-dependency` | lifecycle 默认不依赖 DB/mail；共享 buffered DB writer 和 `audit_logs -> mail_outbox` shutdown 顺序分别显式启用。 |
@@ -126,6 +128,7 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 ```rust
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    aster_forge_auth::initialize_jwt_crypto_provider().map_err(to_io_error)?;
     aster_forge_panic::install_panic_hook(aster_forge_panic::PanicHookConfig::new(
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
@@ -477,10 +480,15 @@ cargo check -p aster_forge_mail --no-default-features --features runtime-compone
 cargo check -p aster_forge_tasks --no-default-features --all-targets
 cargo check -p aster_forge_tasks --no-default-features --features runtime --all-targets
 cargo check -p aster_forge_tasks --no-default-features --features runtime-component --all-targets
-cargo check --workspace --all-targets --all-features
-cargo test --workspace --all-targets --all-features
-cargo clippy --all-targets --all-features
+cargo check --workspace --exclude aster_forge_auth --all-targets --all-features
+cargo test --workspace --exclude aster_forge_auth --all-targets --all-features
+cargo clippy --workspace --exclude aster_forge_auth --all-targets --all-features -- -D warnings
+cargo test -p aster_forge_auth --no-default-features --features aws-lc-rs,password --all-targets
+cargo test -p aster_forge_auth --no-default-features --features rust-crypto,password --all-targets
+bash scripts/test-auth-features.sh
 ```
+
+`aster_forge_auth --all-features` 是预期编译失败的配置；不能混入 workspace 全 feature 正向检查。CI 对 auth 后端分别编译/测试，并用独立消费项目校验零/双 feature 的编译诊断。
 
 ## 接入检查
 
