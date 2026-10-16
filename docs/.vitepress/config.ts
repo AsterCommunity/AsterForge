@@ -29,6 +29,7 @@ const cratePages = [
   ["API", "/crates/aster_forge_api"],
   ["API docs macros", "/crates/aster_forge_api_docs_macros"],
   ["Audit", "/crates/aster_forge_audit"],
+  ["Local session auth", "/crates/aster_forge_auth"],
   ["Cache", "/crates/aster_forge_cache"],
   ["Cloud files core", "/crates/aster_forge_cloud_files_core"],
   ["Cloud files Linux", "/crates/aster_forge_cloud_files_linux"],

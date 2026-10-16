@@ -56,6 +56,7 @@ aster_forge_runtime::AsterRuntime::builder()
 | 数据、协调与后台任务 | [`aster_forge_db`](https://forge.astercosm.com/crates/aster_forge_db)、[`aster_forge_cache`](https://forge.astercosm.com/crates/aster_forge_cache)、[`aster_forge_tasks`](https://forge.astercosm.com/crates/aster_forge_tasks)、[`aster_forge_mail`](https://forge.astercosm.com/crates/aster_forge_mail)、[`aster_forge_audit`](https://forge.astercosm.com/crates/aster_forge_audit) |
 | 存储与领域无关辅助 | [`aster_forge_cloud_files_core`](https://forge.astercosm.com/crates/aster_forge_cloud_files_core)、[`aster_forge_cloud_files_linux`](https://forge.astercosm.com/crates/aster_forge_cloud_files_linux)、[`aster_forge_cloud_files_macos_bridge`](https://forge.astercosm.com/crates/aster_forge_cloud_files_macos_bridge)、[`aster_forge_cloud_files_windows`](https://forge.astercosm.com/crates/aster_forge_cloud_files_windows)、[`aster_forge_storage_core`](https://forge.astercosm.com/crates/aster_forge_storage_core)、[`aster_forge_file_classification`](https://forge.astercosm.com/crates/aster_forge_file_classification) |
 | 工具类 | [`aster_forge_crypto`](https://forge.astercosm.com/crates/aster_forge_crypto)、[`aster_forge_utils`](https://forge.astercosm.com/crates/aster_forge_utils)、[`aster_forge_validation`](https://forge.astercosm.com/crates/aster_forge_validation) |
+| 认证机制 | [`aster_forge_auth`](https://forge.astercosm.com/crates/aster_forge_auth) |
 
 ## 集成规则
 

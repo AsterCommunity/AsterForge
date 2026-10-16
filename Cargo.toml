@@ -12,6 +12,7 @@ members = [
     "crates/aster_forge_cloud_files/macos_bridge",
     "crates/aster_forge_cloud_files/windows",
     "crates/aster_forge_config",
+    "crates/aster_forge_auth",
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
     "crates/aster_forge_db_migration",
@@ -83,6 +84,7 @@ hkdf = "0.13"
 http = "1"
 httpdate = "1"
 ipnet = "2.12.2"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 md-5 = "0.11"
 moka = { version = "0.12.16", features = ["future"] }

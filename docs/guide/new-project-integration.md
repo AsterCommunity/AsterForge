@@ -70,6 +70,7 @@ src/
 
 ```toml
 [dependencies]
+aster_forge_auth = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_auth" }
 aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_middleware", features = ["metrics"] }
 aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_observability" }
 aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
