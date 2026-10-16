@@ -126,3 +126,5 @@ cargo test -p aster_forge_observability --no-default-features --features axum,pr
 库测试覆盖正常导出、实例注入、关闭后的 503、格式和 no-store。产品测试还必须覆盖：feature 缺失、静态开关关闭时 route 不存在、认证先于导出故障、错误凭据、认证并发预算、角色边界以及 health/readiness 不受影响。
 
 AsterDrive 的 `src/api/routes/health` 与 metrics Basic Auth middleware 是产品集成参考；路径和认证策略保留在 Drive。新项目先参照上面的显式注入形态，再按自身部署策略选择认证，不必复制 Drive 的业务配置树。
+
+固定 Drive 调用点、消费者验证与发行边界见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)；本 crate 的名称不代表已提供 tracing/logging exporters。

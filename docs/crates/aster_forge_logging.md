@@ -7,7 +7,7 @@
 - 服务启动时初始化 `tracing_subscriber`。
 - 控制日志等级。
 - 输出文本或 JSON 日志。
-- 同时输出到 stdout 和文件。
+- 按配置选择 stdout 或文件输出。
 - 持有 non-blocking appender guard，避免进程退出时丢日志。
 
 不适合放在这里的内容：
@@ -89,3 +89,5 @@ Forge 只初始化 subscriber，不定义业务 span 字段。
 
 - AsterDrive：容器部署和运维文档里的日志配置。
 - AsterYggdrasil：轻量服务启动链路里如何保存 logging guard。
+
+当前 `init_logging()` 直接安装全局 subscriber，不提供可组合 OTel layer 或 OTLP logs exporter。可组合 layers、trace_id/span_id 关联由 [#45](https://github.com/AsterCommunity/AsterForge/issues/45) 跟踪；已接入本地日志不等于已接入 traces。消费者固定版本与调用点见[证据索引](../guide/reference-projects.md#观测消费者证据索引)。

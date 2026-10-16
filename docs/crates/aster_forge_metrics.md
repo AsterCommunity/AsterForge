@@ -273,7 +273,7 @@ async fn run_sampler(recorder: InfrastructureMetricsRecorder) {
 | 全局 `export_metrics` | 注入 provider 的 exposition resource |
 | 全局 health report | 注入的 recorder `record_health` |
 
-旧全局实现直接删除，不保留平行 registry 或双写。AsterDrive 本轮按本地/锁定 revision 验证；其他外部产品需要按本表升级，不能将 Forge 库内通过当作已经接入所有消费者。
+旧全局实现直接删除，不保留平行 registry 或双写。AsterDrive 已合并实例级消费迁移；准确 consumer/provider revision、历史验证范围和未核验的发行状态见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)。其他外部产品需要按本表升级，不能将 Forge 库内通过当作已经接入所有消费者。
 
 ## 验证入口
 
@@ -288,3 +288,5 @@ cargo run --release -p aster_forge_metrics --features backend-prometheus --examp
 测试覆盖实例隔离、整批注册、schema、数值/基数、并发记录、Noop、关闭、真实本地 OTLP receiver 和双导出；微基准只测预热后记录成本，不代表产品端到端吞吐损失。
 
 参考消费者为 AsterDrive `crates/aster_drive_metrics` 和 bundled Actix template；产品 upload、quota、blob cleanup 和 remote 语义不进入 Forge。
+
+当前消费版本与后续 traces 的边界统一见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)。

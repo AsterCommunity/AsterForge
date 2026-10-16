@@ -134,8 +134,11 @@ async fn main() -> std::io::Result<()> {
         env!("CARGO_PKG_VERSION"),
         env!("CARGO_PKG_REPOSITORY"),
     ));
-    aster_forge_logging::init_tracing(&logging_config())
-        .map_err(to_io_error)?;
+    let logging = aster_forge_logging::init_logging(&logging_config());
+    let _log_guard = logging.guard;
+    if let Some(warning) = logging.warning {
+        tracing::warn!(%warning, "logging initialization warning");
+    }
 
     let state = runtime::assembly::prepare_state().await.map_err(to_io_error)?;
     let state = actix_web::web::Data::new(state);
@@ -503,3 +506,5 @@ bash scripts/test-auth-features.sh
 - clippy 以 `-D warnings` 通过。
 
 做到这些，新项目才算真正接上 Forge，而不是把 Forge 当成零散工具箱。 
+
+观测接入的已交付能力、消费者固定版本与未来 traces 边界见[消费者证据索引](./reference-projects.md#观测消费者证据索引)。初始化本地 logging 不代表已组合 OTel layer。
