@@ -204,7 +204,9 @@ shutdown 顺序为 producer/mail drain → server-shutdown hook → writer begin
 → database close。数据库组件必须声明依赖 `AUDIT_MANAGER_COMPONENT`；原有稳定组件名和
 shutdown phase 名继续保留。`AsterRuntime::run()` 会在所有 shutdown phase 执行后，
 将 drain 等失败作为 `AsterRuntimeError::Shutdown { report }` 返回产品；startup 中断时也
-保留 cleanup report。没有 mail outbox 的 follower 可使用
+保留 cleanup report。startup hook panic 遵循 required 策略并进入清理；
+产品 `before_shutdown` hook panic 同样会执行 audit drain 和数据库关闭，再返回
+`AsterRuntimeError::BeforeShutdown { shutdown_report }`。没有 mail outbox 的 follower 可使用
 `audit_component_with_writer_after(..., &[BACKGROUND_TASKS_COMPONENT], ...)`，显式覆盖生产者依赖。已有 lifecycle factory 的高级集成可以单独注册
 `audit_writer_component(writer, drain_timeout)`，但必须在 server-start hook 前注册，
 且不要再注册另一个 `audit_manager_component` 或含 flush 的完整旧 hook bundle。

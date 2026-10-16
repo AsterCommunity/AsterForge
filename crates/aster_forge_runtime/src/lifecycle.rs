@@ -9,7 +9,11 @@
 
 use std::future::Future;
 use std::marker::PhantomData;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+
+use futures::FutureExt;
+use tokio::task::JoinHandle;
 
 use tokio_util::sync::CancellationToken;
 
@@ -26,6 +30,28 @@ type ShutdownResourceFn<T> = Box<dyn FnOnce(T) -> ShutdownResourceFuture + Send>
 
 fn empty_runtime_hook() -> RuntimeHook {
     Box::new(|| Box::pin(async {}))
+}
+
+/// Keeps the internal signal listener owned by its service run, including cancellation paths.
+struct RuntimeSignalTask(JoinHandle<()>);
+
+impl Drop for RuntimeSignalTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl RuntimeSignalTask {
+    async fn cancel_and_join(mut self) {
+        // Once the service has stopped, its signal callback has no remaining stop work to own.
+        // Join cancellation before component cleanup can release the callback's dependencies.
+        self.0.abort();
+        if let Err(error) = (&mut self.0).await
+            && error.is_panic()
+        {
+            tracing::error!(%error, "runtime signal callback panicked");
+        }
+    }
 }
 
 /// Runs one service future with shared Aster shutdown mechanics.
@@ -64,6 +90,8 @@ pub struct RuntimeServiceComponent<S> {
 
 impl<S> RuntimeServiceComponent<S> {
     /// Creates a service component with a product-provided stop hook.
+    /// The hook only stops the service; the runtime cancels it after the service future completes.
+    /// Put resource cleanup in component shutdown phases so it runs after listener join.
     pub fn new<F, Fut>(
         component_name: &'static str,
         kind: RuntimeComponentKind,
@@ -347,7 +375,7 @@ where
     }
 }
 
-/// Error returned when runtime assembly, required startup, or component shutdown fails.
+/// Error returned when runtime assembly or startup/shutdown lifecycle work fails.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AsterRuntimeError {
     /// No service component was registered.
@@ -368,6 +396,12 @@ pub enum AsterRuntimeError {
         /// Startup report that contains the failing phase.
         report: crate::StartupReport,
         /// Cleanup report, including any secondary drain or dependency-close failures.
+        shutdown_report: crate::ShutdownReport,
+    },
+    /// The product before-shutdown hook panicked. Component cleanup still completed.
+    #[error("runtime before-shutdown hook panicked")]
+    BeforeShutdown {
+        /// Cleanup report, including secondary drain or dependency-close failures.
         shutdown_report: crate::ShutdownReport,
     },
     /// One or more shutdown phases failed or timed out. All remaining phases still ran.
@@ -413,6 +447,7 @@ where
     S: Future,
 {
     /// Runs startup, the main service, before-shutdown hooks, and component shutdown.
+    /// The owned signal listener is cancelled and joined after the service stops, before cleanup.
     ///
     /// When a required startup phase aborts, component shutdown phases still run
     /// best-effort before the startup error is returned, so components that already
@@ -422,8 +457,9 @@ where
     /// # Errors
     ///
     /// Returns a startup report error when a required startup phase aborts, or a shutdown
-    /// report error after all cleanup phases run if any phase fails or times out. Best-effort
-    /// product hooks should handle their own errors and return success explicitly.
+    /// report error after all cleanup phases run if any phase fails or times out. A panicking
+    /// before-shutdown hook also returns an error after component cleanup. Best-effort product
+    /// hooks should handle their own errors and return success explicitly.
     pub async fn run(mut self) -> Result<S::Output, AsterRuntimeError> {
         let startup_report = self.registry.startup().await;
         if startup_report.aborted() {
@@ -435,16 +471,29 @@ where
             });
         }
 
-        let _signal_task =
-            spawn_termination_signal_handler(self.shutdown_token, self.stop_on_signal);
+        let signal_task = RuntimeSignalTask(spawn_termination_signal_handler(
+            self.shutdown_token,
+            self.stop_on_signal,
+        ));
 
         let output = self.service.await;
+        signal_task.cancel_and_join().await;
         tracing::info!("service stopped");
 
-        (self.before_shutdown)().await;
+        // The product hook precedes audit drain. Isolate both construction and polling so a
+        // panic cannot skip writer join or database close, and retain secondary cleanup errors.
+        let before_shutdown_failed = AssertUnwindSafe(async { (self.before_shutdown)().await })
+            .catch_unwind()
+            .await
+            .is_err();
 
         let report = self.registry.shutdown().await;
         log_shutdown_report(&report);
+        if before_shutdown_failed {
+            return Err(AsterRuntimeError::BeforeShutdown {
+                shutdown_report: report,
+            });
+        }
         if report.has_failures() {
             return Err(AsterRuntimeError::Shutdown { report });
         }
@@ -544,7 +593,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns assembly, required startup, or component shutdown errors.
+    /// Returns assembly or startup/shutdown lifecycle errors.
     pub async fn run(self) -> Result<S::Output, AsterRuntimeError> {
         self.build()?.run().await
     }
@@ -555,6 +604,8 @@ where
     S: Future,
 {
     /// Runs the service future and product cleanup hooks.
+    /// Cancels and joins its signal listener before invoking `after_stop`; dropping this run
+    /// future also aborts the listener so it cannot retain resources of an abandoned service.
     pub async fn run<Stop, StopFut, AfterStop, AfterStopFut>(
         self,
         stop_on_signal: Stop,
@@ -566,9 +617,13 @@ where
         AfterStop: FnOnce() -> AfterStopFut,
         AfterStopFut: Future<Output = ()>,
     {
-        let _signal_task = spawn_termination_signal_handler(self.shutdown_token, stop_on_signal);
+        let signal_task = RuntimeSignalTask(spawn_termination_signal_handler(
+            self.shutdown_token,
+            stop_on_signal,
+        ));
 
         let server_result = self.server.await;
+        signal_task.cancel_and_join().await;
         tracing::info!("server stopped");
         after_stop().await;
         server_result

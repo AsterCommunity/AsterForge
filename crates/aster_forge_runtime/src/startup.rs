@@ -6,9 +6,12 @@
 //! driver loading, runtime config reload, audit setup, and application state construction.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
+
+use futures::FutureExt;
 
 type StartupFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type StartupPhaseFn = dyn FnMut() -> StartupFuture + Send;
@@ -327,13 +330,18 @@ impl StartupCoordinator {
     ///
     /// Required phase failures stop later phases. Optional phase failures are logged and included in
     /// the report while later phases continue.
+    /// Callback construction and polling panics follow the same required/optional policy. This
+    /// lets the runtime clean up components that started before a product startup hook panicked.
     pub async fn run(&mut self) -> StartupReport {
         let mut reports = Vec::with_capacity(self.phases.len());
 
         for phase in &mut self.phases {
             tracing::info!(phase = phase.name, "starting startup phase");
             let started_at = Instant::now();
-            let result = (phase.phase)().await;
+            let result = AssertUnwindSafe(async { (phase.phase)().await })
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| Err("startup phase panicked".to_owned()));
             let duration = started_at.elapsed();
             let status = match result {
                 Ok(()) => StartupPhaseStatus::Succeeded,
