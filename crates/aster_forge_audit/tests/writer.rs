@@ -220,6 +220,7 @@ async fn postgres_audit_writer_contract() {
         "runtime",
         "runtime_failure",
         "runtime_service_panic",
+        "runtime_cancel_panic",
         "constraint",
         "timeout",
         "retry",
@@ -235,6 +236,7 @@ async fn postgres_audit_writer_contract() {
             "runtime" => runtime_contract(db.clone(), false).await,
             "runtime_failure" => runtime_contract(db.clone(), true).await,
             "runtime_service_panic" => panic_cleanup_contract(db.clone(), "service").await,
+            "runtime_cancel_panic" => cancellation_panic_cleanup_contract(db.clone()).await,
             "constraint" => postgres_constraint_failure(&db).await,
             "timeout" => postgres_blocked_drain(&db).await,
             _ => postgres_safe_retry(fixture.url(), &db).await,
@@ -554,5 +556,104 @@ async fn panic_cleanup_contract(db: DatabaseConnection, phase: &'static str) {
     assert!(!report.has_failures());
     assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(writer.snapshot().persisted, 1);
+    assert!(writer.unconfirmed().is_empty());
+}
+
+struct PanickingCancellationGuard;
+impl Drop for PanickingCancellationGuard {
+    fn drop(&mut self) {
+        panic!("product cancellation cleanup panicked");
+    }
+}
+
+#[tokio::test]
+async fn producer_timeout_destructor_panic_still_drains_audit_and_joins_before_database_close() {
+    cancellation_panic_cleanup_contract(sqlite().await).await;
+}
+
+async fn cancellation_panic_cleanup_contract(db: DatabaseConnection) {
+    let writer = Arc::new(AuditWriter::new(db.clone()));
+    let (start_writer, shutdown_writer, close_writer) =
+        (writer.clone(), writer.clone(), writer.clone());
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let close_flag = closed.clone();
+    let result = AsterRuntime::builder()
+        .component(runtime_component_with_shutdown(|shutdown| {
+            RuntimeServiceComponent::new(
+                "http",
+                RuntimeComponentKind::Core,
+                async {},
+                shutdown,
+                || async {},
+            )
+        }))
+        .component(runtime_component(
+            |registry: &mut RuntimeComponentRegistry| {
+                registry.component("producer").shutdown(
+                    "producer_stop",
+                    Some(Duration::from_millis(1)),
+                    || async {
+                        let _guard = PanickingCancellationGuard;
+                        std::future::pending().await
+                    },
+                );
+            },
+        ))
+        .component(audit_component_with_writer_after(
+            (),
+            writer.clone(),
+            Duration::from_secs(2),
+            &["producer"],
+            move |()| async move {
+                start_writer
+                    .record(request(1))
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+            move |()| async move {
+                shutdown_writer
+                    .record(request(2))
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+        ))
+        .component(runtime_component(
+            move |registry: &mut RuntimeComponentRegistry| {
+                registry
+                    .component("database")
+                    .depends_on(AUDIT_MANAGER_COMPONENT)
+                    .shutdown("database_close", None, move || {
+                        let (db, writer, flag) =
+                            (db.clone(), close_writer.clone(), close_flag.clone());
+                        async move {
+                            assert_eq!(writer.snapshot().state, BufferedWriterState::Stopped);
+                            assert_eq!(count(&db).await, 2);
+                            db.close().await.map_err(|error| error.to_string())?;
+                            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            Ok(())
+                        }
+                    });
+            },
+        ))
+        .run()
+        .await;
+    let Err(AsterRuntimeError::Shutdown { report }) = result else {
+        panic!("producer cancellation panic must reach the caller after all cleanup")
+    };
+    assert_eq!(report.phases[0].name, "producer_stop");
+    assert_eq!(
+        report.phases[0].status,
+        ShutdownPhaseStatus::Failed("shutdown phase panicked".into())
+    );
+    assert!(
+        report.phases[1..]
+            .iter()
+            .all(|phase| phase.status == ShutdownPhaseStatus::Succeeded)
+    );
+    assert_eq!(report.phases.last().unwrap().name, "database_close");
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(writer.snapshot().persisted, 2);
     assert!(writer.unconfirmed().is_empty());
 }

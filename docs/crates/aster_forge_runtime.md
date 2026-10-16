@@ -275,6 +275,10 @@ service future panic 同样先执行产品 hook 和全部 component cleanup，�
 service 正常返回的值（包括产品自己的 `Result::Err`）在 cleanup 成功时保持原样。
 低层 `ServiceLifecycle` 则在执行完 `after_stop` 后重新抛出原始 service panic；
 service 和 cleanup 同时 panic 时保留 service 的原始 payload。
+service future 完成后的析构同样在隔离范围内，析构 panic 也不会跳过上述清理。
+component shutdown 的 timeout 包含在 panic 隔离范围内：超时取消 pending future 时，
+如果其析构 panic，该 phase 记为 `Failed("shutdown phase panicked")`，后续 drain/close
+仍执行；普通超时仍记为 `TimedOut`。
 
 `AsterRuntime` 和 `ServiceLifecycle` 显式持有 signal listener：service 结束后、cleanup
 之前取消并 join listener，释放其 callback 持有的资源。取消 run future 时也会 abort
@@ -677,6 +681,8 @@ Observer 只接收调用方创建的有界 `mpsc::Sender<BufferedWriterEvent>`�
 flush 边界还覆盖独立确认进度、多个等待范围、后续 admission/failure、部分批次边界、
 空范围和已过期 deadline；生命周期覆盖正常/产品错误退出、service/hook 双重 panic、
 独立 token、startup/run 取消及数据库关闭顺序。
+对抗测试还覆盖两条 lane 同时失败的全部 9 种分类组合：只有 Retryable 可以显式
+恢复，Permanent 和实际已写入但返回 UnknownCommit 的记录都不重放。
 
 ## Startup
 
@@ -871,6 +877,9 @@ aster_forge_runtime::ServiceLifecycle::new(server, shutdown_token)
 
 `ShutdownReport` 会保留 phase 执行顺序，并提供 `has_failures()` 方便上层日志判断。
 如果产品只需要统一记录最终结果，可以直接调用 `log_shutdown_report(&report)`。
+`ShutdownCoordinator` 与 component registry 共用超时及 panic 隔离：phase 构造、
+轮询、完成后的析构、超时取消时的析构 panic 均生成 failed phase，继续执行后续阶段。
+报告使用固定错误文本，不复制 panic payload。
 
 注意：`ShutdownCoordinator` 是低层顺序执行器，不解析 component dependency。需要组件目录、依赖校验和 dependency-aware shutdown 时，使用 `RuntimeComponentRegistry` 或 `AsterRuntime`。
 

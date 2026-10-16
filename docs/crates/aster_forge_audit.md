@@ -253,6 +253,8 @@ stop 停止 admission，等待已接受写入直到 deadline 或不可继续的�
 写入，空范围仍可成功。正常 threshold/timer 或其他 flush 请求仍可独立写入。
 service future panic 时，`AsterRuntime` 仍执行 audit drain、worker join 和数据库关闭，
 再返回 `AsterRuntimeError::Service { shutdown_report, before_shutdown_panicked }`。
+关闭阶段超时取消时，即使产品 future 的析构 panic，也会记录 failed phase 并继续
+audit drain、writer join 和数据库关闭；service future 完成后的析构 panic 同样进入清理。
 root token 和独立 service token 在清理前都会取消，供产品 worker 退出；取消 run future
 只能通知取消，不能替代显式等待完整 drain。
 

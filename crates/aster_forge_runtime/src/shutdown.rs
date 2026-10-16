@@ -5,9 +5,11 @@
 //! buffers, and closing database or network handles in their preferred order.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -108,6 +110,37 @@ struct RegisteredShutdownPhase {
     phase: Box<ShutdownPhaseFn>,
 }
 
+/// Applies the same timeout and unwind boundary to both shutdown executors.
+pub(crate) async fn run_shutdown_phase<F, Fut>(
+    timeout: Option<Duration>,
+    phase: F,
+) -> ShutdownPhaseStatus
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    // The timeout must be INSIDE the unwind boundary: expiry drops the pending phase future,
+    // and a panicking cancellation destructor must not bypass later drain/close phases. Await
+    // an owning async block so completed futures are also dropped while still in the boundary.
+    AssertUnwindSafe(async {
+        let future = async { phase().await };
+        match timeout {
+            Some(duration) => match tokio::time::timeout(duration, future).await {
+                Ok(Ok(())) => ShutdownPhaseStatus::Succeeded,
+                Ok(Err(error)) => ShutdownPhaseStatus::Failed(error),
+                Err(_) => ShutdownPhaseStatus::TimedOut,
+            },
+            None => match future.await {
+                Ok(()) => ShutdownPhaseStatus::Succeeded,
+                Err(error) => ShutdownPhaseStatus::Failed(error),
+            },
+        }
+    })
+    .catch_unwind()
+    .await
+    .unwrap_or_else(|_| ShutdownPhaseStatus::Failed("shutdown phase panicked".to_owned()))
+}
+
 /// Ordered shutdown phase coordinator.
 ///
 /// The coordinator owns phase ordering, timeout handling, duration collection,
@@ -149,24 +182,15 @@ impl ShutdownCoordinator {
     ///
     /// Later phases still run when an earlier phase fails. This lets product
     /// shutdown code make best-effort progress through independent resources.
+    /// Construction, polling, and completion/timeout destruction panics become failed phase
+    /// reports. Panic payloads are not copied into the public report.
     pub async fn run(&mut self) -> ShutdownReport {
         let mut reports = Vec::with_capacity(self.phases.len());
 
         for phase in &mut self.phases {
             tracing::info!(phase = phase.name, "starting shutdown phase");
             let started_at = Instant::now();
-            let future = (phase.phase)();
-            let status = match phase.timeout {
-                Some(timeout) => match tokio::time::timeout(timeout, future).await {
-                    Ok(Ok(())) => ShutdownPhaseStatus::Succeeded,
-                    Ok(Err(error)) => ShutdownPhaseStatus::Failed(error),
-                    Err(_) => ShutdownPhaseStatus::TimedOut,
-                },
-                None => match future.await {
-                    Ok(()) => ShutdownPhaseStatus::Succeeded,
-                    Err(error) => ShutdownPhaseStatus::Failed(error),
-                },
-            };
+            let status = run_shutdown_phase(phase.timeout, &mut phase.phase).await;
             let duration = started_at.elapsed();
             match &status {
                 ShutdownPhaseStatus::Succeeded => {

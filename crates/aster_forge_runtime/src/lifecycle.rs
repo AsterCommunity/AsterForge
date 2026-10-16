@@ -472,6 +472,7 @@ where
     /// Service panics become [`AsterRuntimeError::Service`] after cleanup, preserving secondary
     /// hook and shutdown failures without exposing the panic payload. Ordinary service outputs
     /// (including product `Result::Err` values) are returned unchanged when cleanup succeeds.
+    /// This also covers destruction of the service future after it finishes.
     ///
     /// The shared and service cancellation tokens are cancelled before cleanup on every exit.
     /// Dropping a polled run future also cancels these tokens, but cannot await cleanup; callers
@@ -496,7 +497,15 @@ where
             self.stop_on_signal,
         ));
 
-        let output = AssertUnwindSafe(self.service).catch_unwind().await;
+        // Own the await inside the boundary so destruction of a completed service future is
+        // covered as well as its poll. Destruction after catch_unwind would bypass cleanup.
+        #[expect(
+            clippy::redundant_async_block,
+            reason = "the owning async block drops the completed service future inside catch_unwind"
+        )]
+        let output = AssertUnwindSafe(async { self.service.await })
+            .catch_unwind()
+            .await;
         // Workers may wait only for cancellation. Wake them before any hook tries to join them,
         // including when the service ends without a process signal or unwinds unexpectedly.
         self.shutdown_token.cancel();
@@ -649,6 +658,7 @@ where
     /// # Panics
     /// Service panics are resumed with their original payload after `after_stop`. If only cleanup
     /// panics, its panic is resumed; if both panic, the original service panic takes precedence.
+    /// Destruction of the completed service future is part of this boundary.
     pub async fn run<Stop, StopFut, AfterStop, AfterStopFut>(
         self,
         stop_on_signal: Stop,
@@ -666,7 +676,13 @@ where
             stop_on_signal,
         ));
 
-        let server_result = AssertUnwindSafe(self.server).catch_unwind().await;
+        #[expect(
+            clippy::redundant_async_block,
+            reason = "the owning async block drops the completed service future inside catch_unwind"
+        )]
+        let server_result = AssertUnwindSafe(async { self.server.await })
+            .catch_unwind()
+            .await;
         self.shutdown_token.cancel();
         signal_task.cancel_and_join().await;
         tracing::info!("server stopped");

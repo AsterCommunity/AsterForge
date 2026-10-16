@@ -1109,3 +1109,120 @@ async fn concurrent_flush_timeout_does_not_cancel_another_waiters_owned_write() 
     long.await.unwrap();
     assert_eq!(writer.stop(deadline()).await.snapshot.persisted, 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn simultaneous_lane_failures_retry_only_safe_records_without_replaying_unknown_commits() {
+    let classes = [
+        WriteFailureClass::Retryable,
+        WriteFailureClass::Permanent,
+        WriteFailureClass::UnknownCommit,
+    ];
+    for batch_class in classes {
+        for direct_class in classes {
+            simultaneous_lane_failure_contract(batch_class, direct_class).await;
+        }
+    }
+}
+
+async fn simultaneous_lane_failure_contract(
+    batch_class: WriteFailureClass,
+    direct_class: WriteFailureClass,
+) {
+    let attempts = Arc::new(Mutex::new([0; 2]));
+    let durable = Arc::new(Mutex::new(Vec::new()));
+    let (calls, committed) = (attempts.clone(), durable.clone());
+    let writer = Writer::new(
+        config(2, 2),
+        OverflowPolicy::DirectWrite,
+        None,
+        move |items| {
+            let direct = items == [3];
+            let lane = usize::from(direct);
+            let class = if direct { direct_class } else { batch_class };
+            let attempt = {
+                let mut calls = calls.lock().unwrap();
+                calls[lane] += 1;
+                calls[lane]
+            };
+            // An unknown commit deliberately writes before returning failure: checking only
+            // writer counters would miss a duplicate physical insert after an unsafe replay.
+            if attempt > 1 || class == WriteFailureClass::UnknownCommit {
+                committed.lock().unwrap().extend(items);
+            }
+            async move {
+                if attempt == 1 {
+                    Err(WriteFailure::new(
+                        class,
+                        if direct { "direct" } else { "batch" },
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    );
+    writer.start().await.unwrap();
+    writer.record(1).await.unwrap();
+    writer.record(2).await.unwrap();
+    let direct = writer.record(3);
+    tokio::pin!(direct);
+    assert!(futures::poll!(&mut direct).is_pending());
+    assert!(matches!(
+        writer.flush(deadline()).await,
+        Err(BufferFlushError::Write(_))
+    ));
+    let Err(RecordError::DirectFailed(failure)) = direct.await else {
+        panic!("direct failure must reach its original waiter")
+    };
+    assert_eq!(failure.class, direct_class);
+    assert_eq!(writer.unconfirmed(), [1, 2, 3]);
+    assert_eq!(*attempts.lock().unwrap(), [1, 1]);
+    advance(Duration::from_secs(100)).await;
+    settle().await;
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        [1, 1],
+        "neither lane retries implicitly"
+    );
+
+    writer.retry_failed();
+    let all_safe =
+        batch_class == WriteFailureClass::Retryable && direct_class == WriteFailureClass::Retryable;
+    let result = writer.flush(deadline()).await;
+    assert_eq!(result.is_ok(), all_safe);
+    let report = writer.stop(deadline()).await;
+    let batch_safe = batch_class == WriteFailureClass::Retryable;
+    let direct_safe = direct_class == WriteFailureClass::Retryable;
+    assert_eq!(
+        report.snapshot.persisted,
+        2 * u64::from(batch_safe) + u64::from(direct_safe)
+    );
+    assert_eq!(report.snapshot.direct_persisted, u64::from(direct_safe));
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        [1 + usize::from(batch_safe), 1 + usize::from(direct_safe)]
+    );
+    let mut expected_unconfirmed = Vec::new();
+    if !batch_safe {
+        expected_unconfirmed.extend([1, 2]);
+    }
+    if !direct_safe {
+        expected_unconfirmed.push(3);
+    }
+    assert_eq!(writer.unconfirmed(), expected_unconfirmed);
+    let mut expected_durable = Vec::new();
+    if batch_class != WriteFailureClass::Permanent {
+        expected_durable.extend([1, 2]);
+    }
+    if direct_class != WriteFailureClass::Permanent {
+        expected_durable.push(3);
+    }
+    let mut actual = durable.lock().unwrap().clone();
+    actual.sort_unstable();
+    assert_eq!(
+        actual, expected_durable,
+        "unknown commits must never be replayed"
+    );
+    writer.retry_failed();
+    assert_eq!(writer.unconfirmed(), expected_unconfirmed);
+}

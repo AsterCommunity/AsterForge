@@ -724,3 +724,194 @@ async fn cancelling_low_level_run_notifies_workers_and_releases_signal_resources
     .unwrap();
     assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn low_level_shutdown_coordinator_isolates_construction_and_polling_panics() {
+    for synchronous in [true, false] {
+        for timeout in [None, Some(Duration::from_secs(1))] {
+            let cleaned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cleanup = cleaned.clone();
+            let mut coordinator = ShutdownCoordinator::new();
+            coordinator
+                .phase("producer", timeout, move || {
+                    assert!(!synchronous, "construction panicked");
+                    async { panic!("polling panicked") }
+                })
+                .phase("database", None, move || {
+                    cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+                    async { Ok(()) }
+                });
+            let result = tokio::spawn(async move { coordinator.run().await }).await;
+            assert!(
+                cleaned.load(std::sync::atomic::Ordering::SeqCst),
+                "one panicking phase must not skip database cleanup"
+            );
+            let report = result.expect("phase panic must become a report");
+            assert_eq!(
+                report.phases[0].status,
+                ShutdownPhaseStatus::Failed("shutdown phase panicked".into())
+            );
+            assert_eq!(report.phases[1].status, ShutdownPhaseStatus::Succeeded);
+        }
+    }
+}
+
+/// Models a cancellation cleanup that fails after the phase has already been polled.
+struct PanickingPhaseFuture {
+    complete: bool,
+    polled: bool,
+}
+impl std::future::Future for PanickingPhaseFuture {
+    type Output = Result<(), String>;
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.polled = true;
+        if self.complete {
+            std::task::Poll::Ready(Ok(()))
+        } else {
+            std::task::Poll::Pending
+        }
+    }
+}
+impl Drop for PanickingPhaseFuture {
+    fn drop(&mut self) {
+        if self.polled {
+            std::panic::panic_any(42_usize);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn phase_destructor_panic_cannot_escape_timeout_and_skip_dependency_close() {
+    for (complete, timeout) in [
+        (false, Some(Duration::from_secs(1))),
+        (true, Some(Duration::from_secs(1))),
+        (true, None),
+    ] {
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cleanup = closed.clone();
+        let mut registry = RuntimeComponentRegistry::new();
+        registry
+            .component("worker")
+            .shutdown("worker_stop", timeout, move || PanickingPhaseFuture {
+                complete,
+                polled: false,
+            });
+        registry
+            .component("database")
+            .depends_on("worker")
+            .shutdown("database_close", None, move || {
+                cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+                async { Ok(()) }
+            });
+        let result = tokio::spawn(async move { registry.shutdown().await }).await;
+        assert!(
+            closed.load(std::sync::atomic::Ordering::SeqCst),
+            "timed-out future cleanup panic must not bypass dependent close"
+        );
+        let report = result.expect("phase drop panic must be isolated");
+        assert_eq!(
+            report.phases[0].status,
+            ShutdownPhaseStatus::Failed("shutdown phase panicked".into())
+        );
+        assert_eq!(report.phases[1].status, ShutdownPhaseStatus::Succeeded);
+    }
+}
+
+#[tokio::test]
+async fn completed_service_future_destructor_panic_still_runs_component_cleanup() {
+    let cleaned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cleanup = cleaned.clone();
+    let run = AsterRuntime::builder()
+        .component(runtime_component_with_shutdown(|shutdown| {
+            RuntimeServiceComponent::new(
+                "service",
+                RuntimeComponentKind::Core,
+                PanickingPhaseFuture {
+                    complete: true,
+                    polled: false,
+                },
+                shutdown,
+                || async {},
+            )
+        }))
+        .component(runtime_component(
+            move |registry: &mut RuntimeComponentRegistry| {
+                registry
+                    .component("database")
+                    .shutdown("close", None, move || {
+                        cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+                        async { Ok(()) }
+                    });
+            },
+        ))
+        .run();
+    let result = tokio::spawn(run).await;
+    assert!(
+        cleaned.load(std::sync::atomic::Ordering::SeqCst),
+        "completed service destructor panic must not bypass cleanup"
+    );
+    assert!(matches!(result, Ok(Err(AsterRuntimeError::Service { .. }))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn low_level_shutdown_coordinator_also_isolates_phase_destructor_panics() {
+    for (complete, timeout) in [
+        (false, Some(Duration::from_secs(1))),
+        (true, Some(Duration::from_secs(1))),
+        (true, None),
+    ] {
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cleanup = closed.clone();
+        let mut coordinator = ShutdownCoordinator::new();
+        coordinator
+            .phase("worker", timeout, move || PanickingPhaseFuture {
+                complete,
+                polled: false,
+            })
+            .phase("database", None, move || {
+                cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+                async { Ok(()) }
+            });
+        let report = tokio::spawn(async move { coordinator.run().await })
+            .await
+            .expect("coordinator must isolate phase destruction as well as polling");
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(
+            report.phases[0].status,
+            ShutdownPhaseStatus::Failed("shutdown phase panicked".into())
+        );
+        assert_eq!(report.phases[1].status, ShutdownPhaseStatus::Succeeded);
+    }
+}
+
+#[tokio::test]
+async fn low_level_completed_service_destructor_panic_runs_cleanup_and_retains_payload() {
+    let cleaned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cleanup = cleaned.clone();
+    let shutdown = CancellationToken::new();
+    let result = tokio::spawn(
+        ServiceLifecycle::new(
+            PanickingPhaseFuture {
+                complete: true,
+                polled: false,
+            },
+            shutdown.clone(),
+        )
+        .run(
+            || async {},
+            move || async move {
+                cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+        ),
+    )
+    .await;
+    assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(shutdown.is_cancelled());
+    assert_eq!(
+        result.unwrap_err().into_panic().downcast_ref::<usize>(),
+        Some(&42)
+    );
+}
