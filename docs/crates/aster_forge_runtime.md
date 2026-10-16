@@ -574,75 +574,80 @@ report.record_metrics("diagnostics", &ProductHealthMetrics(metrics));
 - `health_component_status{scope,component}`：component status，`healthy=0`、`degraded=1`、`unhealthy=2`。
 - `health_component_duration_seconds{scope,component,status}`：component check duration。
 
+`AsterRuntime::run()` 在执行完全部 cleanup 后，如果任何 shutdown phase 失败或超时，
+返回 `AsterRuntimeError::Shutdown { report }`，报告保留失败和后续数据库关闭顺序。
+component shutdown hook 的构造或轮询 panic 也会转成 failed phase，后续 writer drain
+和数据库关闭仍执行；报告不复制可能含产品数据的 panic payload。
+best-effort hook 应在产品边界处理错误并显式返回成功；mandatory audit drain 失败会到达
+调用方，不能仅记录日志后当作 runtime 成功。startup 中断时，`Startup` 错误同时保留
+`report` 和 `shutdown_report`，避免丢失清理阶段的次级失败。
+
 ## Buffered Batch Writer
 
-模块：`aster_forge_runtime::buffered`
-
-主要类型：
-
-- `BufferedBatchConfig`
-- `BufferedBatchWriter<T>`
-
-`BufferedBatchWriter<T>` 抽的是 Aster 服务里反复出现的一类 runtime 机械层：调用点需要快速接收一条记录，但真实写入可以合并成批量操作；如果迟迟凑不满批次，也要在短延迟后 flush；如果队列满了，则不能无限堆内存，而是把新记录走一次直写并触发后台 flush。
-
-它适合承载这些公共规则：
-
-- 内存队列上限。
-- 达到批量大小后立即后台 flush。
-- 首条记录进入空队列后安排延迟 flush。
-- 队列溢出时对当前记录执行单条写入。
-- shutdown 前取消延迟任务，并由产品侧显式 flush 剩余记录。
-
-它不承载这些业务语义：
-
-- 审计日志、邮件 outbox、任务记录等具体实体。
-- repository、事务、错误类型和重试策略。
-- 是否应该记录某个审计动作。
-- shutdown 阶段应该在哪一步 flush。
-- 指标名称、审计动作名称和产品日志格式。
-
-示例：
+模块：`aster_forge_runtime::buffered`。主入口为调用方持有的
+`ManagedBatchWriter<T, E>`，`T: Clone` 用于在持久化期间保留原始记录。
 
 ```rust
-use std::sync::Arc;
 use std::time::Duration;
+use aster_forge_runtime::{BufferedBatchConfig, ManagedBatchWriter, OverflowPolicy};
+use tokio::time::Instant;
 
-use aster_forge_runtime::{BufferedBatchConfig, BufferedBatchWriter};
-
-let db_for_batch = db.clone();
-let db_for_single = db.clone();
-
-let writer = Arc::new(BufferedBatchWriter::new(
-    BufferedBatchConfig::new(4096, 100, Duration::from_secs(1), "audit_log"),
-    move |items: Vec<audit_log::ActiveModel>| {
-        let db = db_for_batch.clone();
-        async move {
-            if let Err(error) = audit_log_repo::create_many(&db, items).await {
-                tracing::warn!("failed to write audit log batch: {error}");
-            }
-        }
+let writer = ManagedBatchWriter::new(
+    BufferedBatchConfig::new(4096, 100, Duration::from_secs(1)),
+    OverflowPolicy::Reject,
+    None, // 可选：调用方创建的有界 mpsc 事件通道
+    |records: Vec<String>| async move {
+        // 调用持久化 adapter；失败返回 WriteFailure<E> 并保留原始 E。
+        persist(records).await
     },
-    move |item: audit_log::ActiveModel| {
-        let db = db_for_single.clone();
-        async move {
-            if let Err(error) = audit_log_repo::create(&db, item).await {
-                tracing::warn!("failed to write audit log: {error}");
-            }
-        }
-    },
-));
-
-writer.record(model).await;
+);
+writer.start().await?;
+let admission = writer.record("record".to_owned()).await?;
+writer.flush(Instant::now() + Duration::from_secs(5)).await?;
+let report = writer.stop(Instant::now() + Duration::from_secs(5)).await;
 ```
 
-shutdown 时产品侧应该先取消延迟 flush，再手动 flush：
+生命周期：`Created → Running → Draining → Stopped`。构造函数不创建 task、timer，
+也不调用 sink；`start()` 仅允许一次。`begin_drain()` 关闭 admission；`flush(deadline)`
+等待确认但不关闭 admission；`stop(deadline)` 关闭 admission、限时 drain，然后取消并
+join 唯一 worker。重复或并发 stop 共用同一 task handle，worker 结束后才允许关闭依赖。
+取消 flush、stop 或 direct-write 等待方不会丢弃已接受记录；后续 stop 仍可 join worker。
+丢弃 owner 会取消并 abort worker，正常 shutdown 应显式 stop 以等待其清理完成。
+Sink future 必须协作式执行，不能在 poll 中执行不返回的阻塞代码。
 
-```rust
-writer.cancel();
-writer.flush().await;
-```
+容量包含正在写入且尚未确认的批次；零 capacity / batch size 归一为一。
+达到阈值立即 flush，部分批次从首条记录入队开始计时。每次 sink 调用最多 batch size
+条，成功 chunk 移出队列，失败 chunk 和后续记录继续保留。ready batch 和 direct lane
+轮换执行，避免连续 overflow 饿死队列。
 
-这个顺序可以避免延迟任务在 shutdown 过程中继续被唤醒，同时保留“进程退出前尽量写完内存队列”的行为。Yggdrasil 的 audit manager 采用的就是这个边界：Forge 负责队列调度和批量切片，Yggdrasil 负责 audit model 构造、database repository、错误日志和是否记录某个动作。
+溢出策略由调用方选择：
+
+- `OverflowPolicy::Reject`：返回 `RecordError::Full(record)`，记录未被接受。
+- `OverflowPolicy::DirectWrite`：使用额外一个有界 overflow slot，由同一 worker 执行
+  单条写入；slot 已占用时仍返回 Full，不创建额外 task 或无限等待队列。
+- `RecordAdmission::Queued` 仅确认内存接收；`DirectPersisted` 仅确认这一条 overflow
+  记录，不能据此认为 queued batch 已持久化。取消 direct 等待方不会取消已接受的记录。
+
+`WriteFailure<E>` 保留具体错误和分类：`Retryable` 表示未提交且显式重试安全；
+`Permanent` 表示原样重试不适用；`UnknownCommit` 表示可能提交，必须先核对。
+所有失败都暂停对应 lane，均不自动重试。`retry_failed()` 只恢复 Retryable；
+未知提交、sink 构造/轮询 panic、在途 sink 取消均不盲目重放。worker 整体同样受监督，
+记录 Clone 等 sink 外部代码 panic 时会关闭 admission、保守隔离剩余记录并唤醒所有等待方，
+而不是让 direct/flush 等到超时。一个 lane 失败时，flush
+仍会尝试 drain 另一个正常 lane。`snapshot()` 提供 lifecycle、queued/direct pending、
+确认计数、原始错误和 failed front chunk 长度；`unconfirmed()` 返回原始未确认记录，
+应在 stop 后读取稳定恢复快照。队列是内存机制，Queued 不提供进程崩溃后的持久化保证。
+
+Observer 只接收调用方创建的有界 `mpsc::Sender<BufferedWriterEvent>`，内部使用
+`try_send`，不执行用户 callback。慢消费、consumer panic 或通道关闭只增加
+`observer_events_dropped`，不会阻塞持久化。
+
+旧的隐式 `BufferedBatchWriter<T>` 已删除。迁移时显式持有 owner、调用 start/stop，
+让 sink 返回分类错误，并处理 admission、flush 和 drain 结果。该模块不定义产品记录、
+产品错误映射或 mandatory/best-effort 策略。
+
+测试覆盖无 runtime 构造、显式 startup、阈值和延迟、容量与 overflow、失败保留和安全
+重试、未知提交、panic、取消、并发 producer/stop、observer 隔离和依赖关闭顺序。
 
 ## Startup
 

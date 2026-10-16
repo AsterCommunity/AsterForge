@@ -347,7 +347,7 @@ where
     }
 }
 
-/// Error returned when runtime assembly or required startup phases fail.
+/// Error returned when runtime assembly, required startup, or component shutdown fails.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AsterRuntimeError {
     /// No service component was registered.
@@ -367,6 +367,14 @@ pub enum AsterRuntimeError {
     Startup {
         /// Startup report that contains the failing phase.
         report: crate::StartupReport,
+        /// Cleanup report, including any secondary drain or dependency-close failures.
+        shutdown_report: crate::ShutdownReport,
+    },
+    /// One or more shutdown phases failed or timed out. All remaining phases still ran.
+    #[error("runtime shutdown completed with failed component phases")]
+    Shutdown {
+        /// Complete ordered report, including failures and dependency cleanup results.
+        report: crate::ShutdownReport,
     },
 }
 
@@ -413,7 +421,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a startup report error when a required startup phase aborts.
+    /// Returns a startup report error when a required startup phase aborts, or a shutdown
+    /// report error after all cleanup phases run if any phase fails or times out. Best-effort
+    /// product hooks should handle their own errors and return success explicitly.
     pub async fn run(mut self) -> Result<S::Output, AsterRuntimeError> {
         let startup_report = self.registry.startup().await;
         if startup_report.aborted() {
@@ -421,6 +431,7 @@ where
             log_shutdown_report(&shutdown_report);
             return Err(AsterRuntimeError::Startup {
                 report: startup_report,
+                shutdown_report,
             });
         }
 
@@ -434,6 +445,9 @@ where
 
         let report = self.registry.shutdown().await;
         log_shutdown_report(&report);
+        if report.has_failures() {
+            return Err(AsterRuntimeError::Shutdown { report });
+        }
 
         Ok(output)
     }
@@ -530,7 +544,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns any error produced while building the runtime or running required startup phases.
+    /// Returns assembly, required startup, or component shutdown errors.
     pub async fn run(self) -> Result<S::Output, AsterRuntimeError> {
         self.build()?.run().await
     }

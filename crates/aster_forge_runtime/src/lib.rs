@@ -26,7 +26,11 @@ pub mod lifecycle;
 pub mod shutdown;
 pub mod startup;
 
-pub use buffered::{BufferedBatchConfig, BufferedBatchWriter};
+pub use buffered::{
+    BufferFlushError, BufferStopReport, BufferedBatchConfig, BufferedWriterEvent,
+    BufferedWriterSnapshot, BufferedWriterState, ManagedBatchWriter, OverflowPolicy,
+    RecordAdmission, RecordError, WriteFailure, WriteFailureCause, WriteFailureClass,
+};
 pub use component::{
     RuntimeComponentBuilder, RuntimeComponentBundle, RuntimeComponentDescriptor,
     RuntimeComponentGraphError, RuntimeComponentKind, RuntimeComponentRegistry,
