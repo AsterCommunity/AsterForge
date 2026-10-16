@@ -801,3 +801,26 @@ async fn worker_panic_outside_sink_wakes_accepted_direct_waiter_and_retains_both
         [1, 2]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn ready_sinks_yield_to_other_runtime_tasks_before_draining_the_whole_queue() {
+    let entered = Arc::new(Notify::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (notify, called) = (entered.clone(), calls.clone());
+    let writer = Writer::new(config(1024, 1), OverflowPolicy::Reject, None, move |_| {
+        if called.fetch_add(1, Ordering::SeqCst) == 0 {
+            notify.notify_one();
+        }
+        async { Ok(()) }
+    });
+    writer.start().await.unwrap();
+    for item in 0..1024 {
+        writer.record(item).await.unwrap();
+    }
+    entered.notified().await;
+    assert!(
+        calls.load(Ordering::SeqCst) < 1024,
+        "a ready sink must not monopolize the executor until every queued record is drained"
+    );
+    assert_eq!(writer.stop(deadline()).await.snapshot.persisted, 1024);
+}

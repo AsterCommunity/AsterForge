@@ -590,6 +590,9 @@ async fn run<T: Clone + Send + 'static, E: Send + Sync + 'static>(core: Arc<Core
         };
         core.complete(direct, count, &result);
         core.changed.notify_waiters();
+        // An immediately-ready sink does not necessarily consume Tokio's cooperative budget.
+        // Yield periodically so the owner's deadline and cancellation tasks can run as well.
+        tokio::task::consume_budget().await;
     }
     core.finish();
 }

@@ -257,6 +257,23 @@ best-effort 执行一遍 `RuntimeComponentRegistry::shutdown()`（并记录 shut
 shutdown phase，然后才返回 `AsterRuntimeError::Startup`。因此组件的 shutdown phase
 必须能容忍"对应 startup phase 从未执行"的情况——它可能对未启动的组件被调用。
 
+`AsterRuntime::run()` 在执行完全部 cleanup 后，如果任何 shutdown phase 失败或超时，
+返回 `AsterRuntimeError::Shutdown { report }`，报告保留失败和后续数据库关闭顺序。
+component shutdown hook 的构造或轮询 panic 也会转成 failed phase，后续 writer drain
+和数据库关闭仍执行；报告不复制可能含产品数据的 panic payload。
+best-effort hook 应在产品边界处理错误并显式返回成功；mandatory audit drain 失败会到达
+调用方，不能仅记录日志后当作 runtime 成功。startup 中断时，`Startup` 错误同时保留
+`report` 和 `shutdown_report`，避免丢失清理阶段的次级失败。
+startup phase 的构造/轮询 panic 遵循 required/optional 策略：required 中断后续 startup
+并执行 shutdown，optional 记录失败后继续。`before_shutdown` hook panic 也不会跳过
+component cleanup，最终返回 `AsterRuntimeError::BeforeShutdown { shutdown_report }`，
+同时保留后续 drain/close 的失败。panic payload 不复制到这些公共报告。
+
+`AsterRuntime` 和 `ServiceLifecycle` 显式持有 signal listener：service 结束后、cleanup
+之前取消并 join listener，释放其 callback 持有的资源。取消 run future 时也会 abort
+listener。signal callback 只负责停止 service，service 结束后可能被取消；其余收尾工作
+应放入 component shutdown 或 after-stop hook。
+
 推荐的产品入口形态：
 
 ```rust
@@ -574,14 +591,6 @@ report.record_metrics("diagnostics", &ProductHealthMetrics(metrics));
 - `health_component_status{scope,component}`：component status，`healthy=0`、`degraded=1`、`unhealthy=2`。
 - `health_component_duration_seconds{scope,component,status}`：component check duration。
 
-`AsterRuntime::run()` 在执行完全部 cleanup 后，如果任何 shutdown phase 失败或超时，
-返回 `AsterRuntimeError::Shutdown { report }`，报告保留失败和后续数据库关闭顺序。
-component shutdown hook 的构造或轮询 panic 也会转成 failed phase，后续 writer drain
-和数据库关闭仍执行；报告不复制可能含产品数据的 panic payload。
-best-effort hook 应在产品边界处理错误并显式返回成功；mandatory audit drain 失败会到达
-调用方，不能仅记录日志后当作 runtime 成功。startup 中断时，`Startup` 错误同时保留
-`report` 和 `shutdown_report`，避免丢失清理阶段的次级失败。
-
 ## Buffered Batch Writer
 
 模块：`aster_forge_runtime::buffered`。主入口为调用方持有的
@@ -618,7 +627,8 @@ Sink future 必须协作式执行，不能在 poll 中执行不返回的阻塞�
 容量包含正在写入且尚未确认的批次；零 capacity / batch size 归一为一。
 达到阈值立即 flush，部分批次从首条记录入队开始计时。每次 sink 调用最多 batch size
 条，成功 chunk 移出队列，失败 chunk 和后续记录继续保留。ready batch 和 direct lane
-轮换执行，避免连续 overflow 饿死队列。
+轮换执行，避免连续 overflow 饿死队列。worker 每批消耗 Tokio cooperative budget，
+即使 sink 连续立即返回，也会周期性让出执行器，让 owner deadline 和取消任务获得调度。
 
 溢出策略由调用方选择：
 
