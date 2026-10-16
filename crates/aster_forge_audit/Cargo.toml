@@ -11,6 +11,7 @@ publish = false
 [features]
 default = []
 db-writer = ["dep:aster_forge_db", "dep:sea-orm"]
+database-container-tests = ["db-writer"]
 mail-outbox-dependency = ["dep:aster_forge_mail"]
 
 [dependencies]
@@ -18,9 +19,12 @@ aster_forge_db = { path = "../aster_forge_db", default-features = false, feature
 aster_forge_mail = { path = "../aster_forge_mail", default-features = false, optional = true }
 aster_forge_runtime = { path = "../aster_forge_runtime" }
 sea-orm = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+aster_forge_test = { path = "../aster_forge_test", features = ["postgres"] }
+uuid.workspace = true
 chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

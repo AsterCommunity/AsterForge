@@ -14,6 +14,8 @@ pub struct AppState {
     pub config: Arc<AppConfig>,
     /// Database reader/writer handles.
     pub db_handles: aster_forge_db::DbHandles,
+    /// Explicitly owned audit writer; its runtime component starts and joins the worker.
+    pub audit_writer: Arc<aster_forge_audit::AuditWriter>,
     /// Shared cache backend.
     pub cache: Arc<dyn aster_forge_cache::CacheBackend>,
     /// Cross-process runtime config reload handle.
@@ -36,6 +38,9 @@ impl AppState {
     ) -> Self {
         Self {
             config: Arc::new(config),
+            audit_writer: Arc::new(aster_forge_audit::AuditWriter::new(
+                db_handles.writer().clone(),
+            )),
             db_handles,
             cache,
             config_sync,

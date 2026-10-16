@@ -1,6 +1,6 @@
 # aster_forge_audit
 
-`aster_forge_audit` 提供 Aster 产品共享的 audit runtime component，以及可选的数据库缓冲写入机制。它不定义产品审计动作，也不接管 audit presentation；它把 Aster 服务里重复的 shutdown 生命周期、batch/delayed flush、queue overflow fallback 和全局 manager 收敛到统一实现。
+`aster_forge_audit` 提供 Aster 产品共享的 audit runtime component，以及可选的数据库缓冲写入机制。它不定义产品审计动作，也不接管 audit presentation；它把 Aster 服务里重复的 shutdown 生命周期、batch/delayed flush、queue overflow 和显式 writer ownership 收敛到统一实现。
 
 ## 适用场景
 
@@ -27,7 +27,7 @@ aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", feat
 
 默认 feature 只提供 lifecycle component。需要 Forge 数据库缓冲 writer 时启用
 `db-writer`；该 feature 会启用 `aster_forge_db/audit-log`，产品不需要再复制
-`AuditLogManager`。
+`AuditWriter`。
 
 默认不依赖 `aster_forge_mail`。如果产品有 mail outbox，并且希望 shutdown audit 在
 outbox drain 之后执行，显式启用 `mail-outbox-dependency`。启用后调用点不需要变化，
@@ -62,15 +62,16 @@ audit_manager  -> depends_on audit_logs
 - `SERVER_SHUTDOWN_AUDIT_PHASE`
 - `AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE`
 
-产品侧只提供资源和三个 hook。大多数产品的审计写入会在内部处理错误，hook 返回
-`()`；这种情况优先使用 `audit_component_infallible(...)`：
+不使用 DB buffer 的产品可以提供资源和三个 hook。hook 内部处理错误并返回 `()` 时，
+使用 `audit_component_infallible(...)`。使用 DB buffer 时优先使用下方的
+`audit_component_with_writer(...)`，由 Forge 明确启动并停止 writer：
 
 ```rust
 aster_forge_audit::audit_component_infallible(
     resources,
     |resources| async move { record_server_start(&resources).await },
     |resources| async move { record_server_shutdown(&resources).await },
-    |()| async move { shutdown_global_audit_log_manager().await },
+    |()| async move { stop_product_audit_sink().await },
 )
 ```
 
@@ -173,47 +174,109 @@ store
 
 ### Buffered writer
 
-启用 `db-writer` 后，运行时直接初始化 Forge manager：
+启用 `db-writer` 后，显式创建 `Arc<AuditWriter>` 放到产品资源里。构造不创建 worker、
+timer 或执行数据库操作。默认 queue capacity 为 4096，batch size 为 100，部分批次延迟
+1 秒；默认 overflow 为额外一个有界 direct-write slot。
 
 ```rust
-aster_forge_audit::init_global_audit_log_manager(writer_db.clone());
-```
+use std::{sync::Arc, time::Duration};
+use aster_forge_audit::{AuditWriter, audit_component_with_writer};
 
-产品完成 action/entity/detail 到 `AuditLogCreate` 的映射后，直接记录：
-
-```rust
-aster_forge_audit::record_audit_log(
-    state.writer_db(),
-    aster_forge_db::AuditLogCreate {
-        user_id: ctx.user_id,
-        action: action.as_str().to_string(),
-        entity_type: entity_type.as_str().to_string(),
-        entity_id,
-        entity_name: entity_name.map(ToOwned::to_owned),
-        details: details.map(|value| value.to_string()),
-        ip_address: ctx.ip_address.clone(),
-        user_agent: ctx.user_agent.clone(),
-        created_at: chrono::Utc::now(),
+let writer = Arc::new(AuditWriter::new(writer_db.clone()));
+let component = audit_component_with_writer(
+    writer.clone(),
+    writer.clone(),
+    Duration::from_secs(5),
+    |writer| async move {
+        writer.record(product_server_start_request()).await
+            .map(|_| ()).map_err(|error| error.to_string())
     },
-)
-.await;
+    |writer| async move {
+        writer.record(product_server_shutdown_request()).await
+            .map(|_| ()).map_err(|error| error.to_string())
+    },
+);
+// 注册 component；数据库关闭必须 depends_on AUDIT_MANAGER_COMPONENT。
 ```
 
-`record_audit_log(...)` 在 manager 尚未初始化时使用传入的 writer DB 直接写入，因此
-startup audit、测试和非标准入口不需要产品侧再维护 fallback 分支。默认策略为：
+完整 bundle 先注册 `audit_writer_start` required startup，再执行产品 server-start hook。
+shutdown 顺序为 producer/mail drain → server-shutdown hook → writer begin_drain/flush/stop
+→ database close。数据库组件必须声明依赖 `AUDIT_MANAGER_COMPONENT`；原有稳定组件名和
+shutdown phase 名继续保留。`AsterRuntime::run()` 会在所有 shutdown phase 执行后，
+将 drain 等失败作为 `AsterRuntimeError::Shutdown { report }` 返回产品；startup 中断时也
+保留 cleanup report。startup hook panic 遵循 required 策略并进入清理；
+产品 `before_shutdown` hook panic 同样会执行 audit drain 和数据库关闭，再返回
+`AsterRuntimeError::BeforeShutdown { shutdown_report }`。没有 mail outbox 的 follower 可使用
+`audit_component_with_writer_after(..., &[BACKGROUND_TASKS_COMPONENT], ...)`，显式覆盖生产者依赖。已有 lifecycle factory 的高级集成可以单独注册
+`audit_writer_component(writer, drain_timeout)`，但必须在 server-start hook 前注册，
+且不要再注册另一个 `audit_manager_component` 或含 flush 的完整旧 hook bundle。
 
-- queue capacity：`4096`
-- immediate batch size：`100`
-- delayed flush：`1s`
-- queue 满时：当前记录 direct write，同时调度已缓冲记录 flush
+产品完成 action/entity/detail 到 `AuditLogCreate` 的映射后，调用
+`writer.record(request).await` 并处理结果：
 
-需要不同策略时创建 `AuditLogManager::with_config(...)`；常规产品应使用默认的全局
-manager API。shutdown component 的 flush hook 直接调用
-`shutdown_global_audit_log_manager()`，不要再包一层同签名函数。
+- `Queued`：仅接收到内存，不代表持久化。mandatory 策略不能仅检查此结果。
+- `DirectPersisted`：仅本次 overflow 记录已提交，不代表 queued batch 提交。
+- `NotRunning(record)` / `Full(record)`：未接受记录，所有权返回产品。
+- `DirectFailed(failure)`：已接受的 direct record 保留在 writer，错误保留原始 `DbError`。
 
-事务内或明确要求绕过进程 buffer 的写入直接使用
-`write_audit_log_direct(...)`；它保留同样的 best-effort warning 行为，但不会改走全局
-manager。
+需要自定义容量、延迟、拒绝 overflow 或有界观测事件时，使用
+`AuditWriter::with_config(db, config, OverflowPolicy, events)`。
+每个 writer 有独立的队列、worker、取消 token、状态和计数。batch capacity 包含在途记录，
+direct slot 仅允许一个未确认记录，两条 lane 由同一 worker 公平调度。
+
+每个 chunk 使用 Forge transaction/store 写入。事务内不自动重试：锁冲突等已知安全失败
+标为 Retryable，参数/约束失败标为 Permanent，提交结果不确定标为 UnknownCommit。
+`WriteFailureCause::Persistence` 保留原始错误及其 driver classification；sink panic 或
+在途取消均保守标记为 UnknownCommit。失败 chunk 不从内存删除，也不计入 persisted。
+`retry_failed()` 只显式恢复 Retryable，未知提交必须由产品核对数据库后决定恢复方式。
+`snapshot().batch_failure_records` 标识队首受失败影响的记录数，后续记录尚未尝试。
+`unconfirmed()` 返回原始请求，stop 后快照稳定。
+
+手工生命周期调用使用 Tokio `Instant` deadline：
+
+```rust
+writer.start().await?; // 只允许一次；使用 component 时不要重复调用
+writer.record(request).await?;
+writer.flush(tokio::time::Instant::now() + Duration::from_secs(5)).await?;
+let report = writer.stop(tokio::time::Instant::now() + Duration::from_secs(5)).await;
+let remaining = report.snapshot.queued + report.snapshot.direct_pending;
+```
+
+stop 停止 admission，等待已接受写入直到 deadline 或不可继续的失败，再取消并 join worker。
+超时时返回未确认记录数和原始错误，runtime phase 同时说明 worker 已 join、数据库可进入
+后续关闭阶段。部分失败时继续 drain 另一条正常 lane；重复、并发 stop 安全。取消 direct
+等待方或 flush future 不会丢弃已接受记录。取消 stop 等待方后仍需另一次 stop 完成 join。
+产品应保留 writer 句柄，在失败退出前获取 `unconfirmed()` 并执行自己的恢复策略。
+
+`flush(deadline)` 在 future 首次 poll 时固定已接收范围，batch 和 direct 必须分别确认。
+后续记录不会延长等待，其失败不会污染先前已确认范围；过期 deadline 不发起新的强制
+写入，空范围仍可成功。正常 threshold/timer 或其他 flush 请求仍可独立写入。
+service future panic 时，`AsterRuntime` 仍执行 audit drain、worker join 和数据库关闭，
+再返回 `AsterRuntimeError::Service { shutdown_report, before_shutdown_panicked }`。
+关闭阶段超时取消时，即使产品 future 的析构 panic，也会记录 failed phase 并继续
+audit drain、writer join 和数据库关闭；service future 完成后的析构 panic 同样进入清理。
+root token 和独立 service token 在清理前都会取消，供产品 worker 退出；取消 run future
+只能通知取消，不能替代显式等待完整 drain。
+
+Observer 使用调用方提供的有界 Tokio mpsc channel，writer 仅 try_send，绝不执行用户
+callback；慢 consumer、panic 或关闭 channel 不影响审计持久化，丢弃事件数可查。
+
+### 迁移：旧入口直接删除
+
+本次不提供兼容层。替换关系：
+
+| 删除的 API | 新接入方式 |
+| --- | --- |
+| `AuditLogManager` | 产品资源持有 `Arc<AuditWriter>` |
+| `init_global_audit_log_manager` / `global_audit_log_manager` | assembly 构造 writer，runtime component 显式 start |
+| `record_audit_log` | `writer.record(request)`，显式处理 admission/error |
+| `flush_global_audit_log_manager` | `writer.flush(deadline)` |
+| `shutdown_global_audit_log_manager` / `cancel` | `writer.stop(deadline)` 并检查 remaining/failure |
+| `write_audit_log_direct` | `aster_forge_db::create_audit_log_row(&connection_or_transaction, request)`，传播错误 |
+
+startup/未初始化时不再隐式 direct fallback。事务内 mandatory audit 使用 DB store/helper，
+与产品业务更新放在同一事务，并由产品映射错误；best-effort 策略也应显式处理记录拒绝、
+缓冲写失败和 drain failure。产品 action/detail、脱敏、权限和展示继续留在产品仓库。
 
 通用 cursor 查询、按 action 统计、distinct user 统计和 retention 删除也由 Forge 承接：
 
@@ -246,8 +309,12 @@ Forge 侧承接：
 
 - shutdown component 名称、依赖和 phase。
 - `server_shutdown` hook 与 manager flush 的顺序。
-- `AuditLogManager`、默认 buffering policy、全局 manager 和未初始化时的 direct-write fallback。
+- 调用方持有的 `AuditWriter`、显式生命周期、默认 buffering policy 和分类失败恢复边界。
 - `audit_logs` 通用表结构、索引 builder 和基础 store。
 - 通用 cursor query、count、distinct user count、delete 和 write helper。
 
-测试至少覆盖 threshold flush、partial delayed flush、cancel 后显式 flush、manual flush 后继续记录、queue overflow direct write 和 shutdown 顺序。这个边界避免 Drive、Yggdrasil 和后续 Aster 服务在表结构、shutdown 顺序、批量写入和索引名上继续分叉，同时不把业务审计语义塞进共享 crate。
+测试覆盖构造无后台工作、startup 边界、threshold/delayed/manual flush、overflow 和在途容量、批次原子失败、原始错误、未知提交不重放、取消、drain timeout、并发 producer/stop、observer 隔离及数据库关闭顺序。
+
+运行 `cargo test -p aster_forge_audit`、`cargo test -p aster_forge_audit --features db-writer`、
+`cargo test -p aster_forge_audit --all-features`（含 Docker PostgreSQL 测试）、
+`cargo test -p aster_forge_runtime --all-features` 和相关 crates 的 Clippy。这个边界避免 Drive、Yggdrasil 和后续 Aster 服务在表结构、shutdown 顺序、批量写入和索引名上继续分叉，同时不把业务审计语义塞进共享 crate。

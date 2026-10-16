@@ -174,7 +174,7 @@ pub fn audit_runtime_component(
 4. 初始化 runtime config snapshot，并按需启动 config sync。
 5. 创建 cache。
 6. 创建 mail sender、mail template catalog 和 mail outbox dispatcher resources。
-7. 初始化 audit manager。
+7. 构造调用方持有的 `Arc<AuditWriter>`，由 audit component 显式启动、drain 和 stop。
 8. 创建 task registry、background task workers、scheduled task runtime。
 9. 构建 Actix app 和 HTTP server handle。
 10. 返回 `RuntimeAssembly`，由 component graph 接管 shutdown。

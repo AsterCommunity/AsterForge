@@ -9,7 +9,11 @@
 
 use std::future::Future;
 use std::marker::PhantomData;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+
+use futures::FutureExt;
+use tokio::task::JoinHandle;
 
 use tokio_util::sync::CancellationToken;
 
@@ -26,6 +30,28 @@ type ShutdownResourceFn<T> = Box<dyn FnOnce(T) -> ShutdownResourceFuture + Send>
 
 fn empty_runtime_hook() -> RuntimeHook {
     Box::new(|| Box::pin(async {}))
+}
+
+/// Keeps the internal signal listener owned by its service run, including cancellation paths.
+struct RuntimeSignalTask(JoinHandle<()>);
+
+impl Drop for RuntimeSignalTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl RuntimeSignalTask {
+    async fn cancel_and_join(mut self) {
+        // Once the service has stopped, its signal callback has no remaining stop work to own.
+        // Join cancellation before component cleanup can release the callback's dependencies.
+        self.0.abort();
+        if let Err(error) = (&mut self.0).await
+            && error.is_panic()
+        {
+            tracing::error!(%error, "runtime signal callback panicked");
+        }
+    }
 }
 
 /// Runs one service future with shared Aster shutdown mechanics.
@@ -64,6 +90,8 @@ pub struct RuntimeServiceComponent<S> {
 
 impl<S> RuntimeServiceComponent<S> {
     /// Creates a service component with a product-provided stop hook.
+    /// The hook only stops the service; the runtime cancels it after the service future completes.
+    /// Put resource cleanup in component shutdown phases so it runs after listener join.
     pub fn new<F, Fut>(
         component_name: &'static str,
         kind: RuntimeComponentKind,
@@ -347,7 +375,7 @@ where
     }
 }
 
-/// Error returned when runtime assembly or required startup phases fail.
+/// Error returned when runtime assembly or startup/shutdown lifecycle work fails.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AsterRuntimeError {
     /// No service component was registered.
@@ -367,6 +395,28 @@ pub enum AsterRuntimeError {
     Startup {
         /// Startup report that contains the failing phase.
         report: crate::StartupReport,
+        /// Cleanup report, including any secondary drain or dependency-close failures.
+        shutdown_report: crate::ShutdownReport,
+    },
+    /// The main service panicked. Product hooks and component cleanup still ran.
+    #[error("runtime service panicked")]
+    Service {
+        /// Cleanup report, including secondary drain or dependency-close failures.
+        shutdown_report: crate::ShutdownReport,
+        /// Whether the product before-shutdown hook also panicked.
+        before_shutdown_panicked: bool,
+    },
+    /// The product before-shutdown hook panicked. Component cleanup still completed.
+    #[error("runtime before-shutdown hook panicked")]
+    BeforeShutdown {
+        /// Cleanup report, including secondary drain or dependency-close failures.
+        shutdown_report: crate::ShutdownReport,
+    },
+    /// One or more shutdown phases failed or timed out. All remaining phases still ran.
+    #[error("runtime shutdown completed with failed component phases")]
+    Shutdown {
+        /// Complete ordered report, including failures and dependency cleanup results.
+        report: crate::ShutdownReport,
     },
 }
 
@@ -387,6 +437,7 @@ pub enum AsterRuntimeError {
 pub struct AsterRuntime<S> {
     service: S,
     shutdown_token: CancellationToken,
+    service_shutdown_token: CancellationToken,
     stop_on_signal: RuntimeHook,
     before_shutdown: RuntimeHook,
     registry: RuntimeComponentRegistry,
@@ -405,6 +456,7 @@ where
     S: Future,
 {
     /// Runs startup, the main service, before-shutdown hooks, and component shutdown.
+    /// The owned signal listener is cancelled and joined after the service stops, before cleanup.
     ///
     /// When a required startup phase aborts, component shutdown phases still run
     /// best-effort before the startup error is returned, so components that already
@@ -413,27 +465,77 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a startup report error when a required startup phase aborts.
+    /// Returns a startup report error when a required startup phase aborts, or a shutdown
+    /// report error after all cleanup phases run if any phase fails or times out. A panicking
+    /// before-shutdown hook also returns an error after component cleanup. Best-effort product
+    /// hooks should handle their own errors and return success explicitly.
+    /// Service panics become [`AsterRuntimeError::Service`] after cleanup, preserving secondary
+    /// hook and shutdown failures without exposing the panic payload. Ordinary service outputs
+    /// (including product `Result::Err` values) are returned unchanged when cleanup succeeds.
+    /// This also covers destruction of the service future after it finishes.
+    ///
+    /// The shared and service cancellation tokens are cancelled before cleanup on every exit.
+    /// Dropping a polled run future also cancels these tokens, but cannot await cleanup; callers
+    /// must let `run` complete to guarantee asynchronous drain and worker joins.
     pub async fn run(mut self) -> Result<S::Output, AsterRuntimeError> {
+        let _shutdown_guard = self.shutdown_token.clone().drop_guard();
+        let _service_shutdown_guard = self.service_shutdown_token.clone().drop_guard();
         let startup_report = self.registry.startup().await;
         if startup_report.aborted() {
+            self.shutdown_token.cancel();
+            self.service_shutdown_token.cancel();
             let shutdown_report = self.registry.shutdown().await;
             log_shutdown_report(&shutdown_report);
             return Err(AsterRuntimeError::Startup {
                 report: startup_report,
+                shutdown_report,
             });
         }
 
-        let _signal_task =
-            spawn_termination_signal_handler(self.shutdown_token, self.stop_on_signal);
+        let signal_task = RuntimeSignalTask(spawn_termination_signal_handler(
+            self.shutdown_token.clone(),
+            self.stop_on_signal,
+        ));
 
-        let output = self.service.await;
+        // Own the await inside the boundary so destruction of a completed service future is
+        // covered as well as its poll. Destruction after catch_unwind would bypass cleanup.
+        #[expect(
+            clippy::redundant_async_block,
+            reason = "the owning async block drops the completed service future inside catch_unwind"
+        )]
+        let output = AssertUnwindSafe(async { self.service.await })
+            .catch_unwind()
+            .await;
+        // Workers may wait only for cancellation. Wake them before any hook tries to join them,
+        // including when the service ends without a process signal or unwinds unexpectedly.
+        self.shutdown_token.cancel();
+        self.service_shutdown_token.cancel();
+        signal_task.cancel_and_join().await;
         tracing::info!("service stopped");
 
-        (self.before_shutdown)().await;
+        // The product hook precedes audit drain. Isolate both construction and polling so a
+        // panic cannot skip writer join or database close, and retain secondary cleanup errors.
+        let before_shutdown_failed = AssertUnwindSafe(async { (self.before_shutdown)().await })
+            .catch_unwind()
+            .await
+            .is_err();
 
         let report = self.registry.shutdown().await;
         log_shutdown_report(&report);
+        let Ok(output) = output else {
+            return Err(AsterRuntimeError::Service {
+                shutdown_report: report,
+                before_shutdown_panicked: before_shutdown_failed,
+            });
+        };
+        if before_shutdown_failed {
+            return Err(AsterRuntimeError::BeforeShutdown {
+                shutdown_report: report,
+            });
+        }
+        if report.has_failures() {
+            return Err(AsterRuntimeError::Shutdown { report });
+        }
 
         Ok(output)
     }
@@ -465,7 +567,7 @@ impl<S> AsterRuntimeBuilder<S> {
     ///
     /// This accessor is primarily for shared component crates that implement
     /// [`AsterRuntimeComponent`] and need to spawn work using the same token the runtime cancels
-    /// when the process receives a termination signal.
+    /// on termination signals, service completion, startup abort, or cancellation of a polled run.
     pub fn shutdown_token(&self) -> &CancellationToken {
         &self.shutdown_token
     }
@@ -512,10 +614,18 @@ impl<S> AsterRuntimeBuilder<S> {
             .validate()
             .map_err(|source| AsterRuntimeError::ComponentGraph { source })?;
 
+        let service_shutdown_token = service.shutdown_token;
+        let signal_shutdown = service_shutdown_token.clone();
         Ok(AsterRuntime {
             service: service.service,
-            shutdown_token: service.shutdown_token,
-            stop_on_signal: service.stop_on_signal,
+            // Component factories receive this token even when the service was constructed
+            // with a separate token. Keep both domains notified rather than replacing the root.
+            shutdown_token: self.shutdown_token,
+            service_shutdown_token,
+            stop_on_signal: Box::new(move || {
+                signal_shutdown.cancel();
+                (service.stop_on_signal)()
+            }),
             before_shutdown: self.before_shutdown,
             registry,
         })
@@ -530,7 +640,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns any error produced while building the runtime or running required startup phases.
+    /// Returns assembly or startup/shutdown lifecycle errors.
     pub async fn run(self) -> Result<S::Output, AsterRuntimeError> {
         self.build()?.run().await
     }
@@ -541,6 +651,14 @@ where
     S: Future,
 {
     /// Runs the service future and product cleanup hooks.
+    /// Cancels and joins its signal listener before invoking `after_stop`; dropping this run
+    /// future also aborts the listener so it cannot retain resources of an abandoned service.
+    /// Cancellation is signalled before cleanup, including service panic and run cancellation.
+    ///
+    /// # Panics
+    /// Service panics are resumed with their original payload after `after_stop`. If only cleanup
+    /// panics, its panic is resumed; if both panic, the original service panic takes precedence.
+    /// Destruction of the completed service future is part of this boundary.
     pub async fn run<Stop, StopFut, AfterStop, AfterStopFut>(
         self,
         stop_on_signal: Stop,
@@ -552,12 +670,36 @@ where
         AfterStop: FnOnce() -> AfterStopFut,
         AfterStopFut: Future<Output = ()>,
     {
-        let _signal_task = spawn_termination_signal_handler(self.shutdown_token, stop_on_signal);
+        let _shutdown_guard = self.shutdown_token.clone().drop_guard();
+        let signal_task = RuntimeSignalTask(spawn_termination_signal_handler(
+            self.shutdown_token.clone(),
+            stop_on_signal,
+        ));
 
-        let server_result = self.server.await;
+        #[expect(
+            clippy::redundant_async_block,
+            reason = "the owning async block drops the completed service future inside catch_unwind"
+        )]
+        let server_result = AssertUnwindSafe(async { self.server.await })
+            .catch_unwind()
+            .await;
+        self.shutdown_token.cancel();
+        signal_task.cancel_and_join().await;
         tracing::info!("server stopped");
-        after_stop().await;
-        server_result
+        // Catch construction as well as polling, and retain the primary panic on double failure.
+        let cleanup_result = AssertUnwindSafe(async { after_stop().await })
+            .catch_unwind()
+            .await;
+        match (server_result, cleanup_result) {
+            (Ok(output), Ok(())) => output,
+            (Err(payload), cleanup) => {
+                if cleanup.is_err() {
+                    tracing::error!("service cleanup also panicked");
+                }
+                std::panic::resume_unwind(payload)
+            }
+            (Ok(_), Err(payload)) => std::panic::resume_unwind(payload),
+        }
     }
 }
 
@@ -841,5 +983,12 @@ mod tests {
                 .phase_name,
             "mail_outbox_drain"
         );
+    }
+
+    #[tokio::test]
+    async fn completed_panicking_signal_listener_is_joined_and_logged() {
+        let task = tokio::spawn(async { panic!("signal callback failed") });
+        tokio::task::yield_now().await;
+        super::RuntimeSignalTask(task).cancel_and_join().await;
     }
 }

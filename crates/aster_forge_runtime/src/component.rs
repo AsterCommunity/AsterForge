@@ -16,6 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use crate::shutdown::run_shutdown_phase;
 use crate::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckScope,
     HealthComponentReport, ShutdownPhaseReport, ShutdownPhaseStatus, ShutdownReport,
@@ -440,24 +441,16 @@ impl RuntimeComponentRegistry {
     /// descriptor metadata and do not block execution. Cycles are reported as
     /// warnings and the registry still makes best-effort progress without
     /// executing a phase more than once.
+    /// Phase construction, polling, and completion/timeout destruction panics become failed
+    /// phase reports, so later drain and dependency-close phases still run. Panic payloads are
+    /// not copied into the public report.
     pub async fn shutdown(&mut self) -> ShutdownReport {
         let mut reports = Vec::with_capacity(self.shutdown.len());
         for index in self.shutdown_order() {
             let registered = &mut self.shutdown[index];
             tracing::info!(phase = registered.phase_name, "starting shutdown phase");
             let started_at = std::time::Instant::now();
-            let future = (registered.phase)();
-            let status = match registered.timeout {
-                Some(timeout) => match tokio::time::timeout(timeout, future).await {
-                    Ok(Ok(())) => ShutdownPhaseStatus::Succeeded,
-                    Ok(Err(error)) => ShutdownPhaseStatus::Failed(error),
-                    Err(_) => ShutdownPhaseStatus::TimedOut,
-                },
-                None => match future.await {
-                    Ok(()) => ShutdownPhaseStatus::Succeeded,
-                    Err(error) => ShutdownPhaseStatus::Failed(error),
-                },
-            };
+            let status = run_shutdown_phase(registered.timeout, &mut registered.phase).await;
             let duration = started_at.elapsed();
             match &status {
                 ShutdownPhaseStatus::Succeeded => {
