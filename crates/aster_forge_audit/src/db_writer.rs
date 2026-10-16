@@ -151,7 +151,10 @@ impl AuditWriter {
     pub fn begin_drain(&self) {
         self.writer.begin_drain();
     }
-    /// Awaits acknowledged persistence until the caller deadline without closing admission.
+    /// Awaits persistence of records accepted before this future's first poll, without closing
+    /// admission. Batch and direct writes are acknowledged separately; later records and their
+    /// failures do not extend this scope. An expired deadline schedules no new forced write,
+    /// while an already acknowledged scope succeeds immediately, even with an expired deadline.
     /// Failed records stay in memory; cancelling this future leaves persistence owned by the worker.
     ///
     /// # Errors

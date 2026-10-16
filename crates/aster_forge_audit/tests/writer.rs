@@ -219,6 +219,7 @@ async fn postgres_audit_writer_contract() {
         "failure",
         "runtime",
         "runtime_failure",
+        "runtime_service_panic",
         "constraint",
         "timeout",
         "retry",
@@ -233,6 +234,7 @@ async fn postgres_audit_writer_contract() {
             "failure" => invalid_batch_contract(&db).await,
             "runtime" => runtime_contract(db.clone(), false).await,
             "runtime_failure" => runtime_contract(db.clone(), true).await,
+            "runtime_service_panic" => panic_cleanup_contract(db.clone(), "service").await,
             "constraint" => postgres_constraint_failure(&db).await,
             "timeout" => postgres_blocked_drain(&db).await,
             _ => postgres_safe_retry(fixture.url(), &db).await,
@@ -466,73 +468,91 @@ async fn runtime_run_propagates_failed_audit_drain_after_database_close() {
 }
 
 #[tokio::test]
-async fn panicking_startup_and_before_shutdown_hooks_flush_accepted_audit_before_database_close() {
-    for startup_panics in [true, false] {
-        let db = sqlite().await;
-        let writer = Arc::new(AuditWriter::new(db.clone()));
-        let (close_writer, start_writer) = (writer.clone(), writer.clone());
-        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let close_flag = closed.clone();
-        let result = AsterRuntime::builder()
-            .component(runtime_component_with_shutdown(|shutdown| {
-                RuntimeServiceComponent::new(
-                    "http",
-                    RuntimeComponentKind::Core,
-                    async {},
-                    shutdown,
-                    || async {},
-                )
-            }))
-            .component(audit_component_with_writer_after(
-                (),
-                writer.clone(),
-                Duration::from_secs(1),
-                &[],
-                move |()| async move {
-                    start_writer
-                        .record(request(1))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    assert!(!startup_panics, "product startup audit hook panicked");
-                    Ok(())
-                },
-                |()| async { Ok(()) },
-            ))
-            .before_shutdown(move || async move {
-                assert!(startup_panics, "product pre-shutdown hook panicked");
-            })
-            .component(runtime_component(
-                move |registry: &mut RuntimeComponentRegistry| {
-                    registry
-                        .component("database")
-                        .depends_on(AUDIT_MANAGER_COMPONENT)
-                        .shutdown("database_close", None, move || {
-                            let (db, writer, flag) =
-                                (db.clone(), close_writer.clone(), close_flag.clone());
-                            async move {
-                                assert_eq!(writer.snapshot().state, BufferedWriterState::Stopped);
-                                assert_eq!(count(&db).await, 1);
-                                db.close().await.map_err(|error| error.to_string())?;
-                                flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                                Ok(())
-                            }
-                        });
-                },
-            ))
-            .run()
-            .await;
-        let report = match result {
-            Err(AsterRuntimeError::Startup {
-                shutdown_report, ..
-            }) if startup_panics => shutdown_report,
-            Err(AsterRuntimeError::BeforeShutdown { shutdown_report }) if !startup_panics => {
-                shutdown_report
-            }
-            result => panic!("unexpected runtime result: {result:?}"),
-        };
-        assert!(!report.has_failures());
-        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
-        assert_eq!(writer.snapshot().persisted, 1);
-        assert!(writer.unconfirmed().is_empty());
+async fn panicking_lifecycle_phases_flush_accepted_audit_before_database_close() {
+    for phase in ["startup", "before_shutdown", "service"] {
+        panic_cleanup_contract(sqlite().await, phase).await;
     }
+}
+
+async fn panic_cleanup_contract(db: DatabaseConnection, phase: &'static str) {
+    let startup_panics = phase == "startup";
+    let writer = Arc::new(AuditWriter::new(db.clone()));
+    let (close_writer, start_writer) = (writer.clone(), writer.clone());
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let close_flag = closed.clone();
+    let result = AsterRuntime::builder()
+        .component(runtime_component_with_shutdown(|shutdown| {
+            RuntimeServiceComponent::new(
+                "http",
+                RuntimeComponentKind::Core,
+                async move {
+                    assert_ne!(phase, "service", "service panicked");
+                },
+                shutdown,
+                || async {},
+            )
+        }))
+        .component(audit_component_with_writer_after(
+            (),
+            writer.clone(),
+            Duration::from_secs(1),
+            &[],
+            move |()| async move {
+                start_writer
+                    .record(request(1))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                assert!(!startup_panics, "product startup audit hook panicked");
+                Ok(())
+            },
+            |()| async { Ok(()) },
+        ))
+        .before_shutdown(move || async move {
+            assert_ne!(
+                phase, "before_shutdown",
+                "product pre-shutdown hook panicked"
+            );
+        })
+        .component(runtime_component(
+            move |registry: &mut RuntimeComponentRegistry| {
+                registry
+                    .component("database")
+                    .depends_on(AUDIT_MANAGER_COMPONENT)
+                    .shutdown("database_close", None, move || {
+                        let (db, writer, flag) =
+                            (db.clone(), close_writer.clone(), close_flag.clone());
+                        async move {
+                            assert_eq!(writer.snapshot().state, BufferedWriterState::Stopped);
+                            assert_eq!(count(&db).await, 1);
+                            db.close().await.map_err(|error| error.to_string())?;
+                            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            Ok(())
+                        }
+                    });
+            },
+        ))
+        .run()
+        .await;
+    let report = match result {
+        Err(AsterRuntimeError::Startup {
+            shutdown_report, ..
+        }) if startup_panics => shutdown_report,
+        Err(AsterRuntimeError::BeforeShutdown { shutdown_report })
+            if phase == "before_shutdown" =>
+        {
+            shutdown_report
+        }
+        Err(AsterRuntimeError::Service {
+            shutdown_report,
+            before_shutdown_panicked,
+        }) if phase == "service" => {
+            assert!(!before_shutdown_panicked);
+            shutdown_report
+        }
+        result => panic!("unexpected runtime result: {result:?}"),
+    };
+    assert!(!report.has_failures());
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(writer.snapshot().persisted, 1);
+    assert!(writer.unconfirmed().is_empty());
 }

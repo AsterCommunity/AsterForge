@@ -220,10 +220,35 @@ struct State<T, E> {
     direct: Option<Direct<T, E>>,
     failure: Option<WriteFailure<E>>,
     failure_records: usize,
-    force: bool,
+    // Highest batch acknowledgment requested by flush/retry. Only the sole worker advances
+    // persisted counters; originals (including in-flight items) remain queued until then.
+    flush_through: u64,
     persisted: u64,
     direct_persisted: u64,
     observer_dropped: u64,
+}
+
+impl<T, E> State<T, E> {
+    fn batch_persisted(&self) -> u64 {
+        self.persisted - self.direct_persisted
+    }
+
+    fn batch_watermark(&self) -> u64 {
+        // Capture admission using batch progress alone: a direct acknowledgment cannot pay for
+        // an unacknowledged queued record. Failed records also remain part of this watermark.
+        self.batch_persisted() + self.queue.len() as u64
+    }
+
+    fn next_batch_size(&self, maximum: usize) -> usize {
+        // Forced partial batches stop at the captured watermark. Later admissions retain their
+        // own threshold/delay instead of being pulled into an earlier flush transaction.
+        let remaining = self.flush_through.saturating_sub(self.batch_persisted());
+        if remaining == 0 {
+            maximum
+        } else {
+            maximum.min(usize::try_from(remaining).unwrap_or(usize::MAX))
+        }
+    }
 }
 
 type Sink<T, E> = dyn Fn(Vec<T>) -> Pin<Box<dyn Future<Output = Result<(), WriteFailure<E>>> + Send>>
@@ -307,7 +332,7 @@ impl<T: Clone + Send + 'static, E: Send + Sync + 'static> ManagedBatchWriter<T, 
                     direct: None,
                     failure: None,
                     failure_records: 0,
-                    force: false,
+                    flush_through: 0,
                     persisted: 0,
                     direct_persisted: 0,
                     observer_dropped: 0,
@@ -401,39 +426,67 @@ impl<T: Clone + Send + 'static, E: Send + Sync + 'static> ManagedBatchWriter<T, 
         self.core.wake.notify_one();
     }
 
-    /// Flushes accepted records with a caller deadline, retaining failures and in-flight items.
-    /// Dropping this future does not cancel persistence; `stop` owns worker termination.
-    /// Continues draining an unaffected lane even if the other lane has failed.
+    /// Flushes records admitted before this future's first poll, using a caller deadline.
+    /// Later admissions cannot extend the captured scope or satisfy it through another lane.
+    /// Dropping this future leaves accepted writes owned by the worker. A failed lane does not
+    /// prevent draining other records in this scope. An expired deadline starts no new flush work.
+    /// An already acknowledged scope succeeds even after the deadline. Normal threshold/timer
+    /// writes and other flush callers proceed independently of this future's scope and deadline.
     ///
     /// # Errors
-    /// Returns a lifecycle error, the original write failure, or deadline exhaustion.
+    /// Returns a lifecycle error, the original in-scope write failure, or deadline exhaustion.
     pub async fn flush(&self, deadline: Instant) -> Result<(), BufferFlushError<E>> {
+        let (batch_target, direct_target) = {
+            let state = self.core.state();
+            if state.lifecycle == BufferedWriterState::Created {
+                return Err(BufferFlushError::NotStarted);
+            }
+            (
+                state.batch_watermark(),
+                state.direct_persisted + u64::from(state.direct.is_some()),
+            )
+        };
         loop {
             let changed = self.core.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             {
                 let mut state = self.core.state();
-                if state.lifecycle == BufferedWriterState::Created {
-                    return Err(BufferFlushError::NotStarted);
+                let batch_pending = state.batch_persisted() < batch_target;
+                let direct_pending = state.direct_persisted < direct_target;
+                if !batch_pending && !direct_pending {
+                    return Ok(());
                 }
-                let work_pending = (!state.queue.is_empty() && state.failure.is_none())
-                    || state.direct.as_ref().is_some_and(|d| d.failure.is_none());
+                let work_pending = (batch_pending && state.failure.is_none())
+                    || (direct_pending
+                        && state.direct.as_ref().is_some_and(|d| d.failure.is_none()));
                 if !work_pending
-                    && let Some(failure) = state
-                        .failure
-                        .as_ref()
-                        .or_else(|| state.direct.as_ref().and_then(|d| d.failure.as_ref()))
+                    && let Some(failure) =
+                        state
+                            .failure
+                            .as_ref()
+                            .filter(|_| batch_pending)
+                            .or_else(|| {
+                                state
+                                    .direct
+                                    .as_ref()
+                                    .filter(|_| direct_pending)
+                                    .and_then(|d| d.failure.as_ref())
+                            })
                 {
                     return Err(BufferFlushError::Write(failure.clone()));
-                }
-                if state.queue.is_empty() && state.direct.is_none() {
-                    return Ok(());
                 }
                 if state.lifecycle == BufferedWriterState::Stopped {
                     return Err(BufferFlushError::Stopped);
                 }
-                state.force = true;
+                // Check before scheduling too: Tokio timeout polls a ready inner future first,
+                // so repeated progress notifications alone must not bypass the caller deadline.
+                if Instant::now() >= deadline {
+                    return Err(BufferFlushError::Deadline);
+                }
+                if batch_pending {
+                    state.flush_through = state.flush_through.max(batch_target);
+                }
             }
             self.core.wake.notify_one();
             if tokio::time::timeout_at(deadline, changed).await.is_err() {
@@ -455,7 +508,7 @@ impl<T: Clone + Send + 'static, E: Send + Sync + 'static> ManagedBatchWriter<T, 
         {
             state.failure = None;
             state.failure_records = 0;
-            state.force = true;
+            state.flush_through = state.flush_through.max(state.batch_watermark());
         }
         if let Some(direct) = &mut state.direct
             && direct
@@ -544,7 +597,7 @@ async fn run<T: Clone + Send + 'static, E: Send + Sync + 'static>(core: Arc<Core
                 .and_then(|at| at.checked_add(core.config.delayed_flush_after));
             let batch_ready = !state.queue.is_empty()
                 && state.failure.is_none()
-                && (state.force
+                && (state.batch_persisted() < state.flush_through
                     || state.lifecycle == BufferedWriterState::Draining
                     || state.queue.len() >= core.config.batch_size
                     || due.is_some_and(|at| at <= Instant::now()));
@@ -559,7 +612,7 @@ async fn run<T: Clone + Send + 'static, E: Send + Sync + 'static>(core: Arc<Core
                         state
                             .queue
                             .iter()
-                            .take(core.config.batch_size)
+                            .take(state.next_batch_size(core.config.batch_size))
                             .cloned()
                             .collect::<Vec<_>>(),
                         false,
@@ -654,7 +707,6 @@ impl<T, E> Core<T, E> {
             state.persisted += count as u64;
             if state.queue.is_empty() {
                 state.oldest = None;
-                state.force = false;
             }
         }
         self.event(
