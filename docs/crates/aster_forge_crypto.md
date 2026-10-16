@@ -55,6 +55,8 @@ salt = 16 random bytes
 `m=19456 KiB, t=2, p=1` 仍可验证，并会被标记为需要重哈希；超过验证上限的 PHC
 参数会在 Argon2 分配工作内存前被拒绝。
 
+`validate_password_hash(hash, limits)` 只解析并验证 PHC、算法、参数及预算，不执行 Argon2，可用于启动校验。
+
 返回错误类型是 `CryptoError`。密码不匹配返回 `Ok(false)`；格式错误、不支持的算法或版本、非法参数和超出资源上限返回错误。产品侧应该把错误映射成内部错误，不要把底层失败细节直接暴露给用户。
 
 ## 自定义工作因子与验证上限
@@ -146,7 +148,7 @@ plaintext 或 ciphertext。
 - HMAC key 的来源、用途隔离和轮换。
 - secret-envelope master key 的字符策略、来源和轮换。
 - 各用途稳定且互不相同的 HKDF context，以及实体相关 AAD。
-- Argon2 的认证并发上限和 blocking 执行策略。
+- Argon2 的产品并发上限与等待/立即拒绝策略（blocking/semaphore 执行机制见 `aster_forge_auth/password`）。
 
 Forge 只保证同一套哈希实现被多个项目复用。
 

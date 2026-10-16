@@ -106,14 +106,14 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 | crate | 默认 feature | 常见显式 feature | 说明 |
 | --- | --- | --- | --- |
 | `aster_forge_middleware` | `actix` | `metrics`、`axum` | 共享 HTTP middleware；框架适配位于显式 `actix` / `axum` 模块。 |
-| `aster_forge_observability` | `actix` | `prometheus`、`axum` | `/metrics` endpoint glue；未启用时 route helper 是 no-op。 |
+| `aster_forge_observability` | `actix` | `prometheus`、`axum` | 显式注入的 exposition resource/Router；未编译 Prometheus 时无端点 API。 |
 | `aster_forge_audit` | 无 | `db-writer`, `mail-outbox-dependency` | lifecycle 默认不依赖 DB/mail；共享 buffered DB writer 和 `audit_logs -> mail_outbox` shutdown 顺序分别显式启用。 |
 | `aster_forge_cache` | `memory` | `redis`, `runtime-component` | Redis 后端显式启用；runtime health component 单独启用。 |
 | `aster_forge_config` | 无 | `redis-pubsub`, `sea-orm`, `openapi` | 配置 reload 通知后端和数据库转换能力分开启用。 |
 | `aster_forge_db` | 无 | `all`, `audit-log`, `mail-outbox`, `runtime-component`, `runtime-lease`, `scheduled-task`, `system-config` | 连接、transaction、pagination 等基础能力默认可用；共享表/store 按需启用。 |
 | `aster_forge_db_migration` | 无 | 无 | Migration 并发协调、跨数据库 index/search helper、主键和 UTC/JSON column builder；产品保留 migration list 和历史兼容策略。 |
 | `aster_forge_mail` | 无 | `persistence`, `runtime-component`, `openapi` | sender/template 默认可用；SeaORM outbox model 和 runtime drain component 分开启用。 |
-| `aster_forge_metrics` | 无 | `backend-prometheus`, `runtime-health`, `allocator-metrics` | backend 由产品入口统一选择；普通产品用 `init_configured_or_noop()`。 |
+| `aster_forge_metrics` | 无 | `backend-prometheus`, `otlp`, `runtime-health`, `allocator-metrics` | 产品显式创建 provider 并添加 reader；pull/push 可同时开启。 |
 | `aster_forge_tasks` | 无 | `runtime`, `runtime-component`, `openapi` | retry、dedupe、steps、spec 默认可用；worker/scheduled runtime 和 component factory 分开启用。 |
 | `aster_forge_webdav` | 无 | `actix` | transport-neutral 协议内核默认可用；Actix adapter 显式启用。 |
 

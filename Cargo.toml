@@ -61,6 +61,11 @@ multiple_unsafe_ops_per_block = "deny"
 undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
+opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics", "experimental_metrics_bound_instruments"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "spec_unstable_metrics_views", "experimental_metrics_custom_reader", "experimental_metrics_bound_instruments"] }
+opentelemetry-prometheus = { version = "0.33.1", default-features = false }
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "metrics"] }
+prost = "0.14"
 actix-web = "4.17.0"
 actix-governor = "0.10"
 axum = "0.8.9"
@@ -79,6 +84,7 @@ fuser = "0.18.0"
 futures = "0.3"
 governor = "0.10"
 headers = "0.4.2"
+hashbrown = "0.17"
 hmac = "0.13"
 hkdf = "0.13"
 http = "1"

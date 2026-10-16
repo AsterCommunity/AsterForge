@@ -13,7 +13,9 @@ pub fn routes() -> Scope {
         .route("/ready", web::get().to(ready))
         .route("/ready", web::head().to(ready));
 
-    crate::metrics::configure_route(scope)
+    #[cfg(feature = "metrics")]
+    let scope = scope.service(aster_forge_observability::actix::prometheus_resource("/metrics"));
+    scope
 }
 
 #[aster_forge_api_docs_macros::path(
@@ -47,7 +49,8 @@ pub async fn ready(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
         check_cache(state.get_ref()).await,
     ];
     let report = SystemHealthReport::with_duration(component_reports, started.elapsed());
-    crate::metrics::record_health_report(aster_forge_runtime::HealthCheckScope::Readiness, &report);
+    #[cfg(feature = "metrics")]
+    state.metrics.record_health(aster_forge_runtime::HealthCheckScope::Readiness.as_str(), &report);
 
     let ready = report
         .components

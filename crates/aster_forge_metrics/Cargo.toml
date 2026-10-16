@@ -11,14 +11,23 @@ publish = false
 [features]
 default = []
 allocator-metrics = ["dep:aster_forge_alloc"]
-backend-prometheus = ["dep:prometheus", "dep:sysinfo"]
+backend-prometheus = ["dep:prometheus", "dep:opentelemetry-prometheus"]
+otlp = ["dep:opentelemetry-proto", "dep:prost", "dep:reqwest", "reqwest/blocking"]
 runtime-health = ["dep:aster_forge_runtime"]
 
 [dependencies]
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-prometheus = { workspace = true, optional = true }
+opentelemetry-proto = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+parking_lot.workspace = true
+hashbrown.workspace = true
 aster_forge_alloc = { path = "../aster_forge_alloc", optional = true }
 aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
 prometheus = { workspace = true, optional = true }
-sysinfo = { workspace = true, optional = true }
+sysinfo.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tokio-util.workspace = true
@@ -26,3 +35,7 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "recording_cost"
+required-features = ["backend-prometheus"]

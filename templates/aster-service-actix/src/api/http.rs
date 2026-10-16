@@ -46,8 +46,11 @@ fn build_http_service_component(
     metrics_data: web::Data<dyn aster_forge_metrics::MetricsRecorder>,
 ) -> io::Result<RuntimeServiceComponent<actix_web::dev::Server>> {
     let shutdown_data = web::Data::new(shutdown_token.clone());
+    let provider = state.metrics.provider();
     let mut server = HttpServer::new(move || {
-        App::new()
+        let app = App::new();
+        let app = match provider.clone() { Some(provider) => app.app_data(web::Data::new(provider)), None => app };
+        app
             .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
             .wrap(aster_forge_middleware::actix::request_id::RequestIdMiddleware)

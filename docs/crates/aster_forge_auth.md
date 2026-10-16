@@ -17,7 +17,9 @@
 aster_forge_auth = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-当前没有可选 feature，默认内核不引入 HTTP 框架、SeaORM、Redis、OpenAPI 或产品实体。JWT 使用成熟的 `jsonwebtoken` / `aws_lc_rs` 后端，默认 HS256，显式支持 HS384/HS512。HMAC key 至少分别为 32/48/64 字节；长度检查不等于熵检查。产品加载高熵签名 key，负责轮换和用途隔离，不复用 AEAD master key。
+可选 `password` feature 提供实例级 `PasswordHashRuntime`：同步密码学原语仍在 crypto，blocking 执行和 semaphore 成本控制由 auth 提供；产品选择并发上限、使用等待或 `try_verify_password` 立即拒绝、凭据来源和错误映射。取消请求不会提前释放仍在执行的 blocking job 额度。
+
+默认内核不引入 HTTP 框架、SeaORM、Redis、OpenAPI 或产品实体。JWT 使用成熟的 `jsonwebtoken` / `aws_lc_rs` 后端，默认 HS256，显式支持 HS384/HS512。HMAC key 至少分别为 32/48/64 字节；长度检查不等于熵检查。产品加载高熵签名 key，负责轮换和用途隔离，不复用 AEAD master key。
 
 ## 最小接入
 

@@ -22,8 +22,8 @@ pub mod secret_envelope;
 pub use hash::{
     PasswordHashPolicy, PasswordHashVerification, PasswordHashVerificationLimits,
     PasswordHashWorkFactor, bytes_to_hex, hash_password, hash_password_with_policy,
-    hmac_sha256_hex, new_sha256, sha256_digest_to_hex, sha256_hex, verify_password,
-    verify_password_with_policy,
+    hmac_sha256_hex, new_sha256, sha256_digest_to_hex, sha256_hex, validate_password_hash,
+    verify_password, verify_password_with_policy,
 };
 pub use secret_envelope::{decrypt_secret, encrypt_secret};
 

@@ -8,12 +8,16 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+password = ["dep:aster_forge_crypto"]
+
 [dependencies]
+aster_forge_crypto = { path = "../aster_forge_crypto", optional = true }
 async-trait.workspace = true
 jsonwebtoken.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "rt"] }
 tokio-util.workspace = true
 uuid.workspace = true
 

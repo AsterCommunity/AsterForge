@@ -9,7 +9,7 @@ use crate::errors::Result;
 
 /// Prepares all resources needed by the runtime component graph.
 pub async fn prepare_state(config: crate::config::AppConfig) -> Result<crate::runtime::AppState> {
-    let metrics = crate::runtime::metrics::create_metrics_recorder();
+    let metrics = crate::runtime::metrics::create_metrics_recorder()?;
     let db_handles =
         crate::db::runtime::prepare_database_handles(&config.database, metrics.clone()).await?;
     let cache = aster_forge_cache::create_cache_with_policy(
@@ -41,7 +41,8 @@ pub async fn run(state: crate::runtime::AppState) -> std::io::Result<()> {
         web::Data::from(state.get_ref().metrics.clone());
     let app_state = state.get_ref();
 
-    aster_forge_runtime::AsterRuntime::builder()
+    let provider = app_state.metrics.provider();
+    let result = aster_forge_runtime::AsterRuntime::builder()
         .component(crate::api::http::http_component(
             crate::api::http::HttpRuntimeConfig {
                 host: host.as_str(),
@@ -61,7 +62,12 @@ pub async fn run(state: crate::runtime::AppState) -> std::io::Result<()> {
         ))
         .run()
         .await
-        .map_err(to_io_error)?
+        .map_err(to_io_error).and_then(std::convert::identity);
+    if let Some(provider) = provider {
+        let shutdown = provider.shutdown(std::time::Duration::from_secs(10)).await.map_err(to_io_error);
+        if result.is_ok() { shutdown?; }
+    }
+    result
 }
 
 fn to_io_error(error: impl ToString) -> std::io::Error {

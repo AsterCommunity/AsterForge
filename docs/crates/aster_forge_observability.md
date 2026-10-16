@@ -1,70 +1,46 @@
 # aster_forge_observability
 
-`aster_forge_observability` 提供 Actix Web 和 Axum 的观测 endpoint glue。它不负责记录指标，也不持有 metrics backend；这些职责属于 `aster_forge_metrics`。
+Forge 提供可注入的 Actix/Axum Prometheus exposition adapter。指标内核和 reader 属于 `aster_forge_metrics`；路由路径、是否启用、认证、静态配置和产品错误策略归产品。
 
-## 适用场景
+## Cargo 与能力
 
-- 给 Actix Web 服务挂载 Prometheus `/metrics` endpoint。
-- 把 route-level observability glue 从产品仓库和 middleware crate 中拆出来。
-- 让产品路由无条件调用 helper，由 Cargo feature 决定 endpoint 是否存在。
-
-不适合放在这里的内容：
-
-- HTTP request metrics middleware；它属于 `aster_forge_middleware::actix`。
-- metrics recorder trait、Prometheus registry、产品自定义 metric 注册；它们属于 `aster_forge_metrics`。
-- 产品 dashboard、告警规则、业务指标命名策略。
-
-## Cargo 接入
+默认只有 `actix` adapter；`axum` 和 `prometheus` 独立可选。未编译 `prometheus` 时没有 exposition API，不会注册端点；OTLP-only 产品不需要这个 feature。
 
 ```toml
-[features]
-metrics = [
-    "aster_forge_observability/prometheus",
-    "aster_forge_metrics/allocator-metrics",
-    "aster_forge_metrics/backend-prometheus",
-    "aster_forge_metrics/runtime-health",
-]
-
-[dependencies]
-aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge" }
-aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
+aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge", features = ["prometheus"] }
 ```
 
-## Route 接入
-
-产品 route 模块推荐无条件调用：
+## 最小接入
 
 ```rust
-pub fn routes() -> actix_web::Scope {
-    let scope = actix_web::web::scope("/health")
-        .route("", actix_web::web::get().to(health))
-        .route("/ready", actix_web::web::get().to(ready));
-
-    aster_forge_observability::actix::configure_prometheus_route(scope)
+#[cfg(feature = "metrics")]
+fn endpoint() -> actix_web::Resource {
+    aster_forge_observability::actix::prometheus_resource("/metrics")
 }
 ```
 
-当 `aster_forge_observability/prometheus` feature 未启用时，`configure_prometheus_route` 返回原始 scope，不注册 `/metrics`。当 feature 启用时，它注册 `/metrics`，并从 `aster_forge_metrics::prometheus` 导出 Prometheus text exposition body。
+在 App 上注入 `web::Data<aster_forge_metrics::MetricsProvider>`。产品根据自己的静态配置决定是否调用 `service(endpoint())`，并可在 resource 上调用 `wrap` / `from_fn`，先鉴权再进入导出 handler。库不读取产品配置、JWT、cookie 或 Basic Auth。
 
-## 启动顺序
+Axum 使用 `prometheus_router(provider)`，返回带实例 Extension 的 Router；产品可以 nest 到自己的路径并在其外层加认证 layer。没有全局 registry 或匿名 probe scope 的自动挂载入口。
 
-`/metrics` endpoint 只负责导出，不负责初始化 backend。产品入口仍然应该通过 `aster_forge_metrics::init_configured_or_noop()` 初始化 recorder：
+## HTTP 与运行时合同
 
-```rust
-pub fn create_metrics_recorder() -> aster_forge_metrics::SharedMetricsRecorder {
-    #[cfg(feature = "metrics")]
-    {
-        return aster_forge_metrics::init_configured_or_noop();
-    }
+- 成功：200，`text/plain; version=0.0.4; charset=utf-8`。
+- 缺少实例注入、provider 无 pull reader、关闭、超限或导出失败：503，稳定脱敏文本。
+- 所有导出响应包含 `Cache-Control: no-store`。
+- handler 不初始化 metrics，也不做业务 SQL、目录遍历、健康探测或系统采样。
+- gather 放进 blocking pool，最多两个并行工作，默认最多等待五秒；已超时工作仍占额度，编码结果受 provider 大小预算限制。
 
-    aster_forge_metrics::NoopMetrics::arc()
-}
+产品必须在实例生命周期内持有 provider，生产者退出后再关闭。认证需要只包此 resource，避免同时改变 health/readiness 的访问规则。AsterDrive 的静态 Basic Auth 是产品 adapter，不下沉到 metrics crate。
+
+## 迁移与测试
+
+旧 `configure_prometheus_route(scope)` 删除，替换为显式 resource/Router 和实例注入。没有兼容全局导出路径可绕过产品认证。
+
+```bash
+cargo check -p aster_forge_observability --no-default-features --all-targets
+cargo test -p aster_forge_observability --features prometheus --lib
+cargo check -p aster_forge_observability --no-default-features --features axum,prometheus --all-targets
 ```
 
-如果 endpoint 被访问但 Prometheus registry 尚未初始化，它会返回 `503 Service Unavailable`，避免误导 scraper 认为服务已经暴露有效 metrics。
-
-## 测试要求
-
-- 未启用 `prometheus` feature 时，helper 不注册 `/metrics`。
-- 启用 `prometheus` feature 且 registry 未初始化时，`/metrics` 返回 `503`。
-- 启用 `prometheus` feature 且 registry 已初始化时，`/metrics` 返回 Prometheus text body。
+测试应验证 feature absence、认证先行、独立实例、正常导出、503、no-store 和导出资源上限。产品仍需覆盖自己的角色、静态配置和认证矩阵。

@@ -25,19 +25,20 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "backend-prometheus")]
-pub mod prometheus;
-
-// One more than the number of enabled backend-* features. The +1 offset keeps the
-// compile-time guard below from degenerating into a comparison against usize's
-// minimum value when every backend is disabled, which would trip
-// clippy::absurd_extreme_comparisons only in that one feature configuration.
-const ENABLED_BACKEND_SLOTS: usize = 1 + cfg!(feature = "backend-prometheus") as usize;
-
-const _: () = assert!(
-    ENABLED_BACKEND_SLOTS <= 2,
-    "aster_forge_metrics allows only one backend-* feature at a time"
-);
+mod instruments;
+mod provider;
+mod shared;
+pub use instruments::*;
+pub use provider::*;
+pub use shared::InfrastructureMetricsRecorder;
+#[cfg(test)]
+mod instance_tests {
+    include!("tests.rs");
+}
+#[cfg(feature = "otlp")]
+mod otlp;
+#[cfg(feature = "otlp")]
+pub use otlp::*;
 
 /// Normalized database backend label used by infrastructure metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +180,18 @@ pub type SharedDbMetricsRecorder = Arc<dyn DbMetricsRecorder>;
     reason = "Default trait methods intentionally ignore metric inputs so products can implement only the signals they collect."
 )]
 pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
+    /// Instance resources for endpoint injection and lifecycle management.
+    fn provider(&self) -> Option<MetricsProvider> {
+        None
+    }
+
+    #[cfg(feature = "runtime-health")]
+    fn record_health(
+        &self,
+        _scope: &'static str,
+        _report: &aster_forge_runtime::SystemHealthReport,
+    ) {
+    }
     /// Records an HTTP request.
     ///
     /// `method` and `route` become metric label values and MUST be low
@@ -277,52 +290,6 @@ impl NoopMetrics {
     }
 }
 
-/// Initializes a concrete metrics backend or falls back to [`NoopMetrics`].
-///
-/// Product crates own concrete exporters and feature flags. This helper only centralizes the
-/// common startup mechanics used by Aster services: try to initialize the product metrics backend,
-/// return the concrete recorder on success, and keep startup working with a no-op recorder on
-/// initialization failure.
-pub fn init_metrics_or_noop<I, B, E, R>(init_metrics: I, build_recorder: B) -> SharedMetricsRecorder
-where
-    I: FnOnce() -> std::result::Result<(), E>,
-    B: FnOnce() -> R,
-    E: std::fmt::Display,
-    R: MetricsRecorder + 'static,
-{
-    match init_metrics() {
-        Ok(()) => {
-            tracing::info!("metrics backend initialized");
-            Arc::new(build_recorder())
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to initialize metrics backend; using noop metrics"
-            );
-            NoopMetrics::arc()
-        }
-    }
-}
-
-/// Initializes the metrics backend selected by enabled Forge features.
-///
-/// Product entrypoints should prefer this helper over selecting a concrete backend directly. If no
-/// backend feature is enabled, or if backend initialization fails, the returned recorder is
-/// [`NoopMetrics`].
-#[must_use]
-pub fn init_configured_or_noop() -> SharedMetricsRecorder {
-    #[cfg(feature = "backend-prometheus")]
-    {
-        prometheus::init_or_noop()
-    }
-
-    #[cfg(not(feature = "backend-prometheus"))]
-    {
-        NoopMetrics::arc()
-    }
-}
-
 /// Kind of metric described by a subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
@@ -349,9 +316,18 @@ pub struct MetricDescriptor {
     pub labels: &'static [&'static str],
     /// Optional histogram buckets.
     pub buckets: &'static [f64],
+    /// UCUM unit, independent of the exporter name.
+    pub unit: &'static str,
 }
 
 impl MetricDescriptor {
+    /// Sets the stable instrument unit without changing the exported name.
+    #[must_use]
+    pub const fn with_unit(mut self, unit: &'static str) -> Self {
+        self.unit = unit;
+        self
+    }
+
     /// Creates a descriptor for a counter metric.
     #[must_use]
     pub const fn counter(
@@ -367,6 +343,7 @@ impl MetricDescriptor {
             kind: MetricKind::Counter,
             labels,
             buckets: &[],
+            unit: "1",
         }
     }
 
@@ -385,6 +362,7 @@ impl MetricDescriptor {
             kind: MetricKind::Gauge,
             labels,
             buckets: &[],
+            unit: "1",
         }
     }
 
@@ -403,6 +381,7 @@ impl MetricDescriptor {
             kind: MetricKind::Histogram,
             labels,
             buckets: &[],
+            unit: "1",
         }
     }
 
@@ -422,6 +401,7 @@ impl MetricDescriptor {
             kind: MetricKind::Histogram,
             labels,
             buckets,
+            unit: "1",
         }
     }
 }
@@ -459,7 +439,7 @@ impl MetricCatalog {
     ///
     /// # Errors
     ///
-    /// Returns [`MetricCatalogError`] when another descriptor has the same subsystem and name.
+    /// Returns [`MetricRegistrationError`] when another descriptor has the same subsystem and name.
     pub fn register(&mut self, descriptor: MetricDescriptor) -> Result<()> {
         if self.descriptors.iter().any(|existing| {
             existing.subsystem == descriptor.subsystem && existing.name == descriptor.name
@@ -500,7 +480,7 @@ pub trait MetricsSubsystem {
     ///
     /// # Errors
     ///
-    /// Returns [`MetricCatalogError`] when the subsystem registers a duplicate metric.
+    /// Returns [`MetricRegistrationError`] when the subsystem registers a duplicate metric.
     fn register_metrics(&self, catalog: &mut MetricCatalog) -> Result<()>;
 }
 
@@ -508,7 +488,7 @@ pub trait MetricsSubsystem {
 ///
 /// # Errors
 ///
-/// Returns [`MetricCatalogError`] when any subsystem registers a duplicate metric.
+/// Returns [`MetricRegistrationError`] when any subsystem registers a duplicate metric.
 pub fn register_subsystems(
     catalog: &mut MetricCatalog,
     subsystems: &[&dyn MetricsSubsystem],
@@ -522,19 +502,6 @@ pub fn register_subsystems(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Default)]
-    struct EnabledMetrics;
-
-    impl DbMetricsRecorder for EnabledMetrics {
-        fn enabled(&self) -> bool {
-            true
-        }
-
-        fn record_db_query(&self, _metric: &DbQueryMetric) {}
-    }
-
-    impl MetricsRecorder for EnabledMetrics {}
 
     struct HttpSubsystem;
 
@@ -605,36 +572,6 @@ mod tests {
             std::time::Duration::from_millis(3),
         );
         assert_eq!(failed.status_label(), "error");
-    }
-
-    #[test]
-    fn init_metrics_or_noop_returns_concrete_recorder_after_successful_init() {
-        let recorder = init_metrics_or_noop(|| Ok::<(), &'static str>(()), || EnabledMetrics);
-
-        assert!(recorder.enabled());
-    }
-
-    #[test]
-    fn init_metrics_or_noop_returns_noop_recorder_after_failed_init() {
-        let recorder = init_metrics_or_noop(|| Err::<(), _>("registry failed"), || EnabledMetrics);
-
-        assert!(!recorder.enabled());
-    }
-
-    #[test]
-    #[cfg(not(feature = "backend-prometheus"))]
-    fn init_configured_or_noop_returns_noop_without_backend_feature() {
-        let recorder = init_configured_or_noop();
-
-        assert!(!recorder.enabled());
-    }
-
-    #[test]
-    #[cfg(feature = "backend-prometheus")]
-    fn init_configured_or_noop_uses_enabled_backend_feature() {
-        let recorder = init_configured_or_noop();
-
-        assert!(recorder.enabled());
     }
 
     #[test]

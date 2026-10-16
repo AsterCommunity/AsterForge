@@ -1,96 +1,97 @@
-//! Actix observability endpoint adapter.
-//!
-//! This crate owns route-level observability glue with Actix and Axum adapters, such as the
-//! Prometheus text exposition endpoint. Metrics recording traits and concrete backend state remain
-//! in `aster_forge_metrics`; product route modules can call these helpers without carrying
-//! backend-specific `#[cfg]` blocks.
-use actix_web::Scope;
+//! Injectable Prometheus resource. Products own its path and authentication middleware.
 
-/// Adds a Prometheus `/metrics` endpoint to an Actix route scope when enabled.
-///
-/// Without the `prometheus` feature this returns the input scope unchanged. Products should call
-/// this unconditionally from their route assembly and let Cargo features decide whether the
-/// endpoint exists.
-pub fn configure_prometheus_route(scope: Scope) -> Scope {
-    #[cfg(feature = "prometheus")]
-    {
-        scope.route("/metrics", actix_web::web::get().to(prometheus_metrics))
-    }
+#[cfg(feature = "prometheus")]
+use actix_web::{HttpRequest, HttpResponse, Resource, http::header, web};
 
-    #[cfg(not(feature = "prometheus"))]
-    {
-        scope
-    }
+/// This resource does not read global state. Missing injection returns 503;
+/// products can wrap the resource so authentication happens before this handler.
+#[cfg(feature = "prometheus")]
+pub fn prometheus_resource(path: &str) -> Resource {
+    web::resource(path).route(web::get().to(prometheus_metrics))
 }
 
 #[cfg(feature = "prometheus")]
-async fn prometheus_metrics() -> actix_web::HttpResponse {
-    if !aster_forge_metrics::prometheus::is_initialized() {
-        tracing::debug!("metrics probe failed because metrics are not initialized");
-        return actix_web::HttpResponse::ServiceUnavailable()
-            .body("metrics registry is not initialized");
-    }
-
-    match aster_forge_metrics::prometheus::export_metrics() {
-        Ok(body) => {
-            tracing::debug!(bytes = body.len(), "metrics probe exported metrics");
-            actix_web::HttpResponse::Ok()
-                .content_type("text/plain; version=0.0.4; charset=utf-8")
-                .body(body)
-        }
-        Err(error) => {
-            tracing::debug!(error = %error, "metrics probe export failed");
-            actix_web::HttpResponse::ServiceUnavailable().body(error)
-        }
+async fn prometheus_metrics(request: HttpRequest) -> HttpResponse {
+    let Some(provider) = request.app_data::<web::Data<aster_forge_metrics::MetricsProvider>>()
+    else {
+        return HttpResponse::ServiceUnavailable()
+            .insert_header((header::CACHE_CONTROL, "no-store"))
+            .body("metrics provider is unavailable");
+    };
+    match provider
+        .export_prometheus(std::time::Duration::from_secs(5))
+        .await
+    {
+        Ok(body) => HttpResponse::Ok()
+            .insert_header((header::CACHE_CONTROL, "no-store"))
+            .content_type("text/plain; version=0.0.4; charset=utf-8")
+            .body(body),
+        Err(_) => HttpResponse::ServiceUnavailable()
+            .insert_header((header::CACHE_CONTROL, "no-store"))
+            .body("metrics export is unavailable"),
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "prometheus"))]
 mod tests {
-    use actix_web::{App, http::StatusCode, test, web};
+    use super::*;
+    use actix_web::{App, http::StatusCode, test};
+    use aster_forge_metrics::{MetricDescriptor, MetricsProvider, ProductCounter};
 
-    use super::configure_prometheus_route;
-
-    #[cfg(not(feature = "prometheus"))]
     #[actix_web::test]
-    async fn prometheus_route_is_not_registered_without_feature() {
-        use actix_web::HttpResponse;
-
-        let app = test::init_service(App::new().service(configure_prometheus_route(
-            web::scope("").route("/healthz", web::get().to(HttpResponse::Ok)),
-        )))
-        .await;
-
-        let health =
-            test::call_service(&app, test::TestRequest::get().uri("/healthz").to_request()).await;
-        assert_eq!(health.status(), StatusCode::OK);
-
-        let metrics =
-            test::call_service(&app, test::TestRequest::get().uri("/metrics").to_request()).await;
-        assert_eq!(metrics.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[cfg(feature = "prometheus")]
-    #[actix_web::test]
-    async fn prometheus_route_exports_text_after_registry_init() {
-        aster_forge_metrics::prometheus::init_metrics()
-            .expect("metrics registry should initialize");
-        let recorder = aster_forge_metrics::prometheus::PrometheusMetricsRecorder;
-        aster_forge_metrics::MetricsRecorder::record_http_request(
-            &recorder, "GET", "/healthz", 200, 0.01,
-        );
-        let app =
-            test::init_service(App::new().service(configure_prometheus_route(web::scope(""))))
-                .await;
-
+    async fn explicit_instance_injection_preserves_status_format_and_no_store() {
+        let app = test::init_service(App::new().service(prometheus_resource("/metrics"))).await;
         let response =
             test::call_service(&app, test::TestRequest::get().uri("/metrics").to_request()).await;
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
 
-        let body = test::read_body(response).await;
-        let body = std::str::from_utf8(&body).expect("metrics body should be utf-8");
-        assert!(body.contains("http_requests_total"));
-        assert!(body.contains("route=\"/healthz\""));
-        assert!(body.contains("process_uptime_seconds"));
+        let provider = MetricsProvider::builder()
+            .with_prometheus()
+            .unwrap()
+            .build()
+            .unwrap();
+        let handle = provider
+            .register_batch(&[MetricDescriptor::counter(
+                "test",
+                "requests_total",
+                "Requests.",
+                &[],
+            )])
+            .unwrap()
+            .remove(0);
+        ProductCounter::from_handle(handle).unwrap().inc(&[], 2);
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(provider.clone()))
+                .service(prometheus_resource("/custom")),
+        )
+        .await;
+        let response =
+            test::call_service(&app, test::TestRequest::get().uri("/custom").to_request()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/plain; version=0.0.4; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert!(
+            String::from_utf8(test::read_body(response).await.to_vec())
+                .unwrap()
+                .contains("test_requests_total 2")
+        );
+        provider
+            .shutdown(std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+        let response =
+            test::call_service(&app, test::TestRequest::get().uri("/custom").to_request()).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

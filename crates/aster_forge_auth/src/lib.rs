@@ -56,3 +56,8 @@ pub use refresh::{
     RefreshTokenService, classify_refresh,
 };
 pub use time::{Clock, FixedClock, SystemClock};
+
+#[cfg(feature = "password")]
+mod password;
+#[cfg(feature = "password")]
+pub use password::*;

@@ -1,16 +1,12 @@
-//! Runtime metrics recorder initialization.
+//! Product feature policy and explicit metrics resource construction.
+use std::sync::Arc;
+use aster_forge_metrics::{MetricsProvider, InfrastructureMetricsRecorder, SharedMetricsRecorder};
 
-use aster_forge_metrics::SharedMetricsRecorder;
-
-/// Creates the runtime metrics recorder for this build.
-pub fn create_metrics_recorder() -> SharedMetricsRecorder {
+pub fn create_metrics_recorder() -> crate::errors::Result<SharedMetricsRecorder> {
+    let builder = MetricsProvider::builder();
     #[cfg(feature = "metrics")]
-    {
-        aster_forge_metrics::init_configured_or_noop()
-    }
-
-    #[cfg(not(feature = "metrics"))]
-    {
-        aster_forge_metrics::NoopMetrics::arc()
-    }
+    let builder = builder.with_prometheus().map_err(|error| crate::errors::AppError::Config(error.to_string()))?;
+    let provider = builder.build().map_err(|error| crate::errors::AppError::Config(error.to_string()))?;
+    if !provider.enabled() { return Ok(aster_forge_metrics::NoopMetrics::arc()); }
+    Ok(Arc::new(InfrastructureMetricsRecorder::new(provider).map_err(|error| crate::errors::AppError::Config(error.to_string()))?))
 }

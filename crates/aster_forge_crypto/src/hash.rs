@@ -367,6 +367,16 @@ fn password_hasher(work_factor: PasswordHashWorkFactor) -> Result<Argon2<'static
     ))
 }
 
+/// Validates a stored verifier without running Argon2 or allocating its work memory.
+///
+/// # Errors
+/// Returns an error for malformed, unsupported or over-budget password verifiers.
+pub fn validate_password_hash(hash: &str, limits: PasswordHashVerificationLimits) -> Result<()> {
+    let parsed =
+        PasswordHash::new(hash).map_err(|_| CryptoError::password_hash("invalid PHC encoding"))?;
+    validate_stored_password_hash(&parsed, limits).map(|_| ())
+}
+
 fn validate_stored_password_hash(
     parsed: &PasswordHash,
     limits: PasswordHashVerificationLimits,

@@ -567,7 +567,7 @@ report.record_metrics("diagnostics", &ProductHealthMetrics(metrics));
 
 这样 Forge 定义稳定的 health report/metrics 语义，并通过 `aster_forge_metrics` 提供可选 backend。产品仓库只负责在入口选择 metrics feature、挂载观测 endpoint，并保持业务 label 低基数。
 
-Drive 和 Yggdrasil 都通过 `aster_forge_metrics/runtime-health` 让 `PrometheusMetricsRecorder` 实现 `aster_forge_runtime::HealthMetricsRecorder`，并在 health service 完成 `Readiness` 或 `Diagnostics` scope 后调用 `SystemHealthReport::record_metrics()`。Prometheus 指标保持低基数：
+新实例接口通过 `aster_forge_metrics/runtime-health` 让 `InfrastructureMetricsRecorder` 实现 `aster_forge_runtime::HealthMetricsRecorder`，并在 health service 完成 `Readiness` 或 `Diagnostics` scope 后调用 `SystemHealthReport::record_metrics()`。Prometheus 指标保持低基数：
 
 - `health_report_status{scope}`：aggregate status，`healthy=0`、`degraded=1`、`unhealthy=2`。
 - `health_report_duration_seconds{scope,status}`：aggregate health run duration。
