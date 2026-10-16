@@ -30,6 +30,20 @@ fn collect_error_info<D: ToSchema>(schemas: &mut Vec<(String, RefOr<Schema>)>) {
         ApiErrorInfo::<D>::schema(),
     ));
     D::schemas(schemas);
+    if std::any::type_name::<D>() != "()" {
+        let diagnostic_name = D::name().into_owned();
+        if !schemas.iter().any(|(name, _)| name == &diagnostic_name) {
+            schemas.push((diagnostic_name, value_schema::<D>()));
+        }
+    }
+}
+
+fn diagnostic_schema<D: ToSchema>() -> RefOr<Schema> {
+    if std::any::type_name::<D>() == "()" {
+        value_schema::<D>()
+    } else {
+        RefOr::Ref(Ref::from_schema_name(D::name()))
+    }
 }
 
 impl<D: ToSchema> ToSchema for ApiErrorInfo<D> {
@@ -48,7 +62,7 @@ impl<D: ToSchema> utoipa::__dev::ComposeSchema for ApiErrorInfo<D> {
         ObjectBuilder::new()
             .property("retryable", bool::schema())
             .required("retryable")
-            .property("diagnostic", value_schema::<D>())
+            .property("diagnostic", diagnostic_schema::<D>())
             .into()
     }
 }
