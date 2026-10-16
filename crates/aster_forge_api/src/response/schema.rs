@@ -24,6 +24,14 @@ fn collect<T: ToSchema>(schemas: &mut Vec<(String, RefOr<Schema>)>) {
     T::schemas(schemas);
 }
 
+fn collect_error_info<D: ToSchema>(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+    schemas.push((
+        format!("ApiErrorInfo_{}", D::name()),
+        ApiErrorInfo::<D>::schema(),
+    ));
+    D::schemas(schemas);
+}
+
 impl<D: ToSchema> ToSchema for ApiErrorInfo<D> {
     fn name() -> Cow<'static, str> {
         Cow::Borrowed("ApiErrorInfo")
@@ -52,7 +60,7 @@ impl<T: ToSchema, C: ToSchema, D: ToSchema> ToSchema for ApiResponse<T, C, D> {
     fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
         T::schemas(schemas);
         collect::<C>(schemas);
-        D::schemas(schemas);
+        collect_error_info::<D>(schemas);
     }
 }
 
@@ -64,7 +72,10 @@ impl<T: ToSchema, C: ToSchema, D: ToSchema> utoipa::__dev::ComposeSchema for Api
             .property("msg", String::schema())
             .required("msg")
             .property("data", value_schema::<T>())
-            .property("error", ApiErrorInfo::<D>::schema())
+            .property(
+                "error",
+                Ref::from_schema_name(format!("ApiErrorInfo_{}", D::name())),
+            )
             .into()
     }
 }
