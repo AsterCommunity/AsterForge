@@ -48,7 +48,7 @@ fn diagnostic_schema<D: ToSchema>() -> RefOr<Schema> {
 
 impl<D: ToSchema> ToSchema for ApiErrorInfo<D> {
     fn name() -> Cow<'static, str> {
-        Cow::Borrowed("ApiErrorInfo")
+        Cow::Owned(format!("ApiErrorInfo_{}", D::name()))
     }
     fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
         D::schemas(schemas);
