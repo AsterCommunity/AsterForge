@@ -149,10 +149,6 @@ impl MetricHandle {
     pub fn kind(&self) -> MetricKind {
         self.inner.descriptor.kind
     }
-    #[must_use]
-    pub fn descriptor(&self) -> MetricDescriptor {
-        self.inner.descriptor
-    }
 
     fn active(&self) -> MetricResult<bool> {
         if self.inner.closed.load(Ordering::Acquire) {
@@ -234,9 +230,6 @@ macro_rules! typed {
                     return Err(MetricError::WrongKind);
                 }
                 Ok(Self { handle })
-            }
-            pub fn handle(&self) -> &MetricHandle {
-                &self.handle
             }
         }
     };

@@ -2,7 +2,7 @@
 //!
 //! Applications often share the same infrastructure metrics while exposing different
 //! product-domain metrics. This crate keeps the common recorder surface small and provides a
-//! registration catalog so each subsystem can describe the metrics it owns without forcing every
+//! instance-owned provider so each subsystem can register the metrics it owns without forcing every
 //! product-specific method into a single shared trait. Concrete backends are selected once at the
 //! product entrypoint through Forge feature flags, so business modules record metric semantics
 //! without depending on exporter crates.
@@ -406,119 +406,9 @@ impl MetricDescriptor {
     }
 }
 
-/// Errors returned by metrics registration.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum MetricRegistrationError {
-    /// A subsystem tried to register the same metric name twice.
-    #[error("duplicate metric registration: {subsystem}.{name}")]
-    DuplicateMetric {
-        /// Owning subsystem name.
-        subsystem: &'static str,
-        /// Duplicate metric name.
-        name: &'static str,
-    },
-}
-
-/// Result type returned by metrics registration helpers.
-pub type Result<T> = std::result::Result<T, MetricRegistrationError>;
-
-/// Catalog of metric descriptors registered by application subsystems.
-#[derive(Debug, Default)]
-pub struct MetricCatalog {
-    descriptors: Vec<MetricDescriptor>,
-}
-
-impl MetricCatalog {
-    /// Creates an empty catalog.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registers one metric descriptor.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MetricRegistrationError`] when another descriptor has the same subsystem and name.
-    pub fn register(&mut self, descriptor: MetricDescriptor) -> Result<()> {
-        if self.descriptors.iter().any(|existing| {
-            existing.subsystem == descriptor.subsystem && existing.name == descriptor.name
-        }) {
-            return Err(MetricRegistrationError::DuplicateMetric {
-                subsystem: descriptor.subsystem,
-                name: descriptor.name,
-            });
-        }
-
-        self.descriptors.push(descriptor);
-        Ok(())
-    }
-
-    /// Returns all descriptors in registration order.
-    #[must_use]
-    pub fn descriptors(&self) -> &[MetricDescriptor] {
-        &self.descriptors
-    }
-
-    /// Returns descriptors owned by `subsystem`.
-    pub fn subsystem<'a>(
-        &'a self,
-        subsystem: &'a str,
-    ) -> impl Iterator<Item = &'a MetricDescriptor> + 'a {
-        self.descriptors
-            .iter()
-            .filter(move |descriptor| descriptor.subsystem == subsystem)
-    }
-}
-
-/// A subsystem that owns and registers a set of metric descriptors.
-pub trait MetricsSubsystem {
-    /// Stable subsystem name.
-    fn name(&self) -> &'static str;
-
-    /// Registers metric descriptors owned by this subsystem.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MetricRegistrationError`] when the subsystem registers a duplicate metric.
-    fn register_metrics(&self, catalog: &mut MetricCatalog) -> Result<()>;
-}
-
-/// Registers every subsystem into one catalog.
-///
-/// # Errors
-///
-/// Returns [`MetricRegistrationError`] when any subsystem registers a duplicate metric.
-pub fn register_subsystems(
-    catalog: &mut MetricCatalog,
-    subsystems: &[&dyn MetricsSubsystem],
-) -> Result<()> {
-    for subsystem in subsystems {
-        subsystem.register_metrics(catalog)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct HttpSubsystem;
-
-    impl MetricsSubsystem for HttpSubsystem {
-        fn name(&self) -> &'static str {
-            "http"
-        }
-
-        fn register_metrics(&self, catalog: &mut MetricCatalog) -> Result<()> {
-            catalog.register(MetricDescriptor::histogram(
-                self.name(),
-                "request_duration_seconds",
-                "HTTP request duration.",
-                &["method", "route", "status"],
-            ))
-        }
-    }
 
     #[test]
     fn noop_metrics_reports_disabled() {
@@ -587,65 +477,5 @@ mod tests {
         assert_eq!(descriptor.kind, MetricKind::Histogram);
         assert_eq!(descriptor.labels, &["kind"]);
         assert_eq!(descriptor.buckets, &[0.1, 1.0]);
-    }
-
-    #[test]
-    fn catalog_registers_descriptors_in_order() {
-        let mut catalog = MetricCatalog::new();
-
-        catalog
-            .register(MetricDescriptor::counter(
-                "auth",
-                "events_total",
-                "Authentication events.",
-                &["action", "status"],
-            ))
-            .expect("auth metric should register");
-        catalog
-            .register(MetricDescriptor::gauge(
-                "tasks",
-                "pending",
-                "Pending background tasks.",
-                &[],
-            ))
-            .expect("task metric should register");
-
-        assert_eq!(catalog.descriptors().len(), 2);
-        assert_eq!(catalog.descriptors()[0].name, "events_total");
-        assert_eq!(catalog.subsystem("tasks").count(), 1);
-    }
-
-    #[test]
-    fn catalog_rejects_duplicate_subsystem_metric_names() {
-        let mut catalog = MetricCatalog::new();
-        let first = MetricDescriptor::counter("auth", "events_total", "first", &[]);
-        let duplicate = MetricDescriptor::counter("auth", "events_total", "second", &["status"]);
-
-        catalog
-            .register(first)
-            .expect("first metric should register");
-        let error = catalog
-            .register(duplicate)
-            .expect_err("duplicate metric should be rejected");
-
-        assert_eq!(
-            error,
-            MetricRegistrationError::DuplicateMetric {
-                subsystem: "auth",
-                name: "events_total"
-            }
-        );
-    }
-
-    #[test]
-    fn register_subsystems_delegates_to_each_subsystem() {
-        let mut catalog = MetricCatalog::new();
-
-        register_subsystems(&mut catalog, &[&HttpSubsystem])
-            .expect("subsystem metrics should register");
-
-        assert_eq!(catalog.descriptors().len(), 1);
-        assert_eq!(catalog.descriptors()[0].subsystem, "http");
-        assert_eq!(catalog.descriptors()[0].kind, MetricKind::Histogram);
     }
 }
