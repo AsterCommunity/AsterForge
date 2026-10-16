@@ -565,10 +565,12 @@ dependencies = [
  "aster_forge_db",
  "aster_forge_mail",
  "aster_forge_runtime",
+ "aster_forge_test",
  "chrono",
  "sea-orm",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

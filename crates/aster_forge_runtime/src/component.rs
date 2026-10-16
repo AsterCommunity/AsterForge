@@ -13,8 +13,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
+
+use futures::FutureExt;
 
 use crate::{
     HealthCheckDescriptor, HealthCheckOptions, HealthCheckRegistry, HealthCheckScope,
@@ -440,13 +443,22 @@ impl RuntimeComponentRegistry {
     /// descriptor metadata and do not block execution. Cycles are reported as
     /// warnings and the registry still makes best-effort progress without
     /// executing a phase more than once.
+    /// Phase construction and polling panics become failed phase reports, so later drain and
+    /// dependency-close phases still run. Panic payloads are not copied into the public report.
     pub async fn shutdown(&mut self) -> ShutdownReport {
         let mut reports = Vec::with_capacity(self.shutdown.len());
         for index in self.shutdown_order() {
             let registered = &mut self.shutdown[index];
             tracing::info!(phase = registered.phase_name, "starting shutdown phase");
             let started_at = std::time::Instant::now();
-            let future = (registered.phase)();
+            let future = async {
+                // Defer callback construction inside the unwind boundary as well as polling.
+                // A product lifecycle hook must not prevent the owned audit writer from joining.
+                AssertUnwindSafe(async { (registered.phase)().await })
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|_| Err("shutdown phase panicked".to_owned()))
+            };
             let status = match registered.timeout {
                 Some(timeout) => match tokio::time::timeout(timeout, future).await {
                     Ok(Ok(())) => ShutdownPhaseStatus::Succeeded,

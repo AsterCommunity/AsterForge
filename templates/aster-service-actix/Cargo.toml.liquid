@@ -139,7 +139,7 @@ actix-web.workspace = true
 aster_forge_alloc.workspace = true
 aster_forge_api.workspace = true
 aster_forge_api_docs_macros.workspace = true
-aster_forge_audit = { workspace = true, features = ["mail-outbox-dependency"] }
+aster_forge_audit = { workspace = true, features = ["db-writer", "mail-outbox-dependency"] }
 aster_forge_cache = { workspace = true, features = ["memory", "redis", "runtime-component"] }
 aster_forge_config = { workspace = true, features = ["redis-pubsub"] }
 aster_forge_db = { workspace = true, features = ["runtime-component", "mail-outbox"] }

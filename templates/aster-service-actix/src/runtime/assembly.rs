@@ -56,7 +56,7 @@ pub async fn run(state: crate::runtime::AppState) -> std::io::Result<()> {
             app_state.metrics.clone(),
         ))
         .component(crate::services::mail_outbox_service::runtime::mail_runtime_component(app_state))
-        .component(crate::services::audit_service::runtime::audit_runtime_component())
+        .component(crate::services::audit_service::runtime::audit_runtime_component(app_state))
         .component(crate::db::runtime::database_component(
             app_state.db_handles.clone(),
         ))

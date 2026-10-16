@@ -19,7 +19,7 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 - Component names, dependencies, and phases are cross-crate contracts. When changing them, inspect the runtime, mail, DB, and consumer graphs together.
 - Clearly distinguish best-effort lifecycle audit from mandatory flush failure policy. Do not collapse them into one error class.
 - Queue overflow, delayed flush, direct-write fallback, and shutdown flush must not lose records or create uncontrolled duplication.
-- The global manager is a compatibility entry point, not an invitation to expand global state. Prefer explicitly passed resources for new APIs.
+- Writers must be explicitly owned, started, drained, and joined. Global manager APIs have been removed; do not restore global state or implicit pre-start fallback.
 
 ## Validation
 
@@ -29,4 +29,4 @@ cargo test -p aster_forge_audit --all-features
 cargo clippy -p aster_forge_audit --all-targets --all-features -- -D warnings
 ```
 
-Cover uninitialized fallback, batching, delay, overflow, flush failures, component dependency order, and the DB/mail feature combinations.
+Cover pre-start admission rejection, batching, delay, overflow, retained failures, unknown commits, cancellation, drain deadlines, component dependency order, runtime error propagation, and the DB/mail feature combinations.

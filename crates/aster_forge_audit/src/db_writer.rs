@@ -1,31 +1,44 @@
-//! Buffered audit-log persistence backed by [`aster_forge_db`].
+//! Explicitly owned audit persistence using the product-neutral DB store.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
-use aster_forge_db::{AuditLogCreate, create_audit_log_requests, create_audit_log_row};
+use aster_forge_db::{AuditLogCreate, DbError, create_audit_log_requests};
+use aster_forge_runtime::{
+    BufferFlushError, BufferStopReport, BufferedBatchConfig, BufferedWriterEvent,
+    BufferedWriterSnapshot, BufferedWriterState, ManagedBatchWriter, OverflowPolicy,
+    RecordAdmission, RecordError, RuntimeComponentBundle, RuntimeComponentBundleRegistration,
+    RuntimeComponentKind, RuntimeComponentRegistry, StartupPhaseFailurePolicy, WriteFailure,
+    WriteFailureClass, runtime_component,
+};
 use sea_orm::DatabaseConnection;
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 
-/// Default number of audit records retained in memory before direct-write fallback.
+use crate::{AUDIT_LOGS_COMPONENT, AUDIT_MANAGER_COMPONENT, AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE};
+
+/// Default queue capacity; an additional single overflow record can be pending.
 pub const DEFAULT_AUDIT_LOG_QUEUE_CAPACITY: usize = 4096;
-/// Default number of audit records that triggers an immediate batch flush.
+/// Default immediate-flush threshold.
 pub const DEFAULT_AUDIT_LOG_BATCH_SIZE: usize = 100;
-/// Default delay before a partial audit batch is flushed.
+/// Default partial-batch delay.
 pub const DEFAULT_AUDIT_LOG_DELAYED_FLUSH_AFTER: Duration = Duration::from_secs(1);
+/// Explicit writer startup phase, before product lifecycle audit hooks.
+pub const AUDIT_WRITER_START_PHASE: &str = "audit_writer_start";
 
-/// Buffering policy for [`AuditLogManager`].
+/// Product-neutral audit buffering configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuditLogBufferConfig {
-    /// Maximum records retained in memory before overflow records are written directly.
+    /// Maximum unacknowledged queued records, including an in-flight batch; zero becomes one.
     pub queue_capacity: usize,
-    /// Number of queued records that triggers an immediate batch flush.
+    /// Immediate-flush threshold and maximum transaction chunk size; zero becomes one.
     pub batch_size: usize,
-    /// Delay before a partial batch is flushed.
+    /// Maximum wait from first queued record before a partial batch is attempted.
     pub delayed_flush_after: Duration,
 }
 
 impl AuditLogBufferConfig {
-    /// Creates an audit-log buffering policy.
+    /// Creates bounded audit buffering settings.
     #[must_use]
     pub const fn new(
         queue_capacity: usize,
@@ -50,323 +63,288 @@ impl Default for AuditLogBufferConfig {
     }
 }
 
-static GLOBAL_AUDIT_LOG_MANAGER: OnceLock<Arc<AuditLogManager>> = OnceLock::new();
-
-/// Best-effort buffered writer for Forge audit-log rows.
-pub struct AuditLogManager {
-    writer: Arc<aster_forge_runtime::BufferedBatchWriter<AuditLogCreate>>,
+/// Caller-owned audit writer. Construction starts no workers, timers, or database operations.
+///
+/// Queued admission acknowledges memory only. Mandatory audit should use the DB store in the
+/// business transaction, or explicitly await `flush` and map failures at the product boundary.
+/// A failed or interrupted write remains available through `unconfirmed`; never replay an unknown
+/// commit without reconciling it first. Stop/join this writer before closing the database.
+pub struct AuditWriter {
+    writer: ManagedBatchWriter<AuditLogCreate, DbError>,
 }
 
-impl AuditLogManager {
-    /// Creates a manager with the default buffering policy.
+impl AuditWriter {
+    /// Uses default bounds and a bounded direct-overflow lane.
     #[must_use]
     pub fn new(db: DatabaseConnection) -> Self {
-        Self::with_config(db, AuditLogBufferConfig::default())
+        Self::with_config(
+            db,
+            AuditLogBufferConfig::default(),
+            OverflowPolicy::DirectWrite,
+            None,
+        )
     }
 
-    /// Creates a manager with a caller-provided buffering policy.
+    /// Configures overflow and optional bounded event delivery. Observer code is never invoked
+    /// by this writer; a slow, panicking, or absent event consumer cannot block persistence.
     #[must_use]
-    pub fn with_config(db: DatabaseConnection, config: AuditLogBufferConfig) -> Self {
-        let batch_size = config.batch_size.max(1);
-        let batch_db = db.clone();
-        let single_db = db;
-        let writer = aster_forge_runtime::BufferedBatchWriter::new(
-            aster_forge_runtime::BufferedBatchConfig::new(
-                config.queue_capacity.max(1),
-                batch_size,
+    pub fn with_config(
+        db: DatabaseConnection,
+        config: AuditLogBufferConfig,
+        overflow: OverflowPolicy,
+        events: Option<mpsc::Sender<BufferedWriterEvent>>,
+    ) -> Self {
+        let writer = ManagedBatchWriter::new(
+            BufferedBatchConfig::new(
+                config.queue_capacity,
+                config.batch_size,
                 config.delayed_flush_after,
-                "audit_log",
             ),
-            move |batch| {
-                let db = batch_db.clone();
-                async move { write_audit_batch(&db, batch, batch_size).await }
-            },
-            move |request| {
-                let db = single_db.clone();
-                async move { write_audit_log_direct(&db, request).await }
+            overflow,
+            events,
+            move |requests: Vec<AuditLogCreate>| {
+                let db = db.clone();
+                async move {
+                    // A single transaction per chunk makes failure atomic and exposes uncertain
+                    // commit outcomes. Disable internal retries: the owner decides whether to retry.
+                    let retry = aster_forge_db::retry::RetryConfig {
+                        max_retries: 0,
+                        ..aster_forge_db::retry::RetryConfig::deadlock()
+                    };
+                    aster_forge_db::transaction::with_transaction_retry(
+                        &db,
+                        &retry,
+                        move |txn| {
+                            let requests = requests.clone();
+                            Box::pin(async move { create_audit_log_requests(txn, requests).await })
+                        },
+                        DbError::is_retryable,
+                    )
+                    .await
+                    .map_err(classify_failure)
+                }
             },
         );
-        Self {
-            writer: Arc::new(writer),
-        }
+        Self { writer }
     }
 
-    /// Queues an audit record, falling back to a direct write if the queue is full.
-    pub async fn record(&self, request: AuditLogCreate) {
-        self.writer.record(request).await;
+    /// Starts the owned worker exactly once; normally called by the runtime component.
+    ///
+    /// # Errors
+    /// Returns the current state when already started, draining, or stopped.
+    pub async fn start(&self) -> Result<(), BufferedWriterState> {
+        self.writer.start().await
     }
-
-    /// Flushes all currently buffered audit records.
-    pub async fn flush(&self) {
-        self.writer.flush().await;
+    /// Admits an audit record. `Queued` acknowledges memory only; `DirectPersisted` acknowledges
+    /// just this overflow record. A cancelled direct waiter does not revoke accepted admission.
+    ///
+    /// # Errors
+    /// Rejected records are returned. Direct failures retain the accepted record in this writer.
+    pub async fn record(
+        &self,
+        request: AuditLogCreate,
+    ) -> Result<RecordAdmission, RecordError<AuditLogCreate, DbError>> {
+        self.writer.record(request).await
     }
-
-    /// Cancels delayed flush tasks. Call [`AuditLogManager::flush`] afterwards on shutdown.
-    pub fn cancel(&self) {
-        self.writer.cancel();
+    /// Atomically closes admission while keeping accepted records available for drain.
+    /// Call after all product producers and the server-shutdown audit hook have finished.
+    pub fn begin_drain(&self) {
+        self.writer.begin_drain();
+    }
+    /// Awaits acknowledged persistence until the caller deadline without closing admission.
+    /// Failed records stay in memory; cancelling this future leaves persistence owned by the worker.
+    ///
+    /// # Errors
+    /// Returns lifecycle, original classified persistence, or deadline errors.
+    pub async fn flush(&self, deadline: Instant) -> Result<(), BufferFlushError<DbError>> {
+        self.writer.flush(deadline).await
+    }
+    /// Closes admission, attempts drain, then cancels and joins the worker before returning.
+    /// Inspect remaining counts/failures before deciding product exit behavior. Repeated and
+    /// concurrent calls are safe; database handles must remain open until this completes.
+    pub async fn stop(&self, deadline: Instant) -> BufferStopReport<DbError> {
+        self.writer.stop(deadline).await
+    }
+    /// Explicitly resumes only retry-safe failures; unknown commits and permanent failures stay
+    /// blocked. Does not restart a stopped writer or silently replay retained records.
+    pub fn retry_failed(&self) {
+        self.writer.retry_failed();
+    }
+    /// Returns per-instance state, acknowledgment counters, and original classified failures.
+    #[must_use]
+    pub fn snapshot(&self) -> BufferedWriterSnapshot<DbError> {
+        self.writer.snapshot()
+    }
+    /// Copies unacknowledged records for product-controlled reconciliation. Stop the writer
+    /// first for a stable recovery snapshot; these records must not be assumed absent from DB.
+    #[must_use]
+    pub fn unconfirmed(&self) -> Vec<AuditLogCreate> {
+        self.writer.unconfirmed()
     }
 }
 
-/// Initializes the process-global audit manager.
-///
-/// Returns `true` when this call installed the manager and `false` when a manager was already
-/// initialized.
-pub fn init_global_audit_log_manager(db: DatabaseConnection) -> bool {
-    let installed = GLOBAL_AUDIT_LOG_MANAGER
-        .set(Arc::new(AuditLogManager::new(db)))
-        .is_ok();
-    if !installed {
-        tracing::warn!("global audit log manager is already initialized; ignoring");
-    }
-    installed
-}
-
-/// Returns the process-global audit manager when initialized.
-pub fn global_audit_log_manager() -> Option<&'static Arc<AuditLogManager>> {
-    GLOBAL_AUDIT_LOG_MANAGER.get()
-}
-
-/// Records through the global manager, or writes directly through `fallback_db` before startup.
-pub async fn record_audit_log(fallback_db: &DatabaseConnection, request: AuditLogCreate) {
-    if let Some(manager) = global_audit_log_manager() {
-        manager.record(request).await;
+fn classify_failure(error: DbError) -> WriteFailure<DbError> {
+    let class = if error.commit_outcome_is_unknown() {
+        WriteFailureClass::UnknownCommit
+    } else if error.is_retryable() {
+        WriteFailureClass::Retryable
     } else {
-        write_audit_log_direct(fallback_db, request).await;
-    }
+        WriteFailureClass::Permanent
+    };
+    WriteFailure::new(class, error)
 }
 
-/// Flushes the process-global audit manager when initialized.
-pub async fn flush_global_audit_log_manager() {
-    if let Some(manager) = global_audit_log_manager() {
-        manager.flush().await;
-    }
+/// Registers explicit writer startup and drain/stop on the existing audit graph.
+///
+/// Register this bundle BEFORE lifecycle audit hooks so startup can record through the writer.
+/// `audit_manager` stops after `audit_logs` (and its producer/mail dependencies); database close
+/// must depend on `AUDIT_MANAGER_COMPONENT`. The timeout belongs to the writer, so the runtime
+/// must not externally time out this phase before it joins its worker.
+/// Drain failures are reported as failed runtime phases, independently of lifecycle-hook policy.
+/// An unrepresentable timeout stops immediately and reports a configuration error after joining.
+pub fn audit_writer_component(
+    writer: Arc<AuditWriter>,
+    drain_timeout: Duration,
+) -> RuntimeComponentBundleRegistration<impl RuntimeComponentBundle> {
+    runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+        let startup_writer = writer.clone();
+        registry
+            .component(AUDIT_MANAGER_COMPONENT)
+            .kind(RuntimeComponentKind::Product)
+            .depends_on(AUDIT_LOGS_COMPONENT)
+            .startup(
+                AUDIT_WRITER_START_PHASE,
+                StartupPhaseFailurePolicy::Required,
+                move || {
+                    let writer = startup_writer.clone();
+                    async move {
+                        writer
+                            .start()
+                            .await
+                            .map_err(|state| format!("audit writer cannot start from {state:?}"))
+                    }
+                },
+            )
+            .shutdown(AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE, None, move || {
+                let writer = writer.clone();
+                async move { stop_writer(&writer, drain_timeout).await }
+            });
+    })
 }
 
-/// Cancels delayed writes and flushes the process-global audit manager when initialized.
-pub async fn shutdown_global_audit_log_manager() {
-    if let Some(manager) = global_audit_log_manager() {
-        manager.cancel();
-        manager.flush().await;
+// The component's timeout is internal: dropping an externally timed phase could close the
+// database while its worker is still alive. Even an unrepresentable deadline must stop/join.
+async fn stop_writer(writer: &AuditWriter, timeout: Duration) -> Result<(), String> {
+    let now = Instant::now();
+    let deadline = now.checked_add(timeout);
+    let report = writer.stop(deadline.unwrap_or(now)).await;
+    let remaining = report.snapshot.queued + report.snapshot.direct_pending;
+    if deadline.is_none() {
+        return Err(format!(
+            "audit drain timeout exceeds clock range; remaining={remaining}; worker joined, database dependency may close"
+        ));
     }
+    if remaining == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "audit drain incomplete: remaining={remaining}, deadline_elapsed={}, batch_failure={:?}, direct_failure={:?}; worker joined, database dependency may close; reconcile retained records before replay",
+        report.deadline_elapsed, report.snapshot.batch_failure, report.snapshot.direct_failure
+    ))
 }
 
-/// Writes one audit record directly, logging persistence failures as best-effort warnings.
-pub async fn write_audit_log_direct(db: &DatabaseConnection, request: AuditLogCreate) {
-    if let Err(error) = create_audit_log_row(db, request).await {
-        tracing::warn!(%error, "failed to write audit log");
-    }
+/// Composes owned writer startup, product lifecycle hooks, and mandatory shutdown drain.
+///
+/// Unlike a manual collection of hooks, this bundle always registers writer startup first.
+/// Lifecycle records keep their product-defined semantics and error policy. With
+/// `mail-outbox-dependency`, mail drain finishes before the shutdown record is admitted.
+/// Do not also register `audit_component`/`audit_manager_component`, which own the same phase.
+pub fn audit_component_with_writer<T, StartFn, StartFut, ShutdownFn, ShutdownFut>(
+    resources: T,
+    writer: Arc<AuditWriter>,
+    drain_timeout: Duration,
+    record_server_start: StartFn,
+    record_server_shutdown: ShutdownFn,
+) -> RuntimeComponentBundleRegistration<impl RuntimeComponentBundle>
+where
+    T: Clone + Send + 'static,
+    StartFn: FnOnce(T) -> StartFut + Send + Sync + 'static,
+    StartFut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    ShutdownFn: FnOnce(T) -> ShutdownFut + Send + Sync + 'static,
+    ShutdownFut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    audit_component_with_writer_after(
+        resources,
+        writer,
+        drain_timeout,
+        crate::DEFAULT_SERVER_SHUTDOWN_AUDIT_DEPENDENCIES,
+        record_server_start,
+        record_server_shutdown,
+    )
 }
 
-async fn write_audit_batch(db: &DatabaseConnection, batch: Vec<AuditLogCreate>, batch_size: usize) {
-    let total = batch.len();
-    let mut requests = batch.into_iter();
-    loop {
-        let chunk = requests.by_ref().take(batch_size).collect::<Vec<_>>();
-        if chunk.is_empty() {
-            break;
-        }
-
-        let count = chunk.len();
-        if let Err(error) = create_audit_log_requests(db, chunk).await {
-            tracing::warn!(count, total, %error, "failed to write audit log batch");
-        }
-    }
+/// Owned audit bundle with explicit producer dependencies, for example a follower with tasks
+/// but no mail outbox. Writer startup still precedes product hooks; stop follows every declared
+/// producer. Use this rather than registering placeholder components to satisfy default edges.
+pub fn audit_component_with_writer_after<T, StartFn, StartFut, ShutdownFn, ShutdownFut>(
+    resources: T,
+    writer: Arc<AuditWriter>,
+    drain_timeout: Duration,
+    shutdown_dependencies: &'static [&'static str],
+    record_server_start: StartFn,
+    record_server_shutdown: ShutdownFn,
+) -> RuntimeComponentBundleRegistration<impl RuntimeComponentBundle>
+where
+    T: Clone + Send + 'static,
+    StartFn: FnOnce(T) -> StartFut + Send + Sync + 'static,
+    StartFut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    ShutdownFn: FnOnce(T) -> ShutdownFut + Send + Sync + 'static,
+    ShutdownFut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    let owner = audit_writer_component(writer, drain_timeout);
+    let start = crate::server_start_audit_component(resources.clone(), record_server_start);
+    let shutdown = crate::server_shutdown_audit_component_after(
+        resources,
+        shutdown_dependencies,
+        record_server_shutdown,
+    );
+    runtime_component(move |registry: &mut RuntimeComponentRegistry| {
+        registry
+            .register_bundle(owner)
+            .register_bundle(start)
+            .register_bundle(shutdown);
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use super::*;
+    use aster_forge_db::DatabaseErrorKind;
+    use aster_forge_runtime::WriteFailureCause;
 
-    use aster_forge_db::{AuditLogCreate, audit_log};
-    use chrono::Utc;
-    use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait};
-
-    use super::{
-        AuditLogBufferConfig, AuditLogManager, DEFAULT_AUDIT_LOG_BATCH_SIZE,
-        DEFAULT_AUDIT_LOG_QUEUE_CAPACITY,
-    };
-
-    async fn test_db() -> DatabaseConnection {
-        let db = sea_orm::Database::connect("sqlite::memory:")
-            .await
-            .expect("audit writer test database should connect");
-        let backend = db.get_database_backend();
-        let create_table = aster_forge_db::create_audit_logs_table(backend);
-        db.execute(&create_table)
-            .await
-            .expect("audit writer test table should be created");
-        db
-    }
-
-    fn audit_request(index: i64) -> AuditLogCreate {
-        AuditLogCreate {
-            user_id: 42,
-            action: "file_upload".to_string(),
-            entity_type: "file".to_string(),
-            entity_id: Some(index),
-            entity_name: Some(format!("file-{index}.txt")),
-            details: None,
-            ip_address: Some("127.0.0.1".to_string()),
-            user_agent: Some("audit-writer-test".to_string()),
-            created_at: Utc::now(),
-        }
-    }
-
-    async fn audit_log_count(db: &DatabaseConnection) -> u64 {
-        audit_log::Entity::find()
-            .count(db)
-            .await
-            .expect("audit writer count query should succeed")
-    }
-
-    async fn wait_for_audit_log_count(db: &DatabaseConnection, expected: u64) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let current = audit_log_count(db).await;
-            if current == expected {
-                return;
-            }
-            assert!(
-                current < expected,
-                "audit count exceeded {expected}: {current}"
-            );
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for audit count {expected}; last count was {current}"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    }
-
-    fn test_manager(db: DatabaseConnection, delayed_flush_after: Duration) -> AuditLogManager {
-        AuditLogManager::with_config(
-            db,
-            AuditLogBufferConfig::new(
-                DEFAULT_AUDIT_LOG_QUEUE_CAPACITY,
-                DEFAULT_AUDIT_LOG_BATCH_SIZE,
-                delayed_flush_after,
-            ),
-        )
-    }
-
-    #[tokio::test]
-    async fn flushes_threshold_batch() {
-        let db = test_db().await;
-        let manager = test_manager(db.clone(), Duration::from_secs(5));
-        let batch_size = i64::try_from(DEFAULT_AUDIT_LOG_BATCH_SIZE)
-            .expect("the fixed audit batch size should fit in i64");
-
-        for index in 0..batch_size {
-            manager.record(audit_request(index)).await;
-        }
-
-        wait_for_audit_log_count(&db, DEFAULT_AUDIT_LOG_BATCH_SIZE as u64).await;
-        manager.cancel();
-    }
-
-    #[tokio::test]
-    async fn flushes_partial_batch_after_delay() {
-        let db = test_db().await;
-        let manager = test_manager(db.clone(), Duration::from_millis(20));
-
-        for index in 0..3 {
-            manager.record(audit_request(index)).await;
-        }
-
-        wait_for_audit_log_count(&db, 3).await;
-        manager.cancel();
-    }
-
-    #[tokio::test]
-    async fn partial_batch_waits_for_configured_delay() {
-        let db = test_db().await;
-        let manager = test_manager(db.clone(), Duration::from_millis(120));
-
-        manager.record(audit_request(1)).await;
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        assert_eq!(audit_log_count(&db).await, 0);
-
-        wait_for_audit_log_count(&db, 1).await;
-        manager.cancel();
-    }
-
-    #[tokio::test]
-    async fn cancelled_shutdown_flushes_buffer() {
-        let db = test_db().await;
-        let manager = test_manager(db.clone(), Duration::from_secs(5));
-
-        manager.record(audit_request(1)).await;
-        manager.cancel();
-        manager.flush().await;
-
-        assert_eq!(audit_log_count(&db).await, 1);
-    }
-
-    #[tokio::test]
-    async fn manual_flush_allows_later_delayed_flush() {
-        let db = test_db().await;
-        let manager = test_manager(db.clone(), Duration::from_millis(20));
-
-        manager.record(audit_request(1)).await;
-        manager.flush().await;
-        assert_eq!(audit_log_count(&db).await, 1);
-
-        manager.record(audit_request(2)).await;
-        wait_for_audit_log_count(&db, 2).await;
-        manager.cancel();
-    }
-
-    #[tokio::test]
-    async fn cancel_stops_delayed_flush_until_explicit_flush() {
-        let db = test_db().await;
-        let manager = test_manager(db.clone(), Duration::from_millis(20));
-
-        manager.record(audit_request(1)).await;
-        manager.cancel();
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        assert_eq!(audit_log_count(&db).await, 0);
-
-        manager.flush().await;
-        assert_eq!(audit_log_count(&db).await, 1);
-    }
-
-    #[tokio::test]
-    async fn overflow_writes_extra_record_directly_then_flushes_buffer() {
-        let db = test_db().await;
-        let manager = Arc::new(test_manager(db.clone(), Duration::from_secs(5)));
-        let flush_guard = manager.writer.lock_flush_for_test().await;
-        let queue_capacity = i64::try_from(DEFAULT_AUDIT_LOG_QUEUE_CAPACITY)
-            .expect("the fixed audit queue capacity should fit in i64");
-
-        for index in 0..queue_capacity {
-            manager.record(audit_request(index)).await;
-        }
-        manager.record(audit_request(10_000)).await;
-
-        assert_eq!(audit_log_count(&db).await, 1);
-        drop(flush_guard);
-
-        wait_for_audit_log_count(&db, (DEFAULT_AUDIT_LOG_QUEUE_CAPACITY + 1) as u64).await;
-        manager.cancel();
-    }
-
-    #[tokio::test]
-    async fn delayed_batch_follows_a_pending_immediate_flush() {
-        let db = test_db().await;
-        let manager = Arc::new(test_manager(db.clone(), Duration::from_millis(20)));
-        let flush_guard = manager.writer.lock_flush_for_test().await;
-        let batch_size = i64::try_from(DEFAULT_AUDIT_LOG_BATCH_SIZE)
-            .expect("the fixed audit batch size should fit in i64");
-
-        for index in 0..batch_size {
-            manager.record(audit_request(index)).await;
-        }
-        manager.record(audit_request(batch_size)).await;
-        assert_eq!(audit_log_count(&db).await, 0);
-
-        drop(flush_guard);
-        wait_for_audit_log_count(&db, (DEFAULT_AUDIT_LOG_BATCH_SIZE + 1) as u64).await;
-        manager.cancel();
+    #[test]
+    fn retains_native_classification_and_unknown_commit_has_priority() {
+        let retry = classify_failure(DbError::database_operation_classified(
+            "deadlock",
+            DatabaseErrorKind::Deadlock,
+        ));
+        assert_eq!(retry.class, WriteFailureClass::Retryable);
+        let unknown = classify_failure(DbError::commit_outcome_unknown(
+            "response lost",
+            Some(DatabaseErrorKind::Deadlock),
+        ));
+        assert_eq!(unknown.class, WriteFailureClass::UnknownCommit);
+        let WriteFailureCause::Persistence(error) = unknown.cause else {
+            panic!("original error missing")
+        };
+        assert!(error.commit_outcome_is_unknown());
+        assert_eq!(
+            error.database_error_kind(),
+            Some(DatabaseErrorKind::Deadlock)
+        );
+        assert_eq!(
+            classify_failure(DbError::non_retryable("invalid record")).class,
+            WriteFailureClass::Permanent
+        );
     }
 }
