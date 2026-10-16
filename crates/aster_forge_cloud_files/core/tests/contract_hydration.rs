@@ -632,7 +632,10 @@ async fn range_beyond_eof_is_rejected_before_backend_work() {
         HydrationError::Backend(backend_error)
             if backend_error.kind() == CloudBackendErrorKind::InvalidRequest
     ));
-    assert!(backend.requests().is_empty());
+    assert_eq!(
+        backend.requests(),
+        [] as [aster_forge_cloud_files_core::ContentReadRequest; 0]
+    );
 }
 
 #[tokio::test]
@@ -1140,7 +1143,10 @@ async fn cancellation_before_poll_never_starts_backend_work() {
         HydrationCancellationOutcome::AlreadyCancelled
     );
     assert_eq!(waiter.wait().await, Err(HydrationError::Cancelled));
-    assert!(backend.requests().is_empty());
+    assert_eq!(
+        backend.requests(),
+        [] as [aster_forge_cloud_files_core::ContentReadRequest; 0]
+    );
 }
 
 #[tokio::test]
@@ -1175,7 +1181,10 @@ async fn dropping_unpolled_waiter_releases_work_and_next_request_starts_fresh() 
         .request(request.clone())
         .expect("abandoned waiter should register");
     drop(abandoned);
-    assert!(backend.requests().is_empty());
+    assert_eq!(
+        backend.requests(),
+        [] as [aster_forge_cloud_files_core::ContentReadRequest; 0]
+    );
 
     let replacement = coordinator
         .request(request)

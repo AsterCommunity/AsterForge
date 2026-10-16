@@ -107,6 +107,9 @@ mod tests {
                 StatusCode::ACCEPTED
             );
         }
-        assert!(recorder.records().is_empty());
+        assert_eq!(
+            recorder.records(),
+            [] as [crate::test_support::HttpMetricRecord; 0]
+        );
     }
 }

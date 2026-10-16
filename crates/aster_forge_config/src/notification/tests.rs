@@ -690,7 +690,10 @@ async fn lagged_subscription_reconnects_and_reconciles_without_reload_observatio
     .await
     .unwrap();
 
-    assert!(reload_observer.snapshot().is_empty());
+    assert_eq!(
+        reload_observer.snapshot(),
+        [] as [crate::notification::supervisor::ConfigReloadObservation; 0]
+    );
     shutdown.cancel();
     worker.await.unwrap().unwrap();
     drop(second_sender);

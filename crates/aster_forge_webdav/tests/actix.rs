@@ -111,7 +111,7 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
             .await
             .expect("bounded XML body");
         assert_eq!(prepared.xml(), body);
-        assert!(prepared.bytes().is_empty());
+        assert_eq!(prepared.bytes(), [] as [u8; 0]);
     }
 
     let mut forbidden = payload_from_bytes(Bytes::from_static(b"x")).await;
@@ -137,8 +137,8 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
     )
     .await
     .expect("PUT stream policy");
-    assert!(prepared.xml().is_empty());
-    assert!(prepared.bytes().is_empty());
+    assert_eq!(prepared.xml(), [] as [u8; 0]);
+    assert_eq!(prepared.bytes(), [] as [u8; 0]);
     assert_eq!(
         stream.next().await.expect("stream chunk").expect("chunk"),
         Bytes::from_static(b"payload")
@@ -152,7 +152,7 @@ async fn method_body_preparation_collects_xml_rejects_empty_policy_and_preserves
     .await
     .expect("bounded patch body");
     assert_eq!(prepared.bytes(), b"patch");
-    assert!(prepared.xml().is_empty());
+    assert_eq!(prepared.xml(), [] as [u8; 0]);
 
     let mut oversized = payload_from_bytes(Bytes::from_static(b"patch!")).await;
     assert!(matches!(
@@ -405,15 +405,15 @@ struct InvalidCapabilityProvider;
 impl DavCapabilityProvider for InvalidCapabilityProvider {
     type Profile = DavNonDavProfile;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
-        Ok(DavCapabilityDeclaration::new(
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
+        std::future::ready(Ok(DavCapabilityDeclaration::new(
             DavResourceState::File,
             DavMethodSet::from_methods(&[DavMethod::Get]),
-        ))
+        )))
     }
 }
 
@@ -422,12 +422,12 @@ struct ForbiddenCapabilityProvider;
 impl DavCapabilityProvider for ForbiddenCapabilityProvider {
     type Profile = DavNonDavProfile;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
-        Err(DavBackendError::new(DavBackendErrorKind::Forbidden))
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
+        std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Forbidden)))
     }
 }
 

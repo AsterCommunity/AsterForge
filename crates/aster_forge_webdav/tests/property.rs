@@ -326,8 +326,8 @@ fn value_snapshot_defaults_are_empty() {
     assert!(metadata.content_type.is_none());
     assert!(metadata.etag.is_none());
     assert!(metadata.last_modified.is_none());
-    assert!(values.active_locks().is_empty());
-    assert!(values.dead_properties().is_empty());
+    assert_eq!(values.active_locks(), []);
+    assert_eq!(values.dead_properties(), []);
     assert!(values.quota().is_none());
     assert!(values.current_principal().is_none());
     assert!(values.sync_token().is_none());
@@ -381,7 +381,7 @@ fn disabled_standard_extension_name_can_still_resolve_as_a_dead_property() {
     let item = build_live_propfind_item("/file".to_owned(), &snapshot, &request, &values)
         .expect("dead property with disabled standard name");
     assert_eq!(property_names(&item, 200), ["quota-used-bytes"]);
-    assert!(property_names(&item, 404).is_empty());
+    assert_eq!(property_names(&item, 404), [] as [&str; 0]);
 }
 
 #[test]
@@ -863,7 +863,7 @@ fn propname_omits_an_empty_success_group() {
         &DefaultValues,
     )
     .expect("empty propname item");
-    assert!(item.propstats.is_empty());
+    assert_eq!(item.propstats, [] as [aster_forge_webdav::DavPropStat; 0]);
 }
 
 #[test]
@@ -909,25 +909,25 @@ struct FailingProvider;
 impl DavLivePropertyProvider for FailingProvider {
     type Values = DefaultValues;
 
-    async fn live_property_values(
+    fn live_property_values(
         &self,
         _path: &aster_forge_webdav::DavPath,
         _requirements: DavLivePropertyRequirements,
-    ) -> Result<Self::Values, DavBackendError> {
-        Err(DavBackendError::new(DavBackendErrorKind::Internal))
+    ) -> impl std::future::Future<Output = Result<Self::Values, DavBackendError>> {
+        std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Internal)))
     }
 }
 
 impl DavLivePropertyProvider for RecordingProvider {
     type Values = Values;
 
-    async fn live_property_values(
+    fn live_property_values(
         &self,
         _path: &aster_forge_webdav::DavPath,
         requirements: DavLivePropertyRequirements,
-    ) -> Result<Self::Values, DavBackendError> {
+    ) -> impl std::future::Future<Output = Result<Self::Values, DavBackendError>> {
         self.calls.lock().expect("calls").push(requirements);
-        Ok(self.values.clone())
+        std::future::ready(Ok(self.values.clone()))
     }
 }
 

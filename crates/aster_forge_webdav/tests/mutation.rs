@@ -109,12 +109,13 @@ impl DavDirectoryEnumerator for Enumerator {
     type Cursor = usize;
     type Entry = Entry;
 
-    async fn read_directory_page<'a>(
+    fn read_directory_page<'a>(
         &'a self,
         request: DavDirectoryPageRequest<'a, Self::Cursor>,
-    ) -> Result<DavDirectoryPage<Self::Entry, Self::Cursor>, DavBackendError> {
+    ) -> impl Future<Output = Result<DavDirectoryPage<Self::Entry, Self::Cursor>, DavBackendError>>
+    {
         if self.failures.contains(request.path.as_str()) {
-            return Err(DavBackendError::new(DavBackendErrorKind::Internal));
+            return std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Internal)));
         }
         let entries = self
             .entries
@@ -125,10 +126,10 @@ impl DavDirectoryEnumerator for Enumerator {
         let end = start
             .saturating_add(request.maximum_entries)
             .min(entries.len());
-        Ok(DavDirectoryPage {
+        std::future::ready(Ok(DavDirectoryPage {
             entries: entries[start..end].to_vec(),
             next_cursor: (end < entries.len()).then_some(end),
-        })
+        }))
     }
 }
 
@@ -232,7 +233,10 @@ impl Port {
 }
 
 impl DavMutationPort for Port {
-    async fn execute(&self, command: DavMutationCommand) -> Result<(), DavMutationStepError> {
+    fn execute(
+        &self,
+        command: DavMutationCommand,
+    ) -> impl Future<Output = Result<(), DavMutationStepError>> {
         let affected = command.affected_path().as_str().to_owned();
         let mut commands = self.commands.lock().unwrap();
         commands.push(command);
@@ -242,7 +246,7 @@ impl DavMutationPort for Port {
             cancellation.cancel();
         }
         drop(commands);
-        self.failures.get(&affected).cloned().map_or(Ok(()), Err)
+        std::future::ready(self.failures.get(&affected).cloned().map_or(Ok(()), Err))
     }
 }
 

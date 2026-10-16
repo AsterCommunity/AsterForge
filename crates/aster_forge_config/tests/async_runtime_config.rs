@@ -105,12 +105,9 @@ async fn empty_and_unchanged_updates_have_empty_diffs() {
         assert_eq!(immediately(runtime.get_model("missing")).await, None);
         assert!(immediately(runtime.snapshot()).await.values().is_empty());
         assert_eq!(immediately(runtime.remove("missing")).await, None);
-        assert!(
-            runtime
-                .reload(&StaticStore(vec![]))
-                .await
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            runtime.reload(&StaticStore(vec![])).await.unwrap(),
+            [] as [aster_forge_config::RuntimeConfigChange; 0]
         );
 
         let existing = row("value", "same", false);
@@ -121,7 +118,10 @@ async fn empty_and_unchanged_updates_have_empty_diffs() {
         assert_eq!(runtime.apply(existing.clone()).await, None);
         let store = StaticStore(vec![existing]);
         let store: &dyn AsyncConfigStore = &store;
-        assert!(runtime.reload(store).await.unwrap().is_empty());
+        assert_eq!(
+            runtime.reload(store).await.unwrap(),
+            [] as [aster_forge_config::RuntimeConfigChange; 0]
+        );
         assert_eq!(
             runtime.remove("value").await,
             Some(RuntimeConfigChange::Removed("value".to_string()))
@@ -433,7 +433,10 @@ async fn restart_required_keys_can_be_removed_and_reinserted_in_queue_order() {
     assert!(poll!(&mut second).is_pending());
 
     release.send(Ok(())).unwrap();
-    assert!(immediately(first).await.unwrap().is_empty());
+    assert_eq!(
+        immediately(first).await.unwrap(),
+        [] as [aster_forge_config::RuntimeConfigChange; 0]
+    );
     assert_eq!(runtime.get_model("value").await, Some(previous));
     assert_eq!(
         immediately(remove).await,

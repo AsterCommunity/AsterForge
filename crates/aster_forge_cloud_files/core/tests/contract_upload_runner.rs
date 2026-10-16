@@ -557,12 +557,12 @@ async fn empty_snapshot_commits_without_source_reads_or_chunks() {
         .await
         .expect("empty upload should complete");
     assert_eq!(outcome, ContentUploadRunOutcome::Completed);
-    assert!(source.reads().is_empty());
+    assert_eq!(source.reads(), [] as [(u64, u64); 0]);
     let state = backend
         .state
         .lock()
         .expect("upload backend mutex should not be poisoned");
-    assert!(state.chunks.is_empty());
+    assert_eq!(state.chunks, [] as [(u64, bytes::Bytes); 0]);
     assert_eq!(state.commit_calls, 1);
 }
 

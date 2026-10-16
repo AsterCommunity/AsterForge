@@ -238,6 +238,9 @@ mod tests {
 
         let req = actix_test::TestRequest::get().uri("/health").to_request();
         assert_eq!(actix_test::call_service(&app, req).await.status(), 200);
-        assert!(metrics.records().is_empty());
+        assert_eq!(
+            metrics.records(),
+            [] as [crate::test_support::HttpMetricRecord; 0]
+        );
     }
 }

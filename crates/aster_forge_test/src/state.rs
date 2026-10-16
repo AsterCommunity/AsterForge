@@ -448,7 +448,7 @@ mod tests {
         state.forget_resource(42, "db_a");
         assert_eq!(state.live_resources(), vec!["db_b"]);
         state.forget_resource(42, "db_b");
-        assert!(state.live_resources().is_empty());
+        assert_eq!(state.live_resources(), [] as [&str; 0]);
     }
 
     #[test]
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(state.shared_resources(), ["schema_template"]);
 
         state.forget_shared_resource("schema_template");
-        assert!(state.shared_resources().is_empty());
+        assert_eq!(state.shared_resources(), [] as [String; 0]);
     }
 
     #[test]
@@ -498,10 +498,9 @@ mod tests {
         state.register_pid_for_execution(u32::MAX, Some("run-a"));
         state.remember_registered_resource(u32::MAX, "db_run_a");
 
-        assert!(
-            state
-                .prune_stale_for_execution(std::process::id(), Some("run-a"), true)
-                .is_empty()
+        assert_eq!(
+            state.prune_stale_for_execution(std::process::id(), Some("run-a"), true),
+            [] as [std::string::String; 0]
         );
         assert_eq!(state.live_resources(), vec!["db_run_a"]);
 
@@ -509,7 +508,7 @@ mod tests {
             state.prune_stale_for_execution(std::process::id(), Some("run-b"), true),
             vec!["db_run_a".to_string()]
         );
-        assert!(state.live_resources().is_empty());
+        assert_eq!(state.live_resources(), [] as [&str; 0]);
     }
 
     #[test]
@@ -539,7 +538,7 @@ mod tests {
             state.prune_stale_for_execution(current_pid, Some("run-b"), true),
             vec!["db_run_a".to_string()]
         );
-        assert!(state.live_resources().is_empty());
+        assert_eq!(state.live_resources(), [] as [&str; 0]);
     }
 
     #[test]

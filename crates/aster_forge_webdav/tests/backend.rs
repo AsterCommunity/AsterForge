@@ -65,7 +65,7 @@ struct RecordingWriteHandle {
 }
 
 impl DavWriteHandle for RecordingWriteHandle {
-    async fn write_bytes(&mut self, buf: Bytes) -> Result<(), DavBackendError> {
+    fn write_bytes(&mut self, buf: Bytes) -> impl Future<Output = Result<(), DavBackendError>> {
         let offset = self.next_offset;
         self.next_offset = self
             .next_offset
@@ -75,35 +75,35 @@ impl DavWriteHandle for RecordingWriteHandle {
             .lock()
             .expect("write log should not be poisoned")
             .push((offset, buf));
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    async fn finish(self) -> Result<(), DavBackendError> {
-        Ok(())
+    fn finish(self) -> impl Future<Output = Result<(), DavBackendError>> {
+        std::future::ready(Ok(()))
     }
 
-    async fn abort(self) -> Result<(), DavBackendError> {
-        Ok(())
+    fn abort(self) -> impl Future<Output = Result<(), DavBackendError>> {
+        std::future::ready(Ok(()))
     }
 }
 
 impl DavWriteSystem for RecordingWriteSystem {
     type Handle = RecordingWriteHandle;
 
-    async fn open_write<'a>(
+    fn open_write<'a>(
         &'a self,
         _path: &'a aster_forge_webdav::DavPath,
         options: DavWriteOptions,
-    ) -> Result<Self::Handle, DavBackendError> {
+    ) -> impl Future<Output = Result<Self::Handle, DavBackendError>> {
         self.opened
             .lock()
             .expect("open log should not be poisoned")
             .push(options);
         let writes = Arc::clone(&self.writes);
-        Ok(RecordingWriteHandle {
+        std::future::ready(Ok(RecordingWriteHandle {
             writes,
             next_offset: 0,
-        })
+        }))
     }
 }
 
@@ -127,47 +127,55 @@ struct RecordingRandomHandle {
 }
 
 impl DavRandomWriteHandle for RecordingRandomHandle {
-    async fn write_at(&mut self, offset: u64, buf: Bytes) -> Result<(), DavBackendError> {
+    fn write_at(
+        &mut self,
+        offset: u64,
+        buf: Bytes,
+    ) -> impl Future<Output = Result<(), DavBackendError>> {
         if let Some(kind) = self.failures.write_at {
-            return Err(DavBackendError::new(kind));
+            return std::future::ready(Err(DavBackendError::new(kind)));
         }
         let writes = Arc::clone(&self.writes);
         writes
             .lock()
             .expect("random write log should not be poisoned")
             .push((offset, buf));
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
-    async fn finish(self) -> Result<(), DavBackendError> {
-        self.failures
-            .finish
-            .map_or(Ok(()), |kind| Err(DavBackendError::new(kind)))
+    fn finish(self) -> impl Future<Output = Result<(), DavBackendError>> {
+        std::future::ready(
+            self.failures
+                .finish
+                .map_or(Ok(()), |kind| Err(DavBackendError::new(kind))),
+        )
     }
 
-    async fn abort(self) -> Result<(), DavBackendError> {
-        self.failures
-            .abort
-            .map_or(Ok(()), |kind| Err(DavBackendError::new(kind)))
+    fn abort(self) -> impl Future<Output = Result<(), DavBackendError>> {
+        std::future::ready(
+            self.failures
+                .abort
+                .map_or(Ok(()), |kind| Err(DavBackendError::new(kind))),
+        )
     }
 }
 
 impl DavRandomWriteSystem for RecordingRandomSystem {
     type Handle = RecordingRandomHandle;
 
-    async fn open_random_write<'a>(
+    fn open_random_write<'a>(
         &'a self,
         _path: &'a aster_forge_webdav::DavPath,
         _options: DavWriteOptions,
-    ) -> Result<Self::Handle, DavBackendError> {
+    ) -> impl Future<Output = Result<Self::Handle, DavBackendError>> {
         if let Some(kind) = self.failures.open {
-            return Err(DavBackendError::new(kind));
+            return std::future::ready(Err(DavBackendError::new(kind)));
         }
         let writes = Arc::clone(&self.writes);
-        Ok(RecordingRandomHandle {
+        std::future::ready(Ok(RecordingRandomHandle {
             writes,
             failures: self.failures,
-        })
+        }))
     }
 }
 

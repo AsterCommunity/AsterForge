@@ -340,7 +340,7 @@ fn fetch_failure_classifications_are_explicit_and_non_overlapping() {
     ];
     for (index, failure) in failures.iter().enumerate() {
         assert!(!failures[..index].contains(failure));
-        assert!(!format!("{failure:?}").is_empty());
+        assert_ne!(format!("{failure:?}"), "");
     }
 }
 

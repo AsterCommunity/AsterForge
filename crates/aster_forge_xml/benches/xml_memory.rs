@@ -87,9 +87,17 @@ fn record_deallocation(size: usize) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let _ = LIVE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
-        Some(live.saturating_sub(size))
-    });
+    // A CAS loop keeps saturation available on the MSRV without using the atomic update
+    // method deprecated by newer toolchains.
+    let mut live = LIVE.load(Ordering::Relaxed);
+    while let Err(current) = LIVE.compare_exchange_weak(
+        live,
+        live.saturating_sub(size),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        live = current;
+    }
 }
 
 #[derive(Clone, Copy)]

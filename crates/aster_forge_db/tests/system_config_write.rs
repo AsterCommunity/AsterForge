@@ -336,7 +336,7 @@ async fn validation_failures_leave_database_snapshot_audit_and_notifications_unc
         ));
         assert_eq!(BINDING.find_all(&db).await.unwrap(), rows_before);
         assert_eq!(runtime.snapshot(), snapshot_before);
-        assert!(audit_values(&db).await.is_empty());
+        assert_eq!(audit_values(&db).await, [] as [std::string::String; 0]);
         assert!(subscription.recv().now_or_never().is_none());
     }
     let lookup = |_: &str| Some("false".to_string());
@@ -363,7 +363,7 @@ async fn validation_failures_leave_database_snapshot_audit_and_notifications_unc
     ));
     assert_eq!(BINDING.find_all(&db).await.unwrap(), rows_before);
     assert_eq!(runtime.snapshot(), disabled_before);
-    assert!(audit_values(&db).await.is_empty());
+    assert_eq!(audit_values(&db).await, [] as [std::string::String; 0]);
     assert!(subscription.recv().now_or_never().is_none());
 }
 
@@ -394,7 +394,7 @@ async fn encoding_audit_and_commit_failures_do_not_escape_the_transaction_bounda
         }
         assert_eq!(BINDING.find_all(&db).await.unwrap(), rows_before);
         assert_eq!(runtime.snapshot(), before);
-        assert!(audit_values(&db).await.is_empty());
+        assert_eq!(audit_values(&db).await, [] as [std::string::String; 0]);
         assert!(subscription.recv().now_or_never().is_none());
     }
 }
@@ -422,7 +422,7 @@ async fn write_failure_preserves_existing_row_and_runtime() {
     ));
     assert_eq!(BINDING.find_all(&db).await.unwrap(), rows_before);
     assert_eq!(runtime.snapshot(), before);
-    assert!(audit_values(&db).await.is_empty());
+    assert_eq!(audit_values(&db).await, [] as [std::string::String; 0]);
     assert!(subscription.recv().now_or_never().is_none());
 }
 

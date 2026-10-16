@@ -1068,11 +1068,11 @@ impl DavCapabilityProvider for CompleteProvider {
         DavPreferExtension
     );
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
         let mut declaration = declaration(
             DavResourceState::Collection,
             &[
@@ -1107,7 +1107,7 @@ impl DavCapabilityProvider for CompleteProvider {
             declaration.search = DavSearchCapabilities::default();
             declaration.versioning = DavVersioningCapabilities::default();
         }
-        Ok(declaration)
+        std::future::ready(Ok(declaration))
     }
 }
 
@@ -1147,11 +1147,11 @@ impl DavWorkspaceSupport for WorkspaceProvider {}
 impl DavCapabilityProvider for WorkspaceProvider {
     type Profile = dav_capability_profile!(DavClass1Profile; DavWorkspaceExtension);
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
         let mut declaration = declaration(DavResourceState::Collection, &[DavMethod::Options]);
         declaration.extensions = DavExtensionSet::from_packages(&[
             DavExtensionPackage::VersionControl,
@@ -1163,7 +1163,7 @@ impl DavCapabilityProvider for WorkspaceProvider {
             state: DavVersioningState::CheckedIn,
             ..DavVersioningCapabilities::default()
         };
-        Ok(declaration)
+        std::future::ready(Ok(declaration))
     }
 }
 
@@ -1191,14 +1191,14 @@ impl DavClass1Support for Class1DeclaringQuota {}
 impl DavCapabilityProvider for Class1DeclaringQuota {
     type Profile = DavClass1Profile;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
         let mut declaration = declaration(DavResourceState::Collection, &[DavMethod::Options]);
         declaration.extensions = DavExtensionSet::from_packages(&[DavExtensionPackage::Quota]);
-        Ok(declaration)
+        std::future::ready(Ok(declaration))
     }
 }
 
@@ -1240,12 +1240,12 @@ where
 {
     type Profile = Profile;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
-        Ok(self.declaration.clone())
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
+        std::future::ready(Ok(self.declaration.clone()))
     }
 }
 
@@ -1330,18 +1330,18 @@ impl DavClass3Support for Class123Provider {}
 impl DavCapabilityProvider for Class123Provider {
     type Profile = DavClass2And3Profile;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
         let mut declaration = declaration(
             DavResourceState::File,
             &[DavMethod::Options, DavMethod::Lock, DavMethod::Unlock],
         );
         declaration.locking = DavLockingCapability::Class2;
         declaration.compliance.class3 = true;
-        Ok(declaration)
+        std::future::ready(Ok(declaration))
     }
 }
 
@@ -1503,11 +1503,11 @@ impl DavPrivateUpdateRangeSupport for CompleteWriteProvider {}
 impl DavCapabilityProvider for CompleteWriteProvider {
     type Profile = DavWithPrivateUpdateRange<DavWithPatch<DavWithPartialPut<DavNonDavProfile>>>;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
         let mut declaration = DavCapabilityDeclaration::new(
             DavResourceState::File,
             DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Put, DavMethod::Patch]),
@@ -1521,7 +1521,7 @@ impl DavCapabilityProvider for CompleteWriteProvider {
                 precondition: DavWritePrecondition::RequireStrongIfMatch,
             },
         };
-        Ok(declaration)
+        std::future::ready(Ok(declaration))
     }
 }
 
@@ -1541,12 +1541,12 @@ struct FailingProvider;
 impl DavCapabilityProvider for FailingProvider {
     type Profile = DavNonDavProfile;
 
-    async fn capabilities(
+    fn capabilities(
         &self,
         _target: &DavCapabilityTarget,
         _context: &DavCapabilityContext,
-    ) -> Result<DavCapabilityDeclaration, DavBackendError> {
-        Err(DavBackendError::new(DavBackendErrorKind::Internal))
+    ) -> impl Future<Output = Result<DavCapabilityDeclaration, DavBackendError>> {
+        std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Internal)))
     }
 }
 

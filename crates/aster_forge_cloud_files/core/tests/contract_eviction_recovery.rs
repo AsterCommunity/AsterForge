@@ -177,12 +177,12 @@ async fn provider_eviction_requires_removal_and_native_invalidation_before_metad
         .await
         .expect("entry load should succeed")
         .expect("entry should exist");
-    assert!(
+    assert_eq!(
         snapshot
             .provider_ranges()
             .expect("provider coverage should exist")
-            .ranges()
-            .is_empty()
+            .ranges(),
+        []
     );
     assert!(snapshot.is_eviction_reserved());
     store
@@ -424,12 +424,12 @@ async fn intent_and_each_durable_transition_are_idempotent_after_lost_returns() 
             .expect("durable metadata reconciliation remains idempotent after completion"),
         StoreWriteStatus::AlreadyApplied
     );
-    assert!(
+    assert_eq!(
         store
             .collect_eviction_backlog(backend.scope())
             .await
-            .expect("recovery scan should succeed")
-            .is_empty()
+            .expect("recovery scan should succeed"),
+        [] as [aster_forge_cloud_files_core::ContentEvictionRecord; 0]
     );
 }
 

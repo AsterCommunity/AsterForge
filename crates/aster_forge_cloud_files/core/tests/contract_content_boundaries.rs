@@ -93,7 +93,7 @@ fn cache_and_operation_identities_expose_exact_values_and_empty_fields() {
 #[test]
 fn sparse_range_set_normalizes_before_after_duplicate_contained_covering_and_bridge_inserts() {
     let mut ranges = ContentRangeSet::new();
-    assert!(ranges.ranges().is_empty());
+    assert_eq!(ranges.ranges(), []);
     assert!(
         ranges
             .insert(range(10, 2), 20)
@@ -145,7 +145,7 @@ fn sparse_range_set_normalizes_before_after_duplicate_contained_covering_and_bri
     assert_eq!(ranges.ranges(), &[range(0, 20)]);
     assert!(ranges.is_complete(20));
     ranges.clear();
-    assert!(ranges.ranges().is_empty());
+    assert_eq!(ranges.ranges(), []);
     assert!(ranges.is_complete(0));
 }
 
@@ -476,7 +476,10 @@ fn cache_write_reservations_count_independently_and_block_eviction_until_all_com
     entry
         .complete_cache_write()
         .expect("second write should complete");
-    assert!(entry.eviction_blockers().is_empty());
+    assert_eq!(
+        entry.eviction_blockers(),
+        [] as [aster_forge_cloud_files_core::ContentEvictionBlocker; 0]
+    );
     assert_eq!(
         entry.complete_cache_write(),
         Err(CloudFilesCoreError::InvalidContentStorageState {

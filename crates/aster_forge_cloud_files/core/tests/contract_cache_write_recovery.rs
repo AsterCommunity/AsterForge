@@ -113,7 +113,7 @@ async fn physical_bytes_must_be_observable_before_coverage_can_advance() {
         .await
         .expect_err("coverage must not claim bytes before physical commit");
     assert_eq!(error.kind(), CloudFilesStoreErrorKind::InvalidTransition);
-    assert!(
+    assert_eq!(
         store
             .load_content_entry(&key)
             .await
@@ -121,8 +121,8 @@ async fn physical_bytes_must_be_observable_before_coverage_can_advance() {
             .expect("entry should exist")
             .provider_ranges()
             .expect("provider ranges should exist")
-            .ranges()
-            .is_empty()
+            .ranges(),
+        []
     );
 
     store
@@ -275,7 +275,7 @@ async fn physical_effect_before_marker_is_recovered_without_claiming_coverage_ea
             .state(),
         ContentCacheWriteState::IntentPersisted
     );
-    assert!(
+    assert_eq!(
         store
             .load_content_entry(&key)
             .await
@@ -283,8 +283,8 @@ async fn physical_effect_before_marker_is_recovered_without_claiming_coverage_ea
             .expect("entry should exist")
             .provider_ranges()
             .expect("provider ranges should exist")
-            .ranges()
-            .is_empty()
+            .ranges(),
+        []
     );
 
     if physical_range_present {
@@ -385,12 +385,12 @@ async fn every_cache_write_persisted_transition_survives_lost_return() {
             .expect("completion retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
     );
-    assert!(
+    assert_eq!(
         store
             .collect_cache_write_backlog(backend.scope())
             .await
-            .expect("recovery scan should succeed")
-            .is_empty()
+            .expect("recovery scan should succeed"),
+        [] as [aster_forge_cloud_files_core::ContentCacheWriteRecord; 0]
     );
 }
 
@@ -426,7 +426,7 @@ async fn whole_empty_file_commit_is_complete_without_synthetic_nonempty_range() 
     let coverage = entry
         .provider_ranges()
         .expect("provider coverage should exist");
-    assert!(coverage.ranges().is_empty());
+    assert_eq!(coverage.ranges(), []);
     assert!(coverage.is_complete(0));
 }
 

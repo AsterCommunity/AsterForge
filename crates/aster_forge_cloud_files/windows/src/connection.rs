@@ -1734,9 +1734,16 @@ impl AtomicWindowsCallbackQueueMetrics {
             QueueMetricEvent::Invalid => &self.invalid_snapshot_rejections,
             QueueMetricEvent::Panic => &self.panic_failures,
         };
-        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-            Some(value.saturating_add(1))
-        });
+        // Saturate on every supported toolchain, including versions predating `try_update`.
+        let mut value = counter.load(Ordering::Relaxed);
+        while let Err(current) = counter.compare_exchange_weak(
+            value,
+            value.saturating_add(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            value = current;
+        }
     }
 }
 

@@ -262,19 +262,22 @@ impl DavDirectoryEnumerator for RecordingEnumerator {
     type Cursor = u64;
     type Entry = TestEntry;
 
-    async fn read_directory_page<'a>(
+    fn read_directory_page<'a>(
         &'a self,
         request: DavDirectoryPageRequest<'a, Self::Cursor>,
-    ) -> Result<DavDirectoryPage<Self::Entry, Self::Cursor>, DavBackendError> {
+    ) -> impl Future<Output = Result<DavDirectoryPage<Self::Entry, Self::Cursor>, DavBackendError>>
+    {
         self.calls
             .lock()
             .expect("call log")
             .push((request.cursor.copied(), request.maximum_entries));
-        self.pages
-            .lock()
-            .expect("page queue")
-            .pop_front()
-            .unwrap_or_else(|| Err(DavBackendError::new(DavBackendErrorKind::Internal)))
+        std::future::ready(
+            self.pages
+                .lock()
+                .expect("page queue")
+                .pop_front()
+                .unwrap_or_else(|| Err(DavBackendError::new(DavBackendErrorKind::Internal))),
+        )
     }
 }
 

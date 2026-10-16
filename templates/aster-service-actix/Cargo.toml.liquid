@@ -19,7 +19,7 @@ rust-version = "1.95.0"
 license = "MIT"
 
 [workspace.dependencies]
-actix-web = "4.15.0"
+actix-web = "4.17.0"
 async-trait = "0.1"
 aster_forge_alloc = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_alloc" }
 aster_forge_api = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_api" }
@@ -45,7 +45,7 @@ rust-embed = "8"
 sea-orm = { version = "2.0.4", default-features = false }
 sea-orm-migration = { version = "2.0.4", default-features = false }
 serde = "1.0.229"
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 testcontainers = "0.28"
 thiserror = "2"
 tikv-jemallocator = "0.7"
@@ -54,7 +54,8 @@ tokio-util = "0.7"
 toml = "1.1"
 tracing = "0.1.44"
 utoipa = "6.0.0"
-utoipa-swagger-ui = "10.0.1"
+# Upstream 10.0.1 requires withdrawn zip 8.6; Forge carries a zip 9 build fix.
+utoipa-swagger-ui = { git = "https://github.com/AsterCommunity/AsterForge", package = "utoipa-swagger-ui" }
 {{crate_name}}_migration = { path = "crates/{{crate_name}}_migration" }
 
 [workspace.lints.clippy]
@@ -163,7 +164,7 @@ tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
 utoipa = { workspace = true, features = ["actix_extras"], optional = true }
-utoipa-swagger-ui = { workspace = true, features = ["actix-web"], optional = true }
+utoipa-swagger-ui = { workspace = true, features = ["actix-web", "vendored"], optional = true }
 {{crate_name}}_migration.workspace = true
 
 [dev-dependencies]

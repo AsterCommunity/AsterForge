@@ -15,7 +15,7 @@ quick-xml = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 libc = "0.2"
-proptest = "1.11.0"
+proptest = "1.12.0"
 roxmltree = "0.21.1"
 xmltree = "0.12.0"
 

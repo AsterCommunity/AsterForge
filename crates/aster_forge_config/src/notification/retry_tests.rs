@@ -348,7 +348,7 @@ async fn worker_retries_coalesced_failed_hints_and_preserves_reload_all() {
     store.fail_reload.store(false, Ordering::SeqCst);
     tick(100).await;
     assert_eq!(store.reloads().len(), 7);
-    assert!(store.reloads()[6].keys.is_empty());
+    assert_eq!(store.reloads()[6].keys, [] as [std::string::String; 0]);
     assert_eq!(worker.notifier.subscribe_attempts(), 1);
     worker.stop().await;
 }
@@ -423,7 +423,10 @@ async fn filtered_notifications_do_not_schedule_retries() {
         send(&sender, "aster_test", "local", &[]);
         pump().await;
         tick(5000).await;
-        assert!(store.reloads().is_empty());
+        assert_eq!(
+            store.reloads(),
+            [] as [crate::notification::message::ConfigReloadMessage; 0]
+        );
         assert_eq!(store.reconciles(), usize::from(reconcile));
         assert_eq!(worker.reload_observer.snapshot().len(), 2);
         assert_eq!(worker.notifier.subscribe_attempts(), 1);
@@ -575,7 +578,7 @@ async fn reload_all_dominates_key_hints_in_either_arrival_order() {
         store.fail_reload.store(false, Ordering::SeqCst);
         tick(100).await;
         assert_eq!(store.reloads().len(), 3);
-        assert!(store.reloads()[2].keys.is_empty());
+        assert_eq!(store.reloads()[2].keys, [] as [std::string::String; 0]);
         worker.stop().await;
     }
 }

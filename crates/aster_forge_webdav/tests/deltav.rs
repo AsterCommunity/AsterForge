@@ -533,7 +533,10 @@ fn version_control_executor_passes_the_plan_once_and_preserves_backend_classific
         }),
     };
     let result = block_on(execute_version_control(&port, plan)).expect("transaction result");
-    assert!(result.response_extensions.is_empty());
+    assert_eq!(
+        result.response_extensions,
+        [] as [aster_forge_webdav::DavXmlElement; 0]
+    );
     assert_eq!(*port.seen.lock().expect("recorded plan"), vec![plan]);
 
     let failing = RecordingVersionControlPort {

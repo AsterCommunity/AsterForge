@@ -504,7 +504,10 @@ async fn completed_mutation_replay_does_not_repeat_remote_effect() {
         .collect_mutation_backlog(backend.scope())
         .await
         .expect("recovery scan should succeed");
-    assert!(recoverable.is_empty());
+    assert_eq!(
+        recoverable,
+        [] as [aster_forge_cloud_files_core::MutationRecord; 0]
+    );
     assert_eq!(remote.attempts(&idempotency), 1);
     assert_eq!(
         store

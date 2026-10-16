@@ -36,7 +36,7 @@ fn root_directory_and_root_children_use_the_apple_root_identifier() {
     assert_eq!(root_item.kind(), MacosFileProviderItemKind::Directory);
     assert_eq!(root_item.size(), 0);
     assert_eq!(root_item.version().metadata(), &metadata);
-    assert!(!root_item.version().content().as_bytes().is_empty());
+    assert_ne!(root_item.version().content().as_bytes(), []);
 
     let child_item = MacosFileProviderItem::from_cloud_item(&child, &root_key)
         .expect("root child should convert");

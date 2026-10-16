@@ -690,12 +690,12 @@ async fn every_upload_persisted_transition_is_idempotent_after_lost_return() {
             .expect("completion retry should be idempotent"),
         StoreWriteStatus::AlreadyApplied
     );
-    assert!(
+    assert_eq!(
         store
             .collect_upload_backlog(backend.scope())
             .await
-            .expect("recovery scan should succeed")
-            .is_empty()
+            .expect("recovery scan should succeed"),
+        [] as [aster_forge_cloud_files_core::ContentUploadRecord; 0]
     );
 }
 

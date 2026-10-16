@@ -178,64 +178,73 @@ impl TestDownloadSource {
 impl DavDownloadSource for TestDownloadSource {
     type Metadata = TestDownloadMetadata;
 
-    async fn metadata<'a>(&'a self, _path: &'a DavPath) -> Result<Self::Metadata, DavBackendError> {
-        Err(DavBackendError::new(DavBackendErrorKind::Internal))
-    }
-
-    async fn open_full<'a>(
+    fn metadata<'a>(
         &'a self,
         _path: &'a DavPath,
-    ) -> Result<DavOpenedDownload, DavBackendError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        self.full.map(Self::opened).map_err(DavBackendError::new)
+    ) -> impl Future<Output = Result<Self::Metadata, DavBackendError>> {
+        std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Internal)))
     }
 
-    async fn open_range<'a>(
+    fn open_full<'a>(
+        &'a self,
+        _path: &'a DavPath,
+    ) -> impl Future<Output = Result<DavOpenedDownload, DavBackendError>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        std::future::ready(self.full.map(Self::opened).map_err(DavBackendError::new))
+    }
+
+    fn open_range<'a>(
         &'a self,
         _path: &'a DavPath,
         _range: aster_forge_utils::http_range::HttpByteRange,
-    ) -> Result<DavOpenedDownload, DavBackendError> {
+    ) -> impl Future<Output = Result<DavOpenedDownload, DavBackendError>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.range.map(Self::opened).map_err(DavBackendError::new)
+        std::future::ready(self.range.map(Self::opened).map_err(DavBackendError::new))
     }
 }
 
 impl DavDownloadSource for MultipartDownloadSource {
     type Metadata = TestDownloadMetadata;
 
-    async fn metadata<'a>(&'a self, _path: &'a DavPath) -> Result<Self::Metadata, DavBackendError> {
-        Err(DavBackendError::new(DavBackendErrorKind::Internal))
-    }
-
-    async fn open_full<'a>(
+    fn metadata<'a>(
         &'a self,
         _path: &'a DavPath,
-    ) -> Result<DavOpenedDownload, DavBackendError> {
-        Err(DavBackendError::new(DavBackendErrorKind::Unsupported))
+    ) -> impl Future<Output = Result<Self::Metadata, DavBackendError>> {
+        std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Internal)))
     }
 
-    async fn open_range<'a>(
+    fn open_full<'a>(
+        &'a self,
+        _path: &'a DavPath,
+    ) -> impl Future<Output = Result<DavOpenedDownload, DavBackendError>> {
+        std::future::ready(Err(DavBackendError::new(DavBackendErrorKind::Unsupported)))
+    }
+
+    fn open_range<'a>(
         &'a self,
         _path: &'a DavPath,
         range: aster_forge_utils::http_range::HttpByteRange,
-    ) -> Result<DavOpenedDownload, DavBackendError> {
+    ) -> impl Future<Output = Result<DavOpenedDownload, DavBackendError>> {
         self.ranges.lock().expect("range calls lock").push(range);
-        let open = self
+        let open = match self
             .opens
             .lock()
             .expect("open plans lock")
             .pop_front()
             .expect("one open plan per selected range")
-            .map_err(DavBackendError::new)?;
+        {
+            Ok(open) => open,
+            Err(kind) => return std::future::ready(Err(DavBackendError::new(kind))),
+        };
         let stream = DropTrackedStream {
             chunks: open.chunks,
             dropped_streams: Arc::clone(&self.dropped_streams),
             pending_polls: open.pending_polls,
         };
-        Ok(DavOpenedDownload::new(
+        std::future::ready(Ok(DavOpenedDownload::new(
             Box::pin(stream),
             open.declared_length,
-        ))
+        )))
     }
 }
 
@@ -1149,7 +1158,7 @@ fn multipart_download_opens_each_final_segment_once_and_streams_only_framing_and
         let boundary = content_type
             .strip_prefix("multipart/byteranges; boundary=")
             .expect("boundary parameter");
-        assert!(!boundary.is_empty());
+        assert_ne!(boundary, "");
 
         let source = MultipartDownloadSource::new(vec![
             Ok(MultipartStreamSpec::pending_then_bytes(

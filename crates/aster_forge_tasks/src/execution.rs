@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(state.wakes, 1);
         assert_eq!(state.failed, 0);
         assert_eq!(state.retried, 0);
-        assert!(state.transitions.is_empty());
+        assert_eq!(state.transitions, [] as [&str; 0]);
     }
 
     #[tokio::test]

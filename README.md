@@ -16,7 +16,7 @@
   <a href="https://forge.astercosm.com/guide/index"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
   <a href="https://forge.astercosm.com/en/index"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
   <a href="https://forge.astercosm.com/crates/aster_forge_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
-  <img alt="Rust 1.94+" src="https://img.shields.io/badge/rust-1.94%2B-B7410E?logo=rust&logoColor=white">
+  <img alt="Rust 1.95+" src="https://img.shields.io/badge/rust-1.95%2B-B7410E?logo=rust&logoColor=white">
   <img alt="License MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-0F172A">
 </p>
 
@@ -45,7 +45,7 @@ aster_forge_runtime::AsterRuntime::builder()
 
 Product code still owns resource creation and business semantics; Forge owns the reusable lifecycle and persistence mechanics behind those components.
 
-All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.94.0+` and edition 2024, and is dual-licensed under `MIT OR Apache-2.0`.
+All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.95.0+` and edition 2024, and is dual-licensed under `MIT OR Apache-2.0`.
 
 ## Crates
 

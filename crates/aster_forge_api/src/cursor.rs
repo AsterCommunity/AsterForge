@@ -531,7 +531,7 @@ mod tests {
         assert!(!slice.has_more);
 
         let slice = CursorSlice::<u8>::empty(7);
-        assert!(slice.items.is_empty());
+        assert_eq!(slice.items, [] as [u8; 0]);
         assert_eq!(slice.total, 7);
         assert!(!slice.has_more);
     }

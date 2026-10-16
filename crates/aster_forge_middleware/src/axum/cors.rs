@@ -254,7 +254,7 @@ mod tests {
                     .contains(name)
             );
         }
-        assert!(body(response).await.is_empty());
+        assert_eq!(body(response).await, "");
     }
 
     #[tokio::test]

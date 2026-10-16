@@ -560,7 +560,10 @@ fn parent_lock_guard_checks_the_canonical_parent_and_skips_mount_root() {
         )
         .await;
         match root_result {
-            Ok(credentials) => assert!(credentials.submitted_lock_tokens.is_empty()),
+            Ok(credentials) => assert_eq!(
+                credentials.submitted_lock_tokens,
+                [] as [std::string::String; 0]
+            ),
             Err(error) => panic!("the mount root has no parent to check, got {error:?}"),
         }
         assert!(
