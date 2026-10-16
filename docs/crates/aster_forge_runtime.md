@@ -269,10 +269,21 @@ startup phase 的构造/轮询 panic 遵循 required/optional 策略：required 
 component cleanup，最终返回 `AsterRuntimeError::BeforeShutdown { shutdown_report }`，
 同时保留后续 drain/close 的失败。panic payload 不复制到这些公共报告。
 
+service future panic 同样先执行产品 hook 和全部 component cleanup，再返回
+`AsterRuntimeError::Service { shutdown_report, before_shutdown_panicked }`。
+即使 service、hook、drain 同时失败，调用方仍能取得主失败及次级清理状态。
+service 正常返回的值（包括产品自己的 `Result::Err`）在 cleanup 成功时保持原样。
+低层 `ServiceLifecycle` 则在执行完 `after_stop` 后重新抛出原始 service panic；
+service 和 cleanup 同时 panic 时保留 service 的原始 payload。
+
 `AsterRuntime` 和 `ServiceLifecycle` 显式持有 signal listener：service 结束后、cleanup
 之前取消并 join listener，释放其 callback 持有的资源。取消 run future 时也会 abort
 listener。signal callback 只负责停止 service，service 结束后可能被取消；其余收尾工作
 应放入 component shutdown 或 after-stop hook。
+service 自行结束、panic 或 required startup abort 时，runtime 在清理前取消共享 root
+token 及 service 显式传入的 token；后者与 root 不同时也不能替换组件收到的 root。
+取消已经开始轮询的 run future 会同步取消这些 token（包括 startup 期间），但无法
+异步执行 drain/join；需要等待 `run` 完整结束才能保证清理完成。
 
 推荐的产品入口形态：
 
@@ -620,6 +631,11 @@ let report = writer.stop(Instant::now() + Duration::from_secs(5)).await;
 也不调用 sink；`start()` 仅允许一次。`begin_drain()` 关闭 admission；`flush(deadline)`
 等待确认但不关闭 admission；`stop(deadline)` 关闭 admission、限时 drain，然后取消并
 join 唯一 worker。重复或并发 stop 共用同一 task handle，worker 结束后才允许关闭依赖。
+每次 flush 在 future 首次 poll 时固定已接受范围，分别检查 batch 和 direct 的确认进度；
+后续入队或直写不会延长本次等待，后续范围的失败也不会污染已确认的结果。
+强制部分批次按已请求的 watermark 截断，单次 flush 不会把后续记录带入同一事务。
+多个 flush 可以同时等待各自范围，且正常 threshold/timer 写入仍可独立进行。
+过期 deadline 不会发起新的强制写入；已确认或空范围可以立即成功。
 取消 flush、stop 或 direct-write 等待方不会丢弃已接受记录；后续 stop 仍可 join worker。
 丢弃 owner 会取消并 abort worker，正常 shutdown 应显式 stop 以等待其清理完成。
 Sink future 必须协作式执行，不能在 poll 中执行不返回的阻塞代码。
@@ -658,6 +674,9 @@ Observer 只接收调用方创建的有界 `mpsc::Sender<BufferedWriterEvent>`�
 
 测试覆盖无 runtime 构造、显式 startup、阈值和延迟、容量与 overflow、失败保留和安全
 重试、未知提交、panic、取消、并发 producer/stop、observer 隔离和依赖关闭顺序。
+flush 边界还覆盖独立确认进度、多个等待范围、后续 admission/failure、部分批次边界、
+空范围和已过期 deadline；生命周期覆盖正常/产品错误退出、service/hook 双重 panic、
+独立 token、startup/run 取消及数据库关闭顺序。
 
 ## Startup
 

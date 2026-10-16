@@ -248,6 +248,14 @@ stop 停止 admission，等待已接受写入直到 deadline 或不可继续的�
 等待方或 flush future 不会丢弃已接受记录。取消 stop 等待方后仍需另一次 stop 完成 join。
 产品应保留 writer 句柄，在失败退出前获取 `unconfirmed()` 并执行自己的恢复策略。
 
+`flush(deadline)` 在 future 首次 poll 时固定已接收范围，batch 和 direct 必须分别确认。
+后续记录不会延长等待，其失败不会污染先前已确认范围；过期 deadline 不发起新的强制
+写入，空范围仍可成功。正常 threshold/timer 或其他 flush 请求仍可独立写入。
+service future panic 时，`AsterRuntime` 仍执行 audit drain、worker join 和数据库关闭，
+再返回 `AsterRuntimeError::Service { shutdown_report, before_shutdown_panicked }`。
+root token 和独立 service token 在清理前都会取消，供产品 worker 退出；取消 run future
+只能通知取消，不能替代显式等待完整 drain。
+
 Observer 使用调用方提供的有界 Tokio mpsc channel，writer 仅 try_send，绝不执行用户
 callback；慢 consumer、panic 或关闭 channel 不影响审计持久化，丢弃事件数可查。
 

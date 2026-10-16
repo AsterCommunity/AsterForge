@@ -325,7 +325,10 @@ async fn cancelling_runtime_aborts_the_owned_signal_listener() {
     let capture = SignalCapture(dropped.clone());
     let entered = Arc::new(tokio::sync::Notify::new());
     let notify = entered.clone();
-    let runtime = AsterRuntime::builder()
+    let builder = AsterRuntime::builder();
+    let root_shutdown = builder.shutdown_token().clone();
+    let service_shutdown = CancellationToken::new();
+    let runtime = builder
         .component(RuntimeServiceComponent::new(
             "service",
             RuntimeComponentKind::Core,
@@ -333,7 +336,7 @@ async fn cancelling_runtime_aborts_the_owned_signal_listener() {
                 notify.notify_one();
                 std::future::pending::<()>().await;
             },
-            CancellationToken::default(),
+            service_shutdown.clone(),
             move || async move {
                 drop(capture);
             },
@@ -344,6 +347,8 @@ async fn cancelling_runtime_aborts_the_owned_signal_listener() {
     entered.notified().await;
     run.abort();
     assert!(run.await.unwrap_err().is_cancelled());
+    assert!(root_shutdown.is_cancelled());
+    assert!(service_shutdown.is_cancelled());
     tokio::time::timeout(Duration::from_secs(1), async {
         while dropped.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
@@ -351,5 +356,371 @@ async fn cancelling_runtime_aborts_the_owned_signal_listener() {
     })
     .await
     .expect("cancelled runtime must not detach its signal listener");
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn service_panic_cannot_bypass_component_cleanup() {
+    let cleaned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cleanup = cleaned.clone();
+    let runtime = AsterRuntime::builder()
+        .component(RuntimeServiceComponent::new(
+            "service",
+            RuntimeComponentKind::Core,
+            async {
+                panic!("service driver panicked");
+            },
+            CancellationToken::default(),
+            || async {},
+        ))
+        .component(runtime_component(
+            move |registry: &mut RuntimeComponentRegistry| {
+                registry
+                    .component("database")
+                    .shutdown("database_close", None, move || {
+                        cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+                        async { Ok(()) }
+                    });
+            },
+        ))
+        .build()
+        .unwrap();
+    let result = tokio::spawn(runtime.run()).await;
+    assert!(
+        cleaned.load(std::sync::atomic::Ordering::SeqCst),
+        "service panic must run component cleanup"
+    );
+    let Ok(Err(AsterRuntimeError::Service {
+        shutdown_report,
+        before_shutdown_panicked,
+    })) = result
+    else {
+        panic!("service panic must become a runtime failure after cleanup")
+    };
+    assert!(!before_shutdown_panicked);
+    assert!(!shutdown_report.has_failures());
+    assert_eq!(shutdown_report.phases[0].name, "database_close");
+}
+
+#[tokio::test(start_paused = true)]
+async fn normal_service_exit_cancels_shared_token_before_joining_components() {
+    for service_failed in [false, true] {
+        let builder = AsterRuntime::builder();
+        let shutdown = builder.shutdown_token().clone();
+        let worker = tokio::spawn(shutdown.clone().cancelled_owned());
+        let result = builder
+            .component(runtime_component_with_shutdown(move |shutdown| {
+                RuntimeServiceComponent::new(
+                    "service",
+                    RuntimeComponentKind::Core,
+                    async move {
+                        if service_failed {
+                            Err("product service failure")
+                        } else {
+                            Ok(42)
+                        }
+                    },
+                    shutdown,
+                    || async {},
+                )
+            }))
+            .component(runtime_component(
+                move |registry: &mut RuntimeComponentRegistry| {
+                    registry.component("worker").shutdown_once(
+                        "worker_join",
+                        Some(Duration::from_secs(1)),
+                        worker,
+                        |worker| async move { worker.await.map_err(|error| error.to_string()) },
+                    );
+                },
+            ))
+            .run()
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            if service_failed {
+                Err("product service failure")
+            } else {
+                Ok(42)
+            }
+        );
+        assert!(shutdown.is_cancelled());
+    }
+}
+
+#[tokio::test]
+async fn low_level_service_panic_still_runs_after_stop_and_preserves_panic_payload() {
+    let cleaned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cleanup = cleaned.clone();
+    let result = tokio::spawn(
+        ServiceLifecycle::new(
+            async {
+                std::panic::panic_any(42_usize);
+            },
+            CancellationToken::default(),
+        )
+        .run(
+            || async {},
+            move || async move {
+                cleanup.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
+        ),
+    )
+    .await;
+    assert!(
+        cleaned.load(std::sync::atomic::Ordering::SeqCst),
+        "after_stop must run even when the service panics"
+    );
+    assert_eq!(
+        result.unwrap_err().into_panic().downcast_ref::<usize>(),
+        Some(&42)
+    );
+}
+
+#[tokio::test]
+async fn service_panic_retains_secondary_hook_and_shutdown_failures() {
+    for synchronous in [true, false] {
+        let builder = AsterRuntime::builder();
+        let root = builder.shutdown_token().clone();
+        let service_token = CancellationToken::new();
+        let check_token = service_token.clone();
+        let result = builder
+            .component(RuntimeServiceComponent::new(
+                "service",
+                RuntimeComponentKind::Core,
+                async { panic!("service failed") },
+                service_token,
+                || async {},
+            ))
+            .before_shutdown(move || {
+                assert!(check_token.is_cancelled());
+                assert!(!synchronous, "hook construction failed");
+                async { panic!("hook polling failed") }
+            })
+            .component(runtime_component(
+                |registry: &mut RuntimeComponentRegistry| {
+                    registry
+                        .component("writer")
+                        .shutdown("drain", None, || async { Err("drain failed".into()) });
+                    registry
+                        .component("database")
+                        .depends_on("writer")
+                        .shutdown("close", None, || async { Ok(()) });
+                },
+            ))
+            .run()
+            .await;
+        let Err(AsterRuntimeError::Service {
+            shutdown_report,
+            before_shutdown_panicked,
+        }) = result
+        else {
+            panic!("primary service failure must retain secondary failures")
+        };
+        assert!(root.is_cancelled());
+        assert!(before_shutdown_panicked);
+        assert_eq!(
+            shutdown_report.phases[0].status,
+            ShutdownPhaseStatus::Failed("drain failed".into())
+        );
+        assert_eq!(shutdown_report.phases[1].name, "close");
+        assert_eq!(
+            shutdown_report.phases[1].status,
+            ShutdownPhaseStatus::Succeeded
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn separate_service_token_cannot_replace_component_root_on_exit_or_startup_abort() {
+    for startup_fails in [false, true] {
+        let builder = AsterRuntime::builder();
+        let root = builder.shutdown_token().clone();
+        let service_token = CancellationToken::new();
+        let worker = tokio::spawn(root.clone().cancelled_owned());
+        let check_token = service_token.clone();
+        let result = builder
+            .component(RuntimeServiceComponent::new(
+                "service",
+                RuntimeComponentKind::Core,
+                async { 42 },
+                service_token.clone(),
+                || async {},
+            ))
+            .component(runtime_component(
+                move |registry: &mut RuntimeComponentRegistry| {
+                    registry
+                        .component("worker")
+                        .startup(
+                            "start",
+                            StartupPhaseFailurePolicy::Required,
+                            move || async move {
+                                if startup_fails {
+                                    Err("startup failed".into())
+                                } else {
+                                    Ok(())
+                                }
+                            },
+                        )
+                        .shutdown_once(
+                            "join",
+                            Some(Duration::from_secs(1)),
+                            worker,
+                            move |worker| async move {
+                                assert!(check_token.is_cancelled());
+                                worker.await.map_err(|error| error.to_string())
+                            },
+                        );
+                },
+            ))
+            .run()
+            .await;
+        if startup_fails {
+            let Err(AsterRuntimeError::Startup {
+                shutdown_report, ..
+            }) = result
+            else {
+                panic!("expected startup failure")
+            };
+            assert!(!shutdown_report.has_failures());
+        } else {
+            assert_eq!(result.unwrap(), 42);
+        }
+        assert!(root.is_cancelled());
+        assert!(service_token.is_cancelled());
+    }
+}
+
+#[tokio::test]
+async fn cancelling_during_startup_notifies_both_token_domains() {
+    let builder = AsterRuntime::builder();
+    let root = builder.shutdown_token().clone();
+    let service_token = CancellationToken::new();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let notify = entered.clone();
+    let run = tokio::spawn(
+        builder
+            .component(RuntimeServiceComponent::new(
+                "service",
+                RuntimeComponentKind::Core,
+                async {},
+                service_token.clone(),
+                || async {},
+            ))
+            .component(runtime_component(
+                move |registry: &mut RuntimeComponentRegistry| {
+                    registry.component("worker").startup(
+                        "start",
+                        StartupPhaseFailurePolicy::Required,
+                        move || {
+                            let notify = notify.clone();
+                            async move {
+                                notify.notify_one();
+                                std::future::pending().await
+                            }
+                        },
+                    );
+                },
+            ))
+            .run(),
+    );
+    entered.notified().await;
+    run.abort();
+    assert!(run.await.unwrap_err().is_cancelled());
+    assert!(root.is_cancelled());
+    assert!(service_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn low_level_cleanup_panics_preserve_the_primary_payload() {
+    for service_panics in [false, true] {
+        for synchronous in [false, true] {
+            let shutdown = CancellationToken::new();
+            let check = shutdown.clone();
+            let result = tokio::spawn(
+                ServiceLifecycle::new(
+                    async move {
+                        if service_panics {
+                            std::panic::panic_any(42_usize);
+                        }
+                        7
+                    },
+                    shutdown.clone(),
+                )
+                .run(
+                    || async {},
+                    move || {
+                        assert!(check.is_cancelled());
+                        if synchronous {
+                            std::panic::panic_any(99_usize);
+                        }
+                        async {
+                            std::panic::panic_any(99_usize);
+                        }
+                    },
+                ),
+            )
+            .await;
+            assert_eq!(
+                result.unwrap_err().into_panic().downcast_ref::<usize>(),
+                Some(&if service_panics { 42 } else { 99 })
+            );
+            assert!(shutdown.is_cancelled());
+        }
+    }
+}
+
+#[tokio::test]
+async fn low_level_normal_outputs_and_cancellation_reach_cleanup_unchanged() {
+    for output in [Ok(42), Err("product error")] {
+        let shutdown = CancellationToken::new();
+        let check = shutdown.clone();
+        let actual = ServiceLifecycle::new(async move { output }, shutdown.clone())
+            .run(
+                || async {},
+                move || async move {
+                    assert!(check.is_cancelled());
+                },
+            )
+            .await;
+        assert_eq!(actual, output);
+        assert!(shutdown.is_cancelled());
+    }
+}
+
+#[tokio::test]
+async fn cancelling_low_level_run_notifies_workers_and_releases_signal_resources() {
+    let shutdown = CancellationToken::new();
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let capture = SignalCapture(dropped.clone());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let notify = entered.clone();
+    let run = tokio::spawn(
+        ServiceLifecycle::new(
+            async move {
+                notify.notify_one();
+                std::future::pending::<()>().await;
+            },
+            shutdown.clone(),
+        )
+        .run(
+            move || async move {
+                drop(capture);
+            },
+            || async {},
+        ),
+    );
+    entered.notified().await;
+    run.abort();
+    assert!(run.await.unwrap_err().is_cancelled());
+    assert!(shutdown.is_cancelled());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while dropped.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
