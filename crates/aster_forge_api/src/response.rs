@@ -191,6 +191,11 @@ impl<T, C, D> ApiResponse<T, C, D> {
     pub const fn data(&self) -> Option<&T> {
         self.data.as_ref()
     }
+    /// Consumes the envelope and returns its optional data payload.
+    #[must_use]
+    pub fn into_data(self) -> Option<T> {
+        self.data
+    }
     /// Optional product error metadata.
     #[must_use]
     pub const fn error_info(&self) -> Option<&ApiErrorInfo<D>> {
@@ -416,6 +421,18 @@ mod tests {
                 .unwrap(),
             &json!({"code":"account.identifier_conflict","msg":"Already used","error":{"retryable":false}}),
         );
+
+        let data = ApiResponse::<_, GateCode>::ok(
+            GateCode::Success,
+            vec![Profile {
+                id: 2,
+                name: "two".into(),
+            }],
+        )
+        .unwrap()
+        .into_data()
+        .unwrap();
+        assert_eq!(data[0].id, 2);
     }
 
     #[test]
