@@ -11,6 +11,8 @@ use std::{
 use tokio::sync::{Barrier, Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
+mod support;
+
 const NOW: i64 = 1_700_000_000;
 const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
 struct TestClock(AtomicI64);
@@ -161,6 +163,7 @@ impl Fixture {
         gate: Option<Arc<Gate>>,
         barrier: Option<Arc<Barrier>>,
     ) -> Self {
+        support::initialize_provider();
         let clock = Arc::new(TestClock(AtomicI64::new(NOW)));
         let policy = JwtPolicy::new("issuer", "web", 60, 600).unwrap();
         let signer = JwtSigner::new(

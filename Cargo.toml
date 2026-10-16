@@ -90,7 +90,7 @@ hkdf = "0.13"
 http = "1"
 httpdate = "1"
 ipnet = "2.12.2"
-jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 md-5 = "0.11"
 moka = { version = "0.12.16", features = ["future"] }

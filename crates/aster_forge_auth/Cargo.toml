@@ -9,6 +9,9 @@ authors.workspace = true
 publish = false
 
 [features]
+default = ["aws-lc-rs"]
+aws-lc-rs = ["jsonwebtoken/aws_lc_rs"]
+rust-crypto = ["jsonwebtoken/rust_crypto"]
 password = ["dep:aster_forge_crypto"]
 
 [dependencies]
