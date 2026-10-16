@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 sea-orm-migration.workspace = true
 tracing.workspace = true
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 aster_forge_test = { path = "../aster_forge_test", features = ["mysql", "postgres"] }

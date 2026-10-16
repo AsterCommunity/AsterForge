@@ -351,3 +351,109 @@ async fn mysql_serializes_migrations_and_releases_after_error() {
     root.close().await.unwrap();
     container.forget_resource(&database_name);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn postgres_waiting_migrator_does_not_block_concurrent_index_and_cancellation_releases_lock()
+{
+    let container = PostgresTestContainer::start(test_suite()).await;
+    let test_database = container
+        .create_database(&unique_database_name("forge_migration_concurrent"))
+        .await;
+    let database = test_database.connect().await;
+    database
+        .execute_unprepared("CREATE TABLE samples (value BIGINT)")
+        .await
+        .unwrap();
+    let options = MigrationLockOptions::new("forge:postgres:concurrent-index")
+        .with_postgres_transaction(false);
+    let entered = Arc::new(Notify::new());
+    let build = Arc::new(Notify::new());
+    let holder_db = database.clone();
+    let holder_options = options.clone();
+    let holder_entered = entered.clone();
+    let holder_build = build.clone();
+    let holder = tokio::spawn(async move {
+        with_migration_lock(&holder_db, &holder_options, |connection| {
+            Box::pin(async move {
+                holder_entered.notify_one();
+                holder_build.notified().await;
+                connection
+                    .execute_unprepared("CREATE INDEX CONCURRENTLY samples_value ON samples(value)")
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+    });
+    entered.notified().await;
+    let waiter_db = database.clone();
+    let waiter_options = options.clone();
+    let waiter = tokio::spawn(async move {
+        with_migration_lock(&waiter_db, &waiter_options, |_| Box::pin(async { Ok(()) })).await
+    });
+    // Observe the real waiting session, instead of assuming a scheduling delay.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = database.query_one_raw(Statement::from_string(DbBackend::Postgres,
+                "SELECT COUNT(*) AS count FROM pg_stat_activity WHERE datname = current_database() AND query = 'SELECT pg_try_advisory_lock($1)'"))
+                .await.unwrap().unwrap();
+            if row.try_get::<i64>("", "count").unwrap() >= 2 { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    build.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        holder.await.unwrap().unwrap();
+        waiter.await.unwrap().unwrap();
+    })
+    .await
+    .expect("lock waiter must not deadlock concurrent index creation");
+
+    let cancel_db = database.clone();
+    let cancel_options = options.clone();
+    let cancel_entered = entered.clone();
+    let cancelled = tokio::spawn(async move {
+        with_migration_lock(&cancel_db, &cancel_options, |_| {
+            Box::pin(async move {
+                cancel_entered.notify_one();
+                std::future::pending::<Result<(), DbErr>>().await
+            })
+        })
+        .await
+    });
+    entered.notified().await;
+    cancelled.abort();
+    assert!(cancelled.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        with_migration_lock(&database, &options, |_| Box::pin(async { Ok(()) })),
+    )
+    .await
+    .expect("cancelled session must release advisory lock")
+    .unwrap();
+
+    // Default callback transaction still rolls back on failure.
+    let error = with_migration_lock(
+        &database,
+        &options.clone().with_postgres_transaction(true),
+        |connection| {
+            Box::pin(async move {
+                connection
+                    .execute_unprepared("CREATE TABLE rolled_back (id BIGINT)")
+                    .await?;
+                Err::<(), _>(DbErr::Custom("rollback".into()))
+            })
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.to_string(), "Custom Error: rollback");
+    assert!(
+        database
+            .execute_unprepared("SELECT * FROM rolled_back")
+            .await
+            .is_err()
+    );
+    database.close().await.unwrap();
+    test_database.cleanup().await;
+}

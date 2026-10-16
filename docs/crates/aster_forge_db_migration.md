@@ -47,7 +47,18 @@ aster_forge_db_migration::with_migration_lock(writer_db, &options, |connection| 
 .await?;
 ```
 
-PostgreSQL 使用 transaction-scoped `pg_advisory_xact_lock`。MySQL 在同一条连接上执行 `GET_LOCK` 和 `RELEASE_LOCK`。SQLite 不额外申请进程级锁，但 callback 仍在事务内执行。
+PostgreSQL 使用私有单连接 pool 的 session advisory lock。等待时通过 `pg_try_advisory_lock` 每 25ms 重试，每次语句都在 autocommit 下结束，不在等待事务内保留 snapshot，避免与另一个实例的 `CREATE INDEX CONCURRENTLY` 形成等待环。session 锁与相同 key 的旧 transaction advisory lock 互斥，保留跨版本锁域。
+
+默认 PostgreSQL callback 仍在事务内执行，失败时回滚。如果 migrator 包含并发建索引或需要每批独立提交的回填，显式关闭外层事务：
+
+```rust
+let options = aster_forge_db_migration::MigrationLockOptions::new("aster_product:database_migrations")
+    .with_postgres_transaction(false);
+```
+
+此时 SeaORM 仍按每个 migration 的 `use_transaction` 决定内部事务。产品必须让非事务 migration 可恢复、可重试，并处理 PostgreSQL 并发建索引失败留下的 invalid index。
+
+PostgreSQL 在成功、错误或取消时关闭私有 session，释放 session lock，不把带锁连接放回产品 writer pool。MySQL 在同一条连接上执行 `GET_LOCK` 和 `RELEASE_LOCK`。SQLite 不额外申请进程级锁，但 callback 仍在事务内执行。
 
 锁标识是持久化部署契约。已经有 migration lock 的产品接入时必须保留原 PostgreSQL advisory key 和 MySQL namespace，避免滚动升级期间新旧实例使用不同锁：
 

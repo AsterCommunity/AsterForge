@@ -19,6 +19,7 @@ pub type MigrationFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, DbErr>> 
 pub struct MigrationLockOptions {
     namespace: String,
     postgres_advisory_key: i64,
+    postgres_transaction: bool,
     mysql_timeout_seconds: u64,
 }
 
@@ -32,6 +33,7 @@ impl MigrationLockOptions {
         Self {
             postgres_advisory_key: stable_advisory_key(&namespace),
             namespace,
+            postgres_transaction: true,
             mysql_timeout_seconds: DEFAULT_MYSQL_LOCK_TIMEOUT_SECONDS,
         }
     }
@@ -40,6 +42,15 @@ impl MigrationLockOptions {
     #[must_use]
     pub const fn with_postgres_advisory_key(mut self, key: i64) -> Self {
         self.postgres_advisory_key = key;
+        self
+    }
+
+    /// Controls the `PostgreSQL` callback transaction (default: true).
+    /// Disable for migrators containing `CREATE INDEX CONCURRENTLY` or independently
+    /// committed backfills. The dedicated session still owns the migration lock.
+    #[must_use]
+    pub const fn with_postgres_transaction(mut self, enabled: bool) -> Self {
+        self.postgres_transaction = enabled;
         self
     }
 
@@ -56,7 +67,7 @@ impl MigrationLockOptions {
         &self.namespace
     }
 
-    /// Returns the `PostgreSQL` transaction-scoped advisory-lock key.
+    /// Returns the `PostgreSQL` advisory-lock key.
     #[must_use]
     pub const fn postgres_advisory_key(&self) -> i64 {
         self.postgres_advisory_key
@@ -88,9 +99,10 @@ impl MigrationLockOptions {
 
 /// Runs a product migration callback while holding the backend's process-wide migration lock.
 ///
-/// `PostgreSQL` uses a transaction-scoped advisory lock. `MySQL` uses a dedicated single-connection
-/// pool and a connection-bound named lock without wrapping DDL in a transaction. `SQLite` runs the
-/// callback in a transaction without an additional external lock.
+/// `PostgreSQL` acquires a session advisory lock without opening a waiting transaction;
+/// the callback is transactional unless explicitly disabled in the options. `MySQL`
+/// uses a dedicated session and named lock without a DDL transaction. `SQLite` runs
+/// the callback in a transaction without an additional external lock.
 ///
 /// # Errors
 ///
@@ -106,10 +118,8 @@ where
 {
     options.validate()?;
     match database.get_database_backend() {
-        DbBackend::Postgres => {
-            run_transactional_migration(database, options, operation, true).await
-        }
-        DbBackend::Sqlite => run_transactional_migration(database, options, operation, false).await,
+        DbBackend::Postgres => run_postgres_migration(database, options, operation).await,
+        DbBackend::Sqlite => run_transactional_migration(database, operation).await,
         DbBackend::MySql => run_mysql_migration(database, options, operation).await,
         _ => Err(DbErr::Custom(
             "unsupported database backend for migration coordination".to_string(),
@@ -119,17 +129,12 @@ where
 
 async fn run_transactional_migration<T, F>(
     database: &DatabaseConnection,
-    options: &MigrationLockOptions,
     operation: F,
-    acquire_postgres_advisory_lock: bool,
 ) -> Result<T, DbErr>
 where
     F: for<'a> FnOnce(DatabaseExecutor<'a>) -> MigrationFuture<'a, T>,
 {
     let transaction = database.begin().await?;
-    if acquire_postgres_advisory_lock {
-        acquire_postgres_lock(&transaction, options).await?;
-    }
     let operation_result = operation((&transaction).into()).await;
 
     match operation_result {
@@ -139,6 +144,60 @@ where
         }
         Err(error) => rollback_preserving_error(transaction, error).await,
     }
+}
+
+async fn run_postgres_migration<T, F>(
+    database: &DatabaseConnection,
+    options: &MigrationLockOptions,
+    operation: F,
+) -> Result<T, DbErr>
+where
+    F: for<'a> FnOnce(DatabaseExecutor<'a>) -> MigrationFuture<'a, T>,
+{
+    let source_pool = database.get_postgres_connection_pool();
+    let connect_options = source_pool.connect_options();
+    let pool = source_pool
+        .options()
+        .clone()
+        .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .test_before_acquire(false)
+        .before_acquire(|_, _| Box::pin(async { Ok(true) }))
+        .after_release(|_, _| Box::pin(async { Ok(true) }))
+        .connect_with((*connect_options).clone())
+        .await
+        .map_err(|error| DbErr::Conn(RuntimeErr::SqlxError(Arc::new(error))))?;
+    let dedicated: DatabaseConnection = pool.into();
+    // Blocking pg_advisory_lock, even in autocommit, retains a statement
+    // snapshot while waiting. CONCURRENTLY may wait for that snapshot, forming
+    // a cycle with the lock holder. Each try statement ends its transaction.
+    loop {
+        let row = dedicated
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT pg_try_advisory_lock($1)",
+                [options.postgres_advisory_key.into()],
+            ))
+            .await?
+            .ok_or_else(|| DbErr::Custom("migration lock query returned no row".into()))?;
+        if row.try_get_by_index::<bool>(0)? {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let result = if options.postgres_transaction {
+        run_transactional_migration(&dedicated, operation).await
+    } else {
+        operation((&dedicated).into()).await
+    };
+    // Explicit close releases the session lock on success/error. Cancellation
+    // drops the private pool as well; this session never returns to the writer pool.
+    if let Err(close_error) = dedicated.close().await {
+        tracing::warn!(%close_error, "failed to close dedicated PostgreSQL migration connection");
+    }
+    result
 }
 
 async fn run_mysql_migration<T, F>(
@@ -208,20 +267,6 @@ where
         Box::pin(M::up(connection, steps))
     })
     .await
-}
-
-async fn acquire_postgres_lock(
-    transaction: &DatabaseTransaction,
-    options: &MigrationLockOptions,
-) -> Result<(), DbErr> {
-    transaction
-        .query_one_raw(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            "SELECT pg_advisory_xact_lock($1)",
-            [options.postgres_advisory_key.into()],
-        ))
-        .await?;
-    Ok(())
 }
 
 async fn acquire_mysql_lock(
