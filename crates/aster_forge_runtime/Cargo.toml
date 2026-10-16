@@ -19,7 +19,7 @@ chrono = { workspace = true, features = ["clock"] }
 futures.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "rt", "signal", "time"] }
+tokio = { workspace = true, features = ["fs", "rt", "signal", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 utoipa = { workspace = true, optional = true }
