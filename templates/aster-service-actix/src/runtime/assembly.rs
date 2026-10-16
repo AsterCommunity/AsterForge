@@ -55,12 +55,8 @@ pub async fn run(state: crate::runtime::AppState) -> std::io::Result<()> {
         .component(crate::tasks::runtime::background_tasks_component(
             app_state.metrics.clone(),
         ))
-        .component(
-            crate::services::mail_outbox_service::runtime::mail_runtime_component(app_state),
-        )
-        .component(
-            crate::services::audit_service::runtime::audit_runtime_component(app_state),
-        )
+        .component(crate::services::mail_outbox_service::runtime::mail_runtime_component(app_state))
+        .component(crate::services::audit_service::runtime::audit_runtime_component(app_state))
         .component(crate::db::runtime::database_component(
             app_state.db_handles.clone(),
         ))
@@ -69,8 +65,13 @@ pub async fn run(state: crate::runtime::AppState) -> std::io::Result<()> {
         .map_err(to_io_error)
         .and_then(std::convert::identity);
     if let Some(provider) = provider {
-        let shutdown = provider.shutdown(std::time::Duration::from_secs(10)).await.map_err(to_io_error);
-        if result.is_ok() { shutdown?; }
+        let shutdown = provider
+            .shutdown(std::time::Duration::from_secs(10))
+            .await
+            .map_err(to_io_error);
+        if result.is_ok() {
+            shutdown?;
+        }
     }
     result
 }
