@@ -915,3 +915,51 @@ async fn low_level_completed_service_destructor_panic_runs_cleanup_and_retains_p
         Some(&42)
     );
 }
+
+#[test]
+fn builder_reports_assembly_errors_and_try_components_preserve_product_errors() {
+    let duplicate = AsterRuntime::builder()
+        .component(RuntimeServiceComponent::new(
+            "one",
+            RuntimeComponentKind::Core,
+            async {},
+            CancellationToken::default(),
+            || async {},
+        ))
+        .component(RuntimeServiceComponent::new(
+            "two",
+            RuntimeComponentKind::Core,
+            async {},
+            CancellationToken::default(),
+            || async {},
+        ))
+        .build();
+    assert!(matches!(
+        duplicate,
+        Err(AsterRuntimeError::DuplicateService)
+    ));
+
+    let missing = AsterRuntime::builder().component(try_runtime_component_with_shutdown::<
+        RuntimeServiceComponent<()>,
+        _,
+        _,
+    >(|_| {
+        Err::<RuntimeServiceComponent<()>, _>("product assembly failed")
+    }));
+    assert!(matches!(missing, Err("product assembly failed")));
+
+    let registry = RuntimeComponentRegistry::configured(|registry| {
+        shutdown_resource_component(
+            "resource",
+            RuntimeComponentKind::Product,
+            "resource_close",
+            1_u8,
+            |_| async { Ok(()) },
+        )
+        .register(registry);
+    });
+    assert_eq!(
+        registry.descriptor("resource").unwrap().kind,
+        RuntimeComponentKind::Product
+    );
+}

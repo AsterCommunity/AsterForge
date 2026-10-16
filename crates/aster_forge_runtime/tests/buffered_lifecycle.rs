@@ -38,6 +38,62 @@ fn memory(
 }
 
 #[test]
+fn public_error_types_preserve_display_and_source_contracts() {
+    use std::error::Error;
+    let persistence = WriteFailure::new(WriteFailureClass::Permanent, std::io::Error::other("db"));
+    assert!(persistence.to_string().contains("db"));
+    assert!(persistence.source().is_some());
+    for cause in [
+        WriteFailureCause::Panicked,
+        WriteFailureCause::Cancelled,
+        WriteFailureCause::NotAttempted,
+    ] {
+        let failure = WriteFailure::<std::io::Error> {
+            class: WriteFailureClass::UnknownCommit,
+            cause,
+        };
+        assert!(failure.to_string().contains("write failed"));
+        assert!(failure.source().is_none());
+    }
+    assert!(
+        RecordError::<u8, std::io::Error>::NotRunning(1)
+            .to_string()
+            .contains("closed")
+    );
+    assert!(
+        RecordError::<u8, std::io::Error>::Full(1)
+            .to_string()
+            .contains("capacity")
+    );
+    let direct: RecordError<u8, std::io::Error> = RecordError::DirectFailed(WriteFailure::new(
+        WriteFailureClass::UnknownCommit,
+        std::io::Error::other("db"),
+    ));
+    assert!(direct.to_string().contains("unconfirmed"));
+    assert!(direct.source().is_some());
+    assert_eq!(
+        BufferFlushError::<std::io::Error>::NotStarted.to_string(),
+        "writer has not started"
+    );
+    assert_eq!(
+        BufferFlushError::<std::io::Error>::Stopped.to_string(),
+        "writer stopped with unconfirmed records"
+    );
+    assert_eq!(
+        BufferFlushError::<std::io::Error>::Deadline.to_string(),
+        "flush deadline elapsed; records remain unconfirmed"
+    );
+    assert!(
+        BufferFlushError::Write(WriteFailure::new(
+            WriteFailureClass::Permanent,
+            std::io::Error::other("db"),
+        ))
+        .source()
+        .is_some()
+    );
+}
+
+#[test]
 fn construction_and_drop_work_without_a_tokio_runtime() {
     let calls = Arc::new(AtomicUsize::new(0));
     let called = calls.clone();
@@ -1108,6 +1164,31 @@ async fn concurrent_flush_timeout_does_not_cancel_another_waiters_owned_write() 
     gate.add_permits(1);
     long.await.unwrap();
     assert_eq!(writer.stop(deadline()).await.snapshot.persisted, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_flush_started_before_stop_reports_stopped_after_worker_join() {
+    let gate = Arc::new(Semaphore::new(0));
+    let block = gate.clone();
+    let writer = Arc::new(Writer::new(
+        config(1, 1),
+        OverflowPolicy::Reject,
+        None,
+        move |_| {
+            let gate = block.clone();
+            async move {
+                gate.acquire().await.unwrap().forget();
+                Ok(())
+            }
+        },
+    ));
+    writer.start().await.unwrap();
+    writer.record(1).await.unwrap();
+    writer.stop(Instant::now()).await;
+    assert!(matches!(
+        writer.flush(deadline()).await,
+        Err(BufferFlushError::Stopped)
+    ));
 }
 
 #[tokio::test(start_paused = true)]

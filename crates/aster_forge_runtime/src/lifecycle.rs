@@ -984,4 +984,11 @@ mod tests {
             "mail_outbox_drain"
         );
     }
+
+    #[tokio::test]
+    async fn completed_panicking_signal_listener_is_joined_and_logged() {
+        let task = tokio::spawn(async { panic!("signal callback failed") });
+        tokio::task::yield_now().await;
+        super::RuntimeSignalTask(task).cancel_and_join().await;
+    }
 }

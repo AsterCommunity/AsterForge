@@ -288,7 +288,10 @@ async fn wait_for_signal_impl() -> Result<TerminationSignal, RuntimeSignalError>
 
 #[cfg(test)]
 mod tests {
-    use super::{ShutdownCoordinator, ShutdownPhaseStatus, TerminationSignal};
+    use super::{
+        ShutdownCoordinator, ShutdownPhaseStatus, ShutdownReport, TerminationSignal,
+        log_shutdown_report,
+    };
     use std::time::Duration;
 
     #[test]
@@ -370,5 +373,15 @@ mod tests {
 
         assert!(!report.has_failures());
         assert_eq!(report.phases[0].status, ShutdownPhaseStatus::Succeeded);
+    }
+
+    #[test]
+    fn empty_shutdown_report_is_successful_and_empty_coordinator_is_observable() {
+        let coordinator = ShutdownCoordinator::new();
+        assert!(coordinator.is_empty());
+        assert_eq!(coordinator.len(), 0);
+        let report = ShutdownReport::new(Vec::new());
+        assert!(!report.has_failures());
+        log_shutdown_report(&report);
     }
 }
