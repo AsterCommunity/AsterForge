@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Upgrade `parking_lot` to 0.13.0. It retains Rust 1.95 as its minimum and removes automatic eventual fairness; fair unlocking is now explicit through the fair-unlock APIs.
 - The Actix service template uses the shared `{code,msg,data?,error?}` envelope for API 404 responses. HTTP status and health probe payloads stay product-owned; generated OpenAPI/SDK artifacts describe the new template contract. Its HTTP client preserves typed-envelope JSON and reports non-JSON HTTP failures with their original status.
 - System configuration persistence now uses `upsert_prevalidated` on bindings, stores, and free functions to make caller validation explicit. Rename existing `upsert` calls accordingly; validate logical values before any secret encoding. `ConfigRegistry::validate_value` is now `validate_value_structure`, while `normalize_value` remains the full validation pipeline.
 - Rate-limit retry delays round all fractional seconds upward. Missing direct peers share a localhost quota bucket and cannot establish trust for forwarded headers.
