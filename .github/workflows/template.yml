@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - 'templates/**'
-      - 'vendor/utoipa-swagger-ui/**'
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -13,7 +12,6 @@ on:
   pull_request:
     paths:
       - 'templates/**'
-      - 'vendor/utoipa-swagger-ui/**'
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
