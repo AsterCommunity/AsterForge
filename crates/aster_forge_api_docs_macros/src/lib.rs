@@ -38,7 +38,7 @@ pub fn path(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[cfg(not(all(feature = "openapi", debug_assertions)))]
-/// Leaves the annotated item unchanged when OpenAPI generation is disabled.
+/// Leaves the annotated item unchanged when `OpenAPI` generation is disabled.
 #[proc_macro_attribute]
 pub fn path(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item

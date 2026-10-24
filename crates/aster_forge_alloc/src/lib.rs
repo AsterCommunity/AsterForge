@@ -152,9 +152,15 @@ mod tests {
     #[cfg(not(feature = "jemalloc"))]
     fn assert_stats_bytes(allocated: usize, peak: usize) {
         let (allocated_mib, peak_mib) = super::stats();
+        let mib_per_byte = 1.0 / 1_048_576.0;
+        let expected_allocated_mib =
+            f64::from(u32::try_from(allocated).expect("test allocation fits in u32"))
+                * mib_per_byte;
+        let expected_peak_mib =
+            f64::from(u32::try_from(peak).expect("test allocation fits in u32")) * mib_per_byte;
 
-        assert_eq!(allocated_mib, allocated as f64 / 1_048_576.0);
-        assert_eq!(peak_mib, peak as f64 / 1_048_576.0);
+        assert!((allocated_mib - expected_allocated_mib).abs() < f64::EPSILON);
+        assert!((peak_mib - expected_peak_mib).abs() < f64::EPSILON);
     }
 
     #[cfg(not(feature = "jemalloc"))]

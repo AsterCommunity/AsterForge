@@ -317,6 +317,13 @@ impl CacheExt for dyn CacheBackend {
 /// Returns [`CacheError`] when the requested backend is unsupported or Redis initialization fails
 /// and [`CacheBackendFailurePolicy::ReturnError`] is selected.
 #[cfg(feature = "memory")]
+#[cfg_attr(
+    not(feature = "redis"),
+    expect(
+        clippy::unused_async,
+        reason = "The Redis feature awaits connection setup; keep one factory API across feature sets."
+    )
+)]
 pub async fn create_cache_with_policy(
     config: &CacheConfig,
     failure_policy: CacheBackendFailurePolicy,
