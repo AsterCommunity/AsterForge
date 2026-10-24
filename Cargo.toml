@@ -66,7 +66,7 @@ opentelemetry_sdk = { version = "0.33.1", default-features = false, features = [
 opentelemetry-prometheus = { version = "0.33.1", default-features = false }
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "metrics"] }
 prost = "0.14"
-actix-web = "4.17.0"
+actix-web = "4.18.1"
 actix-governor = "0.10"
 axum = "0.8.9"
 aes-gcm = "0.11"
@@ -101,7 +101,7 @@ quick-xml = { version = "0.42", default-features = false }
 quote = "1"
 openidconnect = { version = "4.0.1", default-features = false }
 rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-redis = { version = "1.7.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+redis = { version = "1.8.0", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 reqwest = { version = "0.13", features = ["json"] }
 sea-orm = { version = "2.0.4", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }

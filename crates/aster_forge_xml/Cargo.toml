@@ -16,7 +16,7 @@ quick-xml = { workspace = true }
 criterion = { workspace = true }
 libc = "0.2"
 proptest = "1.12.0"
-roxmltree = "0.21.1"
+roxmltree = "0.21.2"
 xmltree = "0.12.0"
 
 [[bench]]

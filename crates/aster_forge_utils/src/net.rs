@@ -140,31 +140,19 @@ mod tests {
         // client address 198.51.100.2 is the first untrusted hop from the
         // right; the leftmost 203.0.113.10 is client-supplied and must lose.
         assert_eq!(
-            real_ip_from_forwarded_for(
-                Some("203.0.113.10, 198.51.100.2"),
-                peer,
-                &trusted,
-            ),
+            real_ip_from_forwarded_for(Some("203.0.113.10, 198.51.100.2"), peer, &trusted,),
             "198.51.100.2".parse::<IpAddr>().unwrap()
         );
 
         // client -> trusted proxy only: the sole entry is the real client.
         assert_eq!(
-            real_ip_from_forwarded_for(
-                Some("203.0.113.10"),
-                peer,
-                &trusted,
-            ),
+            real_ip_from_forwarded_for(Some("203.0.113.10"), peer, &trusted,),
             "203.0.113.10".parse::<IpAddr>().unwrap()
         );
 
         // a spoofed client-supplied chain must not overwrite the attested hop
         assert_eq!(
-            real_ip_from_forwarded_for(
-                Some("6.6.6.6, 203.0.113.10"),
-                peer,
-                &trusted,
-            ),
+            real_ip_from_forwarded_for(Some("6.6.6.6, 203.0.113.10"), peer, &trusted,),
             "203.0.113.10".parse::<IpAddr>().unwrap()
         );
     }
@@ -192,18 +180,11 @@ mod tests {
         // a malformed hop to the right of the client invalidates the chain:
         // trust cannot skip past unparseable entries.
         assert_eq!(
-            real_ip_from_forwarded_for(
-                Some("203.0.113.10, not-an-ip, 10.0.0.9"),
-                peer,
-                &trusted,
-            ),
+            real_ip_from_forwarded_for(Some("203.0.113.10, not-an-ip, 10.0.0.9"), peer, &trusted,),
             peer
         );
         assert_eq!(real_ip_from_forwarded_for(None, peer, &trusted), peer);
-        assert_eq!(
-            real_ip_from_forwarded_for(Some(""), peer, &trusted),
-            peer
-        );
+        assert_eq!(real_ip_from_forwarded_for(Some(""), peer, &trusted), peer);
     }
 
     #[test]
