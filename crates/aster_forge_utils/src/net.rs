@@ -49,24 +49,39 @@ pub fn is_trusted_proxy(ip: IpAddr, trusted: &[IpNet]) -> bool {
     trusted.iter().any(|net| net.contains(&ip))
 }
 
-/// Returns the first client IP from `X-Forwarded-For` only when `peer` is trusted.
+/// Returns the client IP from `X-Forwarded-For`, or the direct peer address when
+/// the peer is not a trusted proxy or the chain carries no trustworthy client.
 ///
-/// The leftmost value is used because application reverse proxies append their own address to the
-/// right. If the peer is not trusted, the header is ignored. Malformed or empty header values fall
-/// back to the direct peer address.
+/// The chain is walked from the right (the address closest to `peer`, which
+/// trusted proxies append on the left of their own hop) towards the left,
+/// skipping every address inside the trusted set. The first untrusted address
+/// is the client as attested by the trusted proxies; everything further to its
+/// left is client-supplied and must never win. Without this right-to-left walk
+/// a client behind one untrusted proxy could plant an arbitrary address.
+#[must_use]
 pub fn real_ip_from_forwarded_for(
     x_forwarded_for: Option<&str>,
     peer: IpAddr,
     trusted: &[IpNet],
 ) -> IpAddr {
-    if !trusted.is_empty() && is_trusted_proxy(peer, trusted) {
-        let ip = x_forwarded_for
-            .and_then(|value| value.split(',').next())
-            .and_then(parse_forwarded_ip);
-        if let Some(ip) = ip {
+    if trusted.is_empty() || !is_trusted_proxy(peer, trusted) {
+        return peer;
+    }
+    let Some(forwarded) = x_forwarded_for else {
+        return peer;
+    };
+    for entry in forwarded.split(',').rev() {
+        let Some(ip) = parse_forwarded_ip(entry) else {
+            // Malformed entries are client-controlled noise: stop trusting the
+            // remainder of the chain and fall back to the direct peer.
+            return peer;
+        };
+        if !is_trusted_proxy(ip, trusted) {
             return ip;
         }
     }
+    // Every entry was a trusted proxy (or the header was empty): the client is
+    // the direct peer we already attested.
     peer
 }
 
@@ -117,24 +132,40 @@ mod tests {
     }
 
     #[test]
-    fn real_ip_uses_leftmost_xff_only_for_trusted_peer() {
+    fn real_ip_walks_the_chain_right_to_left_and_stops_at_the_first_untrusted_hop() {
         let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_string()]);
+        let peer = "10.0.0.5".parse::<IpAddr>().unwrap();
 
+        // client -> proxy(198.51.100.2) -> trusted(10.0.0.5): the proxied
+        // client address 198.51.100.2 is the first untrusted hop from the
+        // right; the leftmost 203.0.113.10 is client-supplied and must lose.
         assert_eq!(
             real_ip_from_forwarded_for(
                 Some("203.0.113.10, 198.51.100.2"),
-                "10.0.0.5".parse::<IpAddr>().unwrap(),
+                peer,
+                &trusted,
+            ),
+            "198.51.100.2".parse::<IpAddr>().unwrap()
+        );
+
+        // client -> trusted proxy only: the sole entry is the real client.
+        assert_eq!(
+            real_ip_from_forwarded_for(
+                Some("203.0.113.10"),
+                peer,
                 &trusted,
             ),
             "203.0.113.10".parse::<IpAddr>().unwrap()
         );
+
+        // a spoofed client-supplied chain must not overwrite the attested hop
         assert_eq!(
             real_ip_from_forwarded_for(
-                Some("203.0.113.10"),
-                "198.51.100.2".parse::<IpAddr>().unwrap(),
+                Some("6.6.6.6, 203.0.113.10"),
+                peer,
                 &trusted,
             ),
-            "198.51.100.2".parse::<IpAddr>().unwrap()
+            "203.0.113.10".parse::<IpAddr>().unwrap()
         );
     }
 
@@ -150,6 +181,28 @@ mod tests {
         assert_eq!(
             real_ip_from_forwarded_for(Some("[2001:db8::1]:443, 10.0.0.5"), peer, &trusted),
             "2001:db8::1".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn real_ip_stops_at_malformed_entries_and_falls_back_to_peer() {
+        let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_string()]);
+        let peer = "10.0.0.5".parse::<IpAddr>().unwrap();
+
+        // a malformed hop to the right of the client invalidates the chain:
+        // trust cannot skip past unparseable entries.
+        assert_eq!(
+            real_ip_from_forwarded_for(
+                Some("203.0.113.10, not-an-ip, 10.0.0.9"),
+                peer,
+                &trusted,
+            ),
+            peer
+        );
+        assert_eq!(real_ip_from_forwarded_for(None, peer, &trusted), peer);
+        assert_eq!(
+            real_ip_from_forwarded_for(Some(""), peer, &trusted),
+            peer
         );
     }
 
