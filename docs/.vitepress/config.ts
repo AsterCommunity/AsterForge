@@ -5,7 +5,7 @@ import { defineConfig } from "vitepress"
 import { withMermaid } from "vitepress-plugin-mermaid"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const SITE_URL = "https://forge.astercosm.com/"
+const SITE_URL = "https://forge.docs.astercosm.com/"
 const ZH_SITE_DESCRIPTION =
   "AsterForge 开发文档，覆盖 Aster 产品共用运行时地基、component 接入、共享 schema/store、功能开关、测试要求和参考项目。"
 const EN_SITE_DESCRIPTION =
@@ -104,7 +104,7 @@ export default withMermaid(
         { text: "首页", link: "/" },
         { text: "总览", link: "/guide/" },
         { text: "模块", link: "/crates/aster_forge_alloc" },
-        { text: "Rustdoc", link: "https://forge.astercosm.com/crates/rustdoc/" },
+        { text: "Rustdoc", link: "https://forge.docs.astercosm.com/crates/rustdoc/" },
         { text: `版本 ${version}`, link: "https://github.com/AsterCommunity/AsterForge" },
       ],
       sidebar: crateSidebar(),
@@ -136,7 +136,7 @@ export default withMermaid(
             { text: "Home", link: "/en/" },
             { text: "Guide", link: "/en/guide/" },
             { text: "Chinese crate docs", link: "/crates/aster_forge_alloc" },
-            { text: "Rustdoc", link: "https://forge.astercosm.com/crates/rustdoc/" },
+            { text: "Rustdoc", link: "https://forge.docs.astercosm.com/crates/rustdoc/" },
           ],
           sidebar: [
             {

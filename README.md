@@ -11,11 +11,11 @@
 </p>
 
 <p align="center">
-  <a href="https://forge.astercosm.com/"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-VitePress-0F766E?logo=vitepress&logoColor=white"></a>
+  <a href="https://forge.docs.astercosm.com/"><img alt="Documentation Site" src="https://img.shields.io/badge/docs-VitePress-0F766E?logo=vitepress&logoColor=white"></a>
   <a href="https://codecov.io/github/AsterCommunity/AsterForge"><img alt="Coverage" src="https://codecov.io/github/AsterCommunity/AsterForge/graph/badge.svg?token=IefDQVj2y6"></a>
-  <a href="https://forge.astercosm.com/guide/index"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
-  <a href="https://forge.astercosm.com/en/index"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
-  <a href="https://forge.astercosm.com/crates/aster_forge_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
+  <a href="https://forge.docs.astercosm.com/guide/index"><img alt="Chinese Guide" src="https://img.shields.io/badge/guide-中文-E11D48"></a>
+  <a href="https://forge.docs.astercosm.com/en/index"><img alt="English Overview" src="https://img.shields.io/badge/overview-English-2563EB"></a>
+  <a href="https://forge.docs.astercosm.com/crates/aster_forge_middleware"><img alt="Crate Docs" src="https://img.shields.io/badge/crates-reference-059669"></a>
   <img alt="Rust 1.95+" src="https://img.shields.io/badge/rust-1.95%2B-B7410E?logo=rust&logoColor=white">
   <img alt="License MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-0F172A">
 </p>
@@ -51,12 +51,12 @@ All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.95
 
 | Area | Crates |
 | --- | --- |
-| Runtime kernel | [`aster_forge_runtime`](https://forge.astercosm.com/crates/aster_forge_runtime), [`aster_forge_config`](https://forge.astercosm.com/crates/aster_forge_config), [`aster_forge_logging`](https://forge.astercosm.com/crates/aster_forge_logging), [`aster_forge_metrics`](https://forge.astercosm.com/crates/aster_forge_metrics), [`aster_forge_panic`](https://forge.astercosm.com/crates/aster_forge_panic), [`aster_forge_alloc`](https://forge.astercosm.com/crates/aster_forge_alloc) |
-| Web and API | [`aster_forge_api`](https://forge.astercosm.com/crates/aster_forge_api), [`aster_forge_api_docs_macros`](https://forge.astercosm.com/crates/aster_forge_api_docs_macros), [`aster_forge_middleware`](https://forge.astercosm.com/crates/aster_forge_middleware), [`aster_forge_observability`](https://forge.astercosm.com/crates/aster_forge_observability), [`aster_forge_external_auth`](https://forge.astercosm.com/crates/aster_forge_external_auth), [`aster_forge_http`](https://forge.astercosm.com/crates/aster_forge_http), [`aster_forge_webdav`](https://forge.astercosm.com/crates/aster_forge_webdav) |
-| Data, coordination, and background work | [`aster_forge_db`](https://forge.astercosm.com/crates/aster_forge_db), [`aster_forge_db_migration`](https://forge.astercosm.com/crates/aster_forge_db_migration), [`aster_forge_cache`](https://forge.astercosm.com/crates/aster_forge_cache), [`aster_forge_tasks`](https://forge.astercosm.com/crates/aster_forge_tasks), [`aster_forge_mail`](https://forge.astercosm.com/crates/aster_forge_mail), [`aster_forge_audit`](https://forge.astercosm.com/crates/aster_forge_audit) |
-| Storage and domain-neutral helpers | [`aster_forge_cloud_files_core`](https://forge.astercosm.com/crates/aster_forge_cloud_files_core), [`aster_forge_cloud_files_linux`](https://forge.astercosm.com/crates/aster_forge_cloud_files_linux), [`aster_forge_cloud_files_macos_bridge`](https://forge.astercosm.com/crates/aster_forge_cloud_files_macos_bridge), [`aster_forge_cloud_files_windows`](https://forge.astercosm.com/crates/aster_forge_cloud_files_windows), [`aster_forge_storage_core`](https://forge.astercosm.com/crates/aster_forge_storage_core), [`aster_forge_file_classification`](https://forge.astercosm.com/crates/aster_forge_file_classification) |
-| Utilities | [`aster_forge_crypto`](https://forge.astercosm.com/crates/aster_forge_crypto), [`aster_forge_utils`](https://forge.astercosm.com/crates/aster_forge_utils), [`aster_forge_validation`](https://forge.astercosm.com/crates/aster_forge_validation), [`aster_forge_xml`](https://forge.astercosm.com/crates/aster_forge_xml) |
-| Authentication | [`aster_forge_auth`](https://forge.astercosm.com/crates/aster_forge_auth) |
+| Runtime kernel | [`aster_forge_runtime`](https://forge.docs.astercosm.com/crates/aster_forge_runtime), [`aster_forge_config`](https://forge.docs.astercosm.com/crates/aster_forge_config), [`aster_forge_logging`](https://forge.docs.astercosm.com/crates/aster_forge_logging), [`aster_forge_metrics`](https://forge.docs.astercosm.com/crates/aster_forge_metrics), [`aster_forge_panic`](https://forge.docs.astercosm.com/crates/aster_forge_panic), [`aster_forge_alloc`](https://forge.docs.astercosm.com/crates/aster_forge_alloc) |
+| Web and API | [`aster_forge_api`](https://forge.docs.astercosm.com/crates/aster_forge_api), [`aster_forge_api_docs_macros`](https://forge.docs.astercosm.com/crates/aster_forge_api_docs_macros), [`aster_forge_middleware`](https://forge.docs.astercosm.com/crates/aster_forge_middleware), [`aster_forge_observability`](https://forge.docs.astercosm.com/crates/aster_forge_observability), [`aster_forge_external_auth`](https://forge.docs.astercosm.com/crates/aster_forge_external_auth), [`aster_forge_http`](https://forge.docs.astercosm.com/crates/aster_forge_http), [`aster_forge_webdav`](https://forge.docs.astercosm.com/crates/aster_forge_webdav) |
+| Data, coordination, and background work | [`aster_forge_db`](https://forge.docs.astercosm.com/crates/aster_forge_db), [`aster_forge_db_migration`](https://forge.docs.astercosm.com/crates/aster_forge_db_migration), [`aster_forge_cache`](https://forge.docs.astercosm.com/crates/aster_forge_cache), [`aster_forge_tasks`](https://forge.docs.astercosm.com/crates/aster_forge_tasks), [`aster_forge_mail`](https://forge.docs.astercosm.com/crates/aster_forge_mail), [`aster_forge_audit`](https://forge.docs.astercosm.com/crates/aster_forge_audit) |
+| Storage and domain-neutral helpers | [`aster_forge_cloud_files_core`](https://forge.docs.astercosm.com/crates/aster_forge_cloud_files_core), [`aster_forge_cloud_files_linux`](https://forge.docs.astercosm.com/crates/aster_forge_cloud_files_linux), [`aster_forge_cloud_files_macos_bridge`](https://forge.docs.astercosm.com/crates/aster_forge_cloud_files_macos_bridge), [`aster_forge_cloud_files_windows`](https://forge.docs.astercosm.com/crates/aster_forge_cloud_files_windows), [`aster_forge_storage_core`](https://forge.docs.astercosm.com/crates/aster_forge_storage_core), [`aster_forge_file_classification`](https://forge.docs.astercosm.com/crates/aster_forge_file_classification) |
+| Utilities | [`aster_forge_crypto`](https://forge.docs.astercosm.com/crates/aster_forge_crypto), [`aster_forge_utils`](https://forge.docs.astercosm.com/crates/aster_forge_utils), [`aster_forge_validation`](https://forge.docs.astercosm.com/crates/aster_forge_validation), [`aster_forge_xml`](https://forge.docs.astercosm.com/crates/aster_forge_xml) |
+| Authentication | [`aster_forge_auth`](https://forge.docs.astercosm.com/crates/aster_forge_auth) |
 
 ## Integration rules
 
@@ -67,7 +67,7 @@ All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.95
 - Write explicit product-side adapters for metrics, runtime config, permission, audit presentation, and policy decisions.
 - Use AsterDrive and AsterYggdrasil as references, not as reasons to move business logic into Forge.
 
-See [`New Project Integration`](https://forge.astercosm.com/guide/new-project-integration) for the target new-product shape and [`Integration Principles`](https://forge.astercosm.com/guide/integration-principles) for the detailed boundary rules.
+See [`New Project Integration`](https://forge.docs.astercosm.com/guide/new-project-integration) for the target new-product shape and [`Integration Principles`](https://forge.docs.astercosm.com/guide/integration-principles) for the detailed boundary rules.
 
 ## Service template
 
@@ -86,12 +86,12 @@ Build and CI follow the AsterDrive model: a pinned toolchain with a split dev pr
 
 ## Documentation
 
-- [Documentation site](https://forge.astercosm.com/)
-- [Chinese guide](https://forge.astercosm.com/guide/index)
-- [New project integration guide](https://forge.astercosm.com/guide/new-project-integration)
-- [English overview](https://forge.astercosm.com/en/index)
-- [Crate reference pages](https://forge.astercosm.com/crates/aster_forge_middleware)
-- [Reference projects](https://forge.astercosm.com/guide/reference-projects)
+- [Documentation site](https://forge.docs.astercosm.com/)
+- [Chinese guide](https://forge.docs.astercosm.com/guide/index)
+- [New project integration guide](https://forge.docs.astercosm.com/guide/new-project-integration)
+- [English overview](https://forge.docs.astercosm.com/en/index)
+- [Crate reference pages](https://forge.docs.astercosm.com/crates/aster_forge_middleware)
+- [Reference projects](https://forge.docs.astercosm.com/guide/reference-projects)
 
 For now, the Chinese crate pages are the authoritative integration reference; the English pages serve as entry points while the crate-by-crate documentation is being mirrored.
 
