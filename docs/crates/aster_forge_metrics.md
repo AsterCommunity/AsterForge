@@ -247,6 +247,8 @@ async fn run_sampler(recorder: InfrastructureMetricsRecorder) {
 
 每个实例只启动一次 updater。它立即开始首轮采样，之后每 15s 采样；错过 tick 时跳过补偿，不堆积采样任务。系统刷新在 blocking pool 中进行，Noop 不返回 updater。OTLP diagnostics 在采样时同步到通用指标，因此通过 metrics 看到的诊断可能落后一个采样周期；直接 `snapshot()` 可读取本地最新计数。
 
+系统采样使用 `sysinfo 0.40`，最低 Rust 版本仍为 1.95。`System` 在 blocking pool 内按需初始化；初始化失败时记录警告并在下个采样周期重试，uptime、allocator 和 OTLP diagnostics 采样继续进行。初始化成功后复用同一个 `System`，保留进程 CPU 采样状态。
+
 ### 错误分类与排查
 
 | `MetricError` | 常见原因与处理边界 |

@@ -510,8 +510,7 @@ async fn system_metrics_updater_task(
     recorder: InfrastructureMetricsRecorder,
     shutdown: CancellationToken,
 ) {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let system = Arc::new(parking_lot::Mutex::new(System::new()));
+    let system = Arc::new(parking_lot::Mutex::new(None));
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -522,58 +521,151 @@ async fn system_metrics_updater_task(
         let system = system.clone();
         let recorder = recorder.clone();
         let task = tokio::task::spawn_blocking(move || {
-            let mut system = system.lock();
-            let pid = Pid::from_u32(std::process::id());
-            system.refresh_processes_specifics(
-                ProcessesToUpdate::Some(&[pid]),
-                true,
-                ProcessRefreshKind::nothing().with_memory().with_cpu(),
-            );
-            if let Some(process) = system.process(pid) {
-                recorder
-                    .metrics
-                    .process_memory_rss_bytes
-                    .set(&[], metric_u64(process.memory()));
-                recorder
-                    .metrics
-                    .process_cpu_milliseconds_total
-                    .set(&[], metric_u64(process.accumulated_cpu_time()));
-            }
-            recorder
-                .metrics
-                .uptime_seconds
-                .set(&[], recorder.started_at.elapsed().as_secs_f64());
-            #[cfg(feature = "otlp")]
-            if let Some(diagnostics) = recorder.provider.otlp_diagnostics() {
-                let snapshot = diagnostics.snapshot();
-                recorder
-                    .metrics
-                    .exporter_successes
-                    .set(&["otlp"], metric_u64(snapshot.successes));
-                recorder
-                    .metrics
-                    .exporter_failures
-                    .set(&["otlp"], metric_u64(snapshot.failures));
-                recorder
-                    .metrics
-                    .exporter_last_success
-                    .set(&["otlp"], metric_u64(snapshot.last_success_unix_seconds));
-            }
-            #[cfg(feature = "allocator-metrics")]
-            {
-                let (allocated, resident) = aster_forge_alloc::stats();
-                recorder
-                    .metrics
-                    .process_heap_memory_mib
-                    .set(&["allocated"], allocated);
-                recorder
-                    .metrics
-                    .process_heap_memory_mib
-                    .set(&["peak_or_resident"], resident);
-            }
+            sample_system_metrics(&recorder, &mut system.lock(), sysinfo::System::new);
         });
         if task.await.is_err() {
             tracing::warn!("system metrics sampler failed");
         }
+    }
+}
+
+fn sample_system_metrics(
+    recorder: &InfrastructureMetricsRecorder,
+    system: &mut Option<sysinfo::System>,
+    initialize: impl FnOnce() -> Result<sysinfo::System, sysinfo::Error>,
+) {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
+
+    if system.is_none() {
+        match initialize() {
+            Ok(initialized) => *system = Some(initialized),
+            Err(error) => {
+                tracing::warn!(%error, "system metrics sampler initialization failed; retrying next interval");
+            }
+        }
+    }
+    if let Some(system) = system {
+        let pid = Pid::from_u32(std::process::id());
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_memory().with_cpu(),
+        );
+        if let Some(process) = system.process(pid) {
+            recorder
+                .metrics
+                .process_memory_rss_bytes
+                .set(&[], metric_u64(process.memory()));
+            recorder
+                .metrics
+                .process_cpu_milliseconds_total
+                .set(&[], metric_u64(process.accumulated_cpu_time()));
+        }
+    }
+    recorder
+        .metrics
+        .uptime_seconds
+        .set(&[], recorder.started_at.elapsed().as_secs_f64());
+    #[cfg(feature = "otlp")]
+    if let Some(diagnostics) = recorder.provider.otlp_diagnostics() {
+        let snapshot = diagnostics.snapshot();
+        recorder
+            .metrics
+            .exporter_successes
+            .set(&["otlp"], metric_u64(snapshot.successes));
+        recorder
+            .metrics
+            .exporter_failures
+            .set(&["otlp"], metric_u64(snapshot.failures));
+        recorder
+            .metrics
+            .exporter_last_success
+            .set(&["otlp"], metric_u64(snapshot.last_success_unix_seconds));
+    }
+    #[cfg(feature = "allocator-metrics")]
+    {
+        let (allocated, resident) = aster_forge_alloc::stats();
+        recorder
+            .metrics
+            .process_heap_memory_mib
+            .set(&["allocated"], allocated);
+        recorder
+            .metrics
+            .process_heap_memory_mib
+            .set(&["peak_or_resident"], resident);
+    }
+}
+
+#[cfg(all(test, feature = "backend-prometheus"))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn system_initialization_retries_without_blocking_other_samples() {
+        let provider = MetricsProvider::builder()
+            .with_prometheus()
+            .unwrap()
+            .build()
+            .unwrap();
+        let recorder = InfrastructureMetricsRecorder::new(provider.clone()).unwrap();
+        let mut system = None;
+        let mut initialization_attempts = 0;
+
+        for error in [
+            sysinfo::Error::Unsupported,
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
+        ] {
+            sample_system_metrics(&recorder, &mut system, || {
+                initialization_attempts += 1;
+                Err(error)
+            });
+            assert!(system.is_none());
+            let output = provider
+                .export_prometheus(Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(sample_value(&output, "process_uptime_seconds") > 0.0);
+            assert!(
+                !output
+                    .lines()
+                    .any(|line| line.starts_with("process_memory_rss_bytes "))
+            );
+            assert!(
+                !output
+                    .lines()
+                    .any(|line| line.starts_with("process_cpu_milliseconds_total "))
+            );
+            #[cfg(feature = "allocator-metrics")]
+            assert!(output.contains("process_heap_memory_mib{kind=\"allocated\"}"));
+        }
+
+        sample_system_metrics(&recorder, &mut system, || {
+            initialization_attempts += 1;
+            sysinfo::System::new()
+        });
+        assert!(system.is_some());
+        sample_system_metrics(&recorder, &mut system, || {
+            initialization_attempts += 1;
+            Err(sysinfo::Error::Unsupported)
+        });
+        assert_eq!(initialization_attempts, 3, "reuse the initialized system");
+
+        let output = provider
+            .export_prometheus(Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert!(sample_value(&output, "process_memory_rss_bytes") > 0.0);
+        assert!(sample_value(&output, "process_cpu_milliseconds_total") >= 0.0);
+        provider.shutdown(Duration::from_secs(1)).await.unwrap();
+    }
+
+    fn sample_value(output: &str, name: &str) -> f64 {
+        output
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
+            .unwrap_or_else(|| panic!("missing sample {name}: {output}"))
+            .parse()
+            .unwrap()
     }
 }

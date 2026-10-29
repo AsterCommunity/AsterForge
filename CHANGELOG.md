@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Upgrade system sampling to `sysinfo` 0.40, retaining Rust 1.95 as the minimum. Failed system initialization retries on the next sampling interval while uptime, allocator, and exporter diagnostics continue to update.
 - Move the documentation site and Rust API reference to `https://forge.docs.astercosm.com/`; `https://forge.astercosm.com/` is the product landing page. Existing documentation paths are retained.
 
 - Upgrade `parking_lot` to 0.13.0. It retains Rust 1.95 as its minimum and removes automatic eventual fairness; fair unlocking is now explicit through the fair-unlock APIs.
