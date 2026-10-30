@@ -31,7 +31,7 @@ expect_failure() {
         printf 'Invalid auth features unexpectedly compiled: %s\n' "${features:-none}" >&2
         exit 1
     fi
-    if ! rg -Fq "$diagnostic" "$consumer/check.log"; then
+    if ! grep -Fq -- "$diagnostic" "$consumer/check.log"; then
         cat "$consumer/check.log" >&2
         exit 1
     fi
@@ -46,7 +46,7 @@ for backend in aws-lc-rs rust-crypto; do
     cargo run --locked --manifest-path "$consumer/Cargo.toml" --features "$backend"
     cargo tree --locked --manifest-path "$consumer/Cargo.toml" --features "$backend" -e features > "$consumer/$backend.tree"
     if test "$backend" = rust-crypto; then
-        if rg -q 'aws-lc-(rs|sys)|feature "(use_pem|aws_lc_rs)"|simple_asn1|pem v' "$consumer/$backend.tree"; then
+        if grep -Eq -- 'aws-lc-(rs|sys)|feature "(use_pem|aws_lc_rs)"|simple_asn1|pem v' "$consumer/$backend.tree"; then
             cat "$consumer/$backend.tree" >&2
             printf 'RustCrypto JWT consumer pulled in AWS-LC or PEM dependencies\n' >&2
             exit 1
