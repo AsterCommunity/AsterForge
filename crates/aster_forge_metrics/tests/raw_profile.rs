@@ -1,0 +1,74 @@
+#![cfg(feature = "backend-prometheus")]
+use aster_forge_metrics::*;
+use std::fmt::Write;
+use std::time::Duration;
+
+#[tokio::test]
+async fn actual_export_matches_reviewed_wire_contract_and_resource() {
+    let provider = MetricsProvider::builder()
+        .with_resource(MetricsResource {
+            service_name: "contract".into(),
+            service_version: "test".into(),
+            environment: "test".into(),
+            role: "api".into(),
+            instance_id: "boot-1".into(),
+        })
+        .unwrap()
+        .with_profile("example", "aster-metrics/v1")
+        .unwrap()
+        .with_prometheus()
+        .unwrap()
+        .build()
+        .unwrap();
+    let recorder = InfrastructureMetricsRecorder::new(provider.clone()).unwrap();
+    recorder.record_http_request("GET", "http", "/files/{id}", 200, 0.125);
+    recorder.record_db_query(&DbQueryMetric::new(
+        DbMetricBackend::Postgres,
+        DbQueryKind::Select,
+        false,
+        Duration::from_millis(2),
+    ));
+    recorder.role_readiness(true);
+    recorder.db_pool("writer", 2, 1, Some(8));
+    let raw = provider
+        .export_prometheus(Duration::from_secs(1))
+        .await
+        .unwrap();
+    for expected in [
+        "# TYPE http_server_request_duration_seconds histogram",
+        "# TYPE db_client_operation_duration_seconds histogram",
+        "# TYPE db_client_connection_count gauge",
+        "# TYPE aster_runtime_ready gauge",
+        "# TYPE target_info gauge",
+        "aster_metrics_schema_version=\"aster-metrics/v1\"",
+        "db_system_name=\"postgresql\"",
+        "http_route=\"/files/{id}\"",
+    ] {
+        assert!(raw.contains(expected), "missing {expected}: {raw}");
+    }
+    assert!(!raw.contains("db_queries_total"));
+    assert!(!raw.contains("process_cpu_milliseconds_total"));
+    let mut output = String::new();
+    for descriptor in provider.descriptors() {
+        let name = descriptor.prometheus_name();
+        writeln!(
+            output,
+            "{} {} {} {:?}",
+            descriptor.name, name, descriptor.unit, descriptor.kind
+        )
+        .unwrap();
+    }
+    if std::env::var_os("ASTER_UPDATE_METRICS_CONTRACT").is_some() {
+        std::fs::write(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/profile-v1.txt"),
+            &output,
+        )
+        .unwrap();
+    }
+    let expected = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/profile-v1.txt"
+    ))
+    .unwrap();
+    assert_eq!(output, expected);
+}

@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -50,6 +50,7 @@ pub struct MetricsResource {
 pub struct MetricsProviderBuilder {
     pub(crate) sdk: opentelemetry_sdk::metrics::MeterProviderBuilder,
     limits: MetricsLimits,
+    profile: Option<(String, String)>,
     pub(crate) enabled: bool,
     #[cfg(feature = "backend-prometheus")]
     registry: Option<prometheus::Registry>,
@@ -94,6 +95,22 @@ impl MetricsProviderBuilder {
         Ok(self)
     }
 
+    /// Adds a reviewed service namespace and schema version to the explicit Resource.
+    /// # Errors
+    /// Rejects empty, oversized or control-character profile fields.
+    pub fn with_profile(mut self, namespace: &str, version: &str) -> MetricResult<Self> {
+        if namespace.trim().is_empty()
+            || version.trim().is_empty()
+            || [namespace, version]
+                .iter()
+                .any(|value| value.len() > 128 || value.chars().any(char::is_control))
+        {
+            return Err(MetricError::InvalidConfiguration);
+        }
+        self.profile = Some((namespace.to_owned(), version.to_owned()));
+        Ok(self)
+    }
+
     #[cfg(feature = "backend-prometheus")]
     /// # Errors
     /// Returns an error if pull export is already configured or its reader cannot be created.
@@ -104,9 +121,6 @@ impl MetricsProviderBuilder {
         let registry = prometheus::Registry::new();
         let reader = opentelemetry_prometheus::exporter()
             .with_registry(registry.clone())
-            .without_units()
-            .without_counter_suffixes()
-            .without_target_info()
             .with_resource_selector(opentelemetry_prometheus::ResourceSelector::All)
             .scope_info_enabled(false)
             .build()
@@ -145,16 +159,29 @@ impl MetricsProviderBuilder {
             return Err(MetricError::InvalidConfiguration);
         }
         let limit = self.limits.max_series_per_instrument;
-        let sdk = self
-            .sdk
-            .with_view(move |_| {
-                opentelemetry_sdk::metrics::Stream::builder()
-                    .with_cardinality_limit(limit)
-                    .build()
-                    .ok()
-            })
-            .build();
-        let meter = sdk.meter("aster_forge");
+        let mut builder = self.sdk.with_view(move |_| {
+            opentelemetry_sdk::metrics::Stream::builder()
+                .with_cardinality_limit(limit)
+                .build()
+                .ok()
+        });
+        if let Some((namespace, version)) = self.profile {
+            builder = builder.with_resource(
+                Resource::builder_empty()
+                    .with_attributes([
+                        opentelemetry::KeyValue::new("service.namespace", namespace),
+                        opentelemetry::KeyValue::new("aster.metrics.schema.version", version),
+                    ])
+                    .build(),
+            );
+        }
+        let sdk = builder.build();
+        let meter = sdk.meter_with_scope(
+            opentelemetry::InstrumentationScope::builder("aster_forge")
+                .with_version("aster-metrics/v1")
+                .with_schema_url("https://opentelemetry.io/schemas/1.44.0")
+                .build(),
+        );
         Ok(MetricsProvider {
             inner: Arc::new(ProviderInner {
                 sdk,
@@ -164,6 +191,8 @@ impl MetricsProviderBuilder {
                 limits: self.limits,
                 descriptors: Mutex::new(BTreeMap::new()),
                 series_count: Arc::new(AtomicUsize::new(0)),
+                observation_failures: Arc::new(AtomicU64::new(0)),
+                collection_failures: AtomicU64::new(0),
                 #[cfg(feature = "backend-prometheus")]
                 registry: self.registry,
                 #[cfg(feature = "otlp")]
@@ -185,6 +214,8 @@ struct ProviderInner {
     limits: MetricsLimits,
     descriptors: Mutex<BTreeMap<String, MetricDescriptor>>,
     series_count: Arc<AtomicUsize>,
+    observation_failures: Arc<AtomicU64>,
+    collection_failures: AtomicU64,
     #[cfg(feature = "backend-prometheus")]
     registry: Option<prometheus::Registry>,
     #[cfg(feature = "otlp")]
@@ -207,6 +238,7 @@ impl MetricsProvider {
         MetricsProviderBuilder {
             sdk: SdkMeterProvider::builder().with_resource(Resource::builder_empty().build()),
             limits: MetricsLimits::default(),
+            profile: None,
             enabled: false,
             #[cfg(feature = "backend-prometheus")]
             registry: None,
@@ -264,6 +296,7 @@ impl MetricsProvider {
                     self.inner.closed.clone(),
                     self.inner.limits.clone(),
                     self.inner.series_count.clone(),
+                    self.inner.observation_failures.clone(),
                 )
             })
             .collect();
@@ -271,6 +304,22 @@ impl MetricsProvider {
             catalog.insert(metric_name(descriptor), *descriptor);
         }
         Ok(handles)
+    }
+
+    /// Number of observations rejected at the local safety boundary.
+    #[must_use]
+    pub fn observation_failures(&self) -> u64 {
+        self.inner.observation_failures.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record_collection_failure(&self) {
+        self.inner
+            .collection_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn collection_failures(&self) -> u64 {
+        self.inner.collection_failures.load(Ordering::Relaxed)
     }
 
     #[must_use]
@@ -381,12 +430,12 @@ pub(crate) fn metric_name(descriptor: &MetricDescriptor) -> String {
     if descriptor.subsystem.is_empty() {
         descriptor.name.to_owned()
     } else {
-        format!("{}_{}", descriptor.subsystem, descriptor.name)
+        format!("{}.{}", descriptor.subsystem, descriptor.name)
     }
 }
 
 fn exported_names(descriptor: &MetricDescriptor) -> Vec<String> {
-    let name = metric_name(descriptor);
+    let name = descriptor.prometheus_name();
     if descriptor.kind == MetricKind::Histogram {
         vec![
             name.clone(),
@@ -409,9 +458,11 @@ fn validate(descriptor: &MetricDescriptor) -> MetricResult<()> {
             && value.len() <= 255
             && value
                 .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.')
     };
-    if !valid_name(&name)
+    if descriptor.prometheus_name() == "target_info_ratio"
+        || descriptor.prometheus_name() == "target_info"
+        || !valid_name(&name)
         || descriptor.help.is_empty()
         || descriptor.labels.len() > 8
         || descriptor.unit.is_empty()
@@ -422,7 +473,23 @@ fn validate(descriptor: &MetricDescriptor) -> MetricResult<()> {
     }
     let mut labels = BTreeSet::new();
     for label in descriptor.labels {
-        if !valid_name(label) || *label == "le" || !labels.insert(label) {
+        let exported = label.replace('.', "_");
+        if !valid_name(label)
+            || [
+                "le",
+                "job",
+                "instance",
+                "service_name",
+                "service_version",
+                "service_namespace",
+                "service_instance_id",
+                "deployment_environment_name",
+                "aster_role",
+                "aster_metrics_schema_version",
+            ]
+            .contains(&exported.as_str())
+            || !labels.insert(exported)
+        {
             return Err(MetricError::InvalidDescriptor);
         }
     }

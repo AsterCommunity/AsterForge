@@ -47,7 +47,14 @@ impl aster_forge_metrics::DbMetricsRecorder for RecordingMetrics {
 }
 
 impl MetricsRecorder for RecordingMetrics {
-    fn record_http_request(&self, method: &str, route: &str, status: u16, duration_seconds: f64) {
+    fn record_http_request(
+        &self,
+        method: &str,
+        _scheme: &str,
+        route: &str,
+        status: u16,
+        duration_seconds: f64,
+    ) {
         self.records
             .lock()
             .expect("metrics records lock")

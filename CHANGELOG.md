@@ -9,6 +9,7 @@
 
 ### Changed
 
+- **Aster Metrics v1 (breaking)** — Adopt OTel HTTP/DB/process instruments, seconds-based cumulative CPU, native memory/pool snapshots, versioned resource identity, standard Prometheus translation and `target_info`. HTTP adapters observe response-body completion/cancellation and omit unmatched routes. Shared extensions move to `aster.*`; update dashboards/rules with the application revision. No legacy series aliases or duplicate instrumentation.
 - Authentication key-length failures now return `AuthError::KeyTooShort` instead of `InvalidPolicy` for HMAC construction and algorithm-specific issuance/verification. Products can use the public `JwtAlgorithm::minimum_key_bytes()` to validate configuration at startup; exhaustive error mappings must handle the new variant.
 - Trusted-proxy middleware documentation and adapter tests now match the existing right-to-left `X-Forwarded-For` trust walk, stopping at the first untrusted hop rather than accepting a spoofable leftmost value.
 - Upgrade system sampling to `sysinfo` 0.40, retaining Rust 1.95 as the minimum. Failed system initialization retries on the next sampling interval while uptime, allocator, and exporter diagnostics continue to update.

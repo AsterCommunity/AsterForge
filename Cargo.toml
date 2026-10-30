@@ -88,6 +88,7 @@ hashbrown = "0.17"
 hmac = "0.13"
 hkdf = "0.13"
 http = "1"
+http-body = "1"
 httpdate = "1"
 ipnet = "2.12.2"
 jsonwebtoken = { version = "11", default-features = false }

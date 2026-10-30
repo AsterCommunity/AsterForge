@@ -4,16 +4,16 @@ use std::time::Duration;
 
 product_metrics! {
     struct TestMetrics {
-        bytes: counter("file", "bytes_total", "Observed bytes.", &["mode"]).with_unit("By"),
-        active: gauge("file", "active", "Active streams.", &["mode"]),
-        duration: histogram_with_buckets("file", "duration_seconds", "Stream duration.", &["mode"], &[0.1, 1.0]).with_unit("s"),
+        bytes: counter("file", "bytes", "Observed bytes.", &["mode"]).with_unit("By"),
+        active: gauge("file", "active", "Active streams.", &["mode"]).with_unit("{stream}"),
+        duration: histogram_with_buckets("file", "duration", "Stream duration.", &["mode"], &[0.1, 1.0]).with_unit("s"),
     }
 }
 
 #[test]
 fn batch_validation_and_macro_registration_are_atomic() {
     let provider = MetricsProvider::builder().build().unwrap();
-    let good = MetricDescriptor::counter("test", "events_total", "Events.", &[]);
+    let good = MetricDescriptor::counter("test", "events_total", "Events.", &[]).with_unit("{event}");
     for invalid in [
         MetricDescriptor::counter("test", "1invalid", "Invalid.", &[]).with_unit(" "),
         MetricDescriptor::counter("test", "invalid", "", &[]),
@@ -28,8 +28,8 @@ fn batch_validation_and_macro_registration_are_atomic() {
     let handles = provider.register_batch(&[good]).unwrap();
     assert!(ProductGauge::from_handle(handles[0].clone()).is_err());
     assert_eq!(provider.register_batch(&[good]).err(), Some(MetricError::DuplicateRegistration));
-    let histogram = MetricDescriptor::histogram("other", "duration", "Duration.", &[]);
-    let collision = MetricDescriptor::gauge("other", "duration_count", "Count.", &[]);
+    let histogram = MetricDescriptor::histogram("other", "duration", "Duration.", &[]).with_unit("s");
+    let collision = MetricDescriptor::gauge("other", "duration_seconds_count", "Count.", &[]).with_unit("{count}");
     assert_eq!(provider.register_batch(&[histogram, collision]).err(), Some(MetricError::DuplicateRegistration));
     assert_eq!(provider.descriptors().len(), 1);
     TestMetrics::register(&provider).unwrap();
@@ -45,7 +45,7 @@ fn noop_accepts_the_same_schema_without_allocating_series() {
     metrics.bytes.inc(&["direct"], 42);
     metrics.active.add(&["direct"], 1.0);
     metrics.duration.observe(&["direct"], 0.05);
-    assert_eq!(provider.descriptors()[0].unit, "1"); // sorted by name
+    assert_eq!(provider.descriptors()[0].unit, "{stream}"); // sorted by name
 }
 
 #[cfg(feature = "backend-prometheus")]
@@ -66,12 +66,12 @@ async fn instances_are_isolated_and_compatible_exposition_is_stable_across_scrap
     metrics.duration.observe(&["direct"], 0.25);
     for _ in 0..2 {
         let output = first.export_prometheus(Duration::from_secs(1)).await.unwrap();
-        assert!(output.contains("# TYPE file_bytes_total counter"), "{output}");
-        assert!(output.contains("file_bytes_total{mode=\"direct\"} 123"), "{output}");
+        assert!(output.contains("# TYPE file_bytes_bytes_total counter"), "{output}");
+        assert!(output.contains("file_bytes_bytes_total{mode=\"direct\"} 123"), "{output}");
         assert!(output.contains("file_active{mode=\"direct\"} 2"), "{output}");
         assert!(output.contains("file_duration_seconds_count{mode=\"direct\"} 1"), "{output}");
         assert!(output.contains("le=\"0.1\""), "{output}");
-        assert!(!output.contains("target_info") && !output.contains("otel_scope"));
+        assert!(!output.contains("otel_scope"));
     }
     let output = second.export_prometheus(Duration::from_secs(1)).await.unwrap();
     assert!(!output.contains("123"));
@@ -115,7 +115,7 @@ async fn concurrent_gauge_updates_and_counters_do_not_lose_observations() {
     }
     for task in tasks { task.join().unwrap(); }
     let output = provider.export_prometheus(Duration::from_secs(1)).await.unwrap();
-    assert!(output.contains("file_bytes_total{mode=\"direct\"} 8000"));
+    assert!(output.contains("file_bytes_bytes_total{mode=\"direct\"} 8000"));
     assert!(output.contains("file_active{mode=\"direct\"} 8000"));
     provider.shutdown(Duration::from_secs(1)).await.unwrap();
 }
@@ -125,7 +125,7 @@ async fn concurrent_gauge_updates_and_counters_do_not_lose_observations() {
 async fn shared_schema_and_sampler_remain_instance_owned() {
     let provider = prometheus_provider();
     let recorder = InfrastructureMetricsRecorder::new(provider.clone()).unwrap();
-    recorder.record_http_request("GET", "/files/{id}", 200, 0.2);
+    recorder.record_http_request("GET", "http", "/files/{id}", 200, 0.2);
     recorder.record_auth_event("login", "ok", "password");
     recorder.record_config_reload("api", "reloaded", "ok", 2, 0.01);
     recorder.record_config_mutation("api", "upsert", "ok", 1);
@@ -137,11 +137,11 @@ async fn shared_schema_and_sampler_remain_instance_owned() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     shutdown.cancel(); task.await.unwrap();
     let output = provider.export_prometheus(Duration::from_secs(1)).await.unwrap();
-    for name in ["http_requests_total", "auth_events_total", "config_reloads_total",
-        "config_mutations_total", "background_tasks_total", "external_operations_total",
-        "process_memory_rss_bytes", "process_cpu_milliseconds_total", "process_uptime_seconds"] {
+    for name in ["aster_http_server_requests_total", "aster_auth_events_total", "aster_config_reloads_total",
+        "aster_config_mutations_total", "aster_task_transitions_total", "aster_external_operations_total",
+        "process_memory_usage_bytes", "process_cpu_time_seconds_total", "process_uptime_seconds"] {
         assert!(output.contains(name), "missing {name}: {output}");
     }
-    assert!(output.contains("# TYPE process_cpu_milliseconds_total gauge"));
+    assert!(output.contains("# TYPE process_cpu_time_seconds_total counter"));
     provider.shutdown(Duration::from_secs(1)).await.unwrap();
 }

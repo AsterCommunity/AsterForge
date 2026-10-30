@@ -30,7 +30,7 @@ mod provider;
 mod shared;
 pub use instruments::*;
 pub use provider::*;
-pub use shared::InfrastructureMetricsRecorder;
+pub use shared::{InfrastructureMetricsRecorder, normalized_http_method};
 #[cfg(test)]
 mod instance_tests {
     include!("tests.rs");
@@ -192,14 +192,49 @@ pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
         _report: &aster_forge_runtime::SystemHealthReport,
     ) {
     }
-    /// Records an HTTP request.
-    ///
+    /// Records an HTTP request using Aster Metrics v1 transport semantics.
     /// `method` and `route` become metric label values and MUST be low
     /// cardinality: pass the route template (e.g. `/api/v1/files/{id}`),
     /// never the raw request path. Raw paths containing IDs or UUIDs allocate
     /// a new, never-freed time series per distinct value — a user-input-driven
     /// memory bomb.
-    fn record_http_request(&self, method: &str, route: &str, status: u16, duration_seconds: f64) {}
+    fn record_http_request(
+        &self,
+        method: &str,
+        scheme: &str,
+        route: &str,
+        status: u16,
+        duration_seconds: f64,
+    ) {
+    }
+
+    /// Records a cancelled or failed response stream without inventing an HTTP status.
+    fn record_http_stream_failure(
+        &self,
+        method: &str,
+        scheme: &str,
+        route: &str,
+        status: u16,
+        duration_seconds: f64,
+        cancelled: bool,
+    ) {
+        self.record_http_request(method, scheme, route, status, duration_seconds);
+    }
+
+    /// Adjusts active HTTP handlers before their route or final status is known.
+    fn http_active(&self, method: &str, scheme: &str, delta: i64) {}
+
+    /// Publishes actual role readiness from the same result as the ready endpoint.
+    fn role_readiness(&self, ready: bool) {}
+
+    /// Publishes native idle/used counts and an optional real pool maximum.
+    fn db_pool(&self, pool: &'static str, idle: u32, used: u32, max: Option<u32>) {}
+
+    /// Adjusts actual in-process task handler executions, independent of persistence.
+    fn task_handler_active(&self, kind: &'static str, delta: i64) {}
+
+    /// Records a local handler return/drop; this does not assert a committed task result.
+    fn task_handler_finished(&self, kind: &'static str, result: &'static str, seconds: f64) {}
 
     /// Records an authentication event.
     fn record_auth_event(&self, action: &'static str, status: &'static str, reason: &'static str) {}
@@ -262,6 +297,77 @@ pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
 /// Shared trait object for application metrics recorders.
 pub type SharedMetricsRecorder = Arc<dyn MetricsRecorder>;
 
+/// Owns exactly one handler active increment, including cancellation and unwind.
+pub struct HttpRequestGuard {
+    recorder: SharedMetricsRecorder,
+    method: &'static str,
+    scheme: &'static str,
+    route: String,
+    status: u16,
+    started: std::time::Instant,
+    finished: bool,
+}
+impl HttpRequestGuard {
+    /// Starts one handler; route and status are deliberately unknown here.
+    #[must_use]
+    pub fn new(recorder: SharedMetricsRecorder, method: &str, scheme: &str) -> Self {
+        let method = normalized_http_method(method);
+        let scheme = if scheme == "https" { "https" } else { "http" };
+        recorder.http_active(method, scheme, 1);
+        Self {
+            recorder,
+            method,
+            scheme,
+            route: String::new(),
+            status: 0,
+            started: std::time::Instant::now(),
+            finished: false,
+        }
+    }
+    /// Supplies matched transport metadata without changing the lifetime owner.
+    pub fn response(&mut self, route: String, status: u16) {
+        self.route = route;
+        self.status = status;
+    }
+    /// Records one terminal response-body observation.
+    pub fn finish(&mut self) {
+        if !self.finished {
+            self.finished = true;
+            self.recorder.http_active(self.method, self.scheme, -1);
+            self.recorder.record_http_request(
+                self.method,
+                self.scheme,
+                &self.route,
+                self.status,
+                self.started.elapsed().as_secs_f64(),
+            );
+        }
+    }
+    /// Records a body transport failure while preserving any committed status.
+    pub fn fail(&mut self) {
+        self.finish_failure(false);
+    }
+    fn finish_failure(&mut self, cancelled: bool) {
+        if !self.finished {
+            self.finished = true;
+            self.recorder.http_active(self.method, self.scheme, -1);
+            self.recorder.record_http_stream_failure(
+                self.method,
+                self.scheme,
+                &self.route,
+                self.status,
+                self.started.elapsed().as_secs_f64(),
+                cancelled,
+            );
+        }
+    }
+}
+impl Drop for HttpRequestGuard {
+    fn drop(&mut self) {
+        self.finish_failure(true);
+    }
+}
+
 /// Metrics recorder that ignores every event.
 #[derive(Debug, Default)]
 pub struct NoopMetrics;
@@ -295,6 +401,12 @@ impl NoopMetrics {
 pub enum MetricKind {
     /// Monotonically increasing counter.
     Counter,
+    /// Signed additive state.
+    UpDownCounter,
+    /// Cumulative snapshot read at collection without repeated addition.
+    ObservableCounter,
+    /// Signed snapshot read at collection.
+    ObservableUpDownCounter,
     /// Point-in-time value.
     Gauge,
     /// Duration or distribution bucket metric.
@@ -321,6 +433,113 @@ pub struct MetricDescriptor {
 }
 
 impl MetricDescriptor {
+    /// Prometheus family name under the pinned exporter translation contract.
+    #[must_use]
+    pub fn prometheus_name(&self) -> String {
+        let mut name = crate::provider::metric_name(self).replace('.', "_");
+        let direct = |unit: &str| match unit {
+            "d" => Some("days"),
+            "h" => Some("hours"),
+            "min" => Some("minutes"),
+            "s" => Some("seconds"),
+            "ms" => Some("milliseconds"),
+            "us" => Some("microseconds"),
+            "ns" => Some("nanoseconds"),
+            "By" | "B" => Some("bytes"),
+            "KiBy" => Some("kibibytes"),
+            "MiBy" => Some("mebibytes"),
+            "GiBy" => Some("gibibytes"),
+            "TiBy" => Some("tibibytes"),
+            "KBy" | "KB" => Some("kilobytes"),
+            "MBy" | "MB" => Some("megabytes"),
+            "GBy" | "GB" => Some("gigabytes"),
+            "TBy" | "TB" => Some("terabytes"),
+            "m" => Some("meters"),
+            "V" => Some("volts"),
+            "A" => Some("amperes"),
+            "J" => Some("joules"),
+            "W" => Some("watts"),
+            "g" => Some("grams"),
+            "Cel" => Some("celsius"),
+            "Hz" => Some("hertz"),
+            "1" => Some("ratio"),
+            "%" => Some("percent"),
+            _ => None,
+        };
+        let suffix = direct(self.unit).map(str::to_owned).or_else(|| {
+            let (numerator, denominator) = self.unit.split_once('/')?;
+            let per = match denominator {
+                "s" => "second",
+                "m" => "minute",
+                "h" => "hour",
+                "d" => "day",
+                "w" => "week",
+                "mo" => "month",
+                "y" => "year",
+                _ => return None,
+            };
+            let prefix = if ["1", "d", "h", "min", "s", "ms", "us", "ns"].contains(&numerator) {
+                None
+            } else {
+                direct(numerator)
+            };
+            Some(prefix.map_or_else(
+                || format!("per_{per}"),
+                |prefix| format!("{prefix}_per_{per}"),
+            ))
+        });
+        if let Some(unit) = suffix {
+            name.push('_');
+            name.push_str(&unit);
+        }
+        if matches!(
+            self.kind,
+            MetricKind::Counter | MetricKind::ObservableCounter
+        ) {
+            name.push_str("_total");
+        }
+        name
+    }
+
+    /// Creates a signed additive instrument.
+    #[must_use]
+    pub const fn up_down_counter(
+        subsystem: &'static str,
+        name: &'static str,
+        help: &'static str,
+        labels: &'static [&'static str],
+    ) -> Self {
+        Self {
+            kind: MetricKind::UpDownCounter,
+            ..Self::gauge(subsystem, name, help, labels)
+        }
+    }
+    /// Creates a cumulative snapshot instrument; callers set absolute values.
+    #[must_use]
+    pub const fn observable_counter(
+        subsystem: &'static str,
+        name: &'static str,
+        help: &'static str,
+        labels: &'static [&'static str],
+    ) -> Self {
+        Self {
+            kind: MetricKind::ObservableCounter,
+            ..Self::gauge(subsystem, name, help, labels)
+        }
+    }
+    /// Creates a signed snapshot instrument; callers set absolute values.
+    #[must_use]
+    pub const fn observable_up_down_counter(
+        subsystem: &'static str,
+        name: &'static str,
+        help: &'static str,
+        labels: &'static [&'static str],
+    ) -> Self {
+        Self {
+            kind: MetricKind::ObservableUpDownCounter,
+            ..Self::gauge(subsystem, name, help, labels)
+        }
+    }
     /// Sets the stable instrument unit without changing the exported name.
     #[must_use]
     pub const fn with_unit(mut self, unit: &'static str) -> Self {
@@ -415,7 +634,7 @@ mod tests {
         let recorder = NoopMetrics::new();
 
         assert!(!recorder.enabled());
-        recorder.record_http_request("GET", "/health", 200, 0.01);
+        recorder.record_http_request("GET", "http", "/health", 200, 0.01);
         recorder.record_auth_event("login", "ok", "password");
         recorder.record_application_event("config", "updated", "ok");
         recorder.record_config_reload("api", "reloaded", "ok", 2, 0.01);

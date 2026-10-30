@@ -4,7 +4,10 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use std::time::Instant;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// Records responses using an optional recorder in request extensions and low-cardinality routes.
 pub async fn metrics(request: Request, next: Next) -> Response {
@@ -17,34 +20,130 @@ pub async fn metrics(request: Request, next: Next) -> Response {
     if !recorder.enabled() {
         return next.run(request).await;
     }
-    let started = Instant::now();
+    if matches!(
+        request.uri().path(),
+        "/health"
+            | "/health/live"
+            | "/health/ready"
+            | "/health/metrics"
+            | "/metrics"
+            | "/ready"
+            | "/live"
+    ) {
+        return next.run(request).await;
+    }
     let method = request.method().to_string();
-    let route = request.extensions().get::<MatchedPath>().map_or_else(
-        || unmatched_route(request.uri().path()).to_string(),
-        |path| path.as_str().to_string(),
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or_else(String::new, |path| path.as_str().to_string());
+    let mut guard = aster_forge_metrics::HttpRequestGuard::new(
+        recorder,
+        &method,
+        request.uri().scheme_str().unwrap_or("http"),
     );
     let response = next.run(request).await;
-    recorder.record_http_request(
-        &method,
-        &route,
-        response.status().as_u16(),
-        started.elapsed().as_secs_f64(),
-    );
-    response
+    guard.response(route, response.status().as_u16());
+    let (parts, body) = response.into_parts();
+    if axum::body::HttpBody::is_end_stream(&body) {
+        guard.finish();
+    }
+    Response::from_parts(
+        parts,
+        axum::body::Body::new(ObservedBody {
+            inner: body,
+            guard: Some(guard),
+        }),
+    )
 }
 
-fn unmatched_route(path: &str) -> &'static str {
-    if path.starts_with("/api/") {
-        "unmatched_api"
-    } else if path.starts_with("/health") {
-        "unmatched_health"
-    } else {
-        "unmatched"
+struct ObservedBody {
+    inner: axum::body::Body,
+    guard: Option<aster_forge_metrics::HttpRequestGuard>,
+}
+impl axum::body::HttpBody for ObservedBody {
+    type Data = axum::body::Bytes;
+    type Error = axum::Error;
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let result = Pin::new(&mut self.inner).poll_frame(cx);
+        if matches!(&result, Poll::Ready(Some(Ok(_))))
+            && self.inner.is_end_stream()
+            && let Some(mut guard) = self.guard.take()
+        {
+            guard.finish();
+        }
+        if matches!(&result, Poll::Ready(None | Some(Err(_))))
+            && let Some(mut guard) = self.guard.take()
+        {
+            if matches!(&result, Poll::Ready(Some(Err(_)))) {
+                guard.fail();
+            } else {
+                guard.finish();
+            }
+        }
+        result
+    }
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn response_body_retains_observation_until_eof_or_drop() {
+        let recorder = RecordingMetrics::enabled();
+        let router = Router::new()
+            .route(
+                "/stream/{id}",
+                get(|| async {
+                    Body::from_stream(futures::stream::pending::<
+                        Result<axum::body::Bytes, std::io::Error>,
+                    >())
+                }),
+            )
+            .route("/complete", get(|| async { "done" }))
+            .layer(middleware::from_fn(metrics))
+            .layer(Extension(recorder.shared()));
+        let response = router
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/stream/42")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(recorder.records().is_empty());
+        drop(response);
+        assert_eq!(recorder.records().len(), 1);
+        assert_eq!(recorder.records()[0].route, "/stream/{id}");
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/complete")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recorder.records().len(), 1);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 32)
+                .await
+                .unwrap(),
+            "done"
+        );
+        assert_eq!(recorder.records().len(), 2);
+    }
     use super::*;
     use crate::test_support::RecordingMetrics;
     use axum::{Extension, Router, body::Body, middleware, routing::get};
@@ -66,9 +165,9 @@ mod tests {
             ("/api/profiles/42", 201, "/api/profiles/{id}"),
             ("/api/profiles/99", 201, "/api/profiles/{id}"),
             ("/api/fails", 400, "/api/fails"),
-            ("/api/missing-secret-id", 404, "unmatched_api"),
-            ("/health/secret-id", 404, "unmatched_health"),
-            ("/missing-secret-id", 404, "unmatched"),
+            ("/api/missing-secret-id", 404, ""),
+            ("/health/secret-id", 404, ""),
+            ("/missing-secret-id", 404, ""),
         ] {
             let response = router
                 .clone()

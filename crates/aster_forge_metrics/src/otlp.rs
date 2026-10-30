@@ -330,7 +330,7 @@ mod tests {
             let handles = provider
                 .register_batch(&[MetricDescriptor::counter(
                     "file",
-                    "bytes_total",
+                    "bytes",
                     "Bytes.",
                     &["direction"],
                 )
@@ -343,7 +343,7 @@ mod tests {
             let request =
                 ExportMetricsServiceRequest::decode(received.join().unwrap().as_slice()).unwrap();
             let metric = &request.resource_metrics[0].scope_metrics[0].metrics[0];
-            assert_eq!(metric.name, "file_bytes_total");
+            assert_eq!(metric.name, "file.bytes");
             assert_eq!(metric.unit, "By");
             let Some(opentelemetry_proto::tonic::metrics::v1::metric::Data::Sum(sum)) =
                 &metric.data
@@ -363,7 +363,7 @@ mod tests {
                     .export_prometheus(Duration::from_secs(1))
                     .await
                     .unwrap();
-                assert!(output.contains("file_bytes_total{direction=\"ingress\"} 12"));
+                assert!(output.contains("file_bytes_bytes_total{direction=\"ingress\"} 12"));
                 assert_eq!(
                     diagnostics.snapshot().successes,
                     1,

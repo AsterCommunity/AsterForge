@@ -1,219 +1,132 @@
 //! Shared infrastructure schema, instance recorder and one system sampler.
-use crate::{
-    DbMetricsRecorder, DbQueryMetric, MetricDescriptor, MetricError, MetricResult, MetricsProvider,
-    MetricsRecorder, ProductCounter, ProductGauge, ProductHistogram,
-};
+use crate::{DbMetricsRecorder, DbQueryMetric, MetricResult, MetricsProvider, MetricsRecorder};
 use std::{future::Future, pin::Pin, sync::Arc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-struct InfrastructureMetricSet {
-    http_requests_total: ProductCounter,
-    http_request_duration_seconds: ProductHistogram,
-    db_queries_total: ProductCounter,
-    db_query_duration_seconds: ProductHistogram,
-    auth_events_total: ProductCounter,
-    application_events_total: ProductCounter,
-    config_reloads_total: ProductCounter,
-    config_reload_duration_seconds: ProductHistogram,
-    config_reload_changed_keys: ProductHistogram,
-    config_mutations_total: ProductCounter,
-    config_mutation_changed_keys: ProductHistogram,
-    background_tasks_total: ProductCounter,
-    background_tasks_pending: ProductGauge,
-    background_task_retries_total: ProductCounter,
-    external_operations_total: ProductCounter,
-    external_operation_duration_seconds: ProductHistogram,
-    #[cfg(feature = "runtime-health")]
-    health_report_status: ProductGauge,
-    #[cfg(feature = "runtime-health")]
-    health_report_duration_seconds: ProductHistogram,
-    #[cfg(feature = "runtime-health")]
-    health_component_status: ProductGauge,
-    #[cfg(feature = "runtime-health")]
-    health_component_duration_seconds: ProductHistogram,
-    process_memory_rss_bytes: ProductGauge,
-    process_cpu_milliseconds_total: ProductGauge,
-    uptime_seconds: ProductGauge,
-    #[cfg(feature = "allocator-metrics")]
-    process_heap_memory_mib: ProductGauge,
-    #[cfg(feature = "otlp")]
-    exporter_successes: ProductGauge,
-    #[cfg(feature = "otlp")]
-    exporter_failures: ProductGauge,
-    #[cfg(feature = "otlp")]
-    exporter_last_success: ProductGauge,
+crate::product_metrics! {
+    struct InfrastructureMetricSet {
+        http_requests_total: counter("", "aster.http.server.requests", "aster.http.server.requests under aster-metrics/v1.", &["aster.request.outcome"]).with_unit("{request}"),
+        http_request_duration_seconds: histogram_with_buckets("", "http.server.request.duration", "http.server.request.duration under aster-metrics/v1.", &["http.request.method", "url.scheme", "http.route", "http.response.status_code", "error.type"], &[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]).with_unit("s"),
+        http_active: up_down_counter("", "http.server.active_requests", "http.server.active_requests under aster-metrics/v1.", &["http.request.method", "url.scheme"]).with_unit("{request}"),
+        role_ready: gauge("", "aster.runtime.ready", "Current role ready endpoint result.", &[]).with_unit("{state}"),
+        pool_connections: observable_up_down_counter("", "db.client.connection.count", "Native idle/used connection count.", &["db.client.connection.pool.name","db.client.connection.state"]).with_unit("{connection}"),
+        pool_max: observable_up_down_counter("", "db.client.connection.max", "Actual finite connection pool limit.", &["db.client.connection.pool.name"]).with_unit("{connection}"),
+        task_handler_active: up_down_counter("", "aster.task.handler.active", "Actually active local task handlers.", &["kind"]).with_unit("{execution}"),
+        task_handler_duration: histogram_with_buckets("", "aster.task.handler.duration", "Local handler lifetime; return does not independently prove persistence.", &["kind","result"], &[0.01,0.1,1.0,5.0,15.0,60.0,300.0,900.0,3600.0]).with_unit("s"),
+        db_query_duration_seconds: histogram_with_buckets("", "db.client.operation.duration", "db.client.operation.duration under aster-metrics/v1.", &["db.system.name", "db.operation.name", "error.type"], &[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
+        auth_events_total: counter("", "aster.auth.events", "aster.auth.events under aster-metrics/v1.", &["action", "status", "reason"]).with_unit("{event}"),
+        application_events_total: counter("", "aster.application.events", "aster.application.events under aster-metrics/v1.", &["category", "event", "status"]).with_unit("{event}"),
+        config_reloads_total: counter("", "aster.config.reloads", "aster.config.reloads under aster-metrics/v1.", &["source", "decision", "status"]).with_unit("{operation}"),
+        config_reload_duration_seconds: histogram_with_buckets("", "aster.config.reload.duration", "aster.config.reload.duration under aster-metrics/v1.", &["source", "decision", "status"], &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
+        config_reload_changed_keys: histogram_with_buckets("", "aster.config.reload.changed_keys", "aster.config.reload.changed_keys under aster-metrics/v1.", &["source", "decision", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 500.0]).with_unit("{key}"),
+        config_mutations_total: counter("", "aster.config.mutations", "aster.config.mutations under aster-metrics/v1.", &["source", "operation", "status"]).with_unit("{operation}"),
+        config_mutation_changed_keys: histogram_with_buckets("", "aster.config.mutation.changed_keys", "aster.config.mutation.changed_keys under aster-metrics/v1.", &["source", "operation", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0]).with_unit("{key}"),
+        background_tasks_total: counter("", "aster.task.transitions", "aster.task.transitions under aster-metrics/v1.", &["kind", "status"]).with_unit("{transition}"),
+        background_tasks_pending: gauge("", "aster.task.pending", "aster.task.pending under aster-metrics/v1.", &[]).with_unit("{task}"),
+        background_task_retries_total: counter("", "aster.task.retries", "aster.task.retries under aster-metrics/v1.", &["kind"]).with_unit("{retry}"),
+        external_operations_total: counter("", "aster.external.operations", "aster.external.operations under aster-metrics/v1.", &["system", "operation", "status"]).with_unit("{operation}"),
+        external_operation_duration_seconds: histogram_with_buckets("", "aster.external.operation.duration", "aster.external.operation.duration under aster-metrics/v1.", &["system", "operation", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0]).with_unit("s"),
+        #[cfg(feature = "runtime-health")]
+        health_report_status: gauge("", "aster.runtime.health.status", "Aggregate health report: healthy=0, degraded=1, unhealthy=2.", &["scope"]).with_unit("{state}"),
+        #[cfg(feature = "runtime-health")]
+        health_report_duration_seconds: histogram_with_buckets("", "aster.runtime.health.duration", "aster.runtime.health.duration under aster-metrics/v1.", &["scope", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]).with_unit("s"),
+        #[cfg(feature = "runtime-health")]
+        health_component_status: gauge("", "aster.runtime.component.health.status", "Component health: healthy=0, degraded=1, unhealthy=2.", &["scope", "component"]).with_unit("{state}"),
+        #[cfg(feature = "runtime-health")]
+        health_component_duration_seconds: histogram_with_buckets("", "aster.runtime.component.health.duration", "aster.runtime.component.health.duration under aster-metrics/v1.", &["scope", "component", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]).with_unit("s"),
+        process_memory_rss_bytes: observable_up_down_counter("", "process.memory.usage", "process.memory.usage under aster-metrics/v1.", &[]).with_unit("By"),
+        process_cpu_time: observable_counter("", "process.cpu.time", "process.cpu.time under aster-metrics/v1.", &[]).with_unit("s"),
+        uptime_seconds: gauge("", "process.uptime", "process.uptime under aster-metrics/v1.", &[]).with_unit("s"),
+        observation_failures: observable_counter("", "aster.observability.failures", "aster.observability.failures under aster-metrics/v1.", &["component", "operation"]).with_unit("{failure}"),
+        #[cfg(feature = "allocator-metrics")]
+        process_heap_memory_mib: gauge("", "aster.process.heap", "aster.process.heap under aster-metrics/v1.", &["kind"]).with_unit("By"),
+        #[cfg(feature = "otlp")]
+        exporter_successes: observable_counter("", "aster.telemetry.exports", "aster.telemetry.exports under aster-metrics/v1.", &["exporter"]).with_unit("{export}"),
+        #[cfg(feature = "otlp")]
+        exporter_failures: observable_counter("", "aster.telemetry.export.failures", "aster.telemetry.export.failures under aster-metrics/v1.", &["exporter"]).with_unit("{failure}"),
+        #[cfg(feature = "otlp")]
+        exporter_last_success: gauge("", "aster.telemetry.export.last_success", "aster.telemetry.export.last_success under aster-metrics/v1.", &["exporter"]).with_unit("s"),
+    }
 }
 impl InfrastructureMetricSet {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the shared schema and atomic typed registration are reviewed together"
-    )]
     fn new(provider: &MetricsProvider) -> MetricResult<Self> {
-        let descriptors = [
-            MetricDescriptor::counter("", "http_requests_total", "Total HTTP requests", &["method", "route", "status"]).with_unit("1"),
-            MetricDescriptor::histogram_with_buckets("", "http_request_duration_seconds", "HTTP request duration in seconds", &["method", "route", "status"], &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
-            MetricDescriptor::counter("", "db_queries_total", "Total database queries observed through the shared database metrics adapter", &["backend", "kind", "status"]).with_unit("1"),
-            MetricDescriptor::histogram_with_buckets("", "db_query_duration_seconds", "Database query duration in seconds", &["backend", "kind", "status"], &[
-                0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0,
-            ]).with_unit("s"),
-            MetricDescriptor::counter("", "auth_events_total", "Total authentication events", &["action", "status", "reason"]).with_unit("1"),
-            MetricDescriptor::counter("", "application_events_total", "Total low-cardinality application events", &["category", "event", "status"]).with_unit("1"),
-            MetricDescriptor::counter("", "config_reloads_total", "Total runtime config reload attempts", &["source", "decision", "status"]).with_unit("1"),
-            MetricDescriptor::histogram_with_buckets("", "config_reload_duration_seconds", "Runtime config reload duration in seconds", &["source", "decision", "status"], &[
-                0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0,
-            ]).with_unit("s"),
-            MetricDescriptor::histogram_with_buckets("", "config_reload_changed_keys", "Number of changed keys observed by runtime config reload attempts", &["source", "decision", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 500.0]).with_unit("1"),
-            MetricDescriptor::counter("", "config_mutations_total", "Total runtime config mutation attempts", &["source", "operation", "status"]).with_unit("1"),
-            MetricDescriptor::histogram_with_buckets("", "config_mutation_changed_keys", "Number of changed keys in runtime config mutation attempts", &["source", "operation", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0]).with_unit("1"),
-            MetricDescriptor::counter("", "background_tasks_total", "Total background task state transitions", &["kind", "status"]).with_unit("1"),
-            MetricDescriptor::gauge("", "background_tasks_pending", "Pending or retryable background task backlog", &[]).with_unit("1"),
-            MetricDescriptor::counter("", "background_task_retries_total", "Total background task retry transitions", &["kind"]).with_unit("1"),
-            MetricDescriptor::counter("", "external_operations_total", "Total operations against external systems", &["system", "operation", "status"]).with_unit("1"),
-            MetricDescriptor::histogram_with_buckets("", "external_operation_duration_seconds", "External system operation duration in seconds", &["system", "operation", "status"], &[
-                0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0, 15.0, 60.0,
-            ]).with_unit("s"),
-            #[cfg(feature = "runtime-health")]
-            MetricDescriptor::gauge("", "health_report_status", "Aggregate health status for a health check scope: healthy=0, degraded=1, unhealthy=2", &["scope"]).with_unit("1"),
-            #[cfg(feature = "runtime-health")]
-            MetricDescriptor::histogram_with_buckets("", "health_report_duration_seconds", "Aggregate health check duration in seconds", &["scope", "status"], &[
-                0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0,
-            ]).with_unit("s"),
-            #[cfg(feature = "runtime-health")]
-            MetricDescriptor::gauge("", "health_component_status", "Health component status for a health check scope: healthy=0, degraded=1, unhealthy=2", &["scope", "component"]).with_unit("1"),
-            #[cfg(feature = "runtime-health")]
-            MetricDescriptor::histogram_with_buckets("", "health_component_duration_seconds", "Health component check duration in seconds", &["scope", "component", "status"], &[
-                0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0,
-            ]).with_unit("s"),
-            MetricDescriptor::gauge("", "process_memory_rss_bytes", "Process RSS memory in bytes", &[]).with_unit("By"),
-            MetricDescriptor::gauge("", "process_cpu_milliseconds_total", "Process accumulated CPU time in milliseconds", &[]).with_unit("ms"),
-            MetricDescriptor::gauge("", "process_uptime_seconds", "Process uptime in seconds", &[]).with_unit("s"),
-            #[cfg(feature = "allocator-metrics")]
-            MetricDescriptor::gauge("", "process_heap_memory_mib", "Allocator heap memory in MiB: allocated and peak_or_resident", &["kind"]).with_unit("MiBy"),
-            #[cfg(feature = "otlp")]
-            MetricDescriptor::gauge("telemetry", "export_successes", "Cumulative successful push exports observed locally.", &["exporter"]),
-            #[cfg(feature = "otlp")]
-            MetricDescriptor::gauge("telemetry", "export_failures", "Cumulative failed push exports observed locally.", &["exporter"]),
-            #[cfg(feature = "otlp")]
-            MetricDescriptor::gauge("telemetry", "export_last_success_timestamp_seconds", "Last acknowledged push export Unix timestamp.", &["exporter"]).with_unit("s"),
-];
-        let mut handles = provider.register_batch(&descriptors)?.into_iter();
-        Ok(Self {
-            http_requests_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            http_request_duration_seconds: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            db_queries_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            db_query_duration_seconds: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            auth_events_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            application_events_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            config_reloads_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            config_reload_duration_seconds: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            config_reload_changed_keys: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            config_mutations_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            config_mutation_changed_keys: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            background_tasks_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            background_tasks_pending: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            background_task_retries_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            external_operations_total: ProductCounter::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            external_operation_duration_seconds: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "runtime-health")]
-            health_report_status: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "runtime-health")]
-            health_report_duration_seconds: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "runtime-health")]
-            health_component_status: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "runtime-health")]
-            health_component_duration_seconds: ProductHistogram::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            process_memory_rss_bytes: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            process_cpu_milliseconds_total: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            uptime_seconds: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "allocator-metrics")]
-            process_heap_memory_mib: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "otlp")]
-            exporter_successes: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "otlp")]
-            exporter_failures: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-            #[cfg(feature = "otlp")]
-            exporter_last_success: ProductGauge::from_handle(
-                handles.next().ok_or(MetricError::InvalidDescriptor)?,
-            )?,
-        })
+        let metrics = Self::register(provider)?;
+        for method in [
+            "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE",
+            "_OTHER",
+        ] {
+            for scheme in ["http", "https"] {
+                metrics.http_active.add(&[method, scheme], 0);
+            }
+        }
+        for outcome in [
+            "completed",
+            "rejected",
+            "auth_rejected",
+            "server_error",
+            "canceled",
+            "transport_error",
+        ] {
+            metrics.http_requests_total.inc(&[outcome], 0);
+        }
+        Ok(metrics)
     }
-    fn record_http_request(&self, method: &str, route: &str, status: u16, duration_seconds: f64) {
+    fn record_http_request(
+        &self,
+        method: &str,
+        scheme: &str,
+        route: &str,
+        status: u16,
+        duration_seconds: f64,
+    ) {
         let metrics = self;
 
-        let status = status.to_string();
-        metrics
-            .http_requests_total
-            .inc(&[method, route, &status], 1);
-        metrics
-            .http_request_duration_seconds
-            .observe(&[method, route, &status], duration_seconds);
+        let method = normalized_http_method(method);
+        let outcome = match status {
+            401 | 403 => "auth_rejected",
+            400..=499 => "rejected",
+            500..=599 => "server_error",
+            _ => "completed",
+        };
+        metrics.http_requests_total.inc(&[outcome], 1);
+        let status = if status == 0 {
+            String::new()
+        } else {
+            status.to_string()
+        };
+        metrics.http_request_duration_seconds.observe(
+            &[
+                method,
+                scheme,
+                route,
+                &status,
+                if status.starts_with('5') {
+                    status.as_str()
+                } else {
+                    ""
+                },
+            ],
+            duration_seconds,
+        );
     }
-
     fn record_db_query(&self, metric: &DbQueryMetric) {
-        let metrics = self;
-
-        let backend = metric.backend.as_label();
-        let kind = metric.kind.as_label();
-        let status = metric.status_label();
-
-        metrics.db_queries_total.inc(&[backend, kind, status], 1);
-        metrics
-            .db_query_duration_seconds
-            .observe(&[backend, kind, status], metric.elapsed.as_secs_f64());
+        let backend = match metric.backend {
+            crate::DbMetricBackend::Postgres => "postgresql",
+            other => other.as_label(),
+        };
+        let operation = match metric.kind {
+            crate::DbQueryKind::Select => "SELECT",
+            crate::DbQueryKind::Insert => "INSERT",
+            crate::DbQueryKind::Update => "UPDATE",
+            crate::DbQueryKind::Delete => "DELETE",
+            crate::DbQueryKind::Pragma => "PRAGMA",
+            _ => "_OTHER",
+        };
+        self.db_query_duration_seconds.observe(
+            &[backend, operation, if metric.failed { "other" } else { "" }],
+            metric.elapsed.as_secs_f64(),
+        );
     }
-
     fn record_auth_event(&self, action: &'static str, status: &'static str, reason: &'static str) {
         let metrics = self;
 
@@ -390,11 +303,80 @@ impl MetricsRecorder for InfrastructureMetricsRecorder {
     fn record_health(&self, scope: &'static str, report: &aster_forge_runtime::SystemHealthReport) {
         report.record_metrics(scope, self);
     }
-    fn record_http_request(&self, method: &str, route: &str, status: u16, duration_seconds: f64) {
+    fn record_http_request(
+        &self,
+        method: &str,
+        scheme: &str,
+        route: &str,
+        status: u16,
+        duration_seconds: f64,
+    ) {
         self.metrics
-            .record_http_request(method, route, status, duration_seconds);
+            .record_http_request(method, scheme, route, status, duration_seconds);
     }
 
+    fn record_http_stream_failure(
+        &self,
+        method: &str,
+        scheme: &str,
+        route: &str,
+        status: u16,
+        duration: f64,
+        cancelled: bool,
+    ) {
+        self.metrics.http_requests_total.inc(
+            &[if cancelled {
+                "canceled"
+            } else {
+                "transport_error"
+            }],
+            1,
+        );
+        let status = if status == 0 {
+            String::new()
+        } else {
+            status.to_string()
+        };
+        self.metrics.http_request_duration_seconds.observe(
+            &[
+                normalized_http_method(method),
+                scheme,
+                route,
+                &status,
+                if cancelled { "canceled" } else { "other" },
+            ],
+            duration,
+        );
+    }
+    fn role_readiness(&self, ready: bool) {
+        self.metrics
+            .role_ready
+            .set(&[], if ready { 1.0 } else { 0.0 });
+    }
+    fn db_pool(&self, pool: &'static str, idle: u32, used: u32, max: Option<u32>) {
+        self.metrics
+            .pool_connections
+            .set(&[pool, "idle"], f64::from(idle));
+        self.metrics
+            .pool_connections
+            .set(&[pool, "used"], f64::from(used));
+        if let Some(max) = max {
+            self.metrics.pool_max.set(&[pool], f64::from(max));
+        }
+    }
+    fn task_handler_active(&self, kind: &'static str, delta: i64) {
+        self.metrics.task_handler_active.add(&[kind], delta);
+    }
+    fn task_handler_finished(&self, kind: &'static str, result: &'static str, seconds: f64) {
+        self.metrics
+            .task_handler_duration
+            .observe(&[kind, result], seconds);
+    }
+    fn http_active(&self, method: &str, scheme: &str, delta: i64) {
+        self.metrics
+            .http_active
+            .add(&[normalized_http_method(method), scheme], delta);
+    }
     fn record_auth_event(&self, action: &'static str, status: &'static str, reason: &'static str) {
         self.metrics.record_auth_event(action, status, reason);
     }
@@ -519,11 +501,12 @@ async fn system_metrics_updater_task(
             break;
         }
         let system = system.clone();
-        let recorder = recorder.clone();
+        let sample_recorder = recorder.clone();
         let task = tokio::task::spawn_blocking(move || {
-            sample_system_metrics(&recorder, &mut system.lock(), sysinfo::System::new);
+            sample_system_metrics(&sample_recorder, &mut system.lock(), sysinfo::System::new);
         });
         if task.await.is_err() {
+            recorder.provider.record_collection_failure();
             tracing::warn!("system metrics sampler failed");
         }
     }
@@ -540,6 +523,7 @@ fn sample_system_metrics(
         match initialize() {
             Ok(initialized) => *system = Some(initialized),
             Err(error) => {
+                recorder.provider.record_collection_failure();
                 tracing::warn!(%error, "system metrics sampler initialization failed; retrying next interval");
             }
         }
@@ -558,10 +542,18 @@ fn sample_system_metrics(
                 .set(&[], metric_u64(process.memory()));
             recorder
                 .metrics
-                .process_cpu_milliseconds_total
-                .set(&[], metric_u64(process.accumulated_cpu_time()));
+                .process_cpu_time
+                .set(&[], metric_u64(process.accumulated_cpu_time()) / 1000.0);
         }
     }
+    recorder.metrics.observation_failures.set(
+        &["metrics", "record"],
+        metric_u64(recorder.provider.observation_failures()),
+    );
+    recorder.metrics.observation_failures.set(
+        &["metrics", "collect"],
+        metric_u64(recorder.provider.collection_failures()),
+    );
     recorder
         .metrics
         .uptime_seconds
@@ -588,11 +580,11 @@ fn sample_system_metrics(
         recorder
             .metrics
             .process_heap_memory_mib
-            .set(&["allocated"], allocated);
+            .set(&["allocated"], allocated * 1024.0 * 1024.0);
         recorder
             .metrics
             .process_heap_memory_mib
-            .set(&["peak_or_resident"], resident);
+            .set(&["peak_or_resident"], resident * 1024.0 * 1024.0);
     }
 }
 
@@ -629,15 +621,15 @@ mod tests {
             assert!(
                 !output
                     .lines()
-                    .any(|line| line.starts_with("process_memory_rss_bytes "))
+                    .any(|line| line.starts_with("process_memory_usage_bytes "))
             );
             assert!(
                 !output
                     .lines()
-                    .any(|line| line.starts_with("process_cpu_milliseconds_total "))
+                    .any(|line| line.starts_with("process_cpu_time_seconds_total "))
             );
             #[cfg(feature = "allocator-metrics")]
-            assert!(output.contains("process_heap_memory_mib{kind=\"allocated\"}"));
+            assert!(output.contains("aster_process_heap_bytes{kind=\"allocated\"}"));
         }
 
         sample_system_metrics(&recorder, &mut system, || {
@@ -655,8 +647,8 @@ mod tests {
             .export_prometheus(Duration::from_secs(1))
             .await
             .unwrap();
-        assert!(sample_value(&output, "process_memory_rss_bytes") > 0.0);
-        assert!(sample_value(&output, "process_cpu_milliseconds_total") >= 0.0);
+        assert!(sample_value(&output, "process_memory_usage_bytes") > 0.0);
+        assert!(sample_value(&output, "process_cpu_time_seconds_total") >= 0.0);
         provider.shutdown(Duration::from_secs(1)).await.unwrap();
     }
 
@@ -667,5 +659,22 @@ mod tests {
             .unwrap_or_else(|| panic!("missing sample {name}: {output}"))
             .parse()
             .unwrap()
+    }
+}
+
+/// Finite HTTP method vocabulary shared by adapters and the recorder.
+#[must_use]
+pub fn normalized_http_method(method: &str) -> &'static str {
+    match method {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "PATCH" => "PATCH",
+        "DELETE" => "DELETE",
+        "CONNECT" => "CONNECT",
+        "OPTIONS" => "OPTIONS",
+        "TRACE" => "TRACE",
+        _ => "_OTHER",
     }
 }

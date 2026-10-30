@@ -151,6 +151,48 @@ pub struct DbHandles {
 }
 
 impl DbHandles {
+    /// Reads native pool state without SQL, network access or fictitious reader pools.
+    #[expect(
+        clippy::match_wildcard_for_single_variants,
+        reason = "SeaORM feature unification may add mock/proxy connection variants; unsupported transports have no native SQLx pool"
+    )]
+    pub fn record_pool_metrics(&self, metrics: &dyn aster_forge_metrics::MetricsRecorder) {
+        fn record(
+            db: &DatabaseConnection,
+            name: &'static str,
+            metrics: &dyn aster_forge_metrics::MetricsRecorder,
+        ) {
+            macro_rules! snapshot {
+                ($pool:expr) => {{
+                    let pool = $pool;
+                    let idle = u32::try_from(pool.num_idle()).unwrap_or(u32::MAX);
+                    metrics.db_pool(
+                        name,
+                        idle,
+                        pool.size().saturating_sub(idle),
+                        Some(pool.options().get_max_connections()),
+                    );
+                }};
+            }
+            match &db.inner {
+                sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_) => {
+                    snapshot!(db.get_postgres_connection_pool());
+                }
+                sea_orm::DatabaseConnectionType::SqlxMySqlPoolConnection(_) => {
+                    snapshot!(db.get_mysql_connection_pool());
+                }
+                sea_orm::DatabaseConnectionType::SqlxSqlitePoolConnection(_) => {
+                    snapshot!(db.get_sqlite_connection_pool());
+                }
+                _ => {}
+            }
+        }
+        record(&self.writer, "writer", metrics);
+        if self.sqlite_read_write_split {
+            record(&self.reader, "reader", metrics);
+        }
+    }
+
     /// Creates writer/reader handles backed by the same connection.
     #[must_use]
     pub fn single(db: DatabaseConnection) -> Self {

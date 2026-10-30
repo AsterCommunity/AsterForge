@@ -58,12 +58,10 @@ mod tests {
             .build()
             .unwrap();
         let handle = provider
-            .register_batch(&[MetricDescriptor::counter(
-                "test",
-                "requests_total",
-                "Requests.",
-                &[],
-            )])
+            .register_batch(&[
+                MetricDescriptor::counter("test", "requests", "Requests.", &[])
+                    .with_unit("{request}"),
+            ])
             .unwrap()
             .remove(0);
         ProductCounter::from_handle(handle).unwrap().inc(&[], 3);

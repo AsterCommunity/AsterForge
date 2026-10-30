@@ -26,6 +26,7 @@ tracing.workspace = true
 uuid.workspace = true
 tower.workspace = true
 http.workspace = true
+http-body.workspace = true
 
 [features]
 default = ["actix"]

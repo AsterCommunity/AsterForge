@@ -1,5 +1,7 @@
 # aster_forge_middleware
 
+指标采用 [Aster Metrics v1](../guide/metrics-profile.md)。Actix/Axum 以响应体 EOF/error/drop 结束 HTTP duration/active；空响应立即结束。未知 route 省略，未知 method 为 `_OTHER`。固定 probe/scrape 路径排除，其他未知 404 仍计量。scheme 取 transport TLS/URI，不信任任意 forwarded header；反代 HTTPS 的可信规范化属于部署入口。
+
 `aster_forge_middleware` 收纳共享 HTTP 中间件，并通过 `actix` / `axum` feature 提供框架适配。
 
 ## 适用场景

@@ -855,6 +855,7 @@ dependencies = [
  "futures",
  "governor",
  "http 1.5.0",
+ "http-body",
  "ipnet",
  "rand 0.10.3",
  "sea-orm",

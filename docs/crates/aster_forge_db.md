@@ -4,6 +4,8 @@
 
 ## 适用场景
 
+原生池观测使用 `DbHandles::record_pool_metrics(&dyn MetricsRecorder)`：只读 SQLx idle/used/真实 max，不执行 SQL/Ping。独立 SQLite reader 单独采样，复用 writer 不伪造 reader。mock/disconnected 无原生统计，省略。SQLx 未公开累计等待和获取阶段超时，当前不伪造这些指标。
+
 - 多数据库 URL 连接和连接池配置。
 - `DbHandles` 管理读写连接并在 shutdown 时关闭。
 - transient 数据库错误重试。
