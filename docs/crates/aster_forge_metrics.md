@@ -50,9 +50,9 @@ use aster_forge_metrics::{MetricsProvider, InfrastructureMetricsRecorder, Metric
 
 aster_forge_metrics::product_metrics! {
     pub struct ProductMetrics {
-        bytes: counter("file", "bytes_total", "Observed bytes.", &["direction"]).with_unit("By"),
+        bytes: counter("example.file", "transferred", "Observed bytes.", &["direction"]).with_unit("By"),
         active: gauge("file", "active", "Active transfers.", &["direction"]),
-        duration: histogram_with_buckets("file", "duration_seconds", "Transfer duration.", &["outcome"], &[0.01, 0.1, 1.0, 10.0]).with_unit("s"),
+        duration: histogram_with_buckets("example.file", "duration", "Transfer duration.", &["outcome"], &[0.01, 0.1, 1.0, 10.0]).with_unit("s"),
     }
 }
 
@@ -104,7 +104,7 @@ fn create(instance_id: String) -> MetricResult<MetricsProvider> {
 | `role` | `aster.role` | `aster_role` |
 | `instance_id` | `service.instance.id` | `service_instance_id` |
 
-Prometheus 侧不另生成 `target_info`；上述属性直接附到样本。`job`、`instance` 通常由 Prometheus 抓取配置附加，不能混同于进程的 `service_instance_id`。OTLP 使用显式 resource，不运行 SDK 环境资源检测器。
+Prometheus 生成 target_info；产品显式调用 with_profile(namespace, version) 添加 service namespace 和 schema，通用 builder 不替产品选择 namespace。Resource 属性附到样本。`job`、`instance` 由抓取配置附加，不混同于进程 instance ID。OTLP 使用显式 resource，不运行环境资源检测器。
 
 provider 的 clone 共享实例，创建第二个 provider 才有独立系列和预算。共享 schema 和每套产品 schema 各注册一次，再 clone recorder/handles 注入消费者；重复注册名称会返回错误。
 
@@ -116,7 +116,7 @@ provider 的 clone 共享实例，创建第二个 provider 才有独立系列和
 | Gauge | `set`、`add` / `try_set`、`try_add` | 有限 `f64`；可升可降，set/add 按系列同步 |
 | Histogram | `observe` / `try_observe` | 有限非负 `f64`；显式递增桶边界 |
 
-macro 中的 labels 是有序 schema；调用传入的值必须按相同顺序且数量相同。subsystem 非空时名称为 `subsystem_name`。单位存入 descriptor；Prometheus exporter 不自动添加单位或 `_total` 后缀，名称应由 schema 明确决定。histogram 的 `_bucket`、`_sum`、`_count` 派生名称也参与冲突检查。
+macro 中 labels 是有序 schema，值按相同顺序和数量传入。 默认属性为字符串；descriptor 或 macro 链式调用 `.with_integer_labels(&["http.response.status_code"])` 将指定 key 声明为整数类型，记录时解析为 i64，非法值拒绝且不占系列预算。整数 key 必须是 labels 的唯一子集；空值仍省略。OTLP 保留整数，Prometheus 将属性呈现为标签文本。subsystem 非空时 OTel 名为 `subsystem.name`；属性允许点分 key。Prometheus 自动转换下划线、单位和 Counter 后缀，公开 `descriptor.prometheus_name()` 供消费端验证。转换后属性、指标和 histogram 派生名冲突在整批注册时拒绝。
 
 | `MetricsLimits` 字段 | 默认值 | 构建时上限 |
 | --- | --- | --- |
@@ -132,9 +132,9 @@ macro 中的 labels 是有序 schema；调用传入的值必须按相同顺序�
 
 ## 通用指标与兼容
 
-`InfrastructureMetricsRecorder` 提供 HTTP、DB、auth、application events、config reload/mutation、background tasks、external operations、health 与 process 指标。原 Prometheus 名称、HELP、类型、labels 和显式 buckets 保持；subsystem 不为空的产品指标仍按 `subsystem_name` 导出。单位由 descriptor 单独表达，exporter 不自动添加单位/`_total` 后缀。
+`InfrastructureMetricsRecorder` 采用 [Aster Metrics v1](../guide/metrics-profile.md)。标准 HTTP/DB/process instrument 使用 OTel 语义，扩展采用 `aster.*`，旧序列直接删除；升级须同步 dashboard/规则，不能双发相加。
 
-`process_cpu_milliseconds_total` 仍是 **毫秒累计值的 gauge**，没有悄悄改为秒 counter。`process_memory_rss_bytes`、`process_uptime_seconds` 和可选 `process_heap_memory_mib{kind}` 的采样移到实例 updater；scrape 不刷新系统或 allocator 数据。
+`process.cpu.time` 是秒累计 ObservableCounter，`process.memory.usage` 是 ObservableUpDownCounter/By；采样写绝对值，重复 scrape 和双 reader 不重复累加。首次采样成功前省略未知值，allocator 转为 bytes。updater 采样，scrape 只读内存。
 
 HTTP `route` 必须是路由模板；DB 只记录 backend/kind/status/elapsed，不记录 SQL。资源身份通过 `MetricsResource` 显式注入，不读取 SDK 环境资源检测器；产品应在每次进程启动时生成、并在进程内保持稳定的 `service.instance.id`，避免多个 OTLP 实例覆盖同一累计系列。产品用户、文件、对象 key、URL、SQL 和凭据不能成为指标 labels。
 
@@ -188,37 +188,25 @@ fn create() -> MetricResult<MetricsProvider> {
 
 所有名称为实际导出名；C = counter，G = gauge，H = histogram。health、allocator 和 exporter 项分别需要对应 feature。
 
-| 名称 | 类型/单位 | labels |
-| --- | --- | --- |
-| `http_requests_total` | C / 1 | method, route, status |
-| `http_request_duration_seconds` | H / s | method, route, status |
-| `db_queries_total` | C / 1 | backend, kind, status |
-| `db_query_duration_seconds` | H / s | backend, kind, status |
-| `auth_events_total` | C / 1 | action, status, reason |
-| `application_events_total` | C / 1 | category, event, status |
-| `config_reloads_total` | C / 1 | source, decision, status |
-| `config_reload_duration_seconds` | H / s | source, decision, status |
-| `config_reload_changed_keys` | H / 1 | source, decision, status |
-| `config_mutations_total` | C / 1 | source, operation, status |
-| `config_mutation_changed_keys` | H / 1 | source, operation, status |
-| `background_tasks_total` | C / 1 | kind, status |
-| `background_tasks_pending` | G / 1 | 无 |
-| `background_task_retries_total` | C / 1 | kind |
-| `external_operations_total` | C / 1 | system, operation, status |
-| `external_operation_duration_seconds` | H / s | system, operation, status |
-| `health_report_status` | G / 1 | scope |
-| `health_report_duration_seconds` | H / s | scope, status |
-| `health_component_status` | G / 1 | scope, component |
-| `health_component_duration_seconds` | H / s | scope, component, status |
-| `process_memory_rss_bytes` | G / By | 无 |
-| `process_cpu_milliseconds_total` | G / ms | 无 |
-| `process_uptime_seconds` | G / s | 无 |
-| `process_heap_memory_mib` | G / MiBy | kind |
-| `telemetry_export_successes` | G / 未指定 | exporter |
-| `telemetry_export_failures` | G / 未指定 | exporter |
-| `telemetry_export_last_success_timestamp_seconds` | G / s | exporter |
+精确 OTel 名、Prometheus 名、单位和类型见受测合同 fixtures/profile-v1.txt（crate tests 目录）。主要变化：
 
-health 状态数值是 healthy=0、degraded=1、unhealthy=2。background task 的 `status="retry"` 同时增加 retry counter。heap 的 kind 为 `allocated` 与 `peak_or_resident`。导出成功/失败虽然是累计数，当前 schema 的类型仍为 gauge。
+| OTel instrument | Prometheus family | 类型/单位 |
+| --- | --- | --- |
+| http.server.request.duration | http_server_request_duration_seconds | Histogram/s |
+| http.server.active_requests | http_server_active_requests | UpDownCounter/{request} |
+| db.client.operation.duration | db_client_operation_duration_seconds | Histogram/s |
+| db.client.connection.count/max | db_client_connection_count/max | ObservableUpDownCounter/{connection} |
+| process.cpu.time | process_cpu_time_seconds_total | ObservableCounter/s |
+| process.memory.usage | process_memory_usage_bytes | ObservableUpDownCounter/By |
+| process.uptime | process_uptime_seconds | Gauge/s |
+| aster.runtime.ready | aster_runtime_ready | Gauge/{state} |
+| aster.runtime.health.status | aster_runtime_health_status | Gauge/{state} |
+| aster.task.handler.active/duration | aster_task_handler_active/duration_seconds | UpDownCounter/Histogram |
+| aster.observability.failures | aster_observability_failures_total | ObservableCounter/{failure} |
+
+标准属性为 http.request.method/url.scheme/http.route/http.response.status_code/error.type、db.system.name/db.operation.name、db.client.connection.pool.name/state。未知的可选属性省略；HTTP outcome 是有限 transport 分类，不是事务提交确认。auth/config/task/external 等扩展位于 aster 命名空间；旧序列删除。
+
+ready 是实际端点结果 0/1；diagnostic health 独立保持 healthy=0/degraded=1/unhealthy=2。task retry 的已确认转换同时增加 retry counter。heap 转成 bytes，kind 为 allocated/peak_or_resident。OTLP exporter 累计成功/失败改为 ObservableCounter，不反复累加快照。
 
 库提供 schema 与记录入口，不会自动拦截全部 HTTP/SQL/auth 流程。产品须显式接入 middleware、数据库 adapter、任务状态转换和认证流程。auth recorder 只接收有限的 action/status/reason，不拥有产品登录策略或用户身份。histogram 精确桶定义可通过 `provider.descriptors()` 或 `src/shared.rs` 查询；变更桶、名称、labels 和单位均应视作监控 schema 变更。
 
@@ -262,7 +250,7 @@ async fn run_sampler(recorder: InfrastructureMetricsRecorder) {
 | `Export` | 编码、大小或 reader 导出失败；检查预算及本地诊断 |
 | `Closed` / `Shutdown` | 关闭后记录或 SDK 关闭失败；检查 producer 退出顺序 |
 
-热路径 convenience API 有意丢弃该次观测错误，不应让指标失败改变业务事务结果。要求检查数值、预算或关闭合同的测试与控制边界使用 `try_*`。库不决定 exporter 故障是否降低 readiness，产品应明确该策略。
+convenience API 跳过失败观测并累计 provider 本地失败数，采样为 `aster.observability.failures{component=metrics,operation=record}`，不让指标错误改变业务事务。控制边界用 `try_*`。exporter 故障是否降低 readiness 由产品决定。
 
 ## API 迁移
 
@@ -292,3 +280,9 @@ cargo run --release -p aster_forge_metrics --features backend-prometheus --examp
 参考消费者为 AsterDrive `crates/aster_drive_metrics` 和 bundled Actix template；产品 upload、quota、blob cleanup 和 remote 语义不进入 Forge。
 
 当前消费版本与后续 traces 的边界统一见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)。
+
+## v1 API 与能力边界
+
+HTTP recorder 增加显式 scheme 参数，全部内部调用方同步迁移，不保留转发 facade。Actix/Axum 在 body EOF/error/drop 完成计量，探针与 scrape 固定路径排除。未知 route/status 作为空属性并在导出时省略。with_profile(namespace, version) 显式选择产品 Resource schema。
+
+role_readiness 来自产品 ready 端点同一结果；health diagnostics 0/1/2 独立。db_pool 接受原生 idle/used/max，DbHandles::record_pool_metrics("main", recorder) 使用应用唯一池身份与 writer/reader 角色组合名称，不执行 SQL。task_handler_active/finished 是本地 handler 执行事实，不保证持久业务成功。其他已确认任务状态转换另计。累计 CPU 合并模式来源于 sysinfo，不伪造 user/system 拆分。库不声明尚未实现的 outbound HTTP/RPC、完整 lease/recovery 遥测。

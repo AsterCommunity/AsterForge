@@ -4,7 +4,10 @@ use crate::{MetricDescriptor, MetricKind, MetricsLimits, provider::metric_name};
 use hashbrown::{Equivalent, HashMap};
 use opentelemetry::{
     KeyValue,
-    metrics::{BoundCounter, BoundGauge, BoundHistogram, Counter, Gauge, Histogram, Meter},
+    metrics::{
+        BoundCounter, BoundGauge, BoundHistogram, BoundUpDownCounter, Counter, Gauge, Histogram,
+        Meter, UpDownCounter,
+    },
 };
 use parking_lot::Mutex;
 use std::{
@@ -67,18 +70,24 @@ impl Equivalent<Vec<String>> for BorrowedLabels<'_> {
 
 enum Instrument {
     Counter(Counter<u64>),
+    UpDownCounter(UpDownCounter<i64>),
+    Snapshot,
     Gauge(Gauge<f64>),
     Histogram(Histogram<f64>),
 }
 enum BoundInstrument {
     Counter(BoundCounter<u64>),
+    UpDownCounter(BoundUpDownCounter<i64>),
+    Snapshot,
     Gauge(BoundGauge<f64>),
     Histogram(BoundHistogram<f64>),
 }
 struct Series {
     instrument: BoundInstrument,
+    attributes: Vec<KeyValue>,
     counter: AtomicU64,
     gauge: Mutex<f64>,
+    sampled: AtomicBool,
 }
 struct HandleInner {
     descriptor: MetricDescriptor,
@@ -87,7 +96,8 @@ struct HandleInner {
     closed: Arc<AtomicBool>,
     limits: MetricsLimits,
     series_count: Arc<AtomicUsize>,
-    series: Mutex<HashMap<Vec<String>, Arc<Series>>>,
+    series: Arc<Mutex<HashMap<Vec<String>, Arc<Series>>>>,
+    failures: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -103,9 +113,46 @@ impl MetricHandle {
         closed: Arc<AtomicBool>,
         limits: MetricsLimits,
         series_count: Arc<AtomicUsize>,
+        failures: Arc<AtomicU64>,
     ) -> Self {
         let name = metric_name(&descriptor);
+        let snapshots: Arc<Mutex<HashMap<Vec<String>, Arc<Series>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let instrument = match descriptor.kind {
+            MetricKind::UpDownCounter => Instrument::UpDownCounter(
+                meter
+                    .i64_up_down_counter(name)
+                    .with_description(descriptor.help)
+                    .with_unit(descriptor.unit)
+                    .build(),
+            ),
+            MetricKind::ObservableCounter | MetricKind::ObservableUpDownCounter => {
+                let state = snapshots.clone();
+                let callback = move |observer: &dyn opentelemetry::metrics::AsyncInstrument<f64>| {
+                    for series in state.lock().values() {
+                        let value = series.gauge.lock();
+                        if series.sampled.load(Ordering::Acquire) {
+                            observer.observe(*value, &series.attributes);
+                        }
+                    }
+                };
+                if descriptor.kind == MetricKind::ObservableCounter {
+                    meter
+                        .f64_observable_counter(name)
+                        .with_description(descriptor.help)
+                        .with_unit(descriptor.unit)
+                        .with_callback(callback)
+                        .build();
+                } else {
+                    meter
+                        .f64_observable_up_down_counter(name)
+                        .with_description(descriptor.help)
+                        .with_unit(descriptor.unit)
+                        .with_callback(callback)
+                        .build();
+                }
+                Instrument::Snapshot
+            }
             MetricKind::Counter => Instrument::Counter(
                 meter
                     .u64_counter(name)
@@ -140,7 +187,8 @@ impl MetricHandle {
                 closed,
                 limits,
                 series_count,
-                series: Mutex::new(HashMap::new()),
+                series: snapshots,
+                failures,
             }),
         }
     }
@@ -173,22 +221,36 @@ impl MetricHandle {
         if series.len() >= self.inner.limits.max_series_per_instrument {
             return Err(MetricError::SeriesLimit);
         }
-        self.inner
-            .series_count
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                (current < self.inner.limits.max_total_series).then_some(current + 1)
-            })
-            .map_err(|_| MetricError::SeriesLimit)?;
         let attributes: Vec<KeyValue> = self
             .inner
             .descriptor
             .labels
             .iter()
             .zip(labels)
-            .map(|(key, value)| KeyValue::new(*key, (*value).to_owned()))
-            .collect();
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(key, value)| {
+                if self.inner.descriptor.integer_labels.contains(key) {
+                    value
+                        .parse::<i64>()
+                        .map(|value| KeyValue::new(*key, value))
+                        .map_err(|_| MetricError::InvalidLabels)
+                } else {
+                    Ok(KeyValue::new(*key, (*value).to_owned()))
+                }
+            })
+            .collect::<MetricResult<_>>()?;
+        self.inner
+            .series_count
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current < self.inner.limits.max_total_series).then_some(current + 1)
+            })
+            .map_err(|_| MetricError::SeriesLimit)?;
         let instrument = match &self.inner.instrument {
             Instrument::Counter(counter) => BoundInstrument::Counter(counter.bind(&attributes)),
+            Instrument::UpDownCounter(counter) => {
+                BoundInstrument::UpDownCounter(counter.bind(&attributes))
+            }
+            Instrument::Snapshot => BoundInstrument::Snapshot,
             Instrument::Gauge(gauge) => BoundInstrument::Gauge(gauge.bind(&attributes)),
             Instrument::Histogram(histogram) => {
                 BoundInstrument::Histogram(histogram.bind(&attributes))
@@ -196,8 +258,10 @@ impl MetricHandle {
         };
         let value = Arc::new(Series {
             instrument,
+            attributes,
             counter: AtomicU64::new(0),
             gauge: Mutex::new(0.0),
+            sampled: AtomicBool::new(false),
         });
         series.insert(
             labels.iter().map(|label| (*label).to_owned()).collect(),
@@ -237,10 +301,71 @@ macro_rules! typed {
 typed!(ProductCounter, Counter);
 typed!(ProductGauge, Gauge);
 typed!(ProductHistogram, Histogram);
+typed!(ProductUpDownCounter, UpDownCounter);
+typed!(ProductSnapshotCounter, ObservableCounter);
+typed!(ProductSnapshotUpDownCounter, ObservableUpDownCounter);
+
+#[derive(Clone)]
+pub struct ProductUpDownCounter {
+    handle: MetricHandle,
+}
+#[derive(Clone)]
+pub struct ProductSnapshotCounter {
+    handle: MetricHandle,
+}
+#[derive(Clone)]
+pub struct ProductSnapshotUpDownCounter {
+    handle: MetricHandle,
+}
+impl ProductUpDownCounter {
+    pub fn add(&self, labels: &[&str], value: i64) {
+        self.handle.diagnose(self.try_add(labels, value));
+    }
+    /// # Errors
+    /// Rejects invalid labels, exhausted budgets and closed providers.
+    pub fn try_add(&self, labels: &[&str], value: i64) -> MetricResult<()> {
+        if self.handle.active()? {
+            let series = self.handle.series(labels)?;
+            if let BoundInstrument::UpDownCounter(counter) = &series.instrument {
+                counter.add(value);
+            }
+        }
+        Ok(())
+    }
+}
+macro_rules! snapshot {
+    ($ty:ident, $monotonic:expr) => {
+        impl $ty {
+            pub fn set(&self, labels: &[&str], value: f64) {
+                self.handle.diagnose(self.try_set(labels, value));
+            }
+            /// # Errors
+            /// Rejects invalid values/labels, decreasing cumulative snapshots and closed providers.
+            pub fn try_set(&self, labels: &[&str], value: f64) -> MetricResult<()> {
+                if !self.handle.active()? {
+                    return Ok(());
+                }
+                if !value.is_finite() || ($monotonic && value < 0.0) {
+                    return Err(MetricError::InvalidValue);
+                }
+                let series = self.handle.series(labels)?;
+                let mut current = series.gauge.lock();
+                if $monotonic && value < *current {
+                    return Err(MetricError::InvalidValue);
+                }
+                *current = value;
+                series.sampled.store(true, Ordering::Release);
+                Ok(())
+            }
+        }
+    };
+}
+snapshot!(ProductSnapshotCounter, true);
+snapshot!(ProductSnapshotUpDownCounter, false);
 
 impl ProductCounter {
     pub fn inc(&self, labels: &[&str], value: u64) {
-        diagnose(self.try_inc(labels, value));
+        self.handle.diagnose(self.try_inc(labels, value));
     }
     /// # Errors
     /// Returns an error for closed providers, invalid labels, series limits or counter overflow.
@@ -266,10 +391,10 @@ impl ProductCounter {
 
 impl ProductGauge {
     pub fn set(&self, labels: &[&str], value: f64) {
-        diagnose(self.try_set(labels, value));
+        self.handle.diagnose(self.try_set(labels, value));
     }
     pub fn add(&self, labels: &[&str], value: f64) {
-        diagnose(self.try_add(labels, value));
+        self.handle.diagnose(self.try_add(labels, value));
     }
     /// # Errors
     /// Returns an error for closed providers, invalid labels, series limits or non-finite values.
@@ -308,7 +433,7 @@ impl ProductGauge {
 
 impl ProductHistogram {
     pub fn observe(&self, labels: &[&str], value: f64) {
-        diagnose(self.try_observe(labels, value));
+        self.handle.diagnose(self.try_observe(labels, value));
     }
     /// # Errors
     /// Returns an error for closed providers, invalid labels, series limits or invalid observations.
@@ -329,9 +454,12 @@ impl ProductHistogram {
     }
 }
 
-fn diagnose(result: MetricResult<()>) {
-    if let Err(error) = result {
-        tracing::debug!(%error, "metric observation skipped");
+impl MetricHandle {
+    fn diagnose(&self, result: MetricResult<()>) {
+        if let Err(error) = result {
+            self.inner.failures.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(%error, "metric observation skipped");
+        }
     }
 }
 
@@ -339,7 +467,7 @@ fn diagnose(result: MetricResult<()>) {
 #[macro_export]
 macro_rules! product_metrics {
     ($(#[$meta:meta])* $vis:vis struct $name:ident {
-        $($(#[$field_meta:meta])* $field:ident : $kind:ident ($($args:expr),* $(,)? ) $(.with_unit($unit:expr))?),* $(,)?
+        $($(#[$field_meta:meta])* $field:ident : $kind:ident ($($args:expr),* $(,)? ) $(.$modifier:ident($argument:expr))*),* $(,)?
     }) => {
         $(#[$meta])*
         $vis struct $name { $($(#[$field_meta])* pub $field: $crate::product_metrics!(@type $kind),)* }
@@ -349,9 +477,9 @@ macro_rules! product_metrics {
             /// # Errors
             /// Returns a registration error without changing the catalog when any descriptor is rejected.
             pub fn register(provider: &$crate::MetricsProvider) -> $crate::MetricResult<Self> {
-                let descriptors = [$($crate::MetricDescriptor::$kind($($args),*)$(.with_unit($unit))?),*];
+                let descriptors = [$($(#[$field_meta])* $crate::MetricDescriptor::$kind($($args),*)$(.$modifier($argument))*),*];
                 let mut handles = provider.register_batch(&descriptors)?.into_iter();
-                Ok(Self { $($field: <$crate::product_metrics!(@type $kind)>::from_handle(
+                Ok(Self { $($(#[$field_meta])* $field: <$crate::product_metrics!(@type $kind)>::from_handle(
                     handles.next().ok_or($crate::MetricError::InvalidDescriptor)?
                 )?,)* })
             }
@@ -359,6 +487,9 @@ macro_rules! product_metrics {
     };
     (@type counter) => { $crate::ProductCounter };
     (@type gauge) => { $crate::ProductGauge };
+    (@type up_down_counter) => { $crate::ProductUpDownCounter };
+    (@type observable_counter) => { $crate::ProductSnapshotCounter };
+    (@type observable_up_down_counter) => { $crate::ProductSnapshotUpDownCounter };
     (@type histogram) => { $crate::ProductHistogram };
     (@type histogram_with_buckets) => { $crate::ProductHistogram };
 }

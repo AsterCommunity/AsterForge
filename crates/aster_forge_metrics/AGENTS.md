@@ -4,18 +4,18 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 
 ## Before Making Changes
 
-- Read `Cargo.toml`, `src/lib.rs`, and `src/prometheus.rs` when relevant. Also read the related crate documentation for allocator, health, or Actix changes.
+- Read `Cargo.toml`, `src/lib.rs`, `src/provider.rs`, `src/instruments.rs`, `src/shared.rs` and `src/otlp.rs` when relevant. Also read allocator, health and adapter documentation.
 - Before adding a metric, write down the cardinality bound for every label. If the bound is unknowable, the label is probably tomorrow's monitoring incident.
 
 ## Ownership Boundaries
 
-- This crate owns product-neutral recorder traits, noop implementations, metric descriptors and catalogs, single-backend selection, and the optional Prometheus exporter and system updater.
+- This crate owns product-neutral recorder traits, noop implementations, metric descriptors and catalogs, reader composition (Prometheus pull and optional OTLP push on one provider), and the optional system updater.
 - The Actix `/metrics` route belongs to `aster_forge_observability`; HTTP middleware belongs to `aster_forge_middleware`.
 - Products own the decision to record business metrics, dashboards, alerts, and product label semantics.
 
 ## Change Constraints
 
-- A build permits only one `backend-*` feature, while the default feature set must continue to support a complete noop configuration.
+- Prometheus/OTLP readers may coexist on one provider; no reader remains Noop. Keep the versioned profile and actual wire fixtures synchronized.
 - Never put raw SQL, URLs, user/file/configuration keys, topics, endpoints, runtime IDs, error text, or other high-cardinality or sensitive values into labels.
 - Descriptor registration must be atomic and retryable. A failed batch rolls back registrations from that batch so it does not leave phantom duplicates.
 - Validate handle kind and label count before reaching a backend panic.

@@ -7,6 +7,12 @@ The Chinese documentation contains the complete crate-by-crate integration notes
 
 ## Observability consumer evidence index
 
+### Aster Metrics v1 candidate (2026-10-31)
+
+[Forge #53](https://github.com/AsterCommunity/AsterForge/pull/53) implements the [v1 profile](../../guide/metrics-profile.md) at `9797a21eae307194e75443ad88ffecf2c4b61b41`. [Drive #662](https://github.com/AsterCommunity/AsterDrive/pull/662), revision `3a3aa00b26c39c57a15a82e2c391663d3a99a4a0`, pins that Git revision without path patches and migrates 49 product instruments, its generated catalog and Grafana. The dated table below remains historical evidence rather than a v1 compatibility promise.
+
+Local validation covers actual Prometheus/OTLP wire output, Noop/readers, middleware body lifetime, native SQLite pools, Drive profile/Grafana and focused health/auth/sampling/task tests, Clippy, workspace checks and documentation. This is not image-release, real Collector persistence or production rollout evidence. Consumers pinned to older revisions are not automatically upgraded and must migrate their metric queries with their source revision.
+
 Checked on 2026-10-17. Forge owns public mechanisms, pinned revisions and consumer evidence references. Drive owns its [current capability/configuration contract](https://github.com/AsterCommunity/AsterDrive/blob/master/docs/src/content/docs/en/ops/monitoring.md). A `master` link means the current branch; pinned links establish only that snapshot, not release or production status. The full product matrix is not duplicated here.
 
 | Field | AsterDrive evidence |

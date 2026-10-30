@@ -10,6 +10,44 @@ use sea_orm::{ConnectionTrait, Database, TransactionTrait};
 use tokio::time::{Duration, timeout};
 
 #[tokio::test]
+async fn pool_metrics_read_native_snapshot_without_inventing_reader() {
+    use aster_forge_metrics::{DbMetricsRecorder, DbQueryMetric, MetricsRecorder};
+    struct PoolSample {
+        name: String,
+        idle: u32,
+        used: u32,
+        max: Option<u32>,
+    }
+    #[derive(Default)]
+    struct Capture(std::sync::Mutex<Vec<PoolSample>>);
+    impl DbMetricsRecorder for Capture {
+        fn enabled(&self) -> bool {
+            true
+        }
+        fn record_db_query(&self, _: &DbQueryMetric) {}
+    }
+    impl MetricsRecorder for Capture {
+        fn db_pool(&self, pool: &str, idle: u32, used: u32, max: Option<u32>) {
+            self.0.lock().unwrap().push(PoolSample {
+                name: pool.to_owned(),
+                idle,
+                used,
+                max,
+            });
+        }
+    }
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let handles = aster_forge_db::DbHandles::single(db);
+    let recorder = Capture::default();
+    handles.record_pool_metrics("main", &recorder);
+    let snapshots = recorder.0.lock().unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].name, "main.writer");
+    assert!(snapshots[0].max.is_some_and(|max| max > 0));
+    assert!(snapshots[0].idle + snapshots[0].used <= snapshots[0].max.unwrap());
+}
+
+#[tokio::test]
 async fn sqlite_transactions_are_serialized_by_single_connection_pool() {
     let database = SqliteTestDatabase::new("single-connection-pool");
     let cfg = DatabaseConfig {

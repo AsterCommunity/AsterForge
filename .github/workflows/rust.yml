@@ -104,7 +104,9 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Run tests with coverage
-        run: cargo llvm-cov --workspace --no-fail-fast --verbose --lcov --output-path coverage/rust/lcov.info
+        # Exporter/profile tests are feature-gated; default features only cover Noop.
+        # Enable metrics capabilities explicitly without combining exclusive auth backends.
+        run: cargo llvm-cov --workspace --features aster_forge_metrics/backend-prometheus,aster_forge_metrics/otlp,aster_forge_metrics/runtime-health,aster_forge_metrics/allocator-metrics,aster_forge_middleware/axum,aster_forge_middleware/metrics --no-fail-fast --verbose --lcov --output-path coverage/rust/lcov.info
 
       - name: Generate HTML coverage report
         if: success()
