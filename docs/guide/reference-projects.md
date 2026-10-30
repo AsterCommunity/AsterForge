@@ -32,6 +32,12 @@ Yggdrasil 的特点是接入边界更清楚，适合看“产品侧应该保留�
 
 ## 观测消费者证据索引
 
+### Aster Metrics v1 候选（2026-10-31）
+
+[Forge #53](https://github.com/AsterCommunity/AsterForge/pull/53) 提供 [v1 profile](./metrics-profile.md)，实现 revision 为 `9797a21eae307194e75443ad88ffecf2c4b61b41`。[Drive #662](https://github.com/AsterCommunity/AsterDrive/pull/662) 的 `3a3aa00b26c39c57a15a82e2c391663d3a99a4a0` 固定该 Git revision，无路径 patch；迁移 49 个产品 instrument、生成目录和 Grafana。下方日期化表格保留旧版证据，不作为 v1 schema 兼容承诺。
+
+本地验证包含实际 Prometheus/OTLP wire、Noop/reader 组合、middleware body 生命周期、原生 SQLite pool、Drive profile/Grafana、定向健康/认证/采样/任务测试、Clippy、工作区检查与文档构建。PR、库验证、消费者接入和生产部署分别验收；本次没有发行镜像、真实 Collector 持久化或生产 rollout 证据。其他固定旧 revision 的消费者未自动升级，需同步其指标消费端。
+
 核对日期：2026-10-17。本索引由 Forge 维护公共机制、固定版本和消费者证据引用；Drive 拥有[当前能力与配置事实源](https://github.com/AsterCommunity/AsterDrive/blob/master/docs/src/content/docs/ops/monitoring.md)。`master` 链接表示当前分支；下表固定提交只证明该快照，不推断发行或生产状态。这里不复制 Drive 的完整支持矩阵。
 
 | 字段 | AsterDrive 证据 |
