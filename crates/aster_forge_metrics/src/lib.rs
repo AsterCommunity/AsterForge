@@ -228,7 +228,7 @@ pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
     fn role_readiness(&self, ready: bool) {}
 
     /// Publishes native idle/used counts and an optional real pool maximum.
-    fn db_pool(&self, pool: &'static str, idle: u32, used: u32, max: Option<u32>) {}
+    fn db_pool(&self, pool: &str, idle: u32, used: u32, max: Option<u32>) {}
 
     /// Adjusts actual in-process task handler executions, independent of persistence.
     fn task_handler_active(&self, kind: &'static str, delta: i64) {}
@@ -426,6 +426,8 @@ pub struct MetricDescriptor {
     pub kind: MetricKind,
     /// Ordered label names used by the metric.
     pub labels: &'static [&'static str],
+    /// Subset of labels encoded as signed integers in OpenTelemetry attributes.
+    pub integer_labels: &'static [&'static str],
     /// Optional histogram buckets.
     pub buckets: &'static [f64],
     /// UCUM unit, independent of the exporter name.
@@ -547,6 +549,13 @@ impl MetricDescriptor {
         self
     }
 
+    /// Encodes these declared label keys as integer attributes, rejecting non-integer values.
+    #[must_use]
+    pub const fn with_integer_labels(mut self, labels: &'static [&'static str]) -> Self {
+        self.integer_labels = labels;
+        self
+    }
+
     /// Creates a descriptor for a counter metric.
     #[must_use]
     pub const fn counter(
@@ -561,6 +570,7 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Counter,
             labels,
+            integer_labels: &[],
             buckets: &[],
             unit: "1",
         }
@@ -580,6 +590,7 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Gauge,
             labels,
+            integer_labels: &[],
             buckets: &[],
             unit: "1",
         }
@@ -599,6 +610,7 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Histogram,
             labels,
+            integer_labels: &[],
             buckets: &[],
             unit: "1",
         }
@@ -619,6 +631,7 @@ impl MetricDescriptor {
             help,
             kind: MetricKind::Histogram,
             labels,
+            integer_labels: &[],
             buckets,
             unit: "1",
         }

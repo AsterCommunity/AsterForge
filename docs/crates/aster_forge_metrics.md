@@ -116,7 +116,7 @@ provider 的 clone 共享实例，创建第二个 provider 才有独立系列和
 | Gauge | `set`、`add` / `try_set`、`try_add` | 有限 `f64`；可升可降，set/add 按系列同步 |
 | Histogram | `observe` / `try_observe` | 有限非负 `f64`；显式递增桶边界 |
 
-macro 中 labels 是有序 schema，值按相同顺序和数量传入。subsystem 非空时 OTel 名为 `subsystem.name`；属性允许点分 key。Prometheus 自动转换下划线、单位和 Counter 后缀，公开 `descriptor.prometheus_name()` 供消费端验证。转换后属性、指标和 histogram 派生名冲突在整批注册时拒绝。
+macro 中 labels 是有序 schema，值按相同顺序和数量传入。 默认属性为字符串；descriptor 或 macro 链式调用 `.with_integer_labels(&["http.response.status_code"])` 将指定 key 声明为整数类型，记录时解析为 i64，非法值拒绝且不占系列预算。整数 key 必须是 labels 的唯一子集；空值仍省略。OTLP 保留整数，Prometheus 将属性呈现为标签文本。subsystem 非空时 OTel 名为 `subsystem.name`；属性允许点分 key。Prometheus 自动转换下划线、单位和 Counter 后缀，公开 `descriptor.prometheus_name()` 供消费端验证。转换后属性、指标和 histogram 派生名冲突在整批注册时拒绝。
 
 | `MetricsLimits` 字段 | 默认值 | 构建时上限 |
 | --- | --- | --- |
@@ -285,4 +285,4 @@ cargo run --release -p aster_forge_metrics --features backend-prometheus --examp
 
 HTTP recorder 增加显式 scheme 参数，全部内部调用方同步迁移，不保留转发 facade。Actix/Axum 在 body EOF/error/drop 完成计量，探针与 scrape 固定路径排除。未知 route/status 作为空属性并在导出时省略。with_profile(namespace, version) 显式选择产品 Resource schema。
 
-role_readiness 来自产品 ready 端点同一结果；health diagnostics 0/1/2 独立。db_pool 接受原生 idle/used/max，DbHandles::record_pool_metrics 不执行 SQL。task_handler_active/finished 是本地 handler 执行事实，不保证持久业务成功。其他已确认任务状态转换另计。累计 CPU 合并模式来源于 sysinfo，不伪造 user/system 拆分。库不声明尚未实现的 outbound HTTP/RPC、完整 lease/recovery 遥测。
+role_readiness 来自产品 ready 端点同一结果；health diagnostics 0/1/2 独立。db_pool 接受原生 idle/used/max，DbHandles::record_pool_metrics("main", recorder) 使用应用唯一池身份与 writer/reader 角色组合名称，不执行 SQL。task_handler_active/finished 是本地 handler 执行事实，不保证持久业务成功。其他已确认任务状态转换另计。累计 CPU 合并模式来源于 sysinfo，不伪造 user/system 拆分。库不声明尚未实现的 outbound HTTP/RPC、完整 lease/recovery 遥测。

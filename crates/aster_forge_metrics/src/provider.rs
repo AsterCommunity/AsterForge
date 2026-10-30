@@ -275,11 +275,15 @@ impl MetricsProvider {
             return Err(MetricError::InstrumentLimit);
         }
         let mut names = BTreeSet::new();
+        let mut otel_names: BTreeSet<_> = catalog.keys().cloned().collect();
         for descriptor in catalog.values() {
             names.extend(exported_names(descriptor));
         }
         for descriptor in descriptors {
             validate(descriptor)?;
+            if !otel_names.insert(metric_name(descriptor)) {
+                return Err(MetricError::DuplicateRegistration);
+            }
             for name in exported_names(descriptor) {
                 if !names.insert(name) {
                     return Err(MetricError::DuplicateRegistration);
@@ -468,6 +472,14 @@ fn validate(descriptor: &MetricDescriptor) -> MetricResult<()> {
         || descriptor.unit.is_empty()
         || descriptor.unit.len() > 32
         || !descriptor.unit.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return Err(MetricError::InvalidDescriptor);
+    }
+    let mut integer_labels = BTreeSet::new();
+    if descriptor
+        .integer_labels
+        .iter()
+        .any(|label| !descriptor.labels.contains(label) || !integer_labels.insert(label))
     {
         return Err(MetricError::InvalidDescriptor);
     }

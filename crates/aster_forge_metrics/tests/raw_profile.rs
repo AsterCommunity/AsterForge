@@ -70,5 +70,20 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
         "/tests/fixtures/profile-v1.txt"
     ))
     .unwrap();
+    // Keep one reviewed all-capabilities contract while exercising individual
+    // exporter builds as well. Only omit entries whose capability is absent.
+    let expected: String = expected
+        .lines()
+        .filter(|line| {
+            (cfg!(feature = "allocator-metrics") || !line.starts_with("aster.process.heap "))
+                && (cfg!(feature = "runtime-health")
+                    || !(line.starts_with("aster.runtime.health.")
+                        || line.starts_with("aster.runtime.component.health.")))
+                && (cfg!(feature = "otlp") || !line.starts_with("aster.telemetry."))
+        })
+        .fold(String::new(), |mut output, line| {
+            writeln!(output, "{line}").unwrap();
+            output
+        });
     assert_eq!(output, expected);
 }

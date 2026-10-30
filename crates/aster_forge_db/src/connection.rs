@@ -152,14 +152,21 @@ pub struct DbHandles {
 
 impl DbHandles {
     /// Reads native pool state without SQL, network access or fictitious reader pools.
+    /// The caller supplies an application-unique, static pool identity (for example
+    /// "main" or "audit"); the emitted pool names are "main.writer" / "main.reader".
+    /// Never derive identity from connection URLs, credentials, tenants or runtime IDs.
     #[expect(
         clippy::match_wildcard_for_single_variants,
         reason = "SeaORM feature unification may add mock/proxy connection variants; unsupported transports have no native SQLx pool"
     )]
-    pub fn record_pool_metrics(&self, metrics: &dyn aster_forge_metrics::MetricsRecorder) {
+    pub fn record_pool_metrics(
+        &self,
+        identity: &'static str,
+        metrics: &dyn aster_forge_metrics::MetricsRecorder,
+    ) {
         fn record(
             db: &DatabaseConnection,
-            name: &'static str,
+            name: &str,
             metrics: &dyn aster_forge_metrics::MetricsRecorder,
         ) {
             macro_rules! snapshot {
@@ -187,9 +194,9 @@ impl DbHandles {
                 _ => {}
             }
         }
-        record(&self.writer, "writer", metrics);
+        record(&self.writer, &format!("{identity}.writer"), metrics);
         if self.sqlite_read_write_split {
-            record(&self.reader, "reader", metrics);
+            record(&self.reader, &format!("{identity}.reader"), metrics);
         }
     }
 

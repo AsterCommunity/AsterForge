@@ -313,6 +313,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_status_attributes_are_integers_for_completed_and_failed_streams() {
+        use crate::{InfrastructureMetricsRecorder, MetricsRecorder};
+        use opentelemetry_proto::tonic::{common::v1::any_value::Value, metrics::v1::metric::Data};
+        let (endpoint, received) = receiver("200 OK", Vec::new());
+        let (builder, _) = MetricsProvider::builder()
+            .with_otlp(config(endpoint))
+            .unwrap();
+        let provider = builder.build().unwrap();
+        let recorder = InfrastructureMetricsRecorder::new(provider.clone()).unwrap();
+        recorder.record_http_request("GET", "https", "/completed", 200, 0.125);
+        recorder.record_http_stream_failure("GET", "https", "/failed", 206, 0.25, false);
+        recorder.record_http_stream_failure("GET", "http", "", 0, 0.5, true);
+        provider.force_flush(Duration::from_secs(2)).await.unwrap();
+        let bytes = received.join().unwrap();
+        assert_eq!(
+            provider.shutdown(Duration::from_secs(2)).await,
+            Err(MetricError::Shutdown)
+        );
+        let request = ExportMetricsServiceRequest::decode(bytes.as_slice()).unwrap();
+        let metric = request
+            .resource_metrics
+            .iter()
+            .flat_map(|r| &r.scope_metrics)
+            .flat_map(|s| &s.metrics)
+            .find(|m| m.name == "http.server.request.duration")
+            .unwrap();
+        let Some(Data::Histogram(histogram)) = &metric.data else {
+            panic!("HTTP duration must be a histogram");
+        };
+        assert_eq!(histogram.data_points.len(), 3);
+        for (route, status, error) in [
+            (Some("/completed"), Some(200), None),
+            (Some("/failed"), Some(206), Some("other")),
+            (None, None, Some("canceled")),
+        ] {
+            let point = histogram
+                .data_points
+                .iter()
+                .find(|point| {
+                    point
+                        .attributes
+                        .iter()
+                        .find(|a| a.key == "http.route")
+                        .and_then(|a| a.value.as_ref())
+                        .and_then(|v| v.value.as_ref())
+                        == route.map(|r| Value::StringValue(r.into())).as_ref()
+                })
+                .unwrap();
+            let attr = |key: &str| {
+                point
+                    .attributes
+                    .iter()
+                    .find(|a| a.key == key)
+                    .and_then(|a| a.value.as_ref())
+                    .and_then(|v| v.value.clone())
+            };
+            assert_eq!(point.count, 1);
+            assert_eq!(
+                attr("http.response.status_code"),
+                status.map(Value::IntValue)
+            );
+            assert_eq!(
+                attr("error.type"),
+                error.map(|e| Value::StringValue(e.into()))
+            );
+            assert_eq!(
+                attr("http.request.method"),
+                Some(Value::StringValue("GET".into()))
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn otlp_only_and_dual_readers_export_one_cumulative_schema() {
         for pull in [false, true] {
             let (endpoint, received) = receiver("200 OK", Vec::new());

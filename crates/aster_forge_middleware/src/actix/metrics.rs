@@ -2,7 +2,7 @@
 //!
 //! The middleware reads a shared [`aster_forge_metrics::SharedMetricsRecorder`] from Actix app
 //! data, records one HTTP request metric per successful or failed downstream service call, and
-//! groups unmatched routes into stable low-cardinality labels.
+//! omits unknown routes while preserving matched route templates.
 
 use std::rc::Rc;
 use std::{
@@ -93,6 +93,7 @@ where
         }
 
         let method = req.method().clone();
+        let is_head = method == actix_web::http::Method::HEAD;
         let route = route_label(&req);
         let mut active = aster_forge_metrics::HttpRequestGuard::new(
             metrics.clone(),
@@ -110,10 +111,13 @@ where
                     let matched = response.request().match_pattern().unwrap_or_default();
                     active.response(matched, response.status().as_u16());
                     Ok(response.map_body(move |_, body| {
-                        if matches!(
-                            body.size(),
-                            actix_web::body::BodySize::None | actix_web::body::BodySize::Sized(0)
-                        ) {
+                        if is_head
+                            || matches!(
+                                body.size(),
+                                actix_web::body::BodySize::None
+                                    | actix_web::body::BodySize::Sized(0)
+                            )
+                        {
                             active.finish();
                         }
                         let remaining = match body.size() {
@@ -195,6 +199,49 @@ fn route_label(req: &ServiceRequest) -> String {
 mod tests {
 
     #[actix_web::test]
+    async fn head_response_completes_without_polling_or_canceling_application_body() {
+        let metrics = RecordingMetrics::enabled();
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(web::Data::new(metrics.shared()))
+                .wrap(MetricsMiddleware)
+                .route(
+                    "/head",
+                    web::head().to(|| async {
+                        HttpResponse::Ok().streaming(futures::stream::pending::<
+                            Result<web::Bytes, std::io::Error>,
+                        >())
+                    }),
+                ),
+        )
+        .await;
+        let response = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::default()
+                .method(actix_web::http::Method::HEAD)
+                .uri("/head")
+                .to_request(),
+        )
+        .await;
+        drop(response);
+        assert_eq!(metrics.active_requests(), 0);
+        assert!(
+            metrics.stream_failures().is_empty(),
+            "HEAD is completed even when its body is discarded"
+        );
+        let records = metrics.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            (
+                records[0].method.as_str(),
+                records[0].route.as_str(),
+                records[0].status
+            ),
+            ("HEAD", "/head", 200)
+        );
+    }
+
+    #[actix_web::test]
     async fn streaming_response_is_counted_at_eof_or_drop_and_probes_are_excluded() {
         use futures::{StreamExt, stream};
         let metrics = RecordingMetrics::enabled();
@@ -231,8 +278,11 @@ mod tests {
         )
         .await;
         assert!(metrics.records().is_empty());
+        assert_eq!(metrics.active_requests(), 1);
         drop(response);
         assert_eq!(metrics.records().len(), 1);
+        assert_eq!(metrics.stream_failures(), vec![true]);
+        assert_eq!(metrics.active_requests(), 0);
         assert_eq!(metrics.records()[0].route, "/stream/{id}");
         let response = actix_test::call_service(
             &app,
@@ -242,6 +292,8 @@ mod tests {
         assert_eq!(metrics.records().len(), 1);
         assert_eq!(actix_test::read_body(response).await, "done");
         assert_eq!(metrics.records().len(), 2);
+        assert_eq!(metrics.stream_failures(), vec![true]);
+        assert_eq!(metrics.active_requests(), 0);
         let response = actix_test::call_service(
             &app,
             actix_test::TestRequest::get()

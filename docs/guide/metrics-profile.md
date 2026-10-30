@@ -29,3 +29,5 @@ CPU 模式、pool 和任务语义只能来自真实 API；缺少可证实的数�
 CPU 是平台合并累计时间，不输出无法从 sysinfo 证明的 user/system 分拆。SQLx 没有公开累计 pool waits 与获取超时，不伪造。任务 handler active/duration 是本地执行事实，确认的状态转换另计；完整 lease/recovery/finish 操作遥测、标准 outbound HTTP/RPC adapter 不在本次已实现清单，不以通用计数器冒充。该范围是 Aster profile，不宣称完整实现 AutoBits RFC 的所有角色组。
 
 属性组合预算由 descriptor 的固定有序 key 与调用方 enum/static catalog 约束；默认每 instrument 4096、实例 16384 个组合，超限拒绝并累计本地失败。identity 固定 service namespace/name/version/instance/environment/role/schema；实例 ID 不进入业务维度。产品 role 目录和业务指标另在 Drive 登记。
+
+HTTP status 属性在 OTLP 中为整数，未知状态省略；Prometheus 标签仍为文本。HEAD 在响应可用时完成，不把协议抑制 body 记为取消。池名由应用显式静态身份与 writer/reader 角色组成（如 main.writer），多个独立 DbHandles 不共享身份。注册同时检查原始 OTel 名与转换后的 Prometheus 名，失败整批回滚。

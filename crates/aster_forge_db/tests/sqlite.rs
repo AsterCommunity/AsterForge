@@ -13,7 +13,7 @@ use tokio::time::{Duration, timeout};
 async fn pool_metrics_read_native_snapshot_without_inventing_reader() {
     use aster_forge_metrics::{DbMetricsRecorder, DbQueryMetric, MetricsRecorder};
     struct PoolSample {
-        name: &'static str,
+        name: String,
         idle: u32,
         used: u32,
         max: Option<u32>,
@@ -27,9 +27,9 @@ async fn pool_metrics_read_native_snapshot_without_inventing_reader() {
         fn record_db_query(&self, _: &DbQueryMetric) {}
     }
     impl MetricsRecorder for Capture {
-        fn db_pool(&self, pool: &'static str, idle: u32, used: u32, max: Option<u32>) {
+        fn db_pool(&self, pool: &str, idle: u32, used: u32, max: Option<u32>) {
             self.0.lock().unwrap().push(PoolSample {
-                name: pool,
+                name: pool.to_owned(),
                 idle,
                 used,
                 max,
@@ -39,10 +39,10 @@ async fn pool_metrics_read_native_snapshot_without_inventing_reader() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
     let handles = aster_forge_db::DbHandles::single(db);
     let recorder = Capture::default();
-    handles.record_pool_metrics(&recorder);
+    handles.record_pool_metrics("main", &recorder);
     let snapshots = recorder.0.lock().unwrap();
     assert_eq!(snapshots.len(), 1);
-    assert_eq!(snapshots[0].name, "writer");
+    assert_eq!(snapshots[0].name, "main.writer");
     assert!(snapshots[0].max.is_some_and(|max| max > 0));
     assert!(snapshots[0].idle + snapshots[0].used <= snapshots[0].max.unwrap());
 }

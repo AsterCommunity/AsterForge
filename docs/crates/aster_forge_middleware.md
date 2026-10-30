@@ -244,13 +244,9 @@ app.app_data(web::Data::new(metrics as SharedMetricsRecorder))
     .wrap(MetricsMiddleware)
 ```
 
-中间件会从 Actix app data 读取 `SharedMetricsRecorder`。没有注册 recorder 时使用 `NoopMetrics`；recorder disabled 时直接跳过记录。启用后会记录 method、route label、status code 和 request duration。
+中间件会从 Actix app data 读取 `SharedMetricsRecorder`。没有注册 recorder 时使用 `NoopMetrics`；recorder disabled 时直接跳过记录。启用后记录 method、scheme、route label 和 status code，并在响应体 EOF、error 或 drop 时结束 duration 与 active 计量。HEAD 没有传输 body，在响应可用时完成计量；正常 HEAD 不记为取消。
 
-route label 优先使用 Actix matched pattern。未匹配路由会被归入低基数标签：
-
-- `/api/...` -> `unmatched_api`
-- `/health...` -> `unmatched_health`
-- 其他 -> `unmatched`
+route label 使用 Actix matched pattern。未匹配 route 为空字符串，导出时省略该属性；不生成 `unmatched_*` 标签，也不使用原始路径。固定 probe 与 scrape 路径不计量，其他业务 404 仍记录。
 
 真实 recorder 和 backend 由 `aster_forge_metrics` 负责；Actix `/metrics` endpoint 由
 `aster_forge_observability` 负责。产品侧只需要把 shared recorder 放进 app data，并保持业务

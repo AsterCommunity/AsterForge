@@ -84,6 +84,7 @@ enum BoundInstrument {
 }
 struct Series {
     instrument: BoundInstrument,
+    attributes: Vec<KeyValue>,
     counter: AtomicU64,
     gauge: Mutex<f64>,
     sampled: AtomicBool,
@@ -128,17 +129,10 @@ impl MetricHandle {
             MetricKind::ObservableCounter | MetricKind::ObservableUpDownCounter => {
                 let state = snapshots.clone();
                 let callback = move |observer: &dyn opentelemetry::metrics::AsyncInstrument<f64>| {
-                    for (values, series) in state.lock().iter() {
-                        let attrs: Vec<KeyValue> = descriptor
-                            .labels
-                            .iter()
-                            .zip(values)
-                            .filter(|(_, value)| !value.is_empty())
-                            .map(|(key, value)| KeyValue::new(*key, value.clone()))
-                            .collect();
+                    for series in state.lock().values() {
                         let value = series.gauge.lock();
                         if series.sampled.load(Ordering::Acquire) {
-                            observer.observe(*value, &attrs);
+                            observer.observe(*value, &series.attributes);
                         }
                     }
                 };
@@ -227,12 +221,6 @@ impl MetricHandle {
         if series.len() >= self.inner.limits.max_series_per_instrument {
             return Err(MetricError::SeriesLimit);
         }
-        self.inner
-            .series_count
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                (current < self.inner.limits.max_total_series).then_some(current + 1)
-            })
-            .map_err(|_| MetricError::SeriesLimit)?;
         let attributes: Vec<KeyValue> = self
             .inner
             .descriptor
@@ -240,8 +228,23 @@ impl MetricHandle {
             .iter()
             .zip(labels)
             .filter(|(_, value)| !value.is_empty())
-            .map(|(key, value)| KeyValue::new(*key, (*value).to_owned()))
-            .collect();
+            .map(|(key, value)| {
+                if self.inner.descriptor.integer_labels.contains(key) {
+                    value
+                        .parse::<i64>()
+                        .map(|value| KeyValue::new(*key, value))
+                        .map_err(|_| MetricError::InvalidLabels)
+                } else {
+                    Ok(KeyValue::new(*key, (*value).to_owned()))
+                }
+            })
+            .collect::<MetricResult<_>>()?;
+        self.inner
+            .series_count
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current < self.inner.limits.max_total_series).then_some(current + 1)
+            })
+            .map_err(|_| MetricError::SeriesLimit)?;
         let instrument = match &self.inner.instrument {
             Instrument::Counter(counter) => BoundInstrument::Counter(counter.bind(&attributes)),
             Instrument::UpDownCounter(counter) => {
@@ -255,6 +258,7 @@ impl MetricHandle {
         };
         let value = Arc::new(Series {
             instrument,
+            attributes,
             counter: AtomicU64::new(0),
             gauge: Mutex::new(0.0),
             sampled: AtomicBool::new(false),
@@ -463,7 +467,7 @@ impl MetricHandle {
 #[macro_export]
 macro_rules! product_metrics {
     ($(#[$meta:meta])* $vis:vis struct $name:ident {
-        $($(#[$field_meta:meta])* $field:ident : $kind:ident ($($args:expr),* $(,)? ) $(.with_unit($unit:expr))?),* $(,)?
+        $($(#[$field_meta:meta])* $field:ident : $kind:ident ($($args:expr),* $(,)? ) $(.$modifier:ident($argument:expr))*),* $(,)?
     }) => {
         $(#[$meta])*
         $vis struct $name { $($(#[$field_meta])* pub $field: $crate::product_metrics!(@type $kind),)* }
@@ -473,7 +477,7 @@ macro_rules! product_metrics {
             /// # Errors
             /// Returns a registration error without changing the catalog when any descriptor is rejected.
             pub fn register(provider: &$crate::MetricsProvider) -> $crate::MetricResult<Self> {
-                let descriptors = [$($(#[$field_meta])* $crate::MetricDescriptor::$kind($($args),*)$(.with_unit($unit))?),*];
+                let descriptors = [$($(#[$field_meta])* $crate::MetricDescriptor::$kind($($args),*)$(.$modifier($argument))*),*];
                 let mut handles = provider.register_batch(&descriptors)?.into_iter();
                 Ok(Self { $($(#[$field_meta])* $field: <$crate::product_metrics!(@type $kind)>::from_handle(
                     handles.next().ok_or($crate::MetricError::InvalidDescriptor)?

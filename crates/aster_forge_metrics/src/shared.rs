@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 crate::product_metrics! {
     struct InfrastructureMetricSet {
         http_requests_total: counter("", "aster.http.server.requests", "aster.http.server.requests under aster-metrics/v1.", &["aster.request.outcome"]).with_unit("{request}"),
-        http_request_duration_seconds: histogram_with_buckets("", "http.server.request.duration", "http.server.request.duration under aster-metrics/v1.", &["http.request.method", "url.scheme", "http.route", "http.response.status_code", "error.type"], &[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]).with_unit("s"),
+        http_request_duration_seconds: histogram_with_buckets("", "http.server.request.duration", "http.server.request.duration under aster-metrics/v1.", &["http.request.method", "url.scheme", "http.route", "http.response.status_code", "error.type"], &[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]).with_unit("s").with_integer_labels(&["http.response.status_code"]),
         http_active: up_down_counter("", "http.server.active_requests", "http.server.active_requests under aster-metrics/v1.", &["http.request.method", "url.scheme"]).with_unit("{request}"),
         role_ready: gauge("", "aster.runtime.ready", "Current role ready endpoint result.", &[]).with_unit("{state}"),
         pool_connections: observable_up_down_counter("", "db.client.connection.count", "Native idle/used connection count.", &["db.client.connection.pool.name","db.client.connection.state"]).with_unit("{connection}"),
@@ -353,7 +353,7 @@ impl MetricsRecorder for InfrastructureMetricsRecorder {
             .role_ready
             .set(&[], if ready { 1.0 } else { 0.0 });
     }
-    fn db_pool(&self, pool: &'static str, idle: u32, used: u32, max: Option<u32>) {
+    fn db_pool(&self, pool: &str, idle: u32, used: u32, max: Option<u32>) {
         self.metrics
             .pool_connections
             .set(&[pool, "idle"], f64::from(idle));
@@ -592,6 +592,80 @@ fn sample_system_metrics(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn recorder_provider_shares_ownership_and_closed_updater_stops() {
+        let noop = InfrastructureMetricsRecorder::new(MetricsProvider::builder().build().unwrap())
+            .unwrap();
+        assert!(!noop.enabled());
+        assert!(
+            noop.system_metrics_updater_task(CancellationToken::new())
+                .is_none()
+        );
+        let provider = MetricsProvider::builder()
+            .with_prometheus()
+            .unwrap()
+            .build()
+            .unwrap();
+        let recorder = InfrastructureMetricsRecorder::new(provider.clone()).unwrap();
+        assert!(recorder.provider().enabled());
+        let injected = MetricsRecorder::provider(&recorder).unwrap();
+        assert_eq!(injected.descriptors(), provider.descriptors());
+        let updater = recorder
+            .system_metrics_updater_task(CancellationToken::new())
+            .unwrap();
+        injected.shutdown(Duration::from_secs(1)).await.unwrap();
+        assert!(!provider.enabled());
+        tokio::time::timeout(Duration::from_secs(1), updater)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(feature = "otlp")]
+    #[tokio::test]
+    async fn sampler_exports_local_failure_snapshots_without_adding_them_again() {
+        let (builder, diagnostics) = MetricsProvider::builder()
+            .with_prometheus()
+            .unwrap()
+            .with_otlp(crate::OtlpMetricsConfig {
+                endpoint: "http://127.0.0.1:0/v1/metrics".into(),
+                headers: std::collections::BTreeMap::new(),
+                timeout: Duration::from_millis(100),
+                interval: Duration::from_mins(1),
+                max_request_bytes: 1024 * 1024,
+                max_response_bytes: 1024,
+            })
+            .unwrap();
+        let provider = builder.build().unwrap();
+        let recorder = InfrastructureMetricsRecorder::new(provider.clone()).unwrap();
+        assert_eq!(
+            provider.force_flush(Duration::from_secs(1)).await,
+            Err(crate::MetricError::Export)
+        );
+        assert_eq!(diagnostics.snapshot().failures, 1);
+        recorder.metrics.process_cpu_time.set(&[], f64::NAN);
+        for count in 1..=2 {
+            sample_system_metrics(&recorder, &mut None, || Err(sysinfo::Error::Unsupported));
+            let output = provider
+                .export_prometheus(Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(output.contains("aster_telemetry_exports_total{exporter=\"otlp\"} 0"));
+            assert!(output.contains("aster_telemetry_export_failures_total{exporter=\"otlp\"} 1"));
+            assert!(
+                output.contains("aster_telemetry_export_last_success_seconds{exporter=\"otlp\"} 0")
+            );
+            assert!(output.contains(
+                "aster_observability_failures_total{component=\"metrics\",operation=\"record\"} 1"
+            ));
+            assert!(output.contains(&format!("aster_observability_failures_total{{component=\"metrics\",operation=\"collect\"}} {count}")));
+            assert!(!output.contains("127.0.0.1"));
+        }
+        assert_eq!(
+            provider.shutdown(Duration::from_secs(1)).await,
+            Err(crate::MetricError::Shutdown)
+        );
+    }
 
     #[tokio::test]
     async fn system_initialization_retries_without_blocking_other_samples() {

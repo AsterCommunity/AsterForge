@@ -33,6 +33,7 @@ pub async fn metrics(request: Request, next: Next) -> Response {
         return next.run(request).await;
     }
     let method = request.method().to_string();
+    let is_head = request.method() == http::Method::HEAD;
     let route = request
         .extensions()
         .get::<MatchedPath>()
@@ -45,7 +46,7 @@ pub async fn metrics(request: Request, next: Next) -> Response {
     let response = next.run(request).await;
     guard.response(route, response.status().as_u16());
     let (parts, body) = response.into_parts();
-    if axum::body::HttpBody::is_end_stream(&body) {
+    if is_head || axum::body::HttpBody::is_end_stream(&body) {
         guard.finish();
     }
     Response::from_parts(
@@ -98,6 +99,48 @@ impl axum::body::HttpBody for ObservedBody {
 mod tests {
 
     #[tokio::test]
+    async fn head_response_completes_without_polling_or_canceling_application_body() {
+        let recorder = RecordingMetrics::enabled();
+        let router = Router::new()
+            .route(
+                "/head",
+                axum::routing::head(|| async {
+                    Body::from_stream(futures::stream::pending::<
+                        Result<axum::body::Bytes, std::io::Error>,
+                    >())
+                }),
+            )
+            .layer(middleware::from_fn(metrics))
+            .layer(Extension(recorder.shared()));
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("HEAD")
+                    .uri("/head")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        drop(response);
+        assert_eq!(recorder.active_requests(), 0);
+        assert!(
+            recorder.stream_failures().is_empty(),
+            "HEAD is completed even when its body is discarded"
+        );
+        let records = recorder.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            (
+                records[0].method.as_str(),
+                records[0].route.as_str(),
+                records[0].status
+            ),
+            ("HEAD", "/head", 200)
+        );
+    }
+
+    #[tokio::test]
     async fn response_body_retains_observation_until_eof_or_drop() {
         let recorder = RecordingMetrics::enabled();
         let router = Router::new()
@@ -123,8 +166,11 @@ mod tests {
             .await
             .unwrap();
         assert!(recorder.records().is_empty());
+        assert_eq!(recorder.active_requests(), 1);
         drop(response);
         assert_eq!(recorder.records().len(), 1);
+        assert_eq!(recorder.stream_failures(), vec![true]);
+        assert_eq!(recorder.active_requests(), 0);
         assert_eq!(recorder.records()[0].route, "/stream/{id}");
         let response = router
             .oneshot(
@@ -143,6 +189,8 @@ mod tests {
             "done"
         );
         assert_eq!(recorder.records().len(), 2);
+        assert_eq!(recorder.stream_failures(), vec![true]);
+        assert_eq!(recorder.active_requests(), 0);
     }
     use super::*;
     use crate::test_support::RecordingMetrics;
