@@ -39,7 +39,7 @@ let policy = JwtPolicy::new("aster-gate", "aster-gate-web", 900, 604_800)?
 let key = JwtKey::hmac(product_hs512_key_bytes)?; // 独立高熵且至少 64 字节
 ```
 
-HS256/384/512 的 HMAC key 至少分别为 32/48/64 字节；长度检查不等于熵检查。产品加载高熵签名 key，负责轮换和用途隔离，不复用 AEAD master key。相同算法、key 和 claims 在两个后端生成相同 token；只切换后端无需重新登录，也不会放宽算法/旧 key 的接受范围。JWT 内容是签名而非加密，不应放入秘密。
+HS256/384/512 的 HMAC key 至少分别为 32/48/64 字节；`JwtAlgorithm::minimum_key_bytes()` 是公开的 `const fn`，产品可在加载最终配置后复用它做启动校验。长度检查不等于熵检查。`JwtKey::hmac` 对不足 32 字节的输入返回 `AuthError::KeyTooShort`；签发/验证时若不满足所选算法的长度下限，也返回同一错误，而其他非法 policy 仍返回 `InvalidPolicy`。错误不包含密钥内容，具体配置字段、实际/期望字节数和最终 HTTP 映射由产品补充。产品加载高熵签名 key，负责轮换和用途隔离，不复用 AEAD master key。相同算法、key 和 claims 在两个后端生成相同 token；只切换后端无需重新登录，也不会放宽算法/旧 key 的接受范围。JWT 内容是签名而非加密，不应放入秘密。
 
 ## 启动初始化
 

@@ -55,28 +55,25 @@ mod tests {
     }
 
     #[test]
-    fn real_ip_uses_leftmost_forwarded_value_only_for_trusted_peer() {
+    fn real_ip_stops_at_first_untrusted_hop_from_trusted_peer() {
         let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_string()]);
-        let req = actix_test::TestRequest::default()
-            .insert_header(("X-Forwarded-For", "203.0.113.10, 198.51.100.2"))
-            .to_srv_request();
-
-        assert_eq!(
-            real_ip_from_trusted_headers(
-                req.headers(),
-                "10.0.0.5".parse::<IpAddr>().unwrap(),
-                &trusted,
-            ),
-            "203.0.113.10".parse::<IpAddr>().unwrap()
-        );
-        assert_eq!(
-            real_ip_from_trusted_headers(
-                req.headers(),
-                "198.51.100.2".parse::<IpAddr>().unwrap(),
-                &trusted,
-            ),
-            "198.51.100.2".parse::<IpAddr>().unwrap()
-        );
+        for (peer, forwarded, expected) in [
+            ("10.0.0.5", "203.0.113.10, 198.51.100.2", "198.51.100.2"),
+            ("10.0.0.5", "203.0.113.10, 10.0.0.9", "203.0.113.10"),
+            ("10.0.0.5", "203.0.113.10", "203.0.113.10"),
+            ("10.0.0.5", "203.0.113.10, not-an-ip, 10.0.0.9", "10.0.0.5"),
+            ("10.0.0.5", "10.0.0.8, 10.0.0.9", "10.0.0.5"),
+            ("198.51.100.2", "203.0.113.10, 10.0.0.9", "198.51.100.2"),
+        ] {
+            let req = actix_test::TestRequest::default()
+                .insert_header(("X-Forwarded-For", forwarded))
+                .to_srv_request();
+            assert_eq!(
+                real_ip_from_trusted_headers(req.headers(), peer.parse().unwrap(), &trusted),
+                expected.parse::<IpAddr>().unwrap(),
+                "peer={peer}, forwarded={forwarded}"
+            );
+        }
     }
 
     #[test]

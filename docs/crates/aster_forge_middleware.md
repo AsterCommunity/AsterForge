@@ -119,7 +119,7 @@ Actix 最后安装的 `.wrap(...)` 最先处理请求。示例从外到内为代
 Forge 负责产品无关的 rate-limit 机械行为：
 
 - 解析可信代理 CIDR / 单 IP 列表。
-- 仅当 direct peer 是可信代理时，使用 `X-Forwarded-For` 最左侧地址作为客户端 IP。
+- 仅当 direct peer 是可信代理时，从右向左检查 `X-Forwarded-For`，跳过可信代理并取首个不可信地址作为客户端 IP；不能越过不可信跳点采用更左侧的可伪造值。遇到非法跳点、缺失头或全可信链时回退 direct peer。
 - 无 peer 地址的部署（Unix domain socket）所有客户端回落共享 `127.0.0.1` 这一个限流桶，一人突发全员被拒；UDS 形态的产品应禁用 IP 限流或改用 `NormalizedStringRateLimiter` 业务 key 限流。
 - 为 `actix-governor` 提供可复用 IP key extractor。
 - 从非零 `(seconds_per_request, burst_size)` 构造 governor quota。
@@ -201,7 +201,7 @@ if let Some(rejection) = limiter.check("User@Example.com") {
 
 这个模块只做 Actix `HeaderMap` 适配：从请求头里读取 `X-Forwarded-For`，然后把可信代理判断交给
 `aster_forge_utils::net`。适合 service 或 audit 代码已经拿到 `HttpRequest` / `HeaderMap`，但不想重复写
-header 解析逻辑的场景。可信 peer 的左侧 forwarded 值支持裸 IPv4/IPv6，也支持代理常见的
+header 解析逻辑的场景。通过可信代理链确定的 forwarded 值支持裸 IPv4/IPv6，也支持代理常见的
 `IPv4:port` 与 `[IPv6]:port` 形式；非法值回退到 direct peer。
 
 ```rust

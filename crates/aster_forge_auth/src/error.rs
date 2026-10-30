@@ -12,7 +12,10 @@ pub enum AuthError {
     /// The upstream JWT provider was already installed; Forge never overwrites or adopts it.
     #[error("JWT crypto provider was already installed")]
     CryptoProviderAlreadyInstalled,
-    /// The caller supplied an invalid policy, key, identifier, or claim value.
+    /// The HMAC key has fewer bytes than required by the configured algorithm.
+    #[error("authentication signing key is too short for the configured algorithm")]
+    KeyTooShort,
+    /// The caller supplied an invalid policy, identifier, or claim value.
     #[error("invalid authentication policy")]
     InvalidPolicy,
     /// The token exceeded the configured parser budget.

@@ -9,6 +9,8 @@
 
 ### Changed
 
+- Authentication key-length failures now return `AuthError::KeyTooShort` instead of `InvalidPolicy` for HMAC construction and algorithm-specific issuance/verification. Products can use the public `JwtAlgorithm::minimum_key_bytes()` to validate configuration at startup; exhaustive error mappings must handle the new variant.
+- Trusted-proxy middleware documentation and adapter tests now match the existing right-to-left `X-Forwarded-For` trust walk, stopping at the first untrusted hop rather than accepting a spoofable leftmost value.
 - Upgrade system sampling to `sysinfo` 0.40, retaining Rust 1.95 as the minimum. Failed system initialization retries on the next sampling interval while uptime, allocator, and exporter diagnostics continue to update.
 - Move the documentation site and Rust API reference to `https://forge.docs.astercosm.com/`; `https://forge.astercosm.com/` is the product landing page. Existing documentation paths are retained.
 

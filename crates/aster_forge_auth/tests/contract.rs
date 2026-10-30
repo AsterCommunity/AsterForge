@@ -343,7 +343,7 @@ fn policy_key_budget_and_version_limits_are_checked() {
     assert!(JwtPolicy::new("issuer", "web", u64::MAX, 1).is_err());
     assert!(policy().with_leeway(u64::MAX).is_err());
     assert!(policy().with_max_token_bytes(0).is_err());
-    assert!(JwtKey::hmac([0; 31]).is_err());
+    assert_eq!(JwtKey::hmac([0; 31]).unwrap_err(), AuthError::KeyTooShort);
     assert!(JwtKey::hmac([0; 32]).is_ok());
     let short = JwtVerifier::new(
         JwtKey::hmac([0; 32]).unwrap(),
@@ -352,7 +352,7 @@ fn policy_key_budget_and_version_limits_are_checked() {
     );
     assert_eq!(
         short.verify(&signed(&claims()), AuthTokenType::Refresh),
-        Err(AuthError::InvalidPolicy)
+        Err(AuthError::KeyTooShort)
     );
     assert!(SessionVersion::new(u64::MAX).next().is_err());
     assert_eq!(SessionVersion::new(7).next().unwrap().value(), 8);

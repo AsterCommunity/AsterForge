@@ -138,6 +138,7 @@ fn runtime_algorithm_enforces_its_minimum_key_size_for_both_operations() {
         (JwtAlgorithm::Hs384, 48),
         (JwtAlgorithm::Hs512, 64),
     ] {
+        assert_eq!(algorithm.minimum_key_bytes(), minimum);
         let policy = policy(algorithm);
         let key = JwtKey::hmac(vec![42; minimum]).unwrap();
         let pair = issue(&signer(key.clone(), policy.clone())).unwrap();
@@ -147,19 +148,47 @@ fn runtime_algorithm_enforces_its_minimum_key_size_for_both_operations() {
                 .verify(&pair.access_token, AuthTokenType::Access)
                 .is_ok()
         );
+        let longer = JwtKey::hmac(vec![42; minimum + 1]).unwrap();
+        let longer_pair = issue(&signer(longer.clone(), policy.clone())).unwrap();
+        let longer_verifier =
+            JwtVerifier::new(longer, policy.clone(), Arc::new(FixedClock::new(NOW)));
+        assert!(
+            longer_verifier
+                .verify(&longer_pair.access_token, AuthTokenType::Access)
+                .is_ok()
+        );
         if minimum == 32 {
-            assert!(JwtKey::hmac([42; 31]).is_err());
+            assert_eq!(JwtKey::hmac([42; 31]).unwrap_err(), AuthError::KeyTooShort);
         } else {
             let key = JwtKey::hmac(vec![42; minimum - 1]).unwrap();
             assert_eq!(
                 issue(&signer(key.clone(), policy.clone())),
-                Err(AuthError::InvalidPolicy)
+                Err(AuthError::KeyTooShort)
             );
             let verifier = JwtVerifier::new(key, policy, Arc::new(FixedClock::new(NOW)));
             assert_eq!(
                 verifier.verify(&pair.access_token, AuthTokenType::Access),
-                Err(AuthError::InvalidPolicy)
+                Err(AuthError::KeyTooShort)
             );
         }
     }
+}
+
+#[test]
+fn hmac_key_construction_classifies_short_keys_without_exposing_them() {
+    for length in [0, 1, 16, 31] {
+        let error = JwtKey::hmac(vec![42; length]).unwrap_err();
+        assert_eq!(error, AuthError::KeyTooShort);
+        assert!(error.to_string().contains("key is too short"));
+    }
+    for length in [32, 33, 48, 64, 65] {
+        assert_eq!(
+            format!("{:?}", JwtKey::hmac(vec![42; length]).unwrap()),
+            "JwtKey(<redacted>)"
+        );
+    }
+    assert_eq!(
+        JwtPolicy::new("issuer", "local-web", 0, 600).unwrap_err(),
+        AuthError::InvalidPolicy
+    );
 }

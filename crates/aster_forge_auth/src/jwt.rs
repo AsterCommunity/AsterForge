@@ -121,7 +121,9 @@ impl JwtAlgorithm {
             Self::Hs512 => Algorithm::HS512,
         }
     }
-    const fn minimum_key_bytes(self) -> usize {
+    /// Minimum HMAC key length in bytes. Length alone does not establish entropy.
+    #[must_use]
+    pub const fn minimum_key_bytes(self) -> usize {
         match self {
             Self::Hs256 => 32,
             Self::Hs384 => 48,
@@ -137,17 +139,17 @@ impl JwtKey {
     /// Creates a key with the minimum HS256 size.
     ///
     /// # Errors
-    /// Returns `InvalidPolicy` for fewer than 32 bytes; this check cannot prove entropy.
+    /// Returns `KeyTooShort` for fewer than 32 bytes; this check cannot prove entropy.
     pub fn hmac(secret: impl AsRef<[u8]>) -> Result<Self> {
         let secret = secret.as_ref();
-        if secret.len() < 32 {
-            return Err(AuthError::InvalidPolicy);
+        if secret.len() < JwtAlgorithm::Hs256.minimum_key_bytes() {
+            return Err(AuthError::KeyTooShort);
         }
         Ok(Self(Arc::from(secret)))
     }
     fn check(&self, algorithm: JwtAlgorithm) -> Result<()> {
         if self.0.len() < algorithm.minimum_key_bytes() {
-            return Err(AuthError::InvalidPolicy);
+            return Err(AuthError::KeyTooShort);
         }
         Ok(())
     }

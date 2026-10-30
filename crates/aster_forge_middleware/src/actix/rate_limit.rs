@@ -33,9 +33,10 @@ pub use crate::shared::rate_limit::{
 /// Trusted-proxy-aware IP key extractor for `actix-governor`.
 ///
 /// The extractor uses the direct peer address by default. When the peer address
-/// matches one of the trusted proxy CIDR entries, the leftmost `X-Forwarded-For`
-/// address is used as the client key. Invalid or missing forwarded addresses
-/// fall back to the direct peer address.
+/// matches a trusted proxy, `X-Forwarded-For` is walked from right to left, skipping
+/// trusted hops and using the first untrusted address as the client key. Malformed
+/// hops encountered before that address, missing headers and entirely trusted
+/// chains fall back to the direct peer address.
 ///
 /// Deployments without a peer address (e.g. Unix domain sockets) fall back to
 /// `127.0.0.1`, so every client shares one rate-limit bucket and a single
@@ -214,26 +215,34 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn trusted_proxy_extractor_uses_leftmost_forwarded_ip_only_from_trusted_peer() {
+    async fn trusted_proxy_extractor_stops_at_first_untrusted_hop_from_trusted_peer() {
         let extractor = TrustedProxyIpKeyExtractor::new(&["10.0.0.0/8".to_string()]);
-        let req = actix_test::TestRequest::default()
-            .peer_addr("10.0.0.5:12345".parse().unwrap())
-            .insert_header(("X-Forwarded-For", "203.0.113.10, 198.51.100.2"))
-            .to_srv_request();
-
-        assert_eq!(
-            extractor.extract(&req).unwrap(),
-            "203.0.113.10".parse::<IpAddr>().unwrap()
-        );
-
-        let untrusted = actix_test::TestRequest::default()
-            .peer_addr("198.51.100.2:12345".parse().unwrap())
-            .insert_header(("X-Forwarded-For", "203.0.113.10"))
-            .to_srv_request();
-        assert_eq!(
-            extractor.extract(&untrusted).unwrap(),
-            "198.51.100.2".parse::<IpAddr>().unwrap()
-        );
+        for (peer, forwarded, expected) in [
+            (
+                "10.0.0.5:12345",
+                "203.0.113.10, 198.51.100.2",
+                "198.51.100.2",
+            ),
+            ("10.0.0.5:12345", "203.0.113.10, 10.0.0.9", "203.0.113.10"),
+            ("10.0.0.5:12345", "203.0.113.10", "203.0.113.10"),
+            (
+                "10.0.0.5:12345",
+                "203.0.113.10, not-an-ip, 10.0.0.9",
+                "10.0.0.5",
+            ),
+            ("10.0.0.5:12345", "10.0.0.8, 10.0.0.9", "10.0.0.5"),
+            ("198.51.100.2:12345", "203.0.113.10", "198.51.100.2"),
+        ] {
+            let req = actix_test::TestRequest::default()
+                .peer_addr(peer.parse().unwrap())
+                .insert_header(("X-Forwarded-For", forwarded))
+                .to_srv_request();
+            assert_eq!(
+                extractor.extract(&req).unwrap(),
+                expected.parse::<IpAddr>().unwrap(),
+                "peer={peer}, forwarded={forwarded}"
+            );
+        }
     }
 
     #[actix_web::test]
