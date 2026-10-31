@@ -100,6 +100,20 @@ impl RedisTestContainer {
             .start()
             .await
             .expect("failed to start Redis test container");
+        // Reused containers bypass testcontainers' normal readiness path. Docker may report
+        // running before publishing NetworkSettings.Ports after starting a stopped container.
+        let mapped = wait_until(
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+            || async {
+                container
+                    .get_host_port_ipv4(IntoContainerPort::tcp(6379))
+                    .await
+                    .is_ok()
+            },
+        )
+        .await;
+        assert!(mapped, "Redis test port mapping did not become available");
         let port = container
             .get_host_port_ipv4(IntoContainerPort::tcp(6379))
             .await

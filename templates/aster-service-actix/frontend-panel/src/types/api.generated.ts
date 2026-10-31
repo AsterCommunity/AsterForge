@@ -45,13 +45,14 @@ export interface components {
          * @enum {string}
          */
         ApiErrorCode: "success" | "endpoint_not_found";
+        ApiErrorInfo_TupleUnit: {
+            diagnostic?: null;
+            retryable: boolean;
+        };
         ApiResponse_TupleUnit_ApiErrorCode_TupleUnit: {
             code: components["schemas"]["ApiErrorCode"];
             data?: null;
-            error?: {
-                diagnostic?: null;
-                retryable: boolean;
-            };
+            error?: components["schemas"]["ApiErrorInfo_TupleUnit"];
             msg: string;
         };
         /** @description Product error adapter: injects the code/message and retains the stable ErrorResponse schema. */
