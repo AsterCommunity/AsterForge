@@ -102,22 +102,20 @@ impl RedisTestContainer {
             .expect("failed to start Redis test container");
         // Reused containers bypass testcontainers' normal readiness path. Docker may report
         // running before publishing NetworkSettings.Ports after starting a stopped container.
-        let mapped = wait_until(
-            Duration::from_secs(30),
-            Duration::from_millis(50),
-            || async {
-                container
+        let port = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(port) = container
                     .get_host_port_ipv4(IntoContainerPort::tcp(6379))
                     .await
-                    .is_ok()
-            },
-        )
+                {
+                    return port;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
         .await;
-        assert!(mapped, "Redis test port mapping did not become available");
-        let port = container
-            .get_host_port_ipv4(IntoContainerPort::tcp(6379))
-            .await
-            .expect("Redis test port should be exposed");
+        let port =
+            port.expect("Redis test port mapping did not become available within 30 seconds");
 
         let url = format!("redis://127.0.0.1:{port}/0");
         let client = redis::Client::open(url.as_str())
