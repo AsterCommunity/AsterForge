@@ -109,6 +109,16 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
     async fn failed_steps_json(&self, task: &Task, display_error: &str) -> Option<String>;
 
     /// Marks the claimed task permanently failed.
+    ///
+    /// The same atomic CAS or transaction must check the task ID, processing token,
+    /// executable state, and absence of a persisted cancellation request. Transactions
+    /// must serialize against cancellation through row locks or an equivalent mechanism.
+    /// A token-only fence or an earlier cancellation read is insufficient. If cancellation committed
+    /// first, preserve it and all associated state; do not commit failure or its side effects.
+    /// Return `true` only after committing failure, or `false` without changes on cancellation
+    /// or a stale lease. On `false`, the runtime calls [`Self::cancel_task_if_requested`]
+    /// with the same lease to acknowledge cancellation or ignore a stale worker.
+    /// Storage failures must remain `Err`, rather than being reported as a CAS miss.
     async fn mark_task_failed(
         &self,
         task: &Task,
@@ -117,6 +127,15 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
     ) -> std::result::Result<bool, Self::Error>;
 
     /// Marks the claimed task retryable at a future timestamp.
+    ///
+    /// Atomically check the task ID, processing token, executable state, and absence of
+    /// persisted cancellation in the same CAS or transaction as the retry update. Transactions
+    /// must serialize against cancellation through row locks or an equivalent mechanism.
+    /// If cancellation committed first, preserve it and do not update attempts, steps,
+    /// retry timing, or related product state. Return `true` only after committing retry;
+    /// return `false` without changes on cancellation or a stale lease. The runtime then
+    /// calls [`Self::cancel_task_if_requested`] with the same lease to distinguish an
+    /// acknowledged cancellation from stale work. Propagate storage failures as `Err`.
     async fn mark_task_retry(
         &self,
         task: &Task,
@@ -125,6 +144,11 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
     ) -> std::result::Result<bool, Self::Error>;
 
     /// Releases a processing lease during cooperative shutdown.
+    ///
+    /// Apply the same atomic token/state/cancellation fence as [`Self::mark_task_retry`].
+    /// Return `false` without changes when cancellation or another owner won; the runtime
+    /// checks [`Self::cancel_task_if_requested`] afterward. A release must not erase a
+    /// persisted user cancellation.
     async fn release_task_for_shutdown(
         &self,
         task: &Task,

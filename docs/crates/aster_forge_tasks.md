@@ -260,10 +260,13 @@ let report = aster_forge_tasks::run_task_consumer(
 - `ClaimedTaskExecutionStore::confirm_task_succeeded`：在权威数据库确认同 task ID、同 processing token 的 Succeeded；处理函数返回 Ok 本身不足以报告成功。心跳持续到取消确认和结果处理完成，成功终态无需继续允许 heartbeat 更新 Processing 行。
 - `TaskHeartbeatStore` 返回 `TaskHeartbeatOutcome::{Renewed, Lost, CancellationRequested}`。
 - execution store 实现 typed cancellation 分类和同 token 的 `cancel_task_if_requested`。
+- `mark_task_retry`、`mark_task_failed` 和 `release_task_for_shutdown` 必须在**同一条 fenced CAS 或同一事务**中检查 task ID、processing token、可执行状态及没有持久化取消请求。事务方案必须通过共享行锁或等价机制串行化取消与结果写入；只检查 token，或读取取消后无条件写入，均不符合契约。产品用 `Canceling` 表达取消时，写入条件必须排除该状态；用独立取消字段时，必须同时检查该字段。
 - handler 在有副作用的边界调用 `ensure_active()`，等待 I/O 时选择 `stop_requested()`；
   它同时被进程关闭、lease 丢失、续约超时和用户取消唤醒。
 
 执行结束、失败/retry CAS 竞争和进程 shutdown 前均检查持久化取消；取消优先，不伪报成功。
+结果写入的返回协议是：`Ok(true)` 仅表示本次迁移已提交；取消或旧 lease 导致未写入时返回 `Ok(false)`，保留原有状态、attempt、steps、lease 和相关业务数据，不执行对应终态清理。runtime 随后用同一 lease 调用 `cancel_task_if_requested`：返回 `true` 才计入 canceled；返回 `false` 则按旧 owner 忽略，不记录 retry/failure/success。数据库错误必须返回 `Err`，不能伪装为 CAS 未命中。
+取消和结果写入按事务提交顺序决定胜者：取消先提交，后续 retry/failure/release 不得覆盖；retry 先提交，则后续取消按产品的队列取消规则处理。runtime 的事前、事后检查不能替代 adapter 内部的原子条件。产品须用真实持久化测试验证取消先提交、结果先提交、旧 token 和正常更新，并检查未命中时没有业务副作用。
 取消保留已提交的产品变更，Forge 不提供回滚承诺。外部副作用仍是至少一次语义。
 产品需把 publication receipt/checkpoint 与文件、配额、版本或业务变更放在同一 fenced 事务内。
 执行尝试只能清理 `cleanup_task_temp_dir_for_lease_in_root` 对应的 token 目录；
@@ -288,7 +291,7 @@ let report = aster_forge_tasks::run_task_consumer(
 - periodic task 的记录逻辑由产品传入 hook。
 - panic outcome 由产品决定如何持久化。
 - `periodic_sleep_duration` 对零间隔钳到 1 秒下限（与 dispatch worker 的 `effective_dispatch_base_interval` 一致），防止配置事故让 runner 热 spin、scheduled 版打爆数据库；非零的亚秒间隔不干预（快速测试、内存轮询是合法用法）。
-- `BackgroundTasks::shutdown` 会 drain 所有 worker 句柄：panic 退出的 worker 逐条记 `tracing::error!`（panic hook 之外补一层任务组上下文），被 `abort_all` 取消的 worker 属于预期路径不告警。
+- `BackgroundTasks::shutdown` 会 drain 所有 worker 句柄：panic 退出的 worker 逐条记 `tracing::error!`（panic hook 之外补一层任务组上下文）；被 `abort_all` 取消的 worker 不逐条记日志，但 grace 超时时 shutdown 会记录一次组级 `tracing::warn!`。
 
 多实例服务如果有一组 process-level singleton worker，优先使用
 `run_leased_background_tasks(...)`，不要在产品侧重复手写
