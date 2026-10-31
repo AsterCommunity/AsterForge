@@ -53,10 +53,13 @@ impl MemoryRemoteMutationBackend {
         namespace_store: Arc<MemoryWritebackStore>,
         state_directory: Option<&Path>,
     ) -> ExampleResult<Self> {
+        if let Some(directory) = state_directory {
+            aster_forge_utils::state_directory::StateDirectory::open(directory)?;
+        }
         let state_file = state_directory.map(|directory| directory.join("remote.json"));
         let mut state = RemoteMutationState::default();
         if let Some(path) = state_file.as_ref() {
-            let document = match fs::read(path) {
+            let document = match aster_forge_utils::state_directory::StateDirectory::open(path.parent().ok_or("state file has no parent")?)?.read("remote.json", MAX_SYNTHETIC_STATE_BYTES) {
                 Ok(bytes) => serde_json::from_slice::<DurableRemoteDocument>(&bytes)?,
                 Err(error) if error.kind() == ErrorKind::NotFound => {
                     DurableRemoteDocument::default()
@@ -188,7 +191,7 @@ impl MemoryRemoteMutationBackend {
                 &right.item_id,
             ))
         });
-        let bytes = serde_json::to_vec_pretty(&DurableRemoteDocument {
+        let bytes = serialize_state_document(&DurableRemoteDocument {
             committed,
             uploads,
             items: Some(items),
@@ -196,17 +199,7 @@ impl MemoryRemoteMutationBackend {
         let parent = state_file
             .parent()
             .ok_or("synthetic remote ledger path omitted its parent")?;
-        fs::create_dir_all(parent)?;
-        let temporary = state_file.with_extension("json.tmp");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(&temporary, state_file)?;
-        OpenOptions::new().read(true).open(parent)?.sync_all()?;
+        aster_forge_utils::state_directory::StateDirectory::open(parent)?.atomic_write("remote.json", &bytes)?;
         Ok(())
     }
 

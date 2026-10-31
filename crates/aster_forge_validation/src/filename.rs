@@ -143,6 +143,11 @@ fn validate_blob_key_for_storage_path(blob_key: &str) -> Result<()> {
             "blob key must be an ASCII token without path separators",
         ));
     }
+    if blob_key[..2] == *".." || blob_key[2..4] == *".." || blob_key.contains(':') {
+        return Err(ValidationError::new(
+            "blob key creates an unsafe path component",
+        ));
+    }
     Ok(())
 }
 
@@ -398,6 +403,14 @@ mod tests {
             next_copy_name("file (4294967294).txt"),
             "file (4294967295).txt"
         );
+    }
+
+    #[test]
+    fn storage_path_rejects_parent_shards_and_windows_prefixes() {
+        for key in ["....payload", "..abpayload", "ab..payload", "C:abpayload"] {
+            assert!(storage_path_from_blob_key(key).is_err(), "{key}");
+        }
+        assert_eq!(storage_path_from_blob_key("a.b.c").unwrap(), "a./b./a.b.c");
     }
 
     #[test]

@@ -93,6 +93,17 @@ async fn split_sqlite_pools_report_held_writer_and_independent_reader_limits() {
     let handles = connect_reader_for_writer(&config, writer).await.unwrap();
     assert!(handles.sqlite_read_write_split());
     let transaction = handles.writer().begin().await.unwrap();
+    // SQLx may return from pool construction while a background connection is still being
+    // returned. Establish the fixture's idle reader state before asserting its sampled usage.
+    // This preparation reads native counters only; it never acquires or pings a connection.
+    let reader = handles.reader().get_sqlite_connection_pool();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while reader.size() == 0 || u32::try_from(reader.num_idle()).unwrap() != reader.size() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reader fixture should finish returning its initial connection");
     let recorder = Capture::default();
     // With the only writer held, any acquisition by the sampler would block.
     handles.record_pool_metrics("main", &recorder);

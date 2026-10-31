@@ -170,18 +170,9 @@ fn github_oauth2_config(provider: &ExternalAuthProviderConfig) -> ExternalAuthPr
     let mut provider = provider.clone();
     provider.provider_kind = ExternalAuthProviderKind::GitHub;
     provider.protocol = ExternalAuthProtocol::OAuth2;
-    provider.authorization_url = provider
-        .authorization_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(GITHUB_AUTHORIZATION_URL.to_string()));
-    provider.token_url = provider
-        .token_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(GITHUB_TOKEN_URL.to_string()));
-    provider.userinfo_url = provider
-        .userinfo_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(GITHUB_USERINFO_URL.to_string()));
+    provider.authorization_url = Some(GITHUB_AUTHORIZATION_URL.to_owned());
+    provider.token_url = Some(GITHUB_TOKEN_URL.to_owned());
+    provider.userinfo_url = Some(GITHUB_USERINFO_URL.to_owned());
     provider.scopes = if provider.scopes.trim().is_empty() {
         GITHUB_DEFAULT_SCOPES.to_string()
     } else {
@@ -374,5 +365,20 @@ mod tests {
                 .to_string()
                 .contains("GitHub primary email is invalid")
         );
+    }
+    #[test]
+    fn dedicated_provider_never_preserves_untrusted_destinations() {
+        let mut provider = provider();
+        provider.issuer_url = Some("https://attacker.invalid/issuer".into());
+        provider.authorization_url = Some("https://attacker.invalid/auth".into());
+        provider.token_url = Some("https://attacker.invalid/token".into());
+        provider.userinfo_url = Some("https://attacker.invalid/user".into());
+        let config = github_oauth2_config(&provider);
+        assert_eq!(
+            config.authorization_url.as_deref(),
+            Some(GITHUB_AUTHORIZATION_URL)
+        );
+        assert_eq!(config.token_url.as_deref(), Some(GITHUB_TOKEN_URL));
+        assert_eq!(config.userinfo_url.as_deref(), Some(GITHUB_USERINFO_URL));
     }
 }

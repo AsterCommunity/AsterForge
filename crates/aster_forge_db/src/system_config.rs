@@ -842,9 +842,17 @@ pub async fn upsert_prevalidated<C: ConnectionTrait>(
         let existing = find_by_key(db, request.key).await?.ok_or_else(|| {
             DbError::non_retryable(format!("config key '{}' not found", request.key))
         })?;
+        if existing.key != request.key {
+            return Err(DbError::non_retryable(
+                "config key spelling conflicts with an existing database key",
+            ));
+        }
+        let may_change_visibility = is_custom_key
+            && existing.source == ConfigSource::Custom
+            && registry.get(&existing.key).is_none();
         let mut active: ActiveModel = existing.into();
         active.value = Set(request.value.to_string());
-        if is_custom_key && let Some(visibility) = request.visibility {
+        if may_change_visibility && let Some(visibility) = request.visibility {
             active.visibility = Set(visibility);
         }
         active.updated_at = Set(now);
@@ -1582,5 +1590,47 @@ mod tests {
             .unwrap();
         assert_eq!(stored.value, "direct");
         assert!(stored.updated_at <= Utc::now());
+    }
+    #[tokio::test]
+    async fn case_insensitive_database_alias_cannot_override_system_visibility() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let sql = create_system_config_table(DatabaseBackend::Sqlite)
+            .to_string(sea_orm::sea_query::SqliteQueryBuilder)
+            .replace(
+                "\"key\" varchar(128)",
+                "\"key\" varchar(128) COLLATE NOCASE",
+            );
+        // SQLite lets an existing unique index define the same case-insensitive equality as MySQL.
+        db.execute_unprepared(&sql).await.unwrap();
+        db.execute_unprepared(
+            "CREATE UNIQUE INDEX config_key_nocase ON system_config (key COLLATE NOCASE)",
+        )
+        .await
+        .unwrap();
+        super::ensure_defaults(&db, &REGISTRY, &[]).await.unwrap();
+        let key = PRIMARY.key.to_ascii_uppercase();
+        let result = super::upsert_prevalidated(
+            &db,
+            &REGISTRY,
+            SystemConfigUpsert {
+                key: &key,
+                value: "alias-write",
+                visibility: Some(ConfigVisibility::Public),
+                updated_by: None,
+            },
+        )
+        .await;
+        // Either reject the spelling mismatch or preserve the system row's metadata.
+        if let Ok(row) = result {
+            assert_eq!(row.visibility, PRIMARY.visibility);
+        }
+        assert_eq!(
+            super::find_by_key(&db, PRIMARY.key)
+                .await
+                .unwrap()
+                .unwrap()
+                .visibility,
+            PRIMARY.visibility
+        );
     }
 }

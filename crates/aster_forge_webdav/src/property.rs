@@ -128,9 +128,28 @@ pub trait DavLivePropertyProvider: Send + Sync {
     ) -> Result<Self::Values, DavBackendError>;
 }
 
+/// Per-resource property composition bounds, independent of serialized response limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DavPropertyMaterializationLimits {
+    /// Retained string and node payload budget, checked before materializing the next value.
+    pub maximum_bytes: usize,
+    pub maximum_properties: usize,
+}
+
+impl Default for DavPropertyMaterializationLimits {
+    fn default() -> Self {
+        Self {
+            maximum_bytes: 64 * 1024 * 1024,
+            maximum_properties: 4096,
+        }
+    }
+}
+
 /// Failure while rendering authoritative product values as `WebDAV` live properties.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavLivePropertyError {
+    #[error("WebDAV property materialization exceeds the configured limit")]
+    LimitExceeded,
     #[error("invalid representation for WebDAV live property {property:?}")]
     InvalidRepresentation { property: DavLiveProperty },
     #[error("required WebDAV live property value is missing: {property:?}")]
@@ -196,23 +215,31 @@ pub async fn build_live_propfind_item_with_provider<P: DavLivePropertyProvider>(
     href: String,
     snapshot: &DavCapabilitySnapshot,
     request: &DavPropfindRequest,
+    limits: DavPropertyMaterializationLimits,
 ) -> Result<DavMultiStatusItem, DavLivePropertyEvaluationError> {
     let requirements = live_property_requirements(snapshot, request);
     let values = provider.live_property_values(path, requirements).await?;
-    build_live_propfind_item(href, snapshot, request, &values).map_err(Into::into)
+    build_live_propfind_item(href, snapshot, request, &values, limits).map_err(Into::into)
 }
 
-/// Composes one PROPFIND item from the validated capability and one product value snapshot.
+/// Composes properties within item-count and retained-value byte limits before serialization.
 ///
 /// # Errors
-///
-/// Returns [`DavLivePropertyError`] when required metadata or property values are invalid.
+/// Returns a property error when values are invalid or materialization exceeds the limits.
 pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
     href: String,
     snapshot: &DavCapabilitySnapshot,
     request: &DavPropfindRequest,
     values: &V,
+    limits: DavPropertyMaterializationLimits,
 ) -> Result<DavMultiStatusItem, DavLivePropertyError> {
+    let mut budget = PropertyBudget {
+        bytes: limits.maximum_bytes,
+        properties: limits.maximum_properties,
+    };
+    if budget.bytes == 0 || budget.properties == 0 {
+        return Err(DavLivePropertyError::LimitExceeded);
+    }
     let metadata = values.metadata();
     let groups = match request {
         DavPropfindRequest::AllProp { include } => {
@@ -225,59 +252,99 @@ pub fn build_live_propfind_item<V: DavLivePropertyValueSnapshot>(
                         metadata,
                         property,
                         &canonical_property(property),
+                        budget.bytes,
                     )?
                 {
-                    ok.push(element);
+                    push_property(&mut budget, &mut ok, element)?;
                 }
                 Ok(())
             })?;
-            append_all_dead_properties(values.dead_properties(), &mut ok);
+            append_all_dead_properties(values.dead_properties(), &mut ok, &mut budget)?;
 
             let mut missing = Vec::new();
             for requested in include {
                 if contains_expanded_name(&ok, requested) {
                     continue;
                 }
-                match resolve_requested_property(snapshot, values, metadata, requested)? {
-                    Some(element) => ok.push(element),
-                    None => missing.push(dav_property_name_element(requested)),
+                match resolve_requested_property(
+                    snapshot,
+                    values,
+                    metadata,
+                    requested,
+                    budget.bytes,
+                )? {
+                    Some(element) => push_property(&mut budget, &mut ok, element)?,
+                    None => push_property(
+                        &mut budget,
+                        &mut missing,
+                        dav_property_name_element(requested),
+                    )?,
                 }
             }
             propstat_groups(ok, missing)
         }
-        DavPropfindRequest::PropName => {
-            let mut names = Vec::new();
-            for_each_catalog_property(snapshot, |property| {
-                if property_is_defined(snapshot, values, metadata, property) {
-                    names.push(dav_property_name_element(&canonical_property(property)));
-                }
-                Ok(())
-            })?;
-            for dead in values.dead_properties() {
-                names.push(dav_property_name_element(&dead_property_name(dead)));
-            }
-            if names.is_empty() {
-                Vec::new()
-            } else {
-                vec![DavPropStat {
-                    status: 200,
-                    properties: names,
-                }]
-            }
-        }
+        DavPropfindRequest::PropName => property_names(snapshot, values, metadata, &mut budget)?,
         DavPropfindRequest::Prop(requested) => {
             let mut ok = Vec::new();
             let mut missing = Vec::new();
+            let mut seen = std::collections::HashSet::new();
             for property in requested {
-                match resolve_requested_property(snapshot, values, metadata, property)? {
-                    Some(element) => ok.push(element),
-                    None => missing.push(dav_property_name_element(property)),
+                if !seen.insert((property.namespace.as_deref(), property.name.as_str())) {
+                    continue;
+                }
+                match resolve_requested_property(
+                    snapshot,
+                    values,
+                    metadata,
+                    property,
+                    budget.bytes,
+                )? {
+                    Some(element) => push_property(&mut budget, &mut ok, element)?,
+                    None => push_property(
+                        &mut budget,
+                        &mut missing,
+                        dav_property_name_element(property),
+                    )?,
                 }
             }
             propstat_groups(ok, missing)
         }
     };
     Ok(DavMultiStatusItem::properties(href, groups))
+}
+
+fn property_names<V: DavLivePropertyValueSnapshot>(
+    snapshot: &DavCapabilitySnapshot,
+    values: &V,
+    metadata: DavLivePropertyMetadata<'_>,
+    budget: &mut PropertyBudget,
+) -> Result<Vec<DavPropStat>, DavLivePropertyError> {
+    let mut names = Vec::new();
+    for_each_catalog_property(snapshot, |property| {
+        if property_is_defined(snapshot, values, metadata, property) {
+            push_property(
+                budget,
+                &mut names,
+                dav_property_name_element(&canonical_property(property)),
+            )?;
+        }
+        Ok(())
+    })?;
+    for dead in values.dead_properties() {
+        push_property(
+            budget,
+            &mut names,
+            dav_property_name_element(&dead_property_name(dead)),
+        )?;
+    }
+    Ok(if names.is_empty() {
+        Vec::new()
+    } else {
+        vec![DavPropStat {
+            status: 200,
+            properties: names,
+        }]
+    })
 }
 
 /// Returns whether a requested property is a protected standard live property.
@@ -472,11 +539,38 @@ fn resolve_requested_property<V: DavLivePropertyValueSnapshot>(
     values: &V,
     metadata: DavLivePropertyMetadata<'_>,
     requested: &DavRequestedProperty,
+    remaining_bytes: usize,
 ) -> Result<Option<DavXmlElement>, DavLivePropertyError> {
+    let selector_bytes = requested
+        .name
+        .len()
+        .saturating_add(requested.prefix.as_ref().map_or(0, String::len))
+        .saturating_add(
+            requested
+                .namespace
+                .as_ref()
+                .map_or(0, String::len)
+                .saturating_mul(2),
+        );
+    if selector_bytes > remaining_bytes {
+        return Err(DavLivePropertyError::LimitExceeded);
+    }
     if let Some(property) = live_property(requested)
         && (is_base_property(property) || snapshot.supports_live_property(property))
     {
-        return resolve_live_property(snapshot, values, metadata, property, requested);
+        return resolve_live_property(
+            snapshot,
+            values,
+            metadata,
+            property,
+            requested,
+            remaining_bytes,
+        );
+    }
+    if let Some(dead) = find_dead_property(values.dead_properties(), requested)
+        && dead.xml.as_ref().map_or(0, Vec::len) > remaining_bytes
+    {
+        return Err(DavLivePropertyError::LimitExceeded);
     }
     Ok(
         find_dead_property(values.dead_properties(), requested).map(|dead| {
@@ -489,13 +583,43 @@ fn resolve_requested_property<V: DavLivePropertyValueSnapshot>(
     )
 }
 
+fn check_property_source_size<V: DavLivePropertyValueSnapshot>(
+    values: &V,
+    metadata: DavLivePropertyMetadata<'_>,
+    property: DavLiveProperty,
+    remaining_bytes: usize,
+) -> Result<(), DavLivePropertyError> {
+    let source_bytes = match property {
+        DavLiveProperty::DisplayName => metadata.display_name.map_or(0, str::len),
+        DavLiveProperty::GetContentLanguage => metadata.content_language.map_or(0, str::len),
+        DavLiveProperty::GetContentType => metadata.content_type.map_or(0, str::len),
+        DavLiveProperty::GetEtag => metadata.etag.map_or(0, str::len),
+        DavLiveProperty::SyncToken => values.sync_token().map_or(0, str::len),
+        DavLiveProperty::AddMember => values.add_member_href().map_or(0, str::len),
+        _ => 0,
+    };
+    if source_bytes > remaining_bytes {
+        return Err(DavLivePropertyError::LimitExceeded);
+    }
+    if let Some(element) = values.extension_value(property) {
+        let mut probe = PropertyBudget {
+            bytes: remaining_bytes,
+            properties: usize::MAX,
+        };
+        charge_property_element(&mut probe, element)?;
+    }
+    Ok(())
+}
+
 fn resolve_live_property<V: DavLivePropertyValueSnapshot>(
     snapshot: &DavCapabilitySnapshot,
     values: &V,
     metadata: DavLivePropertyMetadata<'_>,
     property: DavLiveProperty,
     requested: &DavRequestedProperty,
+    remaining_bytes: usize,
 ) -> Result<Option<DavXmlElement>, DavLivePropertyError> {
+    check_property_source_size(values, metadata, property, remaining_bytes)?;
     let element = match property {
         DavLiveProperty::CreationDate => metadata
             .creation_date
@@ -831,17 +955,82 @@ fn subtree_uses_prefix(element: &DavXmlElement, prefix: &str) -> bool {
         })
 }
 
-fn append_all_dead_properties(dead: &[DavProp], output: &mut Vec<DavXmlElement>) {
+struct PropertyBudget {
+    bytes: usize,
+    properties: usize,
+}
+
+fn push_property(
+    budget: &mut PropertyBudget,
+    output: &mut Vec<DavXmlElement>,
+    element: DavXmlElement,
+) -> Result<(), DavLivePropertyError> {
+    budget.properties = budget
+        .properties
+        .checked_sub(1)
+        .ok_or(DavLivePropertyError::LimitExceeded)?;
+    charge_property_element(budget, &element)?;
+    output.push(element);
+    Ok(())
+}
+
+fn charge_property_element(
+    budget: &mut PropertyBudget,
+    root: &DavXmlElement,
+) -> Result<(), DavLivePropertyError> {
+    let mut pending = vec![root];
+    while let Some(element) = pending.pop() {
+        let mut bytes = std::mem::size_of::<DavXmlElement>()
+            .saturating_add(element.name.len())
+            .saturating_add(element.prefix.as_ref().map_or(0, String::len))
+            .saturating_add(element.namespace.as_ref().map_or(0, String::len));
+        for (key, value) in element.namespaces.iter().chain(&element.attributes) {
+            bytes = bytes
+                .saturating_add(key.len())
+                .saturating_add(value.len())
+                .saturating_add(std::mem::size_of::<(String, String)>());
+        }
+        for child in &element.children {
+            bytes = bytes.saturating_add(std::mem::size_of::<DavXmlNode>());
+            match child {
+                DavXmlNode::Element(child) => pending.push(child),
+                DavXmlNode::Text(value) | DavXmlNode::CData(value) | DavXmlNode::Comment(value) => {
+                    bytes = bytes.saturating_add(value.len());
+                }
+                DavXmlNode::ProcessingInstruction(target, value) => {
+                    bytes = bytes
+                        .saturating_add(target.len())
+                        .saturating_add(value.as_ref().map_or(0, String::len));
+                }
+            }
+        }
+        budget.bytes = budget
+            .bytes
+            .checked_sub(bytes)
+            .ok_or(DavLivePropertyError::LimitExceeded)?;
+    }
+    Ok(())
+}
+
+fn append_all_dead_properties(
+    dead: &[DavProp],
+    output: &mut Vec<DavXmlElement>,
+    budget: &mut PropertyBudget,
+) -> Result<(), DavLivePropertyError> {
     for property in dead {
         let name = dead_property_name(property);
         if !contains_expanded_name(output, &name) {
-            output.push(dav_dead_property_element(
-                &name,
-                None,
-                property.xml.as_deref(),
-            ));
+            if property.xml.as_ref().map_or(0, Vec::len) > budget.bytes {
+                return Err(DavLivePropertyError::LimitExceeded);
+            }
+            push_property(
+                budget,
+                output,
+                dav_dead_property_element(&name, None, property.xml.as_deref()),
+            )?;
         }
     }
+    Ok(())
 }
 
 fn find_dead_property<'a>(

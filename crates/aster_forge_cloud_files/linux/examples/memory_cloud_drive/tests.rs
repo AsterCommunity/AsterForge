@@ -721,4 +721,29 @@ mod tests {
                 .is_empty()
         );
     }
+    #[test]
+    fn durable_state_does_not_follow_predictable_temporary_links_and_is_private() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = test_directory("state-security");
+        fs::create_dir_all(&directory).unwrap();
+        let victim = directory.join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        symlink(&victim, directory.join("writeback.json.tmp")).unwrap();
+        write_durable_document(&directory.join("writeback.json"), &DurableWritebackDocument::default()).unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(fs::metadata(directory.join("writeback.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
+        let (cloud, _) = MemoryCloud::fixture().unwrap();
+        assert!(MemoryWritebackStore::new(cloud.scope.clone(), Some(&directory)).is_err());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn synthetic_document_serialization_enforces_exact_byte_limit() {
+        let exact = "x".repeat(MAX_SYNTHETIC_STATE_BYTES - 2);
+        assert_eq!(serialize_state_document(&exact).unwrap().len(), MAX_SYNTHETIC_STATE_BYTES);
+        assert!(serialize_state_document(&(exact + "x")).is_err());
+    }
+
 }

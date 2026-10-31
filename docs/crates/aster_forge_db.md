@@ -826,3 +826,9 @@ let file = transaction::with_transaction_retry(
 
 - AsterDrive：复杂 repository、跨数据库行为和 migration CLI。
 - AsterYggdrasil：较轻服务启动/关闭链路和任务 repository token fence。
+
+## 配置身份与连接诊断
+
+`upsert_prevalidated` 更新已存在的行时，以实际 row 的身份保护 system visibility；数据库 collation 把不同拼写视为相等时，拒绝非原始拼写的更新，不写值或元数据。不会自动修改历史 key 或数据库 collation。
+
+`AuditLogCreate::validate()` 可在入队前复用共享字段约束，无模型复制和数据库 I/O。连接层在构造错误前移除完整数据库 URL 及原始/编码后的 userinfo，重试日志与返回错误均使用脱敏结果；`DatabaseUrl::Debug` 的既有脱敏保持有效。

@@ -66,7 +66,7 @@ async fn run_upload_worker(
     generation: SessionGeneration,
     mut shutdown: watch::Receiver<bool>,
 ) -> ExampleResult<()> {
-    let runner = ContentUploadRunner::new(8)?;
+    let runner = ContentUploadRunner::new(1024 * 1024)?;
     loop {
         if *shutdown.borrow() {
             return Ok(());

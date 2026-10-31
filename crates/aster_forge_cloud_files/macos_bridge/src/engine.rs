@@ -166,6 +166,7 @@ where
         requested_revision: &ContentRevision,
     ) -> Result<MacosContentFetchPlan> {
         let key = identifier.item_key()?;
+        self.validate_content_scope(key)?;
         let item = self.backend.get_item(key).await?;
         if item.key() != key {
             return Err(MacosBridgeError::InvalidBackendResponse {
@@ -207,6 +208,7 @@ where
         offset: u64,
         maximum_length: NonZeroU64,
     ) -> Result<MacosFetchedContentChunk> {
+        self.validate_content_scope(&plan.key)?;
         if offset >= plan.size {
             return Err(MacosBridgeError::InvalidBackendResponse {
                 reason: "content chunk offset is outside the planned file",
@@ -231,5 +233,15 @@ where
             offset: response_offset,
             bytes,
         })
+    }
+    fn validate_content_scope(&self, key: &CloudItemKey) -> Result<()> {
+        if key.scope() != self.root_key.scope() {
+            return Err(MacosBridgeError::Backend(
+                aster_forge_cloud_files_core::CloudBackendError::new(
+                    aster_forge_cloud_files_core::CloudBackendErrorKind::PermissionDenied,
+                ),
+            ));
+        }
+        Ok(())
     }
 }

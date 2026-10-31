@@ -1,8 +1,9 @@
+#[cfg(test)]
+use std::fs;
 use std::{
     collections::HashMap,
     error::Error,
-    fs::{self, OpenOptions},
-    io::{ErrorKind, Write},
+    io::ErrorKind,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
@@ -905,4 +906,24 @@ impl DurableUploadRecord {
         }
         Ok(record)
     }
+}
+
+// Synthetic state is bounded independently of the upload chunk size and restored input file size.
+const MAX_SYNTHETIC_STATE_BYTES: usize = 16 * 1024 * 1024;
+
+fn serialize_state_document(document: &impl serde::Serialize) -> Result<Vec<u8>, serde_json::Error> {
+    struct BoundedDocument(Vec<u8>);
+    impl std::io::Write for BoundedDocument {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > MAX_SYNTHETIC_STATE_BYTES.saturating_sub(self.0.len()) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "synthetic state exceeds the byte limit"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut output = BoundedDocument(Vec::new());
+    serde_json::to_writer(&mut output, document)?;
+    Ok(output.0)
 }

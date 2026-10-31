@@ -137,6 +137,8 @@ pub enum RecordAdmission {
 /// Admission failure. Rejected records are returned; accepted failed direct writes stay in memory.
 #[derive(Debug)]
 pub enum RecordError<T, E> {
+    /// A typed producer rejected a record before admitting it into shared state.
+    Invalid { item: T, error: E },
     /// Admission is closed or startup has not completed.
     NotRunning(T),
     /// The configured queue/direct-lane bound was reached.
@@ -772,6 +774,7 @@ impl<E: std::error::Error + 'static> std::error::Error for WriteFailure<E> {
 impl<T, E: std::fmt::Display> std::fmt::Display for RecordError<T, E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Invalid { .. } => f.write_str("record rejected by validation"),
             Self::NotRunning(_) => f.write_str("writer admission is closed or not started"),
             Self::Full(_) => f.write_str("writer admission capacity exhausted"),
             Self::DirectFailed(error) => {
@@ -783,6 +786,7 @@ impl<T, E: std::fmt::Display> std::fmt::Display for RecordError<T, E> {
 impl<T: std::fmt::Debug, E: std::error::Error + 'static> std::error::Error for RecordError<T, E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Invalid { error, .. } => Some(error),
             Self::DirectFailed(error) => Some(error),
             _ => None,
         }

@@ -192,3 +192,7 @@ ctest --test-dir /tmp/aster-forge-macos-fixture -C Debug --output-on-failure
 - [Replicated File Provider extension](https://developer.apple.com/documentation/fileprovider/replicated-file-provider-extension)
 - [Synchronizing the File Provider extension](https://developer.apple.com/documentation/fileprovider/synchronizing-the-file-provider-extension)
 - [Defining File Provider content](https://developer.apple.com/documentation/fileprovider/defining-your-file-provider-s-content)
+
+## 内容读取的 scope fence
+
+`prepare_content_fetch` 和 `read_content_chunk` 在任何 backend 调用前验证 key 的 namespace/root scope 与当前 engine 一致；跨 scope identifier 和其他 scope engine 生成的 plan 返回 PermissionDenied。内容 revision、offset、长度与响应验证仍独立执行。产品 backend 继续拥有真实账号与权限边界。

@@ -33,3 +33,6 @@ utoipa = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+aster_forge_test = { path = "../aster_forge_test", features = ["logs"] }

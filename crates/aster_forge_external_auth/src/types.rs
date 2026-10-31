@@ -197,7 +197,7 @@ pub fn parse_external_auth_provider_options(options: &str) -> ExternalAuthProvid
     serde_json::from_str::<ExternalAuthProviderOptions>(options)
         .unwrap_or_else(|error| {
             if !options.is_empty() && options != "{}" {
-                tracing::warn!("invalid external auth provider options JSON '{options}': {error}");
+                tracing::warn!(error = %error, "invalid external auth provider options JSON");
             }
             ExternalAuthProviderOptions::default()
         })
@@ -267,5 +267,17 @@ mod tests {
         }
         assert!(ExternalAuthProviderKind::try_from_value(&"oauth2".to_string()).is_err());
         assert!(ExternalAuthProtocol::try_from_value(&"saml".to_string()).is_err());
+    }
+    #[test]
+    fn malformed_provider_document_never_enters_logs() {
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        logs.capture(|| {
+            let _ =
+                super::parse_external_auth_provider_options("canary-private-document\nFAKE RECORD");
+        });
+        let text = logs.text();
+        assert!(text.contains("invalid external auth provider options"));
+        assert!(!text.contains("canary-private-document"), "{text}");
+        assert_eq!(text.lines().count(), 1);
     }
 }

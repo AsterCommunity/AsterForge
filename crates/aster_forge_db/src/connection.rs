@@ -334,6 +334,50 @@ pub async fn connect_reader_for_writer(
     connect_reader_for_writer_with_metrics(cfg, writer, Arc::new(NoopDbMetrics)).await
 }
 
+fn redacted_connection_error(error: &impl std::fmt::Display, url: &str) -> DbError {
+    let mut message = error.to_string().replace(url, "<redacted database URL>");
+    // Drivers may echo either the full URL or individual raw/percent-encoded userinfo fields.
+    if let Ok(parsed) = aster_forge_utils::url::parse_url(url, "database URL") {
+        for encoded in [Some(parsed.username()), parsed.password()]
+            .into_iter()
+            .flatten()
+        {
+            if encoded.is_empty() {
+                continue;
+            }
+            let decoded = percent_decode_userinfo(encoded);
+            message = message.replace(encoded, "<redacted>");
+            if !decoded.is_empty() {
+                message = message.replace(&decoded, "<redacted>");
+            }
+        }
+    }
+    DbError::database_connection(message)
+}
+
+fn percent_decode_userinfo(value: &str) -> String {
+    // URL parsing canonicalizes percent escapes, so decode only valid hex pairs.
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut remaining = value.as_bytes();
+    while let Some((&first, rest)) = remaining.split_first() {
+        if first == b'%' && rest.len() >= 2 {
+            let hex = |byte: u8| {
+                char::from(byte)
+                    .to_digit(16)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            if let (Some(high), Some(low)) = (hex(rest[0]), hex(rest[1])) {
+                bytes.push(high * 16 + low);
+                remaining = &rest[2..];
+                continue;
+            }
+        }
+        bytes.push(first);
+        remaining = rest;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 async fn connect_once(
     cfg: &DatabaseConfig,
     database_url: &str,
@@ -357,11 +401,11 @@ async fn connect_once(
     let db = if is_sqlite {
         SqlxSqliteConnector::connect(opt)
             .await
-            .map_err(DbError::database_connection)?
+            .map_err(|error| redacted_connection_error(&error, &url))?
     } else {
         Database::connect(opt)
             .await
-            .map_err(DbError::database_connection)?
+            .map_err(|error| redacted_connection_error(&error, &url))?
     };
 
     let backend = db.get_database_backend();
@@ -420,7 +464,7 @@ async fn connect_sqlite_reader_once(
 
     let mut db = SqlxSqliteConnector::connect(opt)
         .await
-        .map_err(DbError::database_connection)?;
+        .map_err(|error| redacted_connection_error(&error, &reader_url))?;
     install_db_metrics(&mut db, metrics);
 
     tracing::info!(

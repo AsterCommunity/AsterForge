@@ -15,6 +15,7 @@ fuzz_target!(|input: &[u8]| {
         max_attributes_per_element: 1_024,
         max_text_bytes: max_input_bytes,
         max_events: 262_144,
+        max_namespace_bindings: 128,
         reject_doctype: true,
     };
     let validation = validate_xml_input(input, policy);

@@ -493,3 +493,9 @@ cargo clippy -p aster_forge_middleware --all-targets --all-features -- -D warnin
 
 - AsterYggdrasil：Actix app 初始化和 request id 日志链路。
 - AsterDrive：WebDAV、WOPI、预览等路由如果需要特殊 header，优先在产品侧覆盖，不反推 Forge 默认值。
+
+## 重复代理字段与 CORS 凭据
+
+Actix/Axum adapter 按线缆顺序合并所有 `X-Forwarded-For` 字段，再从右向左寻找可信代理确认的第一个非可信地址。读到非法字段值或空字段时回退 direct peer；direct peer 不可信时不会采用代理字段。代理仍应清理或正确追加客户端传入的头。
+
+启用的 CORS policy 明确禁止 credentials 时，移除下游遗留的所有 `Access-Control-Allow-Credentials` 值，避免与本层新增的 allow-origin 组合后越过策略。未启用或 exempt 的请求继续透传。

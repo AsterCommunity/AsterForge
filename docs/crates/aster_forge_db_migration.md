@@ -146,3 +146,7 @@ cargo clippy -p aster_forge_db_migration --all-targets -- -D warnings
 ```
 
 单元测试覆盖配置边界、SQLite commit/rollback、跨数据库 SQL 生成、索引幂等行为和非法 identifier。容器测试使用真实 PostgreSQL 与 MySQL，验证相同 namespace 的并发串行化，以及 callback 失败后锁可以继续获取。产品仓库仍需通过本地 Cargo patch 保留 migration history、fresh database 和滚动升级兼容测试。
+
+## 标识符与 SQL 语句边界
+
+extension 名称作为单个双引号 PostgreSQL identifier 输出；索引名称按目标数据库转义内嵌引号，包含公开 PostgreSQL index builders。允许合法带引号、连字符或非 ASCII 的名称，不把名称当作 SQL 片段。产品继续拥有 migration 清单和名称来源；`execute_sqlite_statements` 明确执行调用方提供的 SQL，不是参数化查询入口。

@@ -457,3 +457,39 @@ async fn postgres_waiting_migrator_does_not_block_concurrent_index_and_cancellat
     database.close().await.unwrap();
     test_database.cleanup().await;
 }
+
+#[tokio::test]
+async fn postgres_extension_and_index_names_remain_data() {
+    let container = PostgresTestContainer::start(test_suite()).await;
+    let fixture = container
+        .create_database(&unique_database_name("identifier"))
+        .await;
+    let db = fixture.connect().await;
+    db.execute_unprepared("CREATE TABLE sentinel (id BIGINT)")
+        .await
+        .unwrap();
+    let manager = sea_orm_migration::SchemaManager::new(&db);
+    aster_forge_db_migration::ensure_postgres_extension(&manager, "pg_trgm")
+        .await
+        .unwrap();
+    assert!(
+        aster_forge_db_migration::ensure_postgres_extension(
+            &manager,
+            "pg_trgm; DROP TABLE sentinel; --"
+        )
+        .await
+        .is_err()
+    );
+    db.execute_unprepared("INSERT INTO sentinel VALUES (1)")
+        .await
+        .unwrap();
+    let hostile_name = "missing\"; DROP TABLE sentinel; --";
+    aster_forge_db_migration::drop_index_if_exists(&db, "sentinel", hostile_name)
+        .await
+        .unwrap();
+    db.execute_unprepared("INSERT INTO sentinel VALUES (2)")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    fixture.cleanup().await;
+}

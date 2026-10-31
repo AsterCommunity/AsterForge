@@ -552,4 +552,36 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body(response).await, "InvalidResponse");
     }
+    #[tokio::test]
+    async fn actual_response_cannot_reenable_credentials_via_handler_headers() {
+        for credentials in [false, true] {
+            let router = Router::new()
+                .fallback(any(|| async {
+                    (
+                        [(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")],
+                        "private",
+                    )
+                }))
+                .layer(middleware::from_fn_with_state(
+                    config(policy(
+                        CorsAllowedOrigins::List(vec!["https://panel.example.com".into()]),
+                        credentials,
+                    )),
+                    runtime_cors,
+                ));
+            let response = send(router, request("GET", "https://panel.example.com")).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "https://panel.example.com"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS),
+                credentials
+            );
+            assert_eq!(body(response).await, "private");
+        }
+    }
 }

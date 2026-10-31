@@ -220,3 +220,109 @@ fn patch_preserves_protocol_and_representation_error_boundaries() {
         StatusCode::INTERNAL_SERVER_ERROR
     );
 }
+
+#[test]
+fn patch_applies_versioning_guards_before_mutation() {
+    use aster_forge_webdav::*;
+    for state in [DavVersioningState::Version, DavVersioningState::CheckedIn] {
+        let mut declaration = DavCapabilityDeclaration::new(
+            DavResourceState::File,
+            DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Patch]),
+        );
+        declaration.compliance.class1 = true;
+        declaration.extensions =
+            DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+        declaration.versioning = DavVersioningCapabilities {
+            state,
+            ..DavVersioningCapabilities::default()
+        };
+        declaration.writes.patch = DavPatchCapability::Formats(&PATCH_FORMATS);
+        let snapshot = plan_capabilities(declaration).unwrap();
+        assert!(
+            plan_versioning_method(&snapshot, DavMethod::Patch).is_err(),
+            "{state:?}"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/example-patch; version=1"),
+        );
+        assert!(
+            plan_patch_request(&snapshot, &headers, mapped(None)).is_err(),
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
+fn patch_carries_every_automatic_versioning_action() {
+    use aster_forge_webdav::*;
+    for (mode, locked, expected) in [
+        (
+            DavAutoVersion::CheckoutCheckin,
+            false,
+            Some(DavVersioningMethodPlan::AutoCheckoutCheckin),
+        ),
+        (
+            DavAutoVersion::CheckoutUnlockedCheckin,
+            false,
+            Some(DavVersioningMethodPlan::AutoCheckoutCheckin),
+        ),
+        (
+            DavAutoVersion::CheckoutUnlockedCheckin,
+            true,
+            Some(DavVersioningMethodPlan::AutoCheckout),
+        ),
+        (
+            DavAutoVersion::Checkout,
+            false,
+            Some(DavVersioningMethodPlan::AutoCheckout),
+        ),
+        (DavAutoVersion::LockedCheckout, false, None),
+        (
+            DavAutoVersion::LockedCheckout,
+            true,
+            Some(DavVersioningMethodPlan::AutoCheckout),
+        ),
+    ] {
+        let mut declaration = DavCapabilityDeclaration::new(
+            DavResourceState::File,
+            DavMethodSet::from_methods(&[DavMethod::Options, DavMethod::Patch]),
+        );
+        declaration.compliance.class1 = true;
+        declaration.extensions =
+            DavExtensionSet::from_packages(&[DavExtensionPackage::VersionControl]);
+        if locked {
+            declaration.locking = DavLockingCapability::Class2;
+            declaration.methods = DavMethodSet::from_methods(&[
+                DavMethod::Options,
+                DavMethod::Patch,
+                DavMethod::Lock,
+                DavMethod::Unlock,
+            ]);
+        }
+        declaration.versioning = DavVersioningCapabilities {
+            state: DavVersioningState::CheckedIn,
+            auto_version: mode,
+            write_locked: locked,
+            ..DavVersioningCapabilities::default()
+        };
+        declaration.writes.patch = DavPatchCapability::Formats(&PATCH_FORMATS);
+        let snapshot = plan_capabilities(declaration).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/example-patch; version=1"),
+        );
+        let result = plan_patch_request(&snapshot, &headers, mapped(None));
+        if let Some(expected) = expected {
+            assert_eq!(result.unwrap().versioning, expected);
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(
+                patch_plan_error_response(&error, &snapshot).status,
+                StatusCode::FORBIDDEN
+            );
+        }
+    }
+}

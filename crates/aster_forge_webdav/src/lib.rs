@@ -133,10 +133,10 @@ pub use preference::{DavPreferencePlan, plan_preferences};
 pub use property::{
     DavCurrentPrincipal, DavLivePropertyError, DavLivePropertyEvaluationError,
     DavLivePropertyMetadata, DavLivePropertyProvider, DavLivePropertyRequirements,
-    DavLivePropertyValueSnapshot, DavProppatchAtomicPlan, DavQuotaSnapshot,
-    build_live_propfind_item, build_live_propfind_item_with_provider, build_proppatch_item,
-    format_creation_date, is_protected_live_property, live_property_requirements,
-    plan_atomic_proppatch, property_multistatus_response,
+    DavLivePropertyValueSnapshot, DavPropertyMaterializationLimits, DavProppatchAtomicPlan,
+    DavQuotaSnapshot, build_live_propfind_item, build_live_propfind_item_with_provider,
+    build_proppatch_item, format_creation_date, is_protected_live_property,
+    live_property_requirements, plan_atomic_proppatch, property_multistatus_response,
     property_multistatus_response_with_limits, propfind_finite_depth_response,
     propfind_request_label, propfind_xml_error_response, proppatch_xml_error_response,
 };

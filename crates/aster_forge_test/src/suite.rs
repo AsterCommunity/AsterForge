@@ -15,10 +15,13 @@ pub struct TestContainerSuite {
     name: String,
     state_dir: PathBuf,
     instance: String,
+    #[cfg(unix)]
+    pub(crate) directory: std::sync::Arc<aster_forge_utils::state_directory::StateDirectory>,
 }
 
 impl TestContainerSuite {
-    /// Creates a suite rooted at `<temp dir>/aster-testcontainers-<name>`.
+    /// Creates a suite rooted at `<temp dir>/aster-testcontainers-<uid>-<name>` on Unix.
+    /// Other platforms retain the suite-named temporary directory.
     ///
     /// The name becomes part of container names and lock file paths, so it must be non-empty
     /// ASCII alphanumeric or `-`.
@@ -35,7 +38,25 @@ impl TestContainerSuite {
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
             "test container suite name must be non-empty ascii alphanumeric or '-': {name:?}"
         );
+        #[cfg(unix)]
+        let state_dir = std::env::temp_dir().join(format!(
+            "aster-testcontainers-{}-{name}",
+            rustix::process::geteuid().as_raw()
+        ));
+        #[cfg(not(unix))]
         let state_dir = std::env::temp_dir().join(format!("aster-testcontainers-{name}"));
+        #[cfg(unix)]
+        let directory = std::sync::Arc::new(
+            aster_forge_utils::state_directory::StateDirectory::open(&state_dir).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "unsafe test state directory {}: {error}",
+                        state_dir.display()
+                    )
+                },
+            ),
+        );
+        #[cfg(not(unix))]
         std::fs::create_dir_all(&state_dir).unwrap_or_else(|error| {
             panic!(
                 "failed to create test container state dir {}: {error}",
@@ -46,6 +67,8 @@ impl TestContainerSuite {
             name: name.to_string(),
             state_dir,
             instance: instance_id().to_string(),
+            #[cfg(unix)]
+            directory,
         }
     }
 
@@ -122,7 +145,10 @@ mod tests {
         assert!(
             suite
                 .state_dir()
-                .ends_with("aster-testcontainers-forge-test")
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("forge-test")
         );
 
         let container = suite.container_name("redis");

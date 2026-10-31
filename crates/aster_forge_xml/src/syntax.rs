@@ -112,6 +112,9 @@ pub fn is_valid_xml_namespace_name(uri: &str) -> bool {
 
 pub(crate) fn map_quick_xml_error(error: quick_xml::Error) -> Error {
     match error {
+        quick_xml::Error::Namespace(quick_xml::name::NamespaceError::TooManyBindings(_)) => {
+            XmlSafetyError::TooManyNamespaces.into()
+        }
         quick_xml::Error::Encoding(_) => XmlSafetyError::InvalidEncoding.into(),
         error => Error::InvalidXml(error.to_string()),
     }

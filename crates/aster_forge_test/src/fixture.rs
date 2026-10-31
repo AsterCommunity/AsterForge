@@ -8,12 +8,17 @@
 use crate::suite::TestContainerSuite;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
+#[cfg(not(unix))]
 use std::io::{Read, Write};
 use std::path::PathBuf;
+#[cfg(not(unix))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const FIXTURE_STATE_FORMAT_VERSION: u32 = 1;
+#[cfg(not(unix))]
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Atomically published identity of a suite-scoped product fixture.
@@ -123,6 +128,8 @@ impl SuiteFixtureState {
 /// product's deterministic candidate resource and rebuild it.
 pub struct SuiteFixtureLock {
     _file: File,
+    #[cfg(unix)]
+    directory: std::sync::Arc<aster_forge_utils::state_directory::StateDirectory>,
     state_path: PathBuf,
 }
 
@@ -137,6 +144,17 @@ impl SuiteFixtureLock {
         assert_valid_fixture_name(fixture);
         let state_path = suite.fixture_state_path(fixture);
         let lock_path = suite.fixture_lock_path(fixture);
+        #[cfg(unix)]
+        let file = suite
+            .directory
+            .open_lock(
+                lock_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap(),
+            )
+            .unwrap_or_else(|error| panic!("unsafe test lock {}: {error}", lock_path.display()));
+        #[cfg(not(unix))]
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -157,6 +175,8 @@ impl SuiteFixtureLock {
         });
         Self {
             _file: file,
+            #[cfg(unix)]
+            directory: suite.directory.clone(),
             state_path,
         }
     }
@@ -168,19 +188,38 @@ impl SuiteFixtureLock {
     /// Panics when state cannot be read, decoded, or validated.
     #[must_use]
     pub fn load(&self) -> Option<SuiteFixtureState> {
-        if !self.state_path.exists() {
-            return None;
-        }
+        #[cfg(unix)]
+        let raw = {
+            let directory = &self.directory;
+            match directory.read(
+                self.state_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap(),
+                16 * 1024 * 1024,
+            ) {
+                Ok(bytes) => String::from_utf8(bytes).unwrap(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+                Err(error) => panic!("unsafe fixture state: {error}"),
+            }
+        };
+        #[cfg(not(unix))]
+        let raw = {
+            if !self.state_path.exists() {
+                return None;
+            }
 
-        let mut raw = String::new();
-        File::open(&self.state_path)
-            .and_then(|mut file| file.read_to_string(&mut raw))
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to read suite fixture state {}: {error}",
-                    self.state_path.display()
-                )
-            });
+            let mut raw = String::new();
+            File::open(&self.state_path)
+                .and_then(|mut file| file.read_to_string(&mut raw))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to read suite fixture state {}: {error}",
+                        self.state_path.display()
+                    )
+                });
+            raw
+        };
         if raw.trim().is_empty() {
             return None;
         }
@@ -204,55 +243,68 @@ impl SuiteFixtureLock {
         state.assert_valid();
         let payload = serde_json::to_vec(state)
             .unwrap_or_else(|error| panic!("failed to serialize suite fixture state: {error}"));
-        let temporary_path = self.state_path.with_extension(format!(
-            "json.tmp-{}-{}",
-            std::process::id(),
-            TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+        #[cfg(unix)]
+        self.directory
+            .atomic_write(
+                self.state_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap(),
+                &payload,
+            )
+            .unwrap_or_else(|error| panic!("failed to publish fixture state: {error}"));
+        #[cfg(not(unix))]
+        {
+            let temporary_path = self.state_path.with_extension(format!(
+                "json.tmp-{}-{}",
+                std::process::id(),
+                TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
 
-        let mut temporary = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary_path)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to create suite fixture temporary state {}: {error}",
-                    temporary_path.display()
-                )
-            });
-        temporary
-            .write_all(&payload)
-            .and_then(|()| temporary.write_all(b"\n"))
-            .and_then(|()| temporary.sync_all())
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to write suite fixture temporary state {}: {error}",
-                    temporary_path.display()
-                )
-            });
-        drop(temporary);
+            let mut temporary = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary_path)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to create suite fixture temporary state {}: {error}",
+                        temporary_path.display()
+                    )
+                });
+            temporary
+                .write_all(&payload)
+                .and_then(|()| temporary.write_all(b"\n"))
+                .and_then(|()| temporary.sync_all())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to write suite fixture temporary state {}: {error}",
+                        temporary_path.display()
+                    )
+                });
+            drop(temporary);
 
-        if let Err(error) = fs::rename(&temporary_path, &self.state_path) {
-            // Windows does not replace a destination through rename. Readers also hold this
-            // lock, so a brief missing state is safe: it deterministically triggers rebuild.
-            if self.state_path.exists() {
-                fs::remove_file(&self.state_path).unwrap_or_else(|remove_error| {
+            if let Err(error) = fs::rename(&temporary_path, &self.state_path) {
+                // Windows does not replace a destination through rename. Readers also hold this
+                // lock, so a brief missing state is safe: it deterministically triggers rebuild.
+                if self.state_path.exists() {
+                    fs::remove_file(&self.state_path).unwrap_or_else(|remove_error| {
                     panic!(
                         "failed to replace suite fixture state {} after rename error {error}: {remove_error}",
                         self.state_path.display()
                     )
                 });
-                fs::rename(&temporary_path, &self.state_path).unwrap_or_else(|retry_error| {
+                    fs::rename(&temporary_path, &self.state_path).unwrap_or_else(|retry_error| {
                     panic!(
                         "failed to replace suite fixture state {} after rename error {error}: {retry_error}",
                         self.state_path.display()
                     )
                 });
-            } else {
-                panic!(
-                    "failed to publish suite fixture state {}: {error}",
-                    self.state_path.display()
-                );
+                } else {
+                    panic!(
+                        "failed to publish suite fixture state {}: {error}",
+                        self.state_path.display()
+                    );
+                }
             }
         }
     }

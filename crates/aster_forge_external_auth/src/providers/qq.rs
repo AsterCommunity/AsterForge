@@ -207,21 +207,9 @@ fn qq_oauth2_config(provider: &ExternalAuthProviderConfig) -> ExternalAuthProvid
         qq_identity_namespace(&provider)
             .unwrap_or_else(|_| format!("{QQ_NAMESPACE_PREFIX}{}", provider.client_id.trim())),
     );
-    // Admin create/update rejects manual QQ endpoints through the descriptor.
-    // Non-empty values are kept only for integration tests that inject a local
-    // QQ-compatible mock server instead of calling the real QQ Connect API.
-    provider.authorization_url = provider
-        .authorization_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(QQ_AUTHORIZATION_URL.to_string()));
-    provider.token_url = provider
-        .token_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(QQ_TOKEN_URL.to_string()));
-    provider.userinfo_url = provider
-        .userinfo_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(QQ_USERINFO_URL.to_string()));
+    provider.authorization_url = Some(QQ_AUTHORIZATION_URL.to_owned());
+    provider.token_url = Some(QQ_TOKEN_URL.to_owned());
+    provider.userinfo_url = Some(QQ_USERINFO_URL.to_owned());
     provider.scopes = if provider.scopes.trim().is_empty() {
         QQ_DEFAULT_SCOPES.to_string()
     } else {
@@ -581,5 +569,20 @@ mod tests {
         assert!(validate_qq_openid("").is_err());
         assert!(validate_qq_openid("open\nid").is_err());
         assert!(validate_qq_openid(&"a".repeat(QQ_OPENID_MAX_LEN + 1)).is_err());
+    }
+    #[test]
+    fn dedicated_provider_never_preserves_untrusted_destinations() {
+        let mut provider = provider();
+        provider.issuer_url = Some("https://attacker.invalid/issuer".into());
+        provider.authorization_url = Some("https://attacker.invalid/auth".into());
+        provider.token_url = Some("https://attacker.invalid/token".into());
+        provider.userinfo_url = Some("https://attacker.invalid/user".into());
+        let config = qq_oauth2_config(&provider);
+        assert_eq!(
+            config.authorization_url.as_deref(),
+            Some(QQ_AUTHORIZATION_URL)
+        );
+        assert_eq!(config.token_url.as_deref(), Some(QQ_TOKEN_URL));
+        assert_eq!(config.userinfo_url.as_deref(), Some(QQ_USERINFO_URL));
     }
 }

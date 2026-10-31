@@ -19,11 +19,15 @@ pub struct DavPatchPlan {
     pub format: &'static DavPatchFormat,
     pub body_policy: DavBodyPolicy,
     pub resource_existed: bool,
+    /// Product must apply this versioning action atomically with the patch.
+    pub versioning: crate::DavVersioningMethodPlan,
 }
 
 /// Failure while selecting and validating an RFC 5789 PATCH request.
 #[derive(Debug, thiserror::Error)]
 pub enum DavPatchPlanError {
+    #[error(transparent)]
+    Versioning(#[from] crate::DavVersioningPrecondition),
     #[error("PATCH is not allowed for this resource")]
     MethodNotAllowed,
     #[error("PATCH Content-Type is not supported for this resource")]
@@ -78,6 +82,7 @@ pub fn plan_patch_request(
         return Err(DavPatchPlanError::PreconditionFailed(conditional));
     }
 
+    let versioning = crate::plan_versioning_method(snapshot, DavMethod::Patch)?;
     let body_policy = match format.body_policy {
         DavPatchBodyPolicy::Bounded { maximum } => DavBodyPolicy::Bounded { maximum },
         DavPatchBodyPolicy::Stream => DavBodyPolicy::Stream,
@@ -86,6 +91,7 @@ pub fn plan_patch_request(
         format,
         body_policy,
         resource_existed: resource.exists,
+        versioning,
     })
 }
 
@@ -96,6 +102,10 @@ pub fn patch_plan_error_response(
     snapshot: &DavCapabilitySnapshot,
 ) -> DavResponse {
     match error {
+        DavPatchPlanError::Versioning(error) => {
+            crate::versioning_precondition_response(snapshot, *error)
+                .unwrap_or_else(|_| no_store_empty_response(StatusCode::INTERNAL_SERVER_ERROR))
+        }
         DavPatchPlanError::MethodNotAllowed => method_not_allowed_response(snapshot),
         DavPatchPlanError::UnsupportedMediaType => {
             let mut response = no_store_empty_response(StatusCode::UNSUPPORTED_MEDIA_TYPE);

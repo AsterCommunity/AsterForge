@@ -112,34 +112,34 @@ async fn invalid_batch_contract(db: &DatabaseConnection) {
     let valid = request(1);
     let mut invalid = request(2);
     invalid.action = "x".repeat(65);
-    writer.record(valid.clone()).await.unwrap();
-    writer.record(invalid.clone()).await.unwrap();
-    assert!(matches!(
-        writer.flush(deadline()).await,
-        Err(BufferFlushError::Write(_))
-    ));
-    assert_eq!(
-        count(db).await,
-        0,
-        "validation failure must leave the complete transaction uncommitted"
+    writer.record(valid).await.unwrap();
+    let Err(RecordError::Invalid { item, error }) = writer.record(invalid.clone()).await else {
+        panic!("invalid record must be returned before admission");
+    };
+    assert_eq!(item, invalid);
+    assert!(!error.is_retryable());
+    writer.flush(deadline()).await.unwrap();
+    assert_eq!(count(db).await, 1);
+    assert!(writer.unconfirmed().is_empty());
+    assert!(
+        writer
+            .stop(deadline())
+            .await
+            .snapshot
+            .batch_failure
+            .is_none()
     );
-    assert_eq!(writer.unconfirmed(), [valid, invalid]);
-    let report = writer.stop(deadline()).await;
-    assert_eq!(report.snapshot.queued, 2);
-    assert_eq!(report.snapshot.persisted, 0);
-    let failure = report.snapshot.batch_failure.unwrap();
-    assert_eq!(failure.class, WriteFailureClass::Permanent);
-    assert!(matches!(failure.cause, WriteFailureCause::Persistence(_)));
 }
 
 #[tokio::test]
-async fn validation_failure_is_atomic_and_records_are_retained() {
+async fn validation_failure_is_rejected_and_valid_records_persist() {
     let db = sqlite().await;
     invalid_batch_contract(&db).await;
     db.close().await.unwrap();
 }
 
 async fn runtime_contract(db: DatabaseConnection, fail: bool) {
+    let fault_db = db.clone();
     let writer = Arc::new(writer(&db, 4, 100, Duration::from_secs(30)));
     let mut registry = RuntimeComponentRegistry::new();
     let start_writer = writer.clone();
@@ -158,7 +158,7 @@ async fn runtime_contract(db: DatabaseConnection, fail: bool) {
         move |()| async move {
             let mut record = request(11);
             if fail {
-                record.action = "x".repeat(65);
+                record.action = "test_action".into();
             }
             shutdown_writer
                 .record(record)
@@ -180,13 +180,21 @@ async fn runtime_contract(db: DatabaseConnection, fail: bool) {
             let (db, writer) = (db.clone(), close_writer.clone());
             async move {
                 assert_eq!(writer.snapshot().state, BufferedWriterState::Stopped);
-                assert_eq!(count(&db).await, if fail { 0 } else { 2 });
+                if !fail {
+                    assert_eq!(count(&db).await, 2);
+                }
                 db.close().await.map_err(|e| e.to_string())
             }
         });
     registry.validate().unwrap();
     assert!(!registry.startup().await.aborted());
     assert_eq!(writer.snapshot().state, BufferedWriterState::Running);
+    if fail {
+        fault_db
+            .execute_unprepared("DROP TABLE audit_logs")
+            .await
+            .unwrap();
+    }
     let report = registry.shutdown().await;
     assert_eq!(report.has_failures(), fail);
     let phases: Vec<_> = report.phases.iter().map(|p| p.name).collect();
@@ -410,6 +418,7 @@ async fn unrepresentable_component_deadline_reports_failure_after_joining() {
 async fn runtime_run_propagates_failed_audit_drain_after_database_close() {
     let db = sqlite().await;
     let writer = Arc::new(AuditWriter::new(db.clone()));
+    let fault_db = db.clone();
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let close_writer = writer.clone();
     let close_flag = closed.clone();
@@ -429,15 +438,19 @@ async fn runtime_run_propagates_failed_audit_drain_after_database_close() {
             Duration::from_secs(1),
             &[],
             |writer| async move {
-                let mut invalid = request(1);
-                invalid.action = "x".repeat(65);
                 writer
-                    .record(invalid)
+                    .record(request(1))
                     .await
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             },
-            |_| async { Ok(()) },
+            move |_| async move {
+                fault_db
+                    .execute_unprepared("DROP TABLE audit_logs")
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
         ))
         .component(runtime_component(
             move |registry: &mut RuntimeComponentRegistry| {
@@ -656,4 +669,66 @@ async fn cancellation_panic_cleanup_contract(db: DatabaseConnection) {
     assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(writer.snapshot().persisted, 2);
     assert!(writer.unconfirmed().is_empty());
+}
+
+#[tokio::test]
+async fn malformed_audit_record_is_rejected_before_queue_or_overflow_admission() {
+    let db = sqlite().await;
+    let writer = writer(&db, 1, 100, Duration::from_secs(30));
+    writer.start().await.unwrap();
+    for full in [false, true] {
+        if full {
+            writer.record(request(1)).await.unwrap();
+        }
+        let mut invalid = request(2);
+        invalid.user_agent = Some("a".repeat(513));
+        assert!(writer.record(invalid).await.is_err());
+        assert!(writer.snapshot().batch_failure.is_none());
+        assert!(writer.snapshot().direct_failure.is_none());
+    }
+    writer.flush(deadline()).await.unwrap();
+    writer.record(request(3)).await.unwrap();
+    writer.flush(deadline()).await.unwrap();
+    assert_eq!(count(&db).await, 2);
+    assert!(
+        writer
+            .stop(deadline())
+            .await
+            .snapshot
+            .batch_failure
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn exact_audit_field_boundaries_admit_valid_and_reject_overflow() {
+    let db = sqlite().await;
+    let writer = writer(&db, 16, 16, Duration::from_secs(30));
+    writer.start().await.unwrap();
+    for (field, maximum) in [(0, 64), (1, 64), (2, 255), (3, 128), (4, 512)] {
+        for overflow in [false, true] {
+            let mut record = request(field);
+            let value = "x".repeat(maximum + usize::from(overflow));
+            match field {
+                0 => record.action = value,
+                1 => record.entity_type = value,
+                2 => record.entity_name = Some(value),
+                3 => record.ip_address = Some(value),
+                _ => record.user_agent = Some(value),
+            }
+            let result = writer.record(record).await;
+            assert_eq!(
+                result.is_ok(),
+                !overflow,
+                "field={field}, overflow={overflow}"
+            );
+            if overflow {
+                assert!(matches!(result, Err(RecordError::Invalid { .. })));
+            }
+        }
+    }
+    writer.flush(deadline()).await.unwrap();
+    assert_eq!(count(&db).await, 5);
+    assert!(writer.unconfirmed().is_empty());
+    writer.stop(deadline()).await;
 }

@@ -174,8 +174,8 @@ where
             smtp_host = %settings.smtp_host,
             smtp_port = settings.smtp_port,
             encryption_enabled = settings.encryption_enabled,
-            to = %to_address,
-            subject = %subject,
+            to = ?to_address,
+            subject = ?subject,
             timeout_secs = self.timeout.as_secs(),
             "mail: preparing runtime SMTP delivery"
         );
@@ -187,8 +187,8 @@ where
                 tracing::debug!(
                     smtp_host = %settings.smtp_host,
                     smtp_port = settings.smtp_port,
-                    to = %to_address,
-                    subject = %subject,
+                    to = ?to_address,
+                    subject = ?subject,
                     timeout_secs = self.timeout.as_secs(),
                     "mail: SMTP delivery completed"
                 );
@@ -198,8 +198,8 @@ where
                 tracing::debug!(
                     smtp_host = %settings.smtp_host,
                     smtp_port = settings.smtp_port,
-                    to = %to_address,
-                    subject = %subject,
+                    to = ?to_address,
+                    subject = ?subject,
                     error = %error,
                     timeout_secs = self.timeout.as_secs(),
                     "mail: SMTP delivery failed"
@@ -210,8 +210,8 @@ where
                 tracing::debug!(
                     smtp_host = %settings.smtp_host,
                     smtp_port = settings.smtp_port,
-                    to = %to_address,
-                    subject = %subject,
+                    to = ?to_address,
+                    subject = ?subject,
                     timeout_secs = self.timeout.as_secs(),
                     "mail: SMTP delivery timed out"
                 );
@@ -469,5 +469,31 @@ mod tests {
             err,
             MailDeliveryError::NotConfigured("mail service is not configured".to_string())
         );
+    }
+    #[tokio::test]
+    async fn invalid_recipient_and_subject_cannot_create_extra_log_records() {
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let sender = SmtpMailSender::new(settings);
+        let result = logs
+            .capture_future(sender.send(MailMessage {
+                from: MailRecipient {
+                    address: "ops@example.com".into(),
+                    display_name: None,
+                },
+                to: MailRecipient {
+                    address: "invalid\nFORGED_RECIPIENT".into(),
+                    display_name: None,
+                },
+                subject: "subject\nFORGED_SUBJECT".into(),
+                text_body: "text".into(),
+                html_body: "html".into(),
+            }))
+            .await;
+        assert!(result.is_err());
+        let text = logs.text();
+        assert!(text.contains("mail: preparing"), "{text}");
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains("\\nFORGED_RECIPIENT"));
+        assert!(text.contains("\\nFORGED_SUBJECT"));
     }
 }

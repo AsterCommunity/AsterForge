@@ -45,6 +45,7 @@ impl From<XmlSafetyError> for DavXmlError {
             XmlSafetyError::InvalidPolicy
             | XmlSafetyError::OutputTooLarge
             | XmlSafetyError::TooManyElements
+            | XmlSafetyError::TooManyNamespaces
             | XmlSafetyError::TooManyAttributes
             | XmlSafetyError::TooManyEvents
             | XmlSafetyError::InvalidEncoding
@@ -133,7 +134,10 @@ impl DavXmlElement {
         let options = webdav_parse_options();
         let document = OwnedDocument::from_reader_with_options(reader, &options)
             .map_err(|error| map_forge_xml_error(&error))?;
-        Ok(element_from_forge(document.root()))
+        materialize_element(
+            document.root(),
+            &mut XmlSafetyPolicy::untrusted().max_input_bytes,
+        )
     }
 
     /// Serializes the element as UTF-8 XML bytes.
@@ -273,15 +277,15 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
             }
             include_seen = true;
             require_property_names(child)?;
-            include.extend(child.child_elements().map(requested_property));
+            include.extend(collect_requested_properties(child)?);
         } else if is_dav_element(child, "prop") {
             if kind.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
             }
             require_property_names(child)?;
-            kind = Some(DavPropfindRequest::Prop(
-                child.child_elements().map(requested_property).collect(),
-            ));
+            kind = Some(DavPropfindRequest::Prop(collect_requested_properties(
+                child,
+            )?));
         }
     }
 
@@ -304,8 +308,9 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
         return Err(DavXmlError::InvalidGrammar);
     }
     require_element_content(root)?;
-    let root_lang = xml_lang_value(root).map(str::to_owned);
+    let root_lang = xml_lang_value(root);
     let mut patches = Vec::new();
+    let mut remaining_bytes = XmlSafetyPolicy::untrusted().max_input_bytes;
     for action in root.child_elements() {
         let set = if is_dav_element(action, "set") {
             true
@@ -316,7 +321,7 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
             continue;
         };
         require_element_content(action)?;
-        let action_lang = xml_lang_value(action).or(root_lang.as_deref());
+        let action_lang = xml_lang_value(action).or(root_lang);
         let prop_container =
             unique_dav_child(action, "prop")?.ok_or(DavXmlError::InvalidGrammar)?;
         require_element_content(prop_container)?;
@@ -325,13 +330,28 @@ pub fn parse_proppatch_request(body: &[u8]) -> Result<Vec<DavPropertyPatchReques
             if !set {
                 require_property_name(property)?;
             }
-            let mut element = element_from_forge(property);
-            let inherited_lang = xml_lang_value(property).or(container_lang);
-            if let Some(lang) = inherited_lang.filter(|lang| !lang.is_empty()) {
+            let inherited_lang = xml_lang_value(property)
+                .or(container_lang)
+                .filter(|lang| !lang.is_empty());
+            let copy_inherited_lang = property.attribute("xml:lang").is_none();
+            let mut extra_bytes = property
+                .name()
+                .len()
+                .saturating_add(property.prefix().map_or(0, str::len))
+                .saturating_add(property.namespace().map_or(0, str::len));
+            if copy_inherited_lang {
+                extra_bytes = extra_bytes.saturating_add(
+                    inherited_lang.map_or(0, |lang| lang.len().saturating_add("xml:lang".len())),
+                );
+            }
+            remaining_bytes = remaining_bytes
+                .checked_sub(extra_bytes)
+                .ok_or(DavXmlError::TooLarge)?;
+            let mut element = materialize_element(property, &mut remaining_bytes)?;
+            if copy_inherited_lang && let Some(lang) = inherited_lang {
                 element
                     .attributes
-                    .entry("xml:lang".to_owned())
-                    .or_insert_with(|| lang.to_owned());
+                    .insert("xml:lang".to_owned(), lang.to_owned());
             }
             patches.push(DavPropertyPatchRequest {
                 set,
@@ -392,7 +412,10 @@ pub fn parse_lock_request(body: &[u8]) -> Result<DavLockRequestBody, DavXmlError
             if owner.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
             }
-            owner = Some(element_from_forge(child));
+            owner = Some(materialize_element(
+                child,
+                &mut XmlSafetyPolicy::untrusted().max_input_bytes,
+            )?);
         }
     }
     match (shared, write_lock) {
@@ -442,7 +465,10 @@ pub(crate) fn parse_version_control_request(body: &[u8]) -> Result<(), DavXmlErr
 
 fn parse_element(bytes: &[u8]) -> Result<DavXmlElement, DavXmlError> {
     let document = parse_document(bytes)?;
-    Ok(element_from_forge(document.root()))
+    materialize_element(
+        document.root(),
+        &mut XmlSafetyPolicy::untrusted().max_input_bytes,
+    )
 }
 
 fn parse_document(bytes: &[u8]) -> Result<BorrowedDocument<'_>, DavXmlError> {
@@ -470,9 +496,7 @@ fn parse_version_tree_prop<S: AsRef<[u8]>>(
     require_element_content(root)?;
     if let Some(prop) = unique_dav_child(root, "prop")? {
         require_property_names(prop)?;
-        return Ok(Some(
-            prop.child_elements().map(requested_property).collect(),
-        ));
+        return Ok(Some(collect_requested_properties(prop)?));
     }
     Ok(None)
 }
@@ -598,6 +622,27 @@ fn require_property_name<S: AsRef<[u8]>>(property: ElementRef<'_, S>) -> Result<
     require_element_content(property)
 }
 
+fn collect_requested_properties<S: AsRef<[u8]>>(
+    container: ElementRef<'_, S>,
+) -> Result<Vec<DavRequestedProperty>, DavXmlError> {
+    let mut seen = std::collections::HashSet::new();
+    let mut remaining = XmlSafetyPolicy::untrusted().max_input_bytes;
+    let mut result = Vec::new();
+    for element in container.child_elements() {
+        if !seen.insert((element.namespace(), element.name())) {
+            continue;
+        }
+        let size = element
+            .name()
+            .len()
+            .saturating_add(element.namespace().map_or(0, str::len))
+            .saturating_add(element.prefix().map_or(0, str::len));
+        remaining = remaining.checked_sub(size).ok_or(DavXmlError::TooLarge)?;
+        result.push(requested_property(element));
+    }
+    Ok(result)
+}
+
 fn requested_property<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavRequestedProperty {
     DavRequestedProperty {
         name: element.name().to_owned(),
@@ -625,6 +670,45 @@ fn map_forge_xml_error(error: &ForgeXmlError) -> DavXmlError {
             DavXmlError::Malformed
         }
     }
+}
+
+fn materialize_element<S: AsRef<[u8]>>(
+    root: ElementRef<'_, S>,
+    remaining_bytes: &mut usize,
+) -> Result<DavXmlElement, DavXmlError> {
+    // Inspect source-backed views before making the first owned subtree allocation. Namespace
+    // declarations can otherwise multiply into every descendant's standalone namespace map.
+    for element in root.descendants() {
+        let mut bytes = element
+            .name()
+            .len()
+            .saturating_add(element.prefix().map_or(0, str::len));
+        bytes = bytes.saturating_add(element.namespace().map_or(0, str::len).saturating_mul(2));
+        for attribute in element.attributes() {
+            bytes = bytes
+                .saturating_add(attribute.qualified_name().len())
+                .saturating_add(attribute.value().len());
+            bytes = bytes
+                .saturating_add(attribute.prefix().map_or(0, str::len))
+                .saturating_add(attribute.namespace().map_or(0, str::len));
+        }
+        for child in element.children() {
+            bytes = bytes.saturating_add(match child {
+                NodeRef::Element(_) => 0,
+                NodeRef::Text(value) | NodeRef::CData(value) | NodeRef::Comment(value) => {
+                    value.len()
+                }
+                NodeRef::ProcessingInstruction(pi) => pi
+                    .target
+                    .len()
+                    .saturating_add(pi.content.map_or(0, str::len)),
+            });
+        }
+        *remaining_bytes = remaining_bytes
+            .checked_sub(bytes)
+            .ok_or(DavXmlError::TooLarge)?;
+    }
+    Ok(element_from_forge(root))
 }
 
 fn element_from_forge<S: AsRef<[u8]>>(element: ElementRef<'_, S>) -> DavXmlElement {

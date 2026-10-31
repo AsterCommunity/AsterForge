@@ -144,6 +144,12 @@ impl AuditWriter {
         &self,
         request: AuditLogCreate,
     ) -> Result<RecordAdmission, RecordError<AuditLogCreate, DbError>> {
+        if let Err(error) = request.validate() {
+            return Err(RecordError::Invalid {
+                item: request,
+                error,
+            });
+        }
         self.writer.record(request).await
     }
     /// Atomically closes admission while keeping accepted records available for drain.

@@ -99,9 +99,10 @@ pub fn normalize_scopes_with_default(
 ) -> Result<String> {
     let raw = value.unwrap_or(default_scopes);
     let mut scopes = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for scope in raw.split_whitespace() {
         let scope = scope.trim();
-        if scope.is_empty() || scopes.iter().any(|existing| existing == scope) {
+        if scope.is_empty() || !seen.insert(scope) {
             continue;
         }
         if scope.chars().any(char::is_control) || scope.len() > 128 {
@@ -266,6 +267,7 @@ pub fn normalize_allowed_domains(value: Option<Vec<String>>) -> Result<Option<St
         return Ok(None);
     };
     let mut domains = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for raw in value {
         let domain = raw.trim().trim_start_matches('@').to_ascii_lowercase();
         if domain.is_empty() {
@@ -281,7 +283,7 @@ pub fn normalize_allowed_domains(value: Option<Vec<String>>) -> Result<Option<St
                 "invalid external auth allowed domain '{raw}'"
             )));
         }
-        if !domains.contains(&domain) {
+        if seen.insert(domain.clone()) {
             domains.push(domain);
         }
     }
@@ -495,5 +497,18 @@ mod tests {
     fn state_and_token_hash_use_sha256_hex() {
         assert_eq!(state_hash("state").len(), 64);
         assert_eq!(state_hash("state"), token_hash("state"));
+    }
+    #[test]
+    #[ignore = "controlled before/after CPU measurement"]
+    fn measure_scope_workload() {
+        let input: String = (0..20_000)
+            .map(|i| format!("scope{i} "))
+            .collect::<Vec<_>>()
+            .concat();
+        let start = std::time::Instant::now();
+        let output =
+            super::normalize_scopes(Some(&input), super::ExternalAuthProtocol::OAuth2).unwrap();
+        assert_eq!(output.split_whitespace().count(), 20_000);
+        println!("auth_scopes_us={}", start.elapsed().as_micros());
     }
 }

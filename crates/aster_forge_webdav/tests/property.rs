@@ -378,8 +378,14 @@ fn disabled_standard_extension_name_can_still_resolve_as_a_dead_property() {
         }],
         ..Values::default()
     };
-    let item = build_live_propfind_item("/file".to_owned(), &snapshot, &request, &values)
-        .expect("dead property with disabled standard name");
+    let item = build_live_propfind_item(
+        "/file".to_owned(),
+        &snapshot,
+        &request,
+        &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
+    )
+    .expect("dead property with disabled standard name");
     assert_eq!(property_names(&item, 200), ["quota-used-bytes"]);
     assert_eq!(property_names(&item, 404), [] as [&str; 0]);
 }
@@ -393,6 +399,7 @@ fn allprop_excludes_expensive_rfc_properties_and_include_restores_them() {
         &snapshot,
         &DavPropfindRequest::AllProp { include: vec![] },
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("allprop item");
     let names = property_names(&allprop, 200);
@@ -431,6 +438,7 @@ fn allprop_excludes_expensive_rfc_properties_and_include_restores_them() {
             ],
         },
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("allprop include item");
     let ok = property_names(&included, 200);
@@ -450,6 +458,7 @@ fn allprop_excludes_expensive_rfc_properties_and_include_restores_them() {
             &snapshot,
             &DavPropfindRequest::AllProp { include: vec![] },
             &invalid_principal,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::InvalidRepresentation {
             property: DavLiveProperty::CurrentUserPrincipal,
@@ -472,6 +481,7 @@ fn propname_uses_dynamic_quota_and_metadata_definition_rules() {
         &snapshot,
         &DavPropfindRequest::PropName,
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("propname item");
     let names = property_names(&item, 200);
@@ -538,6 +548,7 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
             property("missing", Some("urn:test"), Some("custom")),
         ]),
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("explicit property item");
     assert_eq!(
@@ -598,6 +609,7 @@ fn explicit_properties_group_success_and_missing_with_requested_qnames() {
         &snapshot,
         &DavPropfindRequest::Prop(vec![property("comment", Some("DAV:"), None)]),
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("default-namespace live property");
     let default_namespace_xml = String::from_utf8(
@@ -629,6 +641,7 @@ fn discovery_properties_are_generated_from_the_same_snapshot() {
             dav_property("supported-query-grammar-set"),
         ]),
         &Values::default(),
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("discovery item");
 
@@ -693,6 +706,7 @@ fn report_discovery_covers_every_typed_report_once() {
         &snapshot,
         &DavPropfindRequest::Prop(vec![dav_property("supported-report-set")]),
         &DefaultValues,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("complete report catalog");
     let property = property_element(&item, 200, "supported-report-set");
@@ -747,6 +761,7 @@ fn resource_type_and_optional_standard_values_follow_resource_state() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("resourcetype")]),
             &DefaultValues,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default(),
         )
         .expect("resource type");
         assert_eq!(property_names(&item, status), ["resourcetype"]);
@@ -774,6 +789,7 @@ fn resource_type_and_optional_standard_values_follow_resource_state() {
             dav_property("getlastmodified"),
         ]),
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("optional file values");
     assert_eq!(property_names(&item, 404), ["quota-used-bytes"]);
@@ -783,6 +799,7 @@ fn resource_type_and_optional_standard_values_follow_resource_state() {
         &snapshot_for(DavResourceState::File, &[]),
         &DavPropfindRequest::Prop(vec![dav_property("getlastmodified")]),
         &DefaultValues,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("missing last-modified");
     assert_eq!(property_names(&empty, 404), ["getlastmodified"]);
@@ -812,6 +829,7 @@ fn class_two_supported_lock_and_empty_namespace_search_grammar_are_rendered() {
         &class2,
         &DavPropfindRequest::Prop(vec![dav_property("supportedlock")]),
         &DefaultValues,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("supported lock");
     let xml = String::from_utf8(
@@ -837,6 +855,7 @@ fn class_two_supported_lock_and_empty_namespace_search_grammar_are_rendered() {
         &search,
         &DavPropfindRequest::Prop(vec![dav_property("supported-query-grammar-set")]),
         &DefaultValues,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("query grammar discovery");
     let xml = String::from_utf8(
@@ -861,6 +880,7 @@ fn propname_omits_an_empty_success_group() {
         &snapshot,
         &DavPropfindRequest::PropName,
         &DefaultValues,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("empty propname item");
     assert_eq!(item.propstats, [] as [aster_forge_webdav::DavPropStat; 0]);
@@ -894,6 +914,7 @@ fn metadata_is_read_once_per_propfind_item() {
             dav_property("getcontenttype"),
         ]),
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("metadata-backed properties");
     assert_eq!(values.calls.load(Ordering::Relaxed), 1);
@@ -948,6 +969,7 @@ fn canonical_provider_entrypoint_fetches_one_snapshot_per_resource() {
             dav_property("quota-used-bytes"),
             dav_property("quota-available-bytes"),
         ]),
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     ))
     .expect("provider item");
     assert_eq!(property_names(&item, 200).len(), 2);
@@ -965,6 +987,7 @@ fn canonical_provider_entrypoint_fetches_one_snapshot_per_resource() {
         "/documents/".to_owned(),
         &snapshot,
         &DavPropfindRequest::PropName,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     ))
     .expect_err("backend failure");
     assert_eq!(
@@ -988,6 +1011,7 @@ fn sync_token_accepts_absolute_uris_and_rejects_missing_or_invalid_values() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("sync-token")]),
             &urn_token,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         )
         .is_ok(),
         "RFC 6578 sync tokens accept absolute non-HTTP URIs"
@@ -1003,6 +1027,7 @@ fn sync_token_accepts_absolute_uris_and_rejects_missing_or_invalid_values() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("sync-token")]),
             &missing,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::MissingRequiredValue {
             property: DavLiveProperty::SyncToken,
@@ -1019,6 +1044,7 @@ fn sync_token_accepts_absolute_uris_and_rejects_missing_or_invalid_values() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("sync-token")]),
             &invalid,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::InvalidRepresentation {
             property: DavLiveProperty::SyncToken,
@@ -1044,6 +1070,7 @@ fn current_principal_rejects_missing_or_invalid_urls() {
                 &snapshot,
                 &DavPropfindRequest::Prop(vec![dav_property("current-user-principal")]),
                 &invalid_principal,
+                aster_forge_webdav::DavPropertyMaterializationLimits::default()
             ),
             Err(DavLivePropertyError::InvalidRepresentation {
                 property: DavLiveProperty::CurrentUserPrincipal,
@@ -1062,6 +1089,7 @@ fn current_principal_rejects_missing_or_invalid_urls() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("current-user-principal")]),
             &missing_principal,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::MissingRequiredValue {
             property: DavLiveProperty::CurrentUserPrincipal,
@@ -1083,6 +1111,7 @@ fn add_member_accepts_supported_uri_shapes_and_rejects_missing_or_invalid_values
                 &snapshot,
                 &DavPropfindRequest::Prop(vec![dav_property("add-member")]),
                 &invalid_add_member,
+                aster_forge_webdav::DavPropertyMaterializationLimits::default()
             ),
             Err(DavLivePropertyError::InvalidRepresentation {
                 property: DavLiveProperty::AddMember,
@@ -1101,6 +1130,7 @@ fn add_member_accepts_supported_uri_shapes_and_rejects_missing_or_invalid_values
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("add-member")]),
             &missing_add_member,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::MissingRequiredValue {
             property: DavLiveProperty::AddMember,
@@ -1116,6 +1146,7 @@ fn add_member_accepts_supported_uri_shapes_and_rejects_missing_or_invalid_values
         &snapshot,
         &DavPropfindRequest::Prop(vec![dav_property("add-member")]),
         &absolute_add_member,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("absolute HTTP(S) Add-Member URI shape");
 }
@@ -1133,6 +1164,7 @@ fn quota_used_bytes_requires_a_snapshot_for_supported_collections() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("quota-used-bytes")]),
             &quota,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::MissingRequiredValue {
             property: DavLiveProperty::QuotaUsedBytes,
@@ -1155,6 +1187,7 @@ fn current_principal_and_add_member_render_typed_href_values() {
             dav_property("add-member"),
         ]),
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("principal and add-member");
     let principal = String::from_utf8(
@@ -1201,6 +1234,7 @@ fn allprop_prefers_live_values_over_duplicate_dead_properties() {
         &snapshot,
         &DavPropfindRequest::AllProp { include: vec![] },
         &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("allprop item");
     assert_eq!(
@@ -1313,6 +1347,7 @@ fn system_time_boundary_for_last_modified_is_reported_only_when_requested() {
         &snapshot,
         &DavPropfindRequest::Prop(vec![dav_property("displayname")]),
         &ExtremeTime,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
     )
     .expect("unrequested invalid date must not fail");
     assert_eq!(
@@ -1321,9 +1356,115 @@ fn system_time_boundary_for_last_modified_is_reported_only_when_requested() {
             &snapshot,
             &DavPropfindRequest::Prop(vec![dav_property("getlastmodified")]),
             &ExtremeTime,
+            aster_forge_webdav::DavPropertyMaterializationLimits::default()
         ),
         Err(DavLivePropertyError::InvalidRepresentation {
             property: DavLiveProperty::GetLastModified,
         })
     );
+}
+
+#[test]
+fn explicit_propfind_deduplicates_requested_values_and_missing_names() {
+    let values = Values {
+        display_name: "large value".repeat(1024),
+        ..Values::default()
+    };
+    let request = DavPropfindRequest::Prop(vec![
+        dav_property("displayname"),
+        dav_property("displayname"),
+        dav_property("missing"),
+        dav_property("missing"),
+    ]);
+    let item = build_live_propfind_item(
+        "/".into(),
+        &live_snapshot(),
+        &request,
+        &values,
+        aster_forge_webdav::DavPropertyMaterializationLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        item.propstats
+            .iter()
+            .map(|group| group.properties.len())
+            .sum::<usize>(),
+        2
+    );
+}
+
+#[test]
+fn propfind_materialization_has_exact_property_and_byte_boundaries() {
+    use aster_forge_webdav::{DavPropertyMaterializationLimits, build_live_propfind_item};
+    let values = Values::default();
+    let request =
+        DavPropfindRequest::Prop(vec![dav_property("displayname"), dav_property("getetag")]);
+    let limits = DavPropertyMaterializationLimits {
+        maximum_bytes: 4096,
+        maximum_properties: 2,
+    };
+    assert!(
+        build_live_propfind_item("/".into(), &live_snapshot(), &request, &values, limits).is_ok()
+    );
+    let limits = DavPropertyMaterializationLimits {
+        maximum_properties: 1,
+        ..limits
+    };
+    assert!(
+        build_live_propfind_item("/".into(), &live_snapshot(), &request, &values, limits).is_err()
+    );
+    let limits = DavPropertyMaterializationLimits {
+        maximum_bytes: 1,
+        ..limits
+    };
+    assert!(
+        build_live_propfind_item("/".into(), &live_snapshot(), &request, &values, limits).is_err()
+    );
+}
+
+#[test]
+fn property_byte_limit_has_a_stable_exact_boundary_and_no_sticky_failure() {
+    use aster_forge_webdav::DavPropertyMaterializationLimits;
+    let values = Values::default();
+    let request = DavPropfindRequest::Prop(vec![dav_property("displayname")]);
+    let snapshot = live_snapshot();
+    let mut lower = 1;
+    let mut upper = 4096;
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        let result = build_live_propfind_item(
+            "/".into(),
+            &snapshot,
+            &request,
+            &values,
+            DavPropertyMaterializationLimits {
+                maximum_bytes: middle,
+                maximum_properties: 1,
+            },
+        );
+        if result.is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    for (bytes, accepted) in [
+        (lower - 1, false),
+        (lower, true),
+        (lower + 1, true),
+        (0, false),
+        (lower, true),
+    ] {
+        let result = build_live_propfind_item(
+            "/".into(),
+            &snapshot,
+            &request,
+            &values,
+            DavPropertyMaterializationLimits {
+                maximum_bytes: bytes,
+                maximum_properties: 1,
+            },
+        );
+        assert_eq!(result.is_ok(), accepted, "bytes={bytes}");
+    }
 }

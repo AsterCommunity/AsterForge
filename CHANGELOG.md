@@ -26,4 +26,11 @@
 
 - Failed configuration reloads and connection reconciliations retry with bounded backoff even when no new notification or reconnect occurs. Recovery work is coalesced, and shutdown cancels retry waits and active callbacks.
 
+### Security
+
+- **Bounded XML and WebDAV (breaking)** — Add an independent active-namespace quota (128 by default), count namespace declarations in embedded-subtree limits, and avoid pairwise writer attribute checks. PROPFIND/version-tree selectors deduplicate expanded names and bound copied bytes; property composers now require explicit `DavPropertyMaterializationLimits`. PATCH enforces immutable/checked-in version rules and returns the automatic checkout/checkin action for product transactions.
+- **Persistence and identity boundaries** — Reject unsafe blob shards and Windows drive-qualified object keys; fence macOS content reads to the engine scope. Audit records validate before admission and return `RecordError::Invalid` without blocking valid records. Configuration updates reject collation aliases and preserve system visibility; database diagnostics redact credential-bearing URLs. Migration helpers quote extension/index identifiers as data.
+- **External auth provider destinations (breaking)** — Dedicated Google, GitHub and QQ drivers use official destinations unconditionally. Use generic OIDC/OAuth2 for custom issuers or compatible services. Provider-option diagnostics omit rejected documents; mail diagnostic fields escape control characters. Scope/domain deduplication, mail fallback parsing and saturated cache reservations avoid repeated full scans while preserving order, fallback and TTL semantics.
+- **HTTP and local state boundaries** — Both HTTP transports combine repeated forwarding fields before trusted-proxy resolution; an active CORS policy disabling credentials removes inherited credential headers. Unix test state uses verified per-user directories, non-truncating no-follow locks and private atomic files. The Linux memory example uses the same state-file mechanics, bounded 16 MiB documents and 1 MiB upload chunks; it remains a synthetic adapter.
+
 [Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/1ba5754792ae94bd8888b03d09ada1644b2107c0...HEAD

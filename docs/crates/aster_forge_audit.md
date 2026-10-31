@@ -318,3 +318,7 @@ Forge 侧承接：
 运行 `cargo test -p aster_forge_audit`、`cargo test -p aster_forge_audit --features db-writer`、
 `cargo test -p aster_forge_audit --all-features`（含 Docker PostgreSQL 测试）、
 `cargo test -p aster_forge_runtime --all-features` 和相关 crates 的 Clippy。这个边界避免 Drive、Yggdrasil 和后续 Aster 服务在表结构、shutdown 顺序、批量写入和索引名上继续分叉，同时不把业务审计语义塞进共享 crate。
+
+## 入队前字段校验
+
+`AuditWriter::record` 复用 `AuditLogCreate::validate()`，在队列和 direct-overflow admission 前拒绝确定性非法字段，返回 `RecordError::Invalid { item, error }`，原记录交还调用方。非法记录不占容量、不触发数据库 I/O，也不阻塞后续正常审计。调用方穷尽匹配必须处理新变体。真正的数据库失败仍按原语义保留记录，永久失败和未知提交不会自动重放。

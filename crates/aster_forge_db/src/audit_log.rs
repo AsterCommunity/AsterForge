@@ -410,13 +410,21 @@ impl AuditLogCursorSlice {
 }
 
 impl AuditLogCreate {
+    /// Validates deterministic field constraints without allocating models or performing I/O.
+    ///
+    /// # Errors
+    /// Returns a non-retryable error when a record violates the shared schema contract.
+    pub fn validate(&self) -> crate::Result<()> {
+        validate_create(self)
+    }
+
     /// Converts the request into a validated `SeaORM` active model.
     ///
     /// # Errors
     ///
     /// Returns an error when the database operation fails.
     pub fn into_active_model(self) -> crate::Result<ActiveModel> {
-        validate_create(&self)?;
+        self.validate()?;
         Ok(ActiveModel {
             id: sea_orm::ActiveValue::default(),
             user_id: Set(self.user_id),

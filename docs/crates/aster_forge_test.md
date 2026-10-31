@@ -158,3 +158,9 @@ process.assert_running();
 
 - AsterDrive：`tests/common` 是这套机制的原始实现来源。
 - AsterYggdrasil：同样形态的共享容器状态机，验证了抽象可以跨产品复用。
+
+## 本地状态与日志测试支持
+
+Unix 容器状态目录包含 effective UID，并验证目录所有者与其他用户写权限。锁文件通过目录句柄相对打开，不跟随符号链接、不截断；状态以唯一 `0600` 临时文件原子替换，读取有 16 MiB 上限。拒绝 unsafe 目录/文件，不自动 chmod、删除或迁移旧状态；旧共享测试容器数据由测试所有者按保留策略处理。
+
+`logs` feature 提供 `logs::CapturedLogs`：`capture` 捕获同步调用，`capture_future` 为异步 future 的每次 poll 安装局部 subscriber，`text` 读取结果，不设置全局 subscriber。用于真实日志的脱敏、控制字符与记录边界回归测试。

@@ -224,3 +224,7 @@ cargo bench -p aster_forge_cache --features bloom,memory --no-run
 
 - AsterDrive：适合参考复杂服务如何集中创建 cache，并在健康检查里展示 backend 状态。
 - AsterYggdrasil：适合参考轻量服务如何只依赖 `CacheBackend` trait，避免业务层绑定 Redis。
+
+## Reservation 满载行为
+
+本地 reservation 同时维护 key 与过期时间索引，在同一个短临界区完成检查和插入；容量上限为 65536。满载且没有过期项时立即拒绝，不再每次扫描整个 map。只访问最早到期项，过期、删除和 prefix invalidation 同步清除两个索引。每 key TTL、零 TTL、RAII 释放及一胜者语义保持不变。

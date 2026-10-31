@@ -91,3 +91,47 @@ async fn sqlite_url_preserves_spaces_in_native_temp_paths() {
     assert!(database_path.is_file());
     db.close().await.expect("SQLite test database should close");
 }
+
+#[tokio::test]
+async fn unsupported_driver_never_returns_credentials() {
+    for url in [
+        aster_forge_db::DatabaseUrl::from(
+            "unsupported://secret-user:secret-password@localhost/database".to_owned(),
+        ),
+        aster_forge_db::DatabaseUrl::credentials(
+            "unsupported://localhost/database",
+            Some("secret-user".into()),
+            Some("secret-password".into()),
+        ),
+    ] {
+        let config = DatabaseConfig {
+            url,
+            pool_size: 1,
+            retry_count: 0,
+        };
+        let error = connect(&config).await.unwrap_err().to_string();
+        assert!(!error.contains("secret-password"), "{error}");
+        assert!(!error.contains("secret-user"), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn retry_diagnostics_redact_separated_credentials() {
+    let logs = aster_forge_test::logs::CapturedLogs::default();
+    let config = DatabaseConfig {
+        url: aster_forge_db::DatabaseUrl::credentials(
+            "unsupported://localhost/db",
+            Some("private-user".into()),
+            Some("private-password#".into()),
+        ),
+        pool_size: 1,
+        retry_count: 1,
+    };
+    let result = logs.capture_future(connect(&config)).await;
+    assert!(result.is_err());
+    let text = logs.text();
+    assert!(text.contains("retrying operation"), "{text}");
+    for secret in ["private-user", "private-password", "private-password%23"] {
+        assert!(!text.contains(secret), "{text}");
+    }
+}

@@ -43,7 +43,7 @@ system-config = ["dep:aster_forge_config"]
 database-container-tests = []
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", features = ["mysql", "postgres"] }
+aster_forge_test = { path = "../aster_forge_test", features = ["mysql", "postgres", "logs"] }
 futures.workspace = true
 serde_json.workspace = true
 url.workspace = true

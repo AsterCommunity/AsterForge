@@ -28,6 +28,8 @@ pub struct XmlSafetyPolicy {
     pub max_attributes_per_element: usize,
     pub max_text_bytes: usize,
     pub max_events: usize,
+    /// Maximum namespace declarations simultaneously in scope.
+    pub max_namespace_bindings: usize,
     pub reject_doctype: bool,
 }
 
@@ -42,6 +44,7 @@ impl XmlSafetyPolicy {
             max_attributes_per_element: DEFAULT_MAX_ATTRIBUTES_PER_ELEMENT,
             max_text_bytes: DEFAULT_MAX_TEXT_BYTES,
             max_events: DEFAULT_MAX_EVENTS,
+            max_namespace_bindings: 128,
             reject_doctype: true,
         }
     }
@@ -53,6 +56,7 @@ impl XmlSafetyPolicy {
             || self.max_attributes_per_element == 0
             || self.max_text_bytes == 0
             || self.max_events == 0
+            || self.max_namespace_bindings == 0
         {
             Err(XmlSafetyError::InvalidPolicy)
         } else {
@@ -359,6 +363,9 @@ fn scan_element(
                 .normalized_value(XmlVersion::Explicit1_0)
                 .map_err(|error| Error::InvalidXml(error.to_string()))?;
             validate_namespace_binding(namespace_prefix, &uri)?;
+            if state.bindings.len() >= policy.max_namespace_bindings {
+                return Err(XmlSafetyError::TooManyNamespaces.into());
+            }
             state.bindings.push(NamespaceBinding {
                 prefix: namespace_prefix.to_owned(),
                 uri: (!uri.is_empty()).then(|| uri.into_owned()),

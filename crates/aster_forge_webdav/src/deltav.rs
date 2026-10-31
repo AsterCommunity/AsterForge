@@ -401,10 +401,10 @@ pub fn plan_versioning_method(
                 Err(DavVersioningPrecondition::MethodNotAllowed)
             }
         },
-        DavMethod::Put | DavMethod::Proppatch => match facts.state {
+        DavMethod::Put | DavMethod::Patch | DavMethod::Proppatch => match facts.state {
             DavVersioningState::Version => Err(DavVersioningPrecondition::CannotModifyVersion),
             DavVersioningState::CheckedIn => {
-                let rejected = if method == DavMethod::Put {
+                let rejected = if matches!(method, DavMethod::Put | DavMethod::Patch) {
                     DavVersioningPrecondition::CannotModifyVersionControlledContent
                 } else {
                     DavVersioningPrecondition::CannotModifyVersionControlledProperty
