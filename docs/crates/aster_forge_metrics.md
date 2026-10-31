@@ -86,6 +86,7 @@ fn create(instance_id: String) -> MetricResult<MetricsProvider> {
             service_name: "example-service".into(),
             service_version: env!("CARGO_PKG_VERSION").into(),
             environment: "production".into(),
+            node_mode: "primary".into(),
             role: "api".into(),
             instance_id,
         })?
@@ -101,8 +102,11 @@ fn create(instance_id: String) -> MetricResult<MetricsProvider> {
 | `service_name` | `service.name` | `service_name` |
 | `service_version` | `service.version` | `service_version` |
 | `environment` | `deployment.environment.name` | `deployment_environment_name` |
+| `node_mode` | `aster.node.mode` | `aster_node_mode` |
 | `role` | `aster.role` | `aster_role` |
 | `instance_id` | `service.instance.id` | `service_instance_id` |
+
+产品身份、节点模式与进程职责是独立维度：例如 `service.name=asterdrive`、`aster.node.mode=primary/follower`、`aster.role=all/api/worker`。Forge 不定义产品枚举或拼接这些值；没有节点模式的产品可将 `node_mode` 留空。节点模式遵守相同的 128-byte/控制字符限制，`aster.node.mode` 与 `aster_node_mode` 均保留为资源身份，禁止业务 instrument 同名标签覆盖。
 
 Prometheus 生成 target_info；产品显式调用 with_profile(namespace, version) 添加 service namespace 和 schema，通用 builder 不替产品选择 namespace。Resource 属性附到样本。`job`、`instance` 由抓取配置附加，不混同于进程 instance ID。OTLP 使用显式 resource，不运行环境资源检测器。
 

@@ -42,6 +42,9 @@ pub struct MetricsResource {
     pub service_name: String,
     pub service_version: String,
     pub environment: String,
+    /// Product-defined node mode, independent of process role; empty omits the attribute.
+    pub node_mode: String,
+    /// Process responsibility within the service, independent of node mode.
     pub role: String,
     pub instance_id: String,
 }
@@ -77,6 +80,7 @@ impl MetricsProviderBuilder {
             ("service.name", resource.service_name),
             ("service.version", resource.service_version),
             ("deployment.environment.name", resource.environment),
+            ("aster.node.mode", resource.node_mode),
             ("aster.role", resource.role),
             ("service.instance.id", resource.instance_id),
         ] {
@@ -497,6 +501,7 @@ fn validate(descriptor: &MetricDescriptor) -> MetricResult<()> {
                 "service_instance_id",
                 "deployment_environment_name",
                 "aster_role",
+                "aster_node_mode",
                 "aster_metrics_schema_version",
             ]
             .contains(&exported.as_str())

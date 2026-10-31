@@ -83,6 +83,8 @@ fn reserved_resource_labels_and_translated_attribute_collisions_are_atomic() {
         &["service.instance.id"],
         &["deployment.environment.name"],
         &["aster.role"],
+        &["aster.node.mode"],
+        &["aster_node_mode"],
         &["aster.metrics.schema.version"],
         &["http.route", "http_route"],
     ] {
@@ -189,6 +191,7 @@ async fn profile_resource_merge_retains_all_explicit_identity_and_omits_empty_fi
         }
         assert!(!sample.contains("deployment_environment_name="));
         assert!(!sample.contains("aster_role="));
+        assert!(!sample.contains("aster_node_mode="));
         provider.shutdown(Duration::from_secs(1)).await.unwrap();
         assert_eq!(
             provider.export_prometheus(Duration::from_secs(1)).await,
@@ -200,4 +203,31 @@ async fn profile_resource_merge_retains_all_explicit_identity_and_omits_empty_fi
         noop.export_prometheus(Duration::from_secs(1)).await,
         Err(MetricError::Unavailable)
     );
+}
+
+#[test]
+fn node_mode_identity_is_bounded_and_rejects_control_characters() {
+    for node_mode in [
+        "primary\n".to_string(),
+        "follower\0".to_string(),
+        "n".repeat(129),
+    ] {
+        assert!(matches!(
+            MetricsProvider::builder().with_resource(MetricsResource {
+                service_name: "example".into(),
+                node_mode,
+                ..Default::default()
+            }),
+            Err(MetricError::InvalidConfiguration)
+        ));
+    }
+    for node_mode in [String::new(), "n".repeat(128)] {
+        MetricsProvider::builder()
+            .with_resource(MetricsResource {
+                service_name: "example".into(),
+                node_mode,
+                ..Default::default()
+            })
+            .unwrap();
+    }
 }

@@ -318,6 +318,13 @@ mod tests {
         use opentelemetry_proto::tonic::{common::v1::any_value::Value, metrics::v1::metric::Data};
         let (endpoint, received) = receiver("200 OK", Vec::new());
         let (builder, _) = MetricsProvider::builder()
+            .with_resource(crate::MetricsResource {
+                service_name: "example".into(),
+                node_mode: "follower".into(),
+                role: "worker".into(),
+                ..Default::default()
+            })
+            .unwrap()
             .with_otlp(config(endpoint))
             .unwrap();
         let provider = builder.build().unwrap();
@@ -332,6 +339,25 @@ mod tests {
             Err(MetricError::Shutdown)
         );
         let request = ExportMetricsServiceRequest::decode(bytes.as_slice()).unwrap();
+        let attributes = &request.resource_metrics[0]
+            .resource
+            .as_ref()
+            .unwrap()
+            .attributes;
+        for (key, expected) in [
+            ("service.name", "example"),
+            ("aster.node.mode", "follower"),
+            ("aster.role", "worker"),
+        ] {
+            let attribute = attributes
+                .iter()
+                .find(|attribute| attribute.key == key)
+                .unwrap();
+            assert_eq!(
+                attribute.value.as_ref().unwrap().value,
+                Some(Value::StringValue(expected.into()))
+            );
+        }
         let metric = request
             .resource_metrics
             .iter()
