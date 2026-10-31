@@ -20,13 +20,15 @@ use actix_web::{
 use futures::future::{LocalBoxFuture, Ready, ok};
 
 pub use crate::shared::cors::{
-    CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, RuntimeCorsPolicy,
+    CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, CorsRejection,
+    RuntimeCorsPolicy,
 };
 use crate::shared::cors::{CorsDecision, CorsSettings};
 
 type PolicyResolver = dyn Fn(&ServiceRequest) -> Result<RuntimeCorsPolicy, Error>;
 type ExemptPathPredicate = dyn Fn(&str) -> bool;
 type ErrorMapper = dyn Fn(CorsMiddlewareError) -> Error;
+type RejectionResponse = dyn Fn(CorsRejection) -> HttpResponse;
 
 /// Runtime CORS middleware configuration.
 pub struct RuntimeCorsConfig {
@@ -34,6 +36,7 @@ pub struct RuntimeCorsConfig {
     policy: Rc<PolicyResolver>,
     exempt_path: Rc<ExemptPathPredicate>,
     map_error: Rc<ErrorMapper>,
+    rejection_response: Rc<RejectionResponse>,
 }
 
 impl RuntimeCorsConfig {
@@ -49,7 +52,22 @@ impl RuntimeCorsConfig {
             policy: Rc::new(policy),
             exempt_path: Rc::new(exempt_path),
             map_error: Rc::new(map_error),
+            rejection_response: Rc::new(|_| HttpResponse::Forbidden().finish()),
         }
+    }
+
+    /// Overrides the default empty 403 for policy denials, without invoking the handler.
+    ///
+    /// Products own the status, body and non-CORS headers. Forge removes CORS grant headers and
+    /// merges the required `Vary` fields. Invalid response headers go to the error mapper.
+    /// Request parsing and preflight/actual response errors use the error mapper instead.
+    #[must_use]
+    pub fn rejection_response<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(CorsRejection) -> HttpResponse + 'static,
+    {
+        self.rejection_response = Rc::new(factory);
+        self
     }
 
     /// Sets preflight-allowed methods.
@@ -94,6 +112,7 @@ impl Clone for RuntimeCorsConfig {
             policy: Rc::clone(&self.policy),
             exempt_path: Rc::clone(&self.exempt_path),
             map_error: Rc::clone(&self.map_error),
+            rejection_response: Rc::clone(&self.rejection_response),
         }
     }
 }
@@ -184,7 +203,19 @@ where
             .map_err(|error| (config.map_error)(error))?;
             match decision {
                 CorsDecision::Pass => Ok(svc.call(req).await?.map_into_left_body()),
-                CorsDecision::Reject => Ok(forbidden(req).map_into_right_body()),
+                CorsDecision::Reject(reason) => {
+                    let mut response = (config.rejection_response)(reason);
+                    let mut headers = to_http_headers(
+                        response.headers(),
+                        CorsMiddlewareErrorKind::InvalidResponse,
+                    )
+                    .map_err(|error| (config.map_error)(error))?;
+                    crate::shared::cors::apply_rejection_headers(&mut headers)
+                        .map_err(|error| (config.map_error)(error))?;
+                    replace_headers(response.headers_mut(), &headers)
+                        .map_err(|error| (config.map_error)(error))?;
+                    Ok(req.into_response(response).map_into_right_body())
+                }
                 CorsDecision::Preflight(headers) => {
                     let mut response = HttpResponse::NoContent().finish();
                     replace_headers(response.headers_mut(), &headers)
@@ -253,17 +284,6 @@ fn replace_headers(
     }
     *headers = result;
     Ok(())
-}
-
-fn forbidden(req: ServiceRequest) -> ServiceResponse {
-    let mut response = HttpResponse::Forbidden().finish();
-    response.headers_mut().insert(
-        header::VARY,
-        HeaderValue::from_static(
-            "Access-Control-Request-Headers, Access-Control-Request-Method, Origin",
-        ),
-    );
-    req.into_response(response)
 }
 
 #[cfg(test)]

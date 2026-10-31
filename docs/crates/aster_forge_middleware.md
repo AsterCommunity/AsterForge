@@ -86,11 +86,46 @@ cargo check -p aster_forge_middleware --example axum_middleware --no-default-fea
 - `CsrfConfig::new(names, protect, source, map_error)` 的 predicate 表达产品的 cookie-authenticated 路由范围；安全方法总是跳过。source resolver 返回 `RequestSourcePolicy`，包含可信 scheme/host、规范化的 public origins 和 source mode。校验先检查来源，再做 double-submit。
 - `RuntimeCorsConfig::new(policy, exempt_path, map_error)` 每次跨源请求重新解析 policy。`enabled = false` 或 `CorsAllowedOrigins::None` 在解析 Origin 前透传；`List([])` 是显式空白名单，拒绝跨源请求。`Any` + credentials 会反射具体 origin，不发送 `*`。
 - `RuntimeCorsConfig::request_origin(...)` 默认返回 `None`，关闭 same-origin bypass。只有产品提供经过信任校验的规范化 origin 后才启用 bypass。Host、Forwarded、X-Forwarded-Proto 本身不能证明来源可信。Actix 保留已有 `connection_info()` 行为，产品必须在入口控制或清理代理头。
-- CSRF source、CORS policy/request-origin 和 keyed-limit key resolver 失败时可以返回 `Err(Box::new(product_response))`，该响应原样保留。CSRF/CORS 校验错误分别交给 `map_error`；CORS 正常策略拒绝与 Actix 一样返回 403。`InvalidRequest` / `InvalidResponse` 分别供产品映射到 4xx / 5xx。
+- CSRF source、CORS policy/request-origin 和 keyed-limit key resolver 失败时可以返回 `Err(Box::new(product_response))`，该响应原样保留。CSRF/CORS 校验错误分别交给 `map_error`；CORS 策略拒绝交给 `rejection_response`，默认与 Actix 一样返回空 403。`InvalidRequest` / `InvalidResponse` 分别供产品映射到 4xx / 5xx。
 - IP 限流通过 `ConnectInfo<SocketAddr>` 获取 direct peer，服务要使用 `into_make_service_with_connect_info::<SocketAddr>()`。其他可信 transport 可以显式设置 `peer_resolver`。缺失 peer 时 client IP helper 返回 `None`，IP limiter 使用共享 localhost 桶且忽略所有 forwarded headers；UDS 产品应关闭 IP limit 或改用字符串 key。
 - `IpRateLimitConfig::new(enabled, seconds, burst, trusted_proxies, rejection)` 和 `KeyedRateLimitConfig::new(limiter, key, rejection)` 由产品提供 rejection response。使用 `RateLimitRejection::retry_after_seconds()` 写入 429 和 Retry-After；所有不足整秒的等待向上取整。配置克隆共享限流状态，disabled 时也跳过 peer/key resolver。
 - keyed/IP limiter 的 `retain_recent()` 可由产品 runtime 的维护任务调用，回收过期 key；Forge 不创建隐藏后台任务。
 - `/metrics` 路由仍属于 `aster_forge_observability::axum`，不由本 crate 注册。
+
+### CORS 策略拒绝响应
+
+两种 transport 的 `RuntimeCorsConfig::rejection_response(factory)` 接收同一个
+`shared::cors::CorsRejection`（也从各自 `cors` 模块导出）：`OriginNotAllowed`、
+`MethodNotAllowed`、`HeadersNotAllowed` 分别表示来源、preflight 方法或请求头未获允许。
+factory 同步返回框架响应：Axum 为 `Response`，Actix 为 `HttpResponse`。产品可捕获自身状态，
+注入错误码、状态和 JSON envelope；Forge 不要求或依赖任何产品响应类型。
+
+例如，Axum 产品可以在 `RuntimeCorsConfig::new(...)` 后连接：
+
+```rust
+.rejection_response(|reason| {
+    let code = match reason {
+        CorsRejection::OriginNotAllowed => "cors.origin_denied",
+        CorsRejection::MethodNotAllowed => "cors.method_denied",
+        CorsRejection::HeadersNotAllowed => "cors.headers_denied",
+    };
+    (StatusCode::FORBIDDEN, axum::Json(serde_json::json!({"code": code}))).into_response()
+})
+```
+
+Actix 产品在同一位置使用 `.rejection_response(|_| HttpResponse::Forbidden().json(...))`。
+两份完整编译示例都演示了产品 JSON 拒绝响应。未配置 factory 时保持原有空 403 和必要的 `Vary`。
+
+只有共享引擎明确拒绝时才调用 factory，且不调用业务 handler。允许请求、same-origin bypass、
+exempt/inactive、无 Origin 请求和 handler 自己返回的空 403 都不会触发它。解析失败仍交给
+`map_error` 的 `InvalidRequest`；构造 preflight/actual 响应或处理 factory 响应头失败仍是
+`InvalidResponse`，不会混成策略拒绝。
+
+Forge 保留 factory 的状态、body、非 CORS 响应头和重复 `Set-Cookie`；合并 `Vary` 中的 Origin、
+Access-Control-Request-Method、Access-Control-Request-Headers，保留已有值与 `Vary: *`。
+拒绝响应中的 Access-Control-Allow-Origin/Credentials/Methods/Headers、Expose-Headers 和 Max-Age
+会被移除，避免产品复用响应时遗留的 CORS 头重新放行请求。产品无需根据 403 或 body 大小猜测拒绝来源。
+这项回调只处理 CORS 策略拒绝，外层 governor 等其他中间件的拒绝响应仍需由产品正确组装层顺序。
 
 ## Actix 接入示例
 
@@ -473,14 +508,18 @@ app.wrap(default_headers())
 
 - 无 request id 请求会生成 request id。
 - 客户端传入的 request id 会被新的 UUID v4 替换，extension 与响应头一致。
-- CORS preflight allow/deny、普通跨源 allow/deny、same-origin bypass、`Vary` 头。
+- CORS preflight allow/deny、普通跨源 allow/deny、same-origin bypass、`Vary` 头；默认和自定义拒绝 factory、三种拒绝原因、解析/构造错误分类、产品响应保留与遗留 CORS 允许头清理。
 - CSRF safe/unsafe 方法、cookie/header 缺失/空/不匹配、自定义名称、来源 header 优先级和长度边界。
 - metrics enabled 时成功和错误响应都会记录。
 - metrics disabled 或缺失 recorder 时不影响请求。
 - 默认安全头出现在成功和失败响应里，保留产品已设置的更严格策略。
 - 特殊路由如果不能使用默认安全头，需要有单独测试说明原因。
 
-仓库测试全部使用 lib unit tests（各模块 `#[cfg(test)] mod tests`），Axum 测试通过真实 `Router` + `tower::ServiceExt::oneshot` 验证。双 transport feature 还会运行跨框架 request ID/security/CORS 契约测试。限流并发验证共享 burst，额度恢复使用 governor fake clock，不依赖 sleep。
+模块测试使用 lib unit tests（各模块 `#[cfg(test)] mod tests`）；公开拒绝 factory 的回归在
+`tests/cors_rejection_contract.rs`，通过真实 Actix Service/Axum Router 验证响应和回调边界。
+Axum 测试使用 `tower::ServiceExt::oneshot`。双 transport feature 还会运行跨框架
+request ID/security/CORS 契约测试，包括拒绝响应的一致性。限流并发验证共享 burst，额度恢复使用
+governor fake clock，不依赖 sleep。
 
 ```bash
 bash scripts/test-middleware-features.sh

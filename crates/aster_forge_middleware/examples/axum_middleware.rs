@@ -47,6 +47,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (status, format!("CORS: {:?}", error.kind())).into_response()
         },
     )
+    .rejection_response(|_| {
+        (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({"code": "example.cors_denied"})),
+        )
+            .into_response()
+    })
     .allowed_methods(["GET", "POST", "OPTIONS"])
     .allowed_headers(["content-type", "x-example-csrf"])
     .exposed_headers(["x-request-id"])

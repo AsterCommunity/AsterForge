@@ -1,6 +1,7 @@
 //! Dynamic CORS using the same policy/validation/header engine as Actix.
 pub use crate::shared::cors::{
-    CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, RuntimeCorsPolicy,
+    CorsAllowedOrigins, CorsMiddlewareError, CorsMiddlewareErrorKind, CorsRejection,
+    RuntimeCorsPolicy,
 };
 use crate::shared::cors::{CorsDecision, CorsSettings};
 use axum::{
@@ -8,13 +9,14 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use http::{HeaderValue, StatusCode, header};
+use http::{StatusCode, header};
 use std::sync::Arc;
 
 type PolicyResolver = dyn Fn(&Request) -> Result<RuntimeCorsPolicy, Box<Response>> + Send + Sync;
 type ExemptPredicate = dyn Fn(&str) -> bool + Send + Sync;
 type ErrorMapper = dyn Fn(CorsMiddlewareError) -> Response + Send + Sync;
 type OriginResolver = dyn Fn(&Request) -> Result<Option<String>, Box<Response>> + Send + Sync;
+type RejectionResponse = dyn Fn(CorsRejection) -> Response + Send + Sync;
 
 /// State for `from_fn_with_state(config, runtime_cors)`. No CORS policy is enabled implicitly.
 #[derive(Clone)]
@@ -24,6 +26,7 @@ pub struct RuntimeCorsConfig {
     exempt_path: Arc<ExemptPredicate>,
     map_error: Arc<ErrorMapper>,
     request_origin: Arc<OriginResolver>,
+    rejection_response: Arc<RejectionResponse>,
 }
 
 impl RuntimeCorsConfig {
@@ -40,7 +43,22 @@ impl RuntimeCorsConfig {
             exempt_path: Arc::new(exempt_path),
             map_error: Arc::new(map_error),
             request_origin: Arc::new(|_| Ok(None)),
+            rejection_response: Arc::new(|_| StatusCode::FORBIDDEN.into_response()),
         }
+    }
+
+    /// Overrides the default empty 403 for policy denials, without invoking the handler.
+    ///
+    /// Products own the status, body and non-CORS headers. Forge removes CORS grant headers and
+    /// merges the required `Vary` fields. Invalid response headers go to the error mapper.
+    /// Request parsing and preflight/actual response errors use the error mapper instead.
+    #[must_use]
+    pub fn rejection_response<F>(mut self, factory: F) -> Self
+    where
+        F: Fn(CorsRejection) -> Response + Send + Sync + 'static,
+    {
+        self.rejection_response = Arc::new(factory);
+        self
     }
 
     /// Provides a normalized, product-trusted request origin for same-origin bypass.
@@ -114,15 +132,12 @@ pub async fn runtime_cors(
     match decision {
         Err(error) => (config.map_error)(error),
         Ok(CorsDecision::Pass) => next.run(request).await,
-        Ok(CorsDecision::Reject) => {
-            let mut response = StatusCode::FORBIDDEN.into_response();
-            response.headers_mut().insert(
-                header::VARY,
-                HeaderValue::from_static(
-                    "Access-Control-Request-Headers, Access-Control-Request-Method, Origin",
-                ),
-            );
-            response
+        Ok(CorsDecision::Reject(reason)) => {
+            let mut response = (config.rejection_response)(reason);
+            match crate::shared::cors::apply_rejection_headers(response.headers_mut()) {
+                Ok(()) => response,
+                Err(error) => (config.map_error)(error),
+            }
         }
         Ok(CorsDecision::Preflight(headers)) => {
             let mut response = StatusCode::NO_CONTENT.into_response();
