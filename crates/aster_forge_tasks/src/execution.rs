@@ -461,6 +461,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct StoreState {
         process_results: VecDeque<std::result::Result<(), TestError>>,
+        process_gate: Option<Arc<tokio::sync::Notify>>,
+        heartbeat_touches: usize,
         failed: usize,
         retried: usize,
         released: usize,
@@ -504,6 +506,7 @@ mod tests {
             _now: DateTime<Utc>,
             _lease_expires_at: DateTime<Utc>,
         ) -> std::result::Result<crate::TaskHeartbeatOutcome, Self::Error> {
+            self.state().heartbeat_touches += 1;
             Ok(crate::TaskHeartbeatOutcome::Renewed)
         }
     }
@@ -531,11 +534,21 @@ mod tests {
         async fn process_task(
             &self,
             task: &TestTask,
-            _context: TaskExecutionContext,
+            context: TaskExecutionContext,
         ) -> std::result::Result<(), Self::Error> {
-            let mut state = self.state();
-            state.processed_order.push(task.id);
-            state.process_results.pop_front().unwrap_or(Ok(()))
+            let (gate, result) = {
+                let mut state = self.state();
+                state.processed_order.push(task.id);
+                (
+                    state.process_gate.clone(),
+                    state.process_results.pop_front().unwrap_or(Ok(())),
+                )
+            };
+            if let Some(gate) = gate {
+                gate.notified().await;
+                context.ensure_active()?;
+            }
+            result
         }
 
         fn is_lease_lost_error(&self, error: &Self::Error) -> bool {
@@ -903,5 +916,51 @@ mod tests {
         assert_eq!(result, crate::TaskDispatchOutcome::default());
         assert_eq!(failed.state().failed, 0);
         assert!(failed.state().transitions.is_empty());
+    }
+    #[tokio::test(start_paused = true)]
+    async fn heartbeats_renew_a_handler_waiting_longer_than_its_original_lease() {
+        let store = TestStore::with_results(vec![Ok(())]);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        store.state().process_gate = Some(gate.clone());
+        let mut configuration = config();
+        configuration.heartbeat_interval = Duration::from_millis(10);
+        configuration.renewal_timeout = Duration::from_millis(30);
+        let worker = tokio::spawn(process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            configuration,
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(store.state().heartbeat_touches >= 8);
+        assert!(!worker.is_finished());
+        gate.notify_one();
+        assert_eq!(worker.await.unwrap().unwrap().succeeded, 1);
+        let touches = store.state().heartbeat_touches;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            store.state().heartbeat_touches,
+            touches,
+            "execution completion must join heartbeat before return"
+        );
+    }
+    #[tokio::test]
+    async fn permanent_failure_racing_a_cancellation_acknowledges_without_failure() {
+        let store = TestStore::with_results(vec![Err(TestError::Business("never".to_string()))]);
+        store.state().failed_write = OutcomeWrite::Cancel;
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(result.failed, 0);
+        assert_eq!(store.state().failed, 0);
+        assert_eq!(store.state().transitions, vec!["canceled"]);
     }
 }

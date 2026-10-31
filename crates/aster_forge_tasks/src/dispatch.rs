@@ -510,6 +510,7 @@ mod tests {
     struct TestClaimStore {
         due: Vec<TestTask>,
         active: u64,
+        calls: AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -519,6 +520,7 @@ mod tests {
             &self,
             request: super::TaskClaimRequest<TestKind, TestLane>,
         ) -> crate::Result<Vec<(TestTask, crate::TaskLease)>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             let available = request
                 .lane
                 .cluster_limit
@@ -569,6 +571,7 @@ mod tests {
                 processing_token: 7,
             }],
             active: 0,
+            calls: AtomicUsize::new(0),
         };
         let lane_config = TaskLaneConfig {
             lane: TestLane::Default,
@@ -596,6 +599,7 @@ mod tests {
                 processing_token: 7,
             }],
             active: 2,
+            calls: AtomicUsize::new(0),
         };
         let lane_config = TaskLaneConfig {
             lane: TestLane::Default,
@@ -927,29 +931,50 @@ mod tests {
 
     #[tokio::test]
     async fn no_available_local_slots_never_calls_the_store() {
-        struct NeverClaim;
-        #[async_trait::async_trait]
-        impl TaskClaimStore<TestTask, TestKind, TestLane> for NeverClaim {
-            type Error = crate::TaskCoreError;
-            async fn claim(
-                &self,
-                _: super::TaskClaimRequest<TestKind, TestLane>,
-            ) -> crate::Result<Vec<(TestTask, crate::TaskLease)>> {
-                panic!("zero local capacity must not reach the store")
-            }
+        let store = TestClaimStore {
+            due: vec![],
+            active: 0,
+            calls: AtomicUsize::new(0),
+        };
+        for (limit, slots) in [(2, 0), (0, 2)] {
+            let lane = TaskLaneConfig {
+                lane: TestLane::Default,
+                kinds: TEST_KINDS,
+                limit,
+                cluster_limit: None,
+            };
+            assert!(
+                claim_due_for_lane(&store, lane, slots, 60, |_| TestLane::Default)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
         }
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn store_token_overflow_propagates_without_an_invalid_lease() {
+        let store = TestClaimStore {
+            due: vec![TestTask {
+                id: 42,
+                kind: TestKind::Example,
+                processing_token: i64::MAX,
+            }],
+            active: 0,
+            calls: AtomicUsize::new(0),
+        };
         let lane = TaskLaneConfig {
             lane: TestLane::Default,
             kinds: TEST_KINDS,
-            limit: 2,
+            limit: 1,
             cluster_limit: None,
         };
-        assert!(
-            claim_due_for_lane(&NeverClaim, lane, 0, 60, |_| TestLane::Default)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let error = claim_due_for_lane(&store, lane, 1, 60, |_| TestLane::Default)
+            .await
+            .unwrap_err();
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(error, crate::TaskCoreError::invalid_value("token overflow"));
     }
 
     #[test]
