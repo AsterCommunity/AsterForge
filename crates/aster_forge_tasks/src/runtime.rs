@@ -803,10 +803,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_aborts_workers_after_custom_grace() {
-        let mut tasks = BackgroundTasks::with_shutdown_token_and_grace(
-            CancellationToken::new(),
-            Duration::from_millis(1),
-        );
+        let mut tasks = BackgroundTasks::with_shutdown_token(CancellationToken::new())
+            .with_shutdown_grace(Duration::from_millis(1));
         let calls = Arc::new(AtomicUsize::new(0));
 
         tasks.push({

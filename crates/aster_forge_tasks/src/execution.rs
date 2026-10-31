@@ -375,7 +375,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -451,6 +450,14 @@ mod tests {
         Business(String),
     }
 
+    #[derive(Debug, Default, Clone, Copy)]
+    enum OutcomeWrite {
+        #[default]
+        Commit,
+        Stale,
+        Cancel,
+    }
+
     #[derive(Debug, Default)]
     struct StoreState {
         process_results: VecDeque<std::result::Result<(), TestError>>,
@@ -459,9 +466,8 @@ mod tests {
         released: usize,
         cancel_requested: bool,
         canceled: usize,
-        cancel_on_retry: AtomicBool,
-        retry_conflict: AtomicBool,
-        failed_conflict: AtomicBool,
+        retry_write: OutcomeWrite,
+        failed_write: OutcomeWrite,
         wakes: usize,
         transitions: Vec<&'static str>,
         processed_order: Vec<i64>,
@@ -570,8 +576,13 @@ mod tests {
             failure: TaskPermanentFailure<'_>,
         ) -> std::result::Result<bool, Self::Error> {
             let mut state = self.state();
-            if state.failed_conflict.load(Ordering::Acquire) {
-                return Ok(false);
+            match state.failed_write {
+                OutcomeWrite::Stale => return Ok(false),
+                OutcomeWrite::Cancel => {
+                    state.cancel_requested = true;
+                    return Ok(false);
+                }
+                OutcomeWrite::Commit => {}
             }
             state.failed += 1;
             state.last_failed_steps = failure.failed_steps_json.map(str::to_string);
@@ -585,14 +596,16 @@ mod tests {
             _retry: TaskRetryUpdate<'_>,
         ) -> std::result::Result<bool, Self::Error> {
             let mut state = self.state();
-            if state.cancel_on_retry.load(Ordering::Acquire) {
-                state.cancel_requested = true;
-                Ok(false)
-            } else if state.retry_conflict.load(Ordering::Acquire) {
-                Ok(false)
-            } else {
-                state.retried += 1;
-                Ok(true)
+            match state.retry_write {
+                OutcomeWrite::Cancel => {
+                    state.cancel_requested = true;
+                    Ok(false)
+                }
+                OutcomeWrite::Stale => Ok(false),
+                OutcomeWrite::Commit => {
+                    state.retried += 1;
+                    Ok(true)
+                }
             }
         }
 
@@ -778,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn a_cancellation_racing_retry_is_acknowledged_instead_of_requeued() {
         let store = TestStore::with_results(vec![Err(TestError::Business("retry".to_string()))]);
-        store.state().cancel_on_retry.store(true, Ordering::Release);
+        store.state().retry_write = OutcomeWrite::Cancel;
         let result = process_claimed_task(
             store.clone(),
             task(7, 0, 3),
@@ -862,7 +875,7 @@ mod tests {
     #[tokio::test]
     async fn retry_and_failure_cas_conflicts_ignore_a_stale_worker() {
         let retry = TestStore::with_results(vec![Err(TestError::Business("retry".to_string()))]);
-        retry.state().retry_conflict.store(true, Ordering::Release);
+        retry.state().retry_write = OutcomeWrite::Stale;
         let result = process_claimed_task(
             retry.clone(),
             task(7, 0, 3),
@@ -877,10 +890,7 @@ mod tests {
         assert!(retry.state().transitions.is_empty());
 
         let failed = TestStore::with_results(vec![Err(TestError::Business("never".to_string()))]);
-        failed
-            .state()
-            .failed_conflict
-            .store(true, Ordering::Release);
+        failed.state().failed_write = OutcomeWrite::Stale;
         let result = process_claimed_task(
             failed.clone(),
             task(7, 2, 3),

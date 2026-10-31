@@ -31,3 +31,6 @@ utoipa = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

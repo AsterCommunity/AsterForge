@@ -487,4 +487,83 @@ mod tests {
                 .expect("observed mutex should not be poisoned")
         );
     }
+    #[tokio::test]
+    async fn named_factories_isolate_signal_and_process_maintenance_tokens() {
+        for after_service in [false, true] {
+            let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let capture = observed.clone();
+            let builder = aster_forge_runtime::AsterRuntime::builder();
+            let signal = builder.shutdown_token().clone();
+            let component = super::background_task_component_from_shutdown(move |stop| {
+                capture.lock().unwrap().push(stop.clone());
+                BackgroundTasks::with_shutdown_token(stop)
+            })
+            .named("local_maintenance");
+            let builder = if after_service {
+                builder.component(component.after_service())
+            } else {
+                builder.component(component)
+            };
+            let capture = observed.clone();
+            let builder = builder.component(
+                super::background_task_component_with_definitions_from_shutdown(
+                    TEST_DEFINITIONS,
+                    move |stop| {
+                        capture.lock().unwrap().push(stop.clone());
+                        BackgroundTasks::with_shutdown_token(stop)
+                    },
+                )
+                .named("task_consumers")
+                .with_definition_filter(|kind| *kind == TestRuntimeTask::Dispatch),
+            );
+            signal.cancel();
+            {
+                let tokens = observed.lock().unwrap();
+                assert_eq!(tokens[0].is_cancelled(), !after_service);
+                assert!(tokens[1].is_cancelled());
+            }
+            let metadata_seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let checked = metadata_seen.clone();
+            let builder = builder.component(aster_forge_runtime::runtime_component(
+                move |registry: &mut aster_forge_runtime::RuntimeComponentRegistry| {
+                    assert!(registry.descriptor(BACKGROUND_TASKS_COMPONENT).is_none());
+                    assert_eq!(
+                        registry.descriptor("task_consumers").unwrap().tasks.len(),
+                        1
+                    );
+                    assert_eq!(
+                        registry.descriptor("task_consumers").unwrap().tasks[0].task_name,
+                        "dispatch"
+                    );
+                    assert!(
+                        registry
+                            .descriptor("local_maintenance")
+                            .unwrap()
+                            .tasks
+                            .is_empty()
+                    );
+                    checked.store(true, std::sync::atomic::Ordering::SeqCst);
+                },
+            ));
+            builder
+                .component(aster_forge_runtime::RuntimeServiceComponent::new(
+                    "test_service",
+                    RuntimeComponentKind::Core,
+                    async {},
+                    CancellationToken::new(),
+                    || async {},
+                ))
+                .run()
+                .await
+                .unwrap();
+            assert!(metadata_seen.load(std::sync::atomic::Ordering::SeqCst));
+            assert!(
+                observed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(CancellationToken::is_cancelled)
+            );
+        }
+    }
 }

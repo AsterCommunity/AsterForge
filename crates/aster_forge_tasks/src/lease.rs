@@ -5,7 +5,9 @@
 //! task code and heartbeat loops to decide whether the current worker may keep writing progress.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
@@ -223,37 +225,28 @@ impl TaskExecutionContext {
         self.lease_guard.ensure_active()
     }
 
-    /// Sleeps until `duration` elapses or shutdown is requested.
+    /// Sleeps until `duration` elapses or execution becomes unsafe.
     ///
     /// # Errors
     ///
-    /// Returns [`TaskCoreError`] when shutdown wins before the requested sleep completes.
+    /// Returns [`TaskCoreError`] on shutdown, user cancellation, lease loss or renewal timeout.
     pub async fn sleep_or_shutdown(&self, duration: Duration) -> Result<()> {
         self.lease_guard.ensure_active()?;
-        let operation = tokio::time::sleep(duration);
-        tokio::pin!(operation);
-        loop {
-            let renewal_budget = self.lease_guard.remaining_renewal_budget();
-            tokio::select! {
-                biased;
-                ()=self.shutdown_token.cancelled()=>return self.lease_guard.ensure_active(),
-                ()=self.lease_guard.control_stop.cancelled()=>return self.lease_guard.ensure_active(),
-                ()=&mut operation=>return self.lease_guard.ensure_active(),
-                ()=tokio::time::sleep(renewal_budget)=> {
-                    // A concurrent heartbeat may have renewed while the timer was ready.
-                    self.lease_guard.ensure_active()?;
-                }
-            }
+        tokio::select! {
+            biased;
+            stopped = self.stop_requested() => stopped,
+            () = tokio::time::sleep(duration) => self.lease_guard.ensure_active(),
         }
     }
 
-    /// Waits for shutdown and then returns the shutdown-requested lease error.
+    /// Waits until execution must stop, including when heartbeat storage remains pending.
     ///
     /// # Errors
     ///
-    /// Returns [`TaskCoreError`] when shutdown or lease loss has been observed.
+    /// Returns [`TaskCoreError`] on shutdown, user cancellation, lease loss or renewal timeout.
     pub async fn stop_requested(&self) -> Result<()> {
         loop {
+            self.lease_guard.ensure_active()?;
             let renewal_budget = self.lease_guard.remaining_renewal_budget();
             tokio::select! {
                 biased;
@@ -434,7 +427,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn renewal_timeout_interrupts_sleep_and_pending_io_waits() {
         let context = super::TaskExecutionContext::new(
             TaskLease::new(2, 1),
@@ -460,7 +453,7 @@ mod tests {
         assert!(io_error.is_task_lease_renewal_timed_out());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn renewal_wait_timer_restarts_after_a_concurrent_heartbeat() {
         let context = super::TaskExecutionContext::new(
             TaskLease::new(3, 2),
@@ -515,6 +508,94 @@ mod tests {
                 .await
                 .unwrap_err()
                 .is_task_lease_lost()
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn renewed_lease_preserves_original_sleep_deadline_and_explicit_stop_wakes_io() {
+        let context = TaskExecutionContext::new(
+            TaskLease::new(5, 2),
+            Duration::from_millis(80),
+            CancellationToken::new(),
+        );
+        let sleeping = context.clone();
+        let waiting = context.clone();
+        let started = tokio::time::Instant::now();
+        let sleep =
+            tokio::spawn(
+                async move { sleeping.sleep_or_shutdown(Duration::from_millis(110)).await },
+            );
+        let io = tokio::spawn(async move { waiting.stop_requested().await });
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        context.lease_guard().record_renewed();
+        assert!(sleep.await.unwrap().is_ok());
+        assert_eq!(started.elapsed(), Duration::from_millis(110));
+        assert!(!io.is_finished());
+        assert!(
+            context
+                .lease_guard()
+                .mark_shutdown_requested()
+                .is_task_worker_shutdown_requested()
+        );
+        assert!(
+            io.await
+                .unwrap()
+                .unwrap_err()
+                .is_task_worker_shutdown_requested()
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn pending_heartbeat_rpc_cannot_keep_an_expired_handler_alive() {
+        struct PendingStore {
+            entered: std::sync::Arc<tokio::sync::Notify>,
+            dropped: CancellationToken,
+        }
+        #[async_trait::async_trait]
+        impl crate::TaskHeartbeatStore for PendingStore {
+            type Error = crate::TaskCoreError;
+            async fn touch_task_heartbeat(
+                &self,
+                _lease: TaskLease,
+                _now: chrono::DateTime<Utc>,
+                _expires: chrono::DateTime<Utc>,
+            ) -> crate::Result<crate::TaskHeartbeatOutcome> {
+                let _rpc_dropped = self.dropped.clone().drop_guard();
+                self.entered.notify_one();
+                std::future::pending().await
+            }
+        }
+        let context = TaskExecutionContext::new(
+            TaskLease::new(6, 2),
+            Duration::from_millis(50),
+            CancellationToken::new(),
+        );
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let dropped = CancellationToken::new();
+        let stop = CancellationToken::new();
+        let handle = crate::spawn_task_heartbeat_with_interval(
+            PendingStore {
+                entered: entered.clone(),
+                dropped: dropped.clone(),
+            },
+            context.lease_guard().clone(),
+            stop.clone(),
+            Duration::from_millis(10),
+            |now| crate::task_lease_expires_at(now, 60),
+        );
+        entered.notified().await;
+        let error = tokio::time::timeout(Duration::from_secs(1), context.stop_requested())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(error.is_task_lease_renewal_timed_out());
+        assert!(
+            !dropped.is_cancelled(),
+            "the heartbeat store is still pending when the handler stops"
+        );
+        crate::stop_task_heartbeat(stop, handle).await;
+        assert!(
+            dropped.is_cancelled(),
+            "shutdown joins and drops the pending heartbeat RPC"
         );
     }
 }

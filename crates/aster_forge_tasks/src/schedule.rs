@@ -1146,6 +1146,7 @@ mod tests {
         let scheduled_runs = Arc::new(AtomicUsize::new(0));
         let recorded_runs = Arc::new(AtomicUsize::new(0));
         let shutdown = CancellationToken::new();
+        let status = crate::TaskRuntimeStatus::default();
         let config = LeasedScheduledRuntimeConfig::new(
             "aster_test",
             "aster_test.background",
@@ -1168,6 +1169,7 @@ mod tests {
                 }
             },
         )
+        .status(status.clone())
         .claim_ttl(std::time::Duration::from_secs(30))
         .lease_ttl(std::time::Duration::from_secs(30))
         .lease_renew_interval(std::time::Duration::from_secs(10))
@@ -1203,6 +1205,9 @@ mod tests {
                 },
             )
             .await;
+
+        assert!(!status.is_running());
+        assert!(!status.ready());
 
         assert_eq!(acquired.load(Ordering::SeqCst), 1);
         assert_eq!(released.load(Ordering::SeqCst), 1);
