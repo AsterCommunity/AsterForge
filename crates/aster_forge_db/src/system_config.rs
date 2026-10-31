@@ -1620,17 +1620,9 @@ mod tests {
             },
         )
         .await;
-        // Either reject the spelling mismatch or preserve the system row's metadata.
-        if let Ok(row) = result {
-            assert_eq!(row.visibility, PRIMARY.visibility);
-        }
-        assert_eq!(
-            super::find_by_key(&db, PRIMARY.key)
-                .await
-                .unwrap()
-                .unwrap()
-                .visibility,
-            PRIMARY.visibility
-        );
+        assert!(result.is_err(), "alias spelling must be rejected");
+        let stored = super::find_by_key(&db, PRIMARY.key).await.unwrap().unwrap();
+        assert_eq!(stored.visibility, PRIMARY.visibility);
+        assert_eq!(stored.value, "primary default");
     }
 }

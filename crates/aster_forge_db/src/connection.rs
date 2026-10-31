@@ -587,6 +587,22 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn connection_diagnostics_redact_individual_userinfo_fields() {
+        let url = "postgres://private-user:private-password%23@localhost/db";
+        for message in [
+            "authentication failed for private-user with password private-password#",
+            "authentication failed for private-user with password private-password%23",
+        ] {
+            let error = super::redacted_connection_error(&message, url).to_string();
+            assert!(error.contains("authentication failed"), "{error}");
+            assert!(error.contains("<redacted>"), "{error}");
+            for secret in ["private-user", "private-password#", "private-password%23"] {
+                assert!(!error.contains(secret), "{error}");
+            }
+        }
+    }
+
+    #[test]
     fn empty_connection_url_preserves_the_driver_diagnostic() {
         let message = "driver rejected an empty database URL";
         assert_eq!(

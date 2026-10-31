@@ -471,6 +471,46 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn rendered_dispatch_escapes_log_fields_without_changing_the_message() {
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let sender = crate::memory_sender();
+        let mut config = settings();
+        config.from_address = "sender\nFORGED_SENDER".into();
+        let recipient = "recipient\nFORGED_RECIPIENT";
+        let subject = "subject\nFORGED_SUBJECT";
+        logs.capture_future(send_rendered_with(
+            &sender,
+            &config,
+            MailRecipient {
+                address: recipient.into(),
+                display_name: None,
+            },
+            RenderedMail {
+                subject: subject.into(),
+                text_body: "text".into(),
+                html_body: "html".into(),
+            },
+        ))
+        .await
+        .unwrap();
+        let text = logs.text();
+        assert!(
+            text.contains("mail: dispatching rendered message"),
+            "{text}"
+        );
+        assert_eq!(text.lines().count(), 1, "{text}");
+        for marker in ["FORGED_SENDER", "FORGED_RECIPIENT", "FORGED_SUBJECT"] {
+            assert!(text.contains(&format!("\\n{marker}")), "{text}");
+        }
+        let message = crate::memory_sender_ref(&sender)
+            .and_then(MemoryMailSender::last_message)
+            .unwrap();
+        assert_eq!(message.from.address, config.from_address);
+        assert_eq!(message.to.address, recipient);
+        assert_eq!(message.subject, subject);
+    }
+
+    #[tokio::test]
     async fn invalid_recipient_and_subject_cannot_create_extra_log_records() {
         let logs = aster_forge_test::logs::CapturedLogs::default();
         let sender = SmtpMailSender::new(settings);

@@ -14,7 +14,9 @@ pub fn routes() -> Scope {
         .route("/ready", web::head().to(ready));
 
     #[cfg(feature = "metrics")]
-    let scope = scope.service(aster_forge_observability::actix::prometheus_resource("/metrics"));
+    let scope = scope.service(aster_forge_observability::actix::prometheus_resource(
+        "/metrics",
+    ));
     scope
 }
 
@@ -50,7 +52,10 @@ pub async fn ready(state: web::Data<crate::runtime::AppState>) -> HttpResponse {
     ];
     let report = SystemHealthReport::with_duration(component_reports, started.elapsed());
     #[cfg(feature = "metrics")]
-    state.metrics.record_health(aster_forge_runtime::HealthCheckScope::Readiness.as_str(), &report);
+    state.metrics.record_health(
+        aster_forge_runtime::HealthCheckScope::Readiness.as_str(),
+        &report,
+    );
 
     let ready = report
         .components

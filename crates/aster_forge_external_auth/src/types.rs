@@ -274,6 +274,30 @@ mod tests {
         assert!(ExternalAuthProtocol::try_from_value(&"saml".to_string()).is_err());
     }
     #[test]
+    fn provider_option_type_errors_log_metadata_without_input_values() {
+        let input = r#"{"microsoft":"canary-private-document"}"#;
+        let error = serde_json::from_str::<super::ExternalAuthProviderOptions>(input).unwrap_err();
+        // This error class includes the rejected value in its Display implementation.
+        assert!(error.to_string().contains("canary-private-document"));
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let options = logs.capture(|| super::parse_external_auth_provider_options(input));
+        assert!(options.microsoft.is_none());
+        let text = logs.text();
+        assert!(
+            text.contains("invalid external auth provider options"),
+            "{text}"
+        );
+        assert!(text.contains("error_category=Data"), "{text}");
+        assert!(text.contains(&format!("line={}", error.line())), "{text}");
+        assert!(
+            text.contains(&format!("column={}", error.column())),
+            "{text}"
+        );
+        assert!(!text.contains("canary-private-document"), "{text}");
+        assert_eq!(text.lines().count(), 1, "{text}");
+    }
+
+    #[test]
     fn malformed_provider_document_never_enters_logs() {
         let logs = aster_forge_test::logs::CapturedLogs::default();
         logs.capture(|| {
