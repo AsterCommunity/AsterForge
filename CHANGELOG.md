@@ -5,7 +5,7 @@
 ### Added
 
 - Framework-neutral typed REST envelopes in `aster_forge_api::response`, preserving omitted data, explicit null, empty-object responses and optional typed error diagnostics. Product-defined codes are checked against success/error state during construction and deserialization; OpenAPI supports multiple codes/DTOs and nested references.
-- Complete Axum HTTP middleware adapters for CSRF, runtime CORS, trusted-proxy client IPs, and IP/keyed rate limits. Framework-neutral CSRF and keyed rate limiting are available under `aster_forge_middleware::shared` without enabling Actix. Compilable Actix and Axum examples demonstrate product policy and error boundaries.
+- Complete Axum HTTP middleware adapters for CSRF, runtime CORS, trusted-proxy client IPs, and IP/keyed rate limits. Actix/Axum CORS supports typed policy-rejection response factories, preserving product responses and required Vary fields while removing stale CORS grants; default empty 403 responses and request/response error classifications remain unchanged. Framework-neutral CSRF and keyed rate limiting are available under `aster_forge_middleware::shared` without enabling Actix. Compilable Actix and Axum examples demonstrate product policy and error boundaries.
 
 ### Changed
 

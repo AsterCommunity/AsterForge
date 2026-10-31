@@ -58,6 +58,9 @@ fn runtime_cors() -> RuntimeCors {
             |path| path == "/health",
             |error| cors_error(&error),
         )
+        .rejection_response(|_| {
+            HttpResponse::Forbidden().json(serde_json::json!({"code": "example.cors_denied"}))
+        })
         .allowed_methods(["GET", "POST", "OPTIONS"])
         .allowed_headers(["content-type", "x-example-csrf"])
         .exposed_headers(["x-request-id"]),

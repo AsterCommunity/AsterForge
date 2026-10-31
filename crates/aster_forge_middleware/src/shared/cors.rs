@@ -10,6 +10,20 @@ pub enum CorsAllowedOrigins {
     List(Vec<String>),
 }
 
+/// A cross-origin request denied by the configured policy.
+///
+/// Products map these reasons to their own response bodies. Request parsing and response
+/// construction failures remain [`CorsMiddlewareError`] values rather than policy rejections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorsRejection {
+    /// The normalized request origin is not allowed.
+    OriginNotAllowed,
+    /// The preflight request method is not allowed.
+    MethodNotAllowed,
+    /// A preflight request header is not allowed.
+    HeadersNotAllowed,
+}
+
 /// Product-neutral runtime CORS policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeCorsPolicy {
@@ -88,7 +102,7 @@ impl CorsMiddlewareError {
 
 #[cfg(any(feature = "actix", feature = "axum"))]
 mod engine {
-    use super::{CorsMiddlewareError, CorsMiddlewareErrorKind, RuntimeCorsPolicy};
+    use super::{CorsMiddlewareError, CorsMiddlewareErrorKind, CorsRejection, RuntimeCorsPolicy};
     use http::{HeaderMap, HeaderValue, header};
     use std::collections::BTreeSet;
     /// Static CORS method/header lists; runtime origin policy is resolved per request.
@@ -102,7 +116,7 @@ mod engine {
 
     pub(crate) enum CorsDecision {
         Pass,
-        Reject,
+        Reject(CorsRejection),
         Preflight(HeaderMap),
         Actual(String),
     }
@@ -138,15 +152,18 @@ mod engine {
             return Ok(CorsDecision::Pass);
         }
         if !policy.allows_origin(&origin) {
-            return Ok(CorsDecision::Reject);
+            return Ok(CorsDecision::Reject(CorsRejection::OriginNotAllowed));
         }
         if method == "OPTIONS" && headers.contains_key(header::ACCESS_CONTROL_REQUEST_METHOD) {
             let allowed_method = headers
                 .get(header::ACCESS_CONTROL_REQUEST_METHOD)
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|method| config.allowed_methods.contains(&method));
-            if !allowed_method || !requested_headers_are_allowed(headers, config)? {
-                return Ok(CorsDecision::Reject);
+            if !allowed_method {
+                return Ok(CorsDecision::Reject(CorsRejection::MethodNotAllowed));
+            }
+            if !requested_headers_are_allowed(headers, config)? {
+                return Ok(CorsDecision::Reject(CorsRejection::HeadersNotAllowed));
             }
             let mut response = HeaderMap::new();
             apply_origin_headers(&mut response, policy, &origin)?;
@@ -277,6 +294,30 @@ mod engine {
         Ok(())
     }
 
+    /// Keeps product response headers while ensuring a denied request receives no CORS grant.
+    pub(crate) fn apply_rejection_headers(
+        headers: &mut HeaderMap,
+    ) -> Result<(), CorsMiddlewareError> {
+        for name in [
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            header::ACCESS_CONTROL_MAX_AGE,
+        ] {
+            headers.remove(name);
+        }
+        for name in [
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+        ] {
+            ensure_vary(headers, name)?;
+        }
+        Ok(())
+    }
+
     fn ensure_vary(headers: &mut HeaderMap, value: &str) -> Result<(), CorsMiddlewareError> {
         let mut values = std::collections::BTreeMap::new();
         for existing in headers.get_all(header::VARY) {
@@ -322,7 +363,8 @@ mod engine {
 
 #[cfg(any(feature = "actix", feature = "axum"))]
 pub(crate) use engine::{
-    CorsDecision, CorsSettings, apply_actual_headers, apply_origin_headers, evaluate,
+    CorsDecision, CorsSettings, apply_actual_headers, apply_origin_headers,
+    apply_rejection_headers, evaluate,
 };
 
 #[cfg(all(test, any(feature = "actix", feature = "axum")))]
