@@ -275,6 +275,12 @@ pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
     /// Sets the number of pending background tasks.
     fn set_background_tasks_pending(&self, pending: u64) {}
 
+    /// Sets the authoritative age of the oldest queued task; an empty queue has age zero.
+    fn set_background_tasks_oldest_age_seconds(&self, seconds: f64) {}
+
+    /// Records a successful claim that took over an expired processing lease.
+    fn record_task_lease_takeover(&self, kind: &'static str) {}
+
     /// Records an operation against an external system.
     fn record_external_operation(
         &self,

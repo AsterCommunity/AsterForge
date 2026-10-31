@@ -10,7 +10,9 @@ pub fn background_tasks_component(
     impl FnOnce(tokio_util::sync::CancellationToken) -> aster_forge_tasks::BackgroundTasks,
 > {
     aster_forge_tasks::background_task_component_from_shutdown(move |shutdown_token| {
-        // Register spawned workers here. Use the shutdown token for long-running loops.
+        // Register process-owned loops here. Durable TaskConsumer runners belong outside
+        // LeasedScheduledRuntimeConfig; only singleton scheduling belongs in that group.
+        // See docs/crates/aster_forge_tasks.md for atomic claim and cancellation contracts.
         let mut tasks = aster_forge_tasks::BackgroundTasks::with_shutdown_token(shutdown_token);
         if let Some(task) = metrics.system_metrics_updater_task(tasks.shutdown_token()) {
             tasks.push(task);

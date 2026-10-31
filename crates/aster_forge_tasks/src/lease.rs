@@ -38,6 +38,7 @@ pub struct TaskLeaseGuard {
     renewal_timeout: Duration,
     shutdown_token: Option<CancellationToken>,
     state: Arc<Mutex<TaskLeaseGuardState>>,
+    control_stop: CancellationToken,
 }
 
 #[derive(Debug)]
@@ -51,6 +52,7 @@ enum TaskLeaseTermination {
     Lost,
     RenewalTimedOut,
     ShutdownRequested,
+    CancellationRequested,
 }
 
 impl TaskLeaseGuard {
@@ -61,6 +63,7 @@ impl TaskLeaseGuard {
             lease,
             renewal_timeout,
             shutdown_token: None,
+            control_stop: CancellationToken::new(),
             state: Arc::new(Mutex::new(TaskLeaseGuardState {
                 last_renewed_at: Instant::now(),
                 termination: None,
@@ -100,7 +103,19 @@ impl TaskLeaseGuard {
     pub fn mark_lost(&self) -> TaskCoreError {
         let mut state = self.lock_state();
         state.termination = Some(TaskLeaseTermination::Lost);
+        self.control_stop.cancel();
         task_lease_lost(self.lease)
+    }
+
+    /// Stops product checkpoints after a persisted cancellation request is observed.
+    #[must_use]
+    pub fn mark_cancel_requested(&self) -> TaskCoreError {
+        self.lock_state().termination = Some(TaskLeaseTermination::CancellationRequested);
+        self.control_stop.cancel();
+        TaskCoreError::CancellationRequested {
+            task_id: self.lease.task_id,
+            processing_token: self.lease.processing_token,
+        }
     }
 
     /// Marks worker shutdown and returns the corresponding error.
@@ -108,6 +123,7 @@ impl TaskLeaseGuard {
     pub fn mark_shutdown_requested(&self) -> TaskCoreError {
         let mut state = self.lock_state();
         state.termination = Some(TaskLeaseTermination::ShutdownRequested);
+        self.control_stop.cancel();
         task_worker_shutdown_requested(self.lease)
     }
 
@@ -126,6 +142,12 @@ impl TaskLeaseGuard {
             Some(TaskLeaseTermination::ShutdownRequested) => {
                 return Err(task_worker_shutdown_requested(self.lease));
             }
+            Some(TaskLeaseTermination::CancellationRequested) => {
+                return Err(TaskCoreError::CancellationRequested {
+                    task_id: self.lease.task_id,
+                    processing_token: self.lease.processing_token,
+                });
+            }
             None => {}
         }
         if self
@@ -134,10 +156,12 @@ impl TaskLeaseGuard {
             .is_some_and(CancellationToken::is_cancelled)
         {
             state.termination = Some(TaskLeaseTermination::ShutdownRequested);
+            self.control_stop.cancel();
             return Err(task_worker_shutdown_requested(self.lease));
         }
         if state.last_renewed_at.elapsed() >= self.renewal_timeout {
             state.termination = Some(TaskLeaseTermination::RenewalTimedOut);
+            self.control_stop.cancel();
             return Err(task_lease_renewal_timed_out(self.lease));
         }
         Ok(())
@@ -198,11 +222,11 @@ impl TaskExecutionContext {
     /// Returns [`TaskCoreError`] when shutdown wins before the requested sleep completes.
     pub async fn sleep_or_shutdown(&self, duration: Duration) -> Result<()> {
         self.lease_guard.ensure_active()?;
-
         tokio::select! {
             biased;
-            () = self.shutdown_token.cancelled() => Err(self.lease_guard.mark_shutdown_requested()),
-            () = tokio::time::sleep(duration) => Ok(()),
+            ()=self.shutdown_token.cancelled()=>self.lease_guard.ensure_active(),
+            ()=self.lease_guard.control_stop.cancelled()=>self.lease_guard.ensure_active(),
+            ()=tokio::time::sleep(duration)=>self.lease_guard.ensure_active(),
         }
     }
 
@@ -211,9 +235,12 @@ impl TaskExecutionContext {
     /// # Errors
     ///
     /// Returns [`TaskCoreError`] when shutdown or lease loss has been observed.
-    pub async fn shutdown_requested(&self) -> Result<()> {
-        self.shutdown_token.cancelled().await;
-        Err(self.lease_guard.mark_shutdown_requested())
+    pub async fn stop_requested(&self) -> Result<()> {
+        tokio::select! {
+            ()=self.shutdown_token.cancelled()=>{},
+            ()=self.lease_guard.control_stop.cancelled()=>{},
+        }
+        self.lease_guard.ensure_active()
     }
 }
 
@@ -247,7 +274,11 @@ pub fn task_lease_expires_at(
     now: chrono::DateTime<chrono::Utc>,
     processing_stale_secs: i64,
 ) -> chrono::DateTime<chrono::Utc> {
-    now + chrono::Duration::seconds(processing_stale_secs.max(1))
+    now.checked_add_signed(
+        chrono::Duration::try_seconds(processing_stale_secs.max(1))
+            .unwrap_or(chrono::Duration::MAX),
+    )
+    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
 }
 
 /// Returns the in-memory renewal timeout used to stop unsafe workers.
@@ -347,5 +378,35 @@ mod tests {
         );
         assert_eq!(task_lease_renewal_timeout(60, 10), Duration::from_secs(50));
         assert_eq!(task_lease_renewal_timeout(1, 10), Duration::from_secs(1));
+    }
+    #[tokio::test]
+    async fn user_cancellation_interrupts_sleep_and_pending_io_waits() {
+        let context = super::TaskExecutionContext::new(
+            TaskLease::new(1, 1),
+            Duration::from_mins(1),
+            CancellationToken::new(),
+        );
+        let sleeping = context.clone();
+        let waiting = context.clone();
+        let sleep =
+            tokio::spawn(async move { sleeping.sleep_or_shutdown(Duration::from_hours(1)).await });
+        let io = tokio::spawn(async move { waiting.stop_requested().await });
+        let _ = context.lease_guard().mark_cancel_requested();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), sleep)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .is_task_cancellation_requested()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), io)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .is_task_cancellation_requested()
+        );
     }
 }

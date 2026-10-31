@@ -147,6 +147,12 @@ pub struct BackgroundTasks {
 }
 
 impl BackgroundTasks {
+    /// Overrides the enclosing join budget, including any consumer drain/cancellation stages.
+    #[must_use]
+    pub fn with_shutdown_grace(mut self, grace: Duration) -> Self {
+        self.shutdown_grace = grace;
+        self
+    }
     /// Creates a task collection with a fresh shutdown token and the default shutdown grace.
     #[must_use]
     pub fn new() -> Self {
