@@ -10,6 +10,7 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
             service_name: "contract".into(),
             service_version: "test".into(),
             environment: "test".into(),
+            node_mode: "primary".into(),
             role: "api".into(),
             instance_id: "boot-1".into(),
         })
@@ -45,6 +46,8 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
         "aster_task_lease_takeovers_total{kind=\"archive\"",
         "# TYPE target_info gauge",
         "aster_metrics_schema_version=\"aster-metrics/v1\"",
+        "aster_node_mode=\"primary\"",
+        "aster_role=\"api\"",
         "db_system_name=\"postgresql\"",
         "http_route=\"/files/{id}\"",
     ] {
