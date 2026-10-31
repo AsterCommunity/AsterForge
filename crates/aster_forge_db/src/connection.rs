@@ -341,6 +341,7 @@ fn redacted_connection_error(error: &impl std::fmt::Display, url: &str) -> DbErr
     }
     // Drivers may echo either the full URL or individual raw/percent-encoded userinfo fields.
     if let Ok(parsed) = aster_forge_utils::url::parse_url(url, "database URL") {
+        let mut secrets = Vec::new();
         for encoded in [Some(parsed.username()), parsed.password()]
             .into_iter()
             .flatten()
@@ -348,11 +349,17 @@ fn redacted_connection_error(error: &impl std::fmt::Display, url: &str) -> DbErr
             if encoded.is_empty() {
                 continue;
             }
+            secrets.push(encoded.to_owned());
             let decoded = percent_decode_userinfo(encoded);
-            message = message.replace(encoded, "<redacted>");
             if !decoded.is_empty() {
-                message = message.replace(&decoded, "<redacted>");
+                secrets.push(decoded);
             }
+        }
+        // A shorter username must not split a longer password before it can be redacted.
+        secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        secrets.dedup();
+        for secret in secrets {
+            message = message.replace(&secret, "<redacted>");
         }
     }
     DbError::database_connection(message)
@@ -599,6 +606,31 @@ mod tests {
             for secret in ["private-user", "private-password#", "private-password%23"] {
                 assert!(!error.contains(secret), "{error}");
             }
+        }
+    }
+
+    #[test]
+    fn overlapping_userinfo_is_redacted_without_leaving_a_password_suffix() {
+        for (url, message) in [
+            ("postgres://admin:admin-secret@localhost/db", "admin-secret"),
+            ("postgres://admin-secret:admin@localhost/db", "admin-secret"),
+            (
+                "postgres://admin%2D:admin-secret@localhost/db",
+                "admin-secret",
+            ),
+            (
+                "postgres://admin:admin-secret%23@localhost/db",
+                "admin-secret#",
+            ),
+            (
+                "postgres://admin:admin-secret%23@localhost/db",
+                "admin-secret%23",
+            ),
+        ] {
+            assert_eq!(
+                super::redacted_connection_error(&message, url).to_string(),
+                crate::DbError::database_connection("<redacted>").to_string()
+            );
         }
     }
 
