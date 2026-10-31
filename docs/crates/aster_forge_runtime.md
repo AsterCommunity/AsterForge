@@ -934,3 +934,7 @@ coordinator.phase("database", Some(Duration::from_secs(5)), move || {
 ## 参考项目
 
 - AsterYggdrasil：使用 Forge 的 health registry、startup phase helper、`AsterRuntime` 和 dependency-aware component shutdown。数据库连接、cache health、mail outbox drain、audit manager flush、background task shutdown 的资源创建和业务语义仍留在产品代码里，但入口只注册 component。
+
+## Producer 校验拒绝
+
+`RecordError::Invalid { item, error }` 表达 typed producer 在进入共享缓冲状态前的拒绝。它保留原记录及可追溯的错误源；通用 `ManagedBatchWriter` 不定义产品字段校验，也不会自行产生此变体。原有 `NotRunning`、`Full`、`DirectFailed` 和失败保留语义不变。

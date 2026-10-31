@@ -35,10 +35,13 @@ impl MemoryWritebackStore {
         reason = "restoring the synthetic writeback document validates every durable collection before publishing state"
     )]
     fn new(scope: CloudScope, state_directory: Option<&Path>) -> ExampleResult<Self> {
+        if let Some(directory) = state_directory {
+            aster_forge_utils::state_directory::StateDirectory::open(directory)?;
+        }
         let state_file = state_directory.map(|directory| directory.join("writeback.json"));
         let mut state = MemoryWritebackState::default();
         if let Some(path) = state_file.as_ref() {
-            let document = match fs::read(path) {
+            let document = match aster_forge_utils::state_directory::StateDirectory::open(path.parent().ok_or("state file has no parent")?)?.read("writeback.json", MAX_SYNTHETIC_STATE_BYTES) {
                 Ok(bytes) => serde_json::from_slice::<DurableWritebackDocument>(&bytes)?,
                 Err(error) if error.kind() == ErrorKind::NotFound => {
                     DurableWritebackDocument::default()
@@ -808,7 +811,7 @@ fn write_durable_document(
     state_file: &Path,
     document: &DurableWritebackDocument,
 ) -> StoreResult<()> {
-    let bytes = serde_json::to_vec(document).map_err(|error| {
+    let bytes = serialize_state_document(document).map_err(|error| {
         store_error(
             CloudFilesStoreErrorKind::PersistenceFailure,
             format!("serialize synthetic writeback state: {error}"),
@@ -820,50 +823,7 @@ fn write_durable_document(
             "synthetic writeback state path omitted its parent",
         )
     })?;
-    fs::create_dir_all(parent).map_err(|error| {
-        store_error(
-            CloudFilesStoreErrorKind::PersistenceFailure,
-            format!("create synthetic writeback directory: {error}"),
-        )
-    })?;
-    let temporary = state_file.with_extension("json.tmp");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temporary)
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("open synthetic writeback temporary file: {error}"),
-            )
-        })?;
-    file.write_all(&bytes).map_err(|error| {
-        store_error(
-            CloudFilesStoreErrorKind::PersistenceFailure,
-            format!("write synthetic writeback state: {error}"),
-        )
-    })?;
-    file.sync_all().map_err(|error| {
-        store_error(
-            CloudFilesStoreErrorKind::PersistenceFailure,
-            format!("sync synthetic writeback state: {error}"),
-        )
-    })?;
-    fs::rename(&temporary, state_file).map_err(|error| {
-        store_error(
-            CloudFilesStoreErrorKind::PersistenceFailure,
-            format!("replace synthetic writeback state: {error}"),
-        )
-    })?;
-    OpenOptions::new()
-        .read(true)
-        .open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            store_error(
-                CloudFilesStoreErrorKind::PersistenceFailure,
-                format!("sync synthetic writeback directory: {error}"),
-            )
-        })
+    aster_forge_utils::state_directory::StateDirectory::open(parent)
+        .and_then(|directory| directory.atomic_write("writeback.json", &bytes))
+        .map_err(|error| store_error(CloudFilesStoreErrorKind::PersistenceFailure, format!("persist synthetic writeback state: {error}")))
 }

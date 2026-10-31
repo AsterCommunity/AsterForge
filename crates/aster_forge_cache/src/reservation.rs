@@ -4,7 +4,8 @@
 //! winning a local `set_if_absent` operation before the cached value is visible. Reservations are
 //! bounded and TTL based so failed writers do not reserve a key forever.
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const RESERVATION_MAX_ENTRIES: usize = 64 * 1024;
@@ -12,40 +13,60 @@ const RESERVATION_MAX_ENTRIES: usize = 64 * 1024;
 #[derive(Debug)]
 pub struct ReservationSet {
     default_ttl: u64,
-    entries: DashMap<String, Instant>,
+    state: Mutex<ReservationState>,
+}
+
+#[derive(Debug, Default)]
+struct ReservationState {
+    entries: HashMap<String, Instant>,
+    expirations: BTreeSet<(Instant, String)>,
+}
+
+impl ReservationState {
+    fn remove(&mut self, key: &str) {
+        if let Some(expiry) = self.entries.remove(key) {
+            self.expirations.remove(&(expiry, key.to_owned()));
+        }
+    }
+
+    fn expire(&mut self, now: Instant) {
+        while self
+            .expirations
+            .first()
+            .is_some_and(|(expiry, _)| *expiry <= now)
+        {
+            if let Some((_, key)) = self.expirations.pop_first() {
+                self.entries.remove(&key);
+            }
+        }
+    }
 }
 
 impl ReservationSet {
     pub fn new(default_ttl: u64) -> Self {
         Self {
             default_ttl,
-            entries: DashMap::new(),
+            state: Mutex::new(ReservationState::default()),
         }
     }
 
     pub fn reserve(&self, key: &str, ttl_secs: Option<u64>) -> bool {
         let now = Instant::now();
-        if self.entries.len() >= RESERVATION_MAX_ENTRIES {
-            self.prune_expired(now);
-            if self.entries.len() >= RESERVATION_MAX_ENTRIES && !self.entries.contains_key(key) {
-                return false;
-            }
+        let mut state = self.state();
+        state.expire(now);
+        if state.entries.contains_key(key) || state.entries.len() >= RESERVATION_MAX_ENTRIES {
+            return false;
         }
+        let expires = self.expires_at(now, ttl_secs);
+        state.entries.insert(key.to_owned(), expires);
+        state.expirations.insert((expires, key.to_owned()));
+        true
+    }
 
-        match self.entries.entry(key.to_string()) {
-            Entry::Occupied(mut entry) => {
-                if *entry.get() > now {
-                    return false;
-                }
-
-                entry.insert(self.expires_at(now, ttl_secs));
-                true
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(self.expires_at(now, ttl_secs));
-                true
-            }
-        }
+    fn state(&self) -> MutexGuard<'_, ReservationState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Reserves `key` and returns a guard releasing the reservation on drop.
@@ -73,11 +94,20 @@ impl ReservationSet {
     }
 
     pub fn remove(&self, key: &str) {
-        self.entries.remove(key);
+        self.state().remove(key);
     }
 
     pub fn invalidate_prefix(&self, prefix: &str) {
-        self.entries.retain(|key, _| !key.starts_with(prefix));
+        let mut state = self.state();
+        let keys: Vec<_> = state
+            .entries
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+        for key in keys {
+            state.remove(&key);
+        }
     }
 
     fn expires_at(&self, now: Instant, ttl_secs: Option<u64>) -> Instant {
@@ -87,10 +117,6 @@ impl ReservationSet {
         // unobservable either way, so which concurrent caller "won" it is meaningless.
         let ttl = ttl_secs.unwrap_or(self.default_ttl);
         now.checked_add(Duration::from_secs(ttl)).unwrap_or(now)
-    }
-
-    fn prune_expired(&self, now: Instant) {
-        self.entries.retain(|_, expires_at| *expires_at > now);
     }
 }
 
@@ -193,5 +219,47 @@ mod tests {
 
         // The published value's co-lifetime reservation survives the guard.
         assert!(reservations.reserve_guarded("nonce", Some(60)).is_none());
+    }
+    #[test]
+    fn saturation_rejection_and_prefix_removal_preserve_capacity() {
+        let reservations = ReservationSet::new(60);
+        for i in 0..super::RESERVATION_MAX_ENTRIES {
+            assert!(reservations.reserve(&format!("live:{i}"), None));
+        }
+        for _ in 0..100 {
+            assert!(!reservations.reserve("absent", None));
+        }
+        assert!(!reservations.reserve("live:0", None));
+        reservations.remove("live:0");
+        assert!(reservations.reserve("replacement", None));
+        reservations.invalidate_prefix("live:");
+        assert!(reservations.reserve("live:1", None));
+        assert!(!reservations.reserve("replacement", None));
+    }
+
+    #[test]
+    fn expired_reservations_and_removed_keys_do_not_leave_stale_deadlines() {
+        let reservations = ReservationSet::new(60);
+        for _ in 0..10_000 {
+            assert!(reservations.reserve("zero", Some(0)));
+            reservations.remove("zero");
+        }
+        assert!(reservations.reserve("zero", None));
+        assert!(!reservations.reserve("zero", None));
+        reservations.invalidate_prefix("zero");
+        assert!(reservations.reserve("zero", None));
+    }
+    #[test]
+    #[ignore = "controlled before/after CPU measurement"]
+    fn measure_saturated_reservation_workload() {
+        let reservations = ReservationSet::new(60);
+        for i in 0..super::RESERVATION_MAX_ENTRIES {
+            assert!(reservations.reserve(&format!("key{i}"), None));
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..256 {
+            assert!(!reservations.reserve("absent", None));
+        }
+        println!("cache_saturated_us={}", start.elapsed().as_micros());
     }
 }

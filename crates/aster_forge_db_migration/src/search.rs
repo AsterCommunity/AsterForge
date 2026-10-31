@@ -115,7 +115,7 @@ pub async fn ensure_postgres_extension(
     extension_name: &str,
 ) -> Result<(), DbErr> {
     let sql = Extension::create()
-        .name(extension_name)
+        .name(format!("\"{}\"", extension_name.replace('"', "\"\"")))
         .if_not_exists()
         .to_string(PostgresQueryBuilder);
     manager.get_connection().execute_unprepared(&sql).await?;
@@ -131,7 +131,7 @@ pub fn postgres_trigram_index(
 ) -> IndexCreateStatement {
     Index::create()
         .if_not_exists()
-        .name(index_name)
+        .name(index_name.replace('"', "\"\""))
         .table(Alias::new(table_name))
         .full_text()
         .col(
@@ -145,7 +145,10 @@ pub fn postgres_trigram_index(
 /// Builds a portable `DROP INDEX IF EXISTS` statement for `PostgreSQL` migrations.
 #[must_use]
 pub fn postgres_drop_index(index_name: &str) -> IndexDropStatement {
-    Index::drop().if_exists().name(index_name).to_owned()
+    Index::drop()
+        .if_exists()
+        .name(index_name.replace('"', "\"\""))
+        .to_owned()
 }
 
 /// Builds `MySQL`'s ngram-backed full-text index statement.
@@ -263,5 +266,13 @@ mod tests {
             mysql,
             "CREATE FULLTEXT INDEX idx_files_name ON files (name) WITH PARSER ngram"
         );
+    }
+    #[test]
+    fn postgres_identifiers_escape_quotes_without_losing_valid_names() {
+        let name = "idx\"; SELECT 1; --";
+        let sql = postgres_drop_index(name).to_string(PostgresQueryBuilder);
+        assert_eq!(sql, "DROP INDEX IF EXISTS \"idx\"\"; SELECT 1; --\"");
+        let sql = postgres_trigram_index(name, "files", "name").to_string(PostgresQueryBuilder);
+        assert!(sql.contains("\"idx\"\"; SELECT 1; --\""));
     }
 }

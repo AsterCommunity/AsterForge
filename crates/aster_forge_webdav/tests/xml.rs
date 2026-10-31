@@ -743,3 +743,59 @@ fn large_bounded_property_payload_round_trips() {
     let reparsed = DavXmlElement::parse(&element.to_bytes().unwrap()).unwrap();
     assert_eq!(reparsed.text().as_deref(), Some(payload.as_str()));
 }
+
+#[test]
+fn propfind_deduplicates_expanded_names_before_copying_namespaces() {
+    let input = br#"<D:propfind xmlns:D="DAV:" xmlns:a="urn:same" xmlns:b="urn:same"><D:prop><a:x/><b:x/><a:missing/><b:missing/></D:prop></D:propfind>"#;
+    let aster_forge_webdav::DavPropfindRequest::Prop(properties) =
+        aster_forge_webdav::parse_propfind_request(input).unwrap()
+    else {
+        panic!("explicit selection");
+    };
+    assert_eq!(properties.len(), 2);
+    assert_eq!(properties[0].prefix.as_deref(), Some("a"));
+}
+
+#[test]
+fn propfind_bounds_total_copied_selector_bytes() {
+    let namespace = format!("urn:{}", "a".repeat(64 * 1024));
+    let mut selectors = String::new();
+    for i in 0..256 {
+        use std::fmt::Write as _;
+        write!(selectors, "<p:x{i}/>").unwrap();
+    }
+    let xml = format!(
+        "<D:propfind xmlns:D='DAV:' xmlns:p='{namespace}'><D:prop>{selectors}</D:prop></D:propfind>"
+    );
+    assert!(aster_forge_webdav::parse_propfind_request(xml.as_bytes()).is_err());
+}
+
+#[test]
+fn owned_property_subtrees_bound_namespace_copy_amplification() {
+    let namespace = format!("urn:{}", "a".repeat(64 * 1024));
+    let body = format!(
+        "<p:root xmlns:p='{namespace}'>{}</p:root>",
+        "<p:x/>".repeat(256)
+    );
+    assert!(aster_forge_webdav::DavXmlElement::parse(body.as_bytes()).is_err());
+}
+
+#[test]
+fn proppatch_bounds_copies_of_inherited_xml_lang() {
+    let lang = "x".repeat(64 * 1024);
+    let operations = "<D:remove><D:prop><x:p/></D:prop></D:remove>".repeat(256);
+    let body = format!(
+        "<D:propertyupdate xmlns:D='DAV:' xmlns:x='urn:x' xml:lang='{lang}'>{operations}</D:propertyupdate>"
+    );
+    assert!(aster_forge_webdav::parse_proppatch_request(body.as_bytes()).is_err());
+    let operations = "<D:remove><D:prop><x:p xml:lang='en'/></D:prop></D:remove>".repeat(256);
+    let body = format!(
+        "<D:propertyupdate xmlns:D='DAV:' xmlns:x='urn:x' xml:lang='{lang}'>{operations}</D:propertyupdate>"
+    );
+    assert_eq!(
+        aster_forge_webdav::parse_proppatch_request(body.as_bytes())
+            .unwrap()
+            .len(),
+        256
+    );
+}

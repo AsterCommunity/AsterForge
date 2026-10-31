@@ -508,3 +508,7 @@ Forge 测试覆盖：
 ## 参考项目
 
 - AsterYggdrasil：模板 payload enum、模板渲染、业务 URL 和发信审计 hook 留在产品代码里；sender、dispatch stats、投递失败 decision、重试策略、截断、`mark_sent` 重试、模板 registry、placeholder 渲染和 HTML/text 转换走 Forge。使用 Forge `mail_outbox` 表时，claim/retry/sent/failed 状态机通过 `aster_forge_db::MailOutboxDbStore::dispatch_due(...)` 接入。
+
+## 文本 fallback 与诊断边界
+
+HTML fallback 对忽略标签维护位置索引，不匹配的关闭标签不会反复扫描整个打开标签栈；错误嵌套仍按最近匹配项恢复。SMTP 诊断中的收件人和主题采用转义格式，换行或控制字符不能伪造新的文本日志记录。它不改变邮件正文、实际收件人或 SMTP 接受语义。

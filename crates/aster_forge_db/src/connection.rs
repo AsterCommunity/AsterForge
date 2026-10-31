@@ -334,6 +334,60 @@ pub async fn connect_reader_for_writer(
     connect_reader_for_writer_with_metrics(cfg, writer, Arc::new(NoopDbMetrics)).await
 }
 
+fn redacted_connection_error(error: &impl std::fmt::Display, url: &str) -> DbError {
+    let mut message = error.to_string();
+    if !url.is_empty() {
+        message = message.replace(url, "<redacted database URL>");
+    }
+    // Drivers may echo either the full URL or individual raw/percent-encoded userinfo fields.
+    if let Ok(parsed) = aster_forge_utils::url::parse_url(url, "database URL") {
+        let mut secrets = Vec::new();
+        for encoded in [Some(parsed.username()), parsed.password()]
+            .into_iter()
+            .flatten()
+        {
+            if encoded.is_empty() {
+                continue;
+            }
+            secrets.push(encoded.to_owned());
+            let decoded = percent_decode_userinfo(encoded);
+            if !decoded.is_empty() {
+                secrets.push(decoded);
+            }
+        }
+        // A shorter username must not split a longer password before it can be redacted.
+        secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        secrets.dedup();
+        for secret in secrets {
+            message = message.replace(&secret, "<redacted>");
+        }
+    }
+    DbError::database_connection(message)
+}
+
+fn percent_decode_userinfo(value: &str) -> String {
+    // URL parsing canonicalizes percent escapes, so decode only valid hex pairs.
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut remaining = value.as_bytes();
+    while let Some((&first, rest)) = remaining.split_first() {
+        if first == b'%' && rest.len() >= 2 {
+            let hex = |byte: u8| {
+                char::from(byte)
+                    .to_digit(16)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            if let (Some(high), Some(low)) = (hex(rest[0]), hex(rest[1])) {
+                bytes.push(high * 16 + low);
+                remaining = &rest[2..];
+                continue;
+            }
+        }
+        bytes.push(first);
+        remaining = rest;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 async fn connect_once(
     cfg: &DatabaseConfig,
     database_url: &str,
@@ -357,11 +411,11 @@ async fn connect_once(
     let db = if is_sqlite {
         SqlxSqliteConnector::connect(opt)
             .await
-            .map_err(DbError::database_connection)?
+            .map_err(|error| redacted_connection_error(&error, &url))?
     } else {
         Database::connect(opt)
             .await
-            .map_err(DbError::database_connection)?
+            .map_err(|error| redacted_connection_error(&error, &url))?
     };
 
     let backend = db.get_database_backend();
@@ -420,7 +474,7 @@ async fn connect_sqlite_reader_once(
 
     let mut db = SqlxSqliteConnector::connect(opt)
         .await
-        .map_err(DbError::database_connection)?;
+        .map_err(|error| redacted_connection_error(&error, &reader_url))?;
     install_db_metrics(&mut db, metrics);
 
     tracing::info!(
@@ -538,6 +592,56 @@ mod tests {
     use aster_forge_test::temp::SqliteTestDatabase;
     use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
     use std::sync::Arc;
+
+    #[test]
+    fn connection_diagnostics_redact_individual_userinfo_fields() {
+        let url = "postgres://private-user:private-password%23@localhost/db";
+        for message in [
+            "authentication failed for private-user with password private-password#",
+            "authentication failed for private-user with password private-password%23",
+        ] {
+            let error = super::redacted_connection_error(&message, url).to_string();
+            assert!(error.contains("authentication failed"), "{error}");
+            assert!(error.contains("<redacted>"), "{error}");
+            for secret in ["private-user", "private-password#", "private-password%23"] {
+                assert!(!error.contains(secret), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_userinfo_is_redacted_without_leaving_a_password_suffix() {
+        for (url, message) in [
+            ("postgres://admin:admin-secret@localhost/db", "admin-secret"),
+            ("postgres://admin-secret:admin@localhost/db", "admin-secret"),
+            (
+                "postgres://admin%2D:admin-secret@localhost/db",
+                "admin-secret",
+            ),
+            (
+                "postgres://admin:admin-secret%23@localhost/db",
+                "admin-secret#",
+            ),
+            (
+                "postgres://admin:admin-secret%23@localhost/db",
+                "admin-secret%23",
+            ),
+        ] {
+            assert_eq!(
+                super::redacted_connection_error(&message, url).to_string(),
+                crate::DbError::database_connection("<redacted>").to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn empty_connection_url_preserves_the_driver_diagnostic() {
+        let message = "driver rejected an empty database URL";
+        assert_eq!(
+            super::redacted_connection_error(&message, "").to_string(),
+            crate::DbError::database_connection(message).to_string()
+        );
+    }
 
     #[test]
     fn credentialed_database_url_is_resolved_and_debug_is_redacted() {

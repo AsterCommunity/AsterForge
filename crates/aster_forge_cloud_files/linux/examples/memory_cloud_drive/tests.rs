@@ -1,13 +1,25 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
-
-    fn test_directory(name: &str) -> PathBuf {
-        let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("aster-forge-cloud-files-{name}-{suffix}"))
+    #[test]
+    fn state_fixture_cleans_up_during_unwind_even_when_state_becomes_a_file() {
+        for replace_with_file in [false, true] {
+            let (guard, directory) = test_directory("unwind-cleanup");
+            let root = guard.path().to_path_buf();
+            let result = std::panic::catch_unwind(move || {
+                let _guard = guard;
+                if replace_with_file {
+                    fs::remove_dir(&directory).unwrap();
+                    fs::write(&directory, b"blocking state file").unwrap();
+                } else {
+                    fs::write(directory.join("writeback.json"), b"checkpoint").unwrap();
+                }
+                panic!("exercise fixture unwind cleanup");
+            });
+            assert!(result.is_err());
+            assert!(!root.exists(), "fixture leaked {}", root.display());
+        }
     }
 
     async fn accepted_create(
@@ -57,6 +69,30 @@ mod tests {
             .get(intent.idempotency_key())
             .and_then(|upload| upload.committed.as_ref())
             .map(|(_, bytes)| bytes.clone())
+    }
+
+    #[test]
+    fn remote_startup_persists_a_restartable_snapshot() {
+        let (_directory_guard, directory) = test_directory("remote-startup-snapshot");
+        let (cloud, _) = MemoryCloud::fixture().unwrap();
+        let store = Arc::new(
+            MemoryWritebackStore::new(cloud.scope.clone(), Some(&directory)).unwrap(),
+        );
+        let backend = MemoryRemoteMutationBackend::new(store.clone(), Some(&directory)).unwrap();
+        let snapshot = fs::read(directory.join("remote.json")).unwrap();
+        let document: DurableRemoteDocument = serde_json::from_slice(&snapshot).unwrap();
+        assert_eq!(document.items.as_ref().unwrap().len(), cloud.items.len());
+        assert!(document.committed.is_empty());
+        assert!(document.uploads.is_empty());
+        drop(backend);
+
+        let restored = MemoryRemoteMutationBackend::new(store, Some(&directory)).unwrap();
+        let restored_state = lock(&restored.state);
+        assert_eq!(restored_state.items.len(), cloud.items.len());
+        for (key, item) in &cloud.items {
+            assert_eq!(restored_state.items.get(key), Some(item));
+        }
+        assert_eq!(fs::read(directory.join("remote.json")).unwrap(), snapshot);
     }
 
     #[tokio::test]
@@ -312,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_upload_commit_before_local_outcome_recovers_after_restart() {
-        let directory = test_directory("upload-restart");
+        let (_directory_guard, directory) = test_directory("upload-restart");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -415,7 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_dirty_state_reconstructs_upload_intent_and_immutable_bytes() {
-        let directory = test_directory("legacy-upload");
+        let (_directory_guard, directory) = test_directory("legacy-upload");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -485,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_local_writeback_persist_does_not_publish_bytes_or_upload_intent() {
-        let directory = test_directory("writeback-persist-failure");
+        let (_directory_guard, directory) = test_directory("writeback-persist-failure");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -524,9 +560,9 @@ mod tests {
 
     #[tokio::test]
     async fn failed_remote_upload_commit_persist_does_not_publish_committed_content() {
-        let directory = test_directory("upload-persist-failure");
+        let (_directory_guard, directory) = test_directory("upload-persist-failure");
         let remote_directory = directory.join("remote-state");
-        fs::create_dir_all(&remote_directory).unwrap();
+        aster_forge_utils::state_directory::StateDirectory::open(&remote_directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
         let generation = SessionGeneration::new(1).unwrap();
@@ -578,7 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_commit_before_outcome_marker_recovers_after_restart() {
-        let directory = test_directory("remote-restart");
+        let (_directory_guard, directory) = test_directory("remote-restart");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -641,7 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_writeback_without_mutation_vector_is_recovered() {
-        let directory = test_directory("legacy-mutation");
+        let (_directory_guard, directory) = test_directory("legacy-mutation");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -667,10 +703,10 @@ mod tests {
 
     #[tokio::test]
     async fn failed_remote_persist_does_not_publish_an_in_memory_commit() {
-        let directory = test_directory("remote-persist-failure");
+        let (_directory_guard, directory) = test_directory("remote-persist-failure");
         fs::create_dir_all(&directory).unwrap();
         let remote_state_directory = directory.join("remote-state");
-        fs::create_dir_all(&remote_state_directory).unwrap();
+        aster_forge_utils::state_directory::StateDirectory::open(&remote_state_directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
         let generation = SessionGeneration::new(1).unwrap();
@@ -678,6 +714,7 @@ mod tests {
         let acceptance = accepted_create(&store, &scope, generation).await;
         let backend =
             MemoryRemoteMutationBackend::new(store, Some(&remote_state_directory)).unwrap();
+        fs::remove_file(remote_state_directory.join("remote.json")).unwrap();
         fs::remove_dir(&remote_state_directory).unwrap();
         fs::write(&remote_state_directory, b"file").unwrap();
         let intent = acceptance.created().mutation_intent();
@@ -721,4 +758,26 @@ mod tests {
                 .is_empty()
         );
     }
+    #[test]
+    fn durable_state_does_not_follow_predictable_temporary_links_and_is_private() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let (_directory_guard, directory) = test_directory("state-security");
+        let victim = directory.join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        symlink(&victim, directory.join("writeback.json.tmp")).unwrap();
+        write_durable_document(&directory.join("writeback.json"), &DurableWritebackDocument::default()).unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(fs::metadata(directory.join("writeback.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
+        let (cloud, _) = MemoryCloud::fixture().unwrap();
+        assert!(MemoryWritebackStore::new(cloud.scope.clone(), Some(&directory)).is_err());
+    }
+
+    #[test]
+    fn synthetic_document_serialization_enforces_exact_byte_limit() {
+        let exact = "x".repeat(MAX_SYNTHETIC_STATE_BYTES - 2);
+        assert_eq!(serialize_state_document(&exact).unwrap().len(), MAX_SYNTHETIC_STATE_BYTES);
+        assert!(serialize_state_document(&(exact + "x")).is_err());
+    }
+
 }

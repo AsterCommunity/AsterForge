@@ -842,9 +842,17 @@ pub async fn upsert_prevalidated<C: ConnectionTrait>(
         let existing = find_by_key(db, request.key).await?.ok_or_else(|| {
             DbError::non_retryable(format!("config key '{}' not found", request.key))
         })?;
+        if existing.key != request.key {
+            return Err(DbError::non_retryable(
+                "config key spelling conflicts with an existing database key",
+            ));
+        }
+        let may_change_visibility = is_custom_key
+            && existing.source == ConfigSource::Custom
+            && registry.get(&existing.key).is_none();
         let mut active: ActiveModel = existing.into();
         active.value = Set(request.value.to_string());
-        if is_custom_key && let Some(visibility) = request.visibility {
+        if may_change_visibility && let Some(visibility) = request.visibility {
             active.visibility = Set(visibility);
         }
         active.updated_at = Set(now);
@@ -937,6 +945,10 @@ pub async fn delete_deprecated_keys<C: ConnectionTrait>(
 
 /// Ensures default rows exist and repairs metadata for existing system rows.
 ///
+/// Existing keys that compare equal under the database collation must retain the registry's
+/// exact spelling. Conflicting spellings are rejected before that row's metadata is changed;
+/// products own any migration of historical aliases.
+///
 /// # Errors
 ///
 /// Returns an error when the database operation fails.
@@ -971,6 +983,11 @@ pub async fn ensure_defaults<C: ConnectionTrait>(
         let existing = find_by_key(db, def.key)
             .await?
             .ok_or_else(|| DbError::non_retryable(format!("config key '{}' not found", def.key)))?;
+        if existing.key != def.key {
+            return Err(DbError::non_retryable(
+                "config key spelling conflicts with an existing database key",
+            ));
+        }
         let mut active: ActiveModel = existing.into();
         active.source = Set(ConfigSource::System);
         active.value_type = Set(def.value_type);
@@ -1582,5 +1599,83 @@ mod tests {
             .unwrap();
         assert_eq!(stored.value, "direct");
         assert!(stored.updated_at <= Utc::now());
+    }
+
+    #[tokio::test]
+    async fn ensure_defaults_rejects_collation_alias_before_repairing_metadata() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let sql = create_system_config_table(DatabaseBackend::Sqlite)
+            .to_string(SqliteQueryBuilder)
+            .replace(
+                "\"key\" varchar(128)",
+                "\"key\" varchar(128) COLLATE NOCASE",
+            );
+        db.execute_unprepared(&sql).await.unwrap();
+        db.execute_unprepared(
+            "CREATE UNIQUE INDEX config_key_nocase ON system_config (key COLLATE NOCASE)",
+        )
+        .await
+        .unwrap();
+        let mut alias = super::build_custom_active_model(
+            &PRIMARY_KEY.to_ascii_uppercase(),
+            "operator value".into(),
+            ConfigVisibility::Public,
+            Utc::now(),
+            Some(42),
+        );
+        alias.category = Set("custom category".into());
+        alias.description = Set("custom description".into());
+        let original = alias.insert(&db).await.unwrap();
+        for _ in 0..2 {
+            let error = super::ensure_defaults(&db, &REGISTRY, &[])
+                .await
+                .unwrap_err();
+            assert!(!error.is_retryable());
+            assert!(error.to_string().contains("config key spelling conflicts"));
+            let stored = Entity::find_by_id(original.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                stored, original,
+                "a conflicting seed must not repair the alias row"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn case_insensitive_database_alias_cannot_override_system_visibility() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let sql = create_system_config_table(DatabaseBackend::Sqlite)
+            .to_string(sea_orm::sea_query::SqliteQueryBuilder)
+            .replace(
+                "\"key\" varchar(128)",
+                "\"key\" varchar(128) COLLATE NOCASE",
+            );
+        // SQLite lets an existing unique index define the same case-insensitive equality as MySQL.
+        db.execute_unprepared(&sql).await.unwrap();
+        db.execute_unprepared(
+            "CREATE UNIQUE INDEX config_key_nocase ON system_config (key COLLATE NOCASE)",
+        )
+        .await
+        .unwrap();
+        super::ensure_defaults(&db, &REGISTRY, &[]).await.unwrap();
+        let key = PRIMARY.key.to_ascii_uppercase();
+        let result = super::upsert_prevalidated(
+            &db,
+            &REGISTRY,
+            SystemConfigUpsert {
+                key: &key,
+                value: "alias-write",
+                visibility: Some(ConfigVisibility::Public),
+                updated_by: None,
+            },
+        )
+        .await;
+        assert!(result.is_err(), "alias spelling must be rejected");
+        let stored = super::find_by_key(&db, PRIMARY.key).await.unwrap().unwrap();
+        assert_eq!(stored.visibility, PRIMARY.visibility);
+        assert_eq!(stored.value, "primary default");
     }
 }

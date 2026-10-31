@@ -153,6 +153,10 @@ let stored = serde_json::to_string(&normalized)?;
 
 不要把所有 validation failure 都当 internal error。
 
+### Blob 分片安全
+
+`storage_path_from_blob_key` 拒绝任一分片为 `..` 的 key，并拒绝含冒号的 Windows 路径/流歧义。正常 ASCII token 与分片布局不变；不要把任意用户文件名当作内部 blob key。原有数据不由 helper 自动迁移。
+
 ## 测试要求
 
 - email trim、大小写、非法格式。

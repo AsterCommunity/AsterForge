@@ -312,3 +312,11 @@ cargo zigbuild --release -p aster_forge_cloud_files_linux \
 - [`fuser::Filesystem`](https://docs.rs/fuser/0.18.0/fuser/trait.Filesystem.html)
 - [`fuser::ReplyData`](https://docs.rs/fuser/0.18.0/fuser/struct.ReplyData.html)
 - [Linux FUSE documentation](https://www.kernel.org/doc/html/latest/filesystems/fuse/fuse.html)
+
+## Synthetic state 的本地安全与容量
+
+memory example 的可选 state 目录通过 `StateDirectory` 验证，读取拒绝 symlink，原子文件替换使用唯一 `0600` 临时文件；目录不可信时启动失败。remote ledger 在恢复完成后、backend 返回前无条件原子重写，writeback ledger 在挂载激活时重写，因此成功启动会把两个旧账本替换为私有文件，无需等待后续操作；启动持久化失败会中止挂载。writeback/remote JSON 各受 16 MiB 读写上限约束，序列化期间即停止超额增长。日常 example upload worker 采用 1 MiB 分块，避免每 8 字节都重写完整状态；8 字节分块仅保留在显式恢复/分片测试中。
+
+16 MiB 限制作用于序列化后的 JSON 体积，而非文件内容容量。文件字节以 JSON 数字数组编码，且 dirty snapshot、上传账本等可能重复保存内容，因此实际可承载的文件内容远小于 16 MiB；超额持久化失败会回滚写入，并在 FUSE 边界映射为 `EIO`。
+
+它仍是受限 synthetic store，不能用 JSON 全量 checkpoint 模型替代生产 durable store。已有状态若超限或目录可被其他用户写入，会被拒绝；不自动删除状态、迁移业务 schema 或 chmod 现有目录。

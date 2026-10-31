@@ -7,6 +7,8 @@
 //! Everything here is test support code. Failures panic with descriptive messages instead of
 //! returning recoverable errors, because a broken test environment should fail fast and loud.
 
+#[cfg(feature = "logs")]
+pub mod logs;
 pub mod temp;
 
 #[cfg(feature = "containers")]

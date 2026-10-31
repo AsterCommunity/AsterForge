@@ -243,3 +243,9 @@ URL 和未经 percent-encoding 的原始凭据，并通过 `url::Url::set_userna
 
 - AsterDrive：URL、proxy、upload chunk、token、临时路径和数值转换场景丰富。
 - AsterYggdrasil：适合看轻量项目如何直接调用 Forge utils，避免保留无意义 facade。
+
+## state_directory（Unix）
+
+`StateDirectory::open(path)` 创建 `0700` 目录或验证现有目录，拒绝 symlink、非当前 effective UID 所有者及 group/world writable 权限。`open_lock(name)` 通过目录 fd 打开普通单链接文件，不 truncate 或跟随 symlink；`read(name, maximum_bytes)` 同样检查文件身份并限制读取量；`atomic_write(name, bytes)` 使用随机、exclusive、`0600` 临时文件，sync 后通过相同目录 fd rename 并同步目录。名称必须为单个正常路径组件。
+
+该机制供测试协调与 durable adapter state 共用，不拥有路径选择、文件锁协议或 JSON schema。调用方提供的目录父路径必须已存在；不自动放宽或收紧已有权限。Unix 专用 API 不暗示 Windows ACL 已验证。

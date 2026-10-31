@@ -385,3 +385,50 @@ fn writes_large_response_directly() {
     let document = BorrowedDocument::parse(output.as_slice()).expect("parse large output");
     assert_eq!(document.root().child_elements().count(), responses);
 }
+
+#[test]
+fn validated_subtree_counts_namespace_declarations_as_attributes() {
+    let subtree = ValidatedXml::new(b"<x xmlns:a='urn:a' xmlns:b='urn:b'/>".to_vec()).unwrap();
+    let options = XmlWriteOptions::new().max_attributes_per_element(1);
+    let mut writer = XmlStreamWriter::with_options(Vec::new(), options).unwrap();
+    writer.start("root").unwrap();
+    assert!(matches!(
+        writer.validated_subtree(&subtree),
+        Err(Error::Safety(XmlSafetyError::TooManyAttributes))
+    ));
+}
+
+#[test]
+fn writer_bounds_inherited_namespaces_and_keeps_expanded_duplicate_rules() {
+    let options = XmlWriteOptions::new().max_namespace_bindings(2);
+    let mut writer = XmlStreamWriter::with_options(Vec::new(), options).unwrap();
+    writer.start_element("r", [("xmlns:a", "urn:a")]).unwrap();
+    writer.empty_element("a:x", [("xmlns:b", "urn:b")]).unwrap();
+    assert!(matches!(
+        writer.empty_element("a:x", [("xmlns:b", "urn:b"), ("xmlns:c", "urn:c")]),
+        Err(Error::Safety(XmlSafetyError::TooManyNamespaces))
+    ));
+    writer.empty_element("a:x", [("xmlns:c", "urn:c")]).unwrap();
+    writer.end_element().unwrap();
+    writer.finish().unwrap();
+    let mut writer = XmlStreamWriter::new(Vec::new()).unwrap();
+    assert!(
+        writer
+            .empty_element(
+                "r",
+                [
+                    ("xmlns:a", "urn:same"),
+                    ("xmlns:b", "urn:same"),
+                    ("a:x", "1"),
+                    ("b:x", "2")
+                ]
+            )
+            .is_err()
+    );
+    let mut writer = XmlStreamWriter::new(Vec::new()).unwrap();
+    let names: Vec<_> = (0..1024).map(|i| format!("a{i}")).collect();
+    writer
+        .empty_element("r", names.iter().map(|name| (name.as_str(), "value")))
+        .unwrap();
+    writer.finish().unwrap();
+}

@@ -19,6 +19,7 @@ pub struct XmlWriteOptions {
     pub max_output_bytes: usize,
     pub max_depth: usize,
     pub max_attributes_per_element: usize,
+    pub max_namespace_bindings: usize,
     pub write_document_declaration: bool,
 }
 
@@ -29,6 +30,7 @@ impl XmlWriteOptions {
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             max_depth: DEFAULT_MAX_DEPTH,
             max_attributes_per_element: DEFAULT_MAX_ATTRIBUTES_PER_ELEMENT,
+            max_namespace_bindings: 128,
             write_document_declaration: false,
         }
     }
@@ -52,13 +54,22 @@ impl XmlWriteOptions {
     }
 
     #[must_use]
+    pub const fn max_namespace_bindings(mut self, value: usize) -> Self {
+        self.max_namespace_bindings = value;
+        self
+    }
+
+    #[must_use]
     pub const fn write_document_declaration(mut self, value: bool) -> Self {
         self.write_document_declaration = value;
         self
     }
 
     fn validate(self) -> Result<(), Error> {
-        if self.max_output_bytes == 0 || self.max_depth == 0 || self.max_attributes_per_element == 0
+        if self.max_output_bytes == 0
+            || self.max_depth == 0
+            || self.max_attributes_per_element == 0
+            || self.max_namespace_bindings == 0
         {
             Err(XmlSafetyError::InvalidPolicy.into())
         } else {
@@ -332,8 +343,16 @@ impl<W: Write> XmlStreamWriter<W> {
                         .into(),
                 ));
             }
-            if element.attributes().count() > self.options.max_attributes_per_element {
+            if element.lexical_attribute_count() > self.options.max_attributes_per_element {
                 return Err(XmlSafetyError::TooManyAttributes.into());
+            }
+            if self
+                .bindings
+                .len()
+                .saturating_add(element.namespace_binding_count())
+                > self.options.max_namespace_bindings
+            {
+                return Err(XmlSafetyError::TooManyNamespaces.into());
             }
             let mut relative_depth = 1usize;
             let mut parent = element.parent();
@@ -435,22 +454,26 @@ impl<W: Write> XmlStreamWriter<W> {
                 self.record_namespace_binding(attribute)?;
                 start.push_attribute((attribute.name, attribute.value));
             }
-            for attribute in start.attributes() {
+            let mut expanded_names = std::collections::HashSet::new();
+            for attribute in start.attributes().with_checks(false) {
                 let attribute = attribute.map_err(|error| Error::InvalidData(error.to_string()))?;
-                let attribute_name = attribute.key.as_ref();
-                self.validate_attribute_namespace(attribute_name)?;
-            }
-            for (index, left) in start.attributes().enumerate() {
-                let left = left.map_err(|error| Error::InvalidData(error.to_string()))?;
-                let left_name = left.key.as_ref();
-                for right in start.attributes().skip(index + 1) {
-                    let right = right.map_err(|error| Error::InvalidData(error.to_string()))?;
-                    let right_name = right.key.as_ref();
-                    if self.attributes_share_expanded_name(left_name, right_name) {
-                        return Err(Error::InvalidData(format!(
-                            "attributes `{left_name}` and `{right_name}` have the same expanded name"
-                        )));
-                    }
+                let name = attribute.key.into_inner();
+                self.validate_attribute_namespace(name)?;
+                let identity = if let Some(prefix) = namespace_declaration_prefix(name) {
+                    (Some(XMLNS_NAMESPACE_URI), prefix)
+                } else {
+                    let (prefix, local) = name.split_once(':').unwrap_or(("", name));
+                    let namespace = if prefix.is_empty() {
+                        None
+                    } else {
+                        self.resolve_namespace(prefix)
+                    };
+                    (namespace, local)
+                };
+                if !expanded_names.insert(identity) {
+                    return Err(Error::InvalidData(format!(
+                        "duplicate expanded attribute `{name}`"
+                    )));
                 }
             }
             self.validate_element_namespace(name)
@@ -493,6 +516,9 @@ impl<W: Write> XmlStreamWriter<W> {
             return Ok(());
         };
         validate_namespace_binding(prefix, attribute.value)?;
+        if self.bindings.len() >= self.options.max_namespace_bindings {
+            return Err(XmlSafetyError::TooManyNamespaces.into());
+        }
         self.bindings.push(NamespaceBinding {
             prefix: prefix.to_owned(),
             uri: (!attribute.value.is_empty()).then(|| attribute.value.to_owned()),
@@ -524,29 +550,6 @@ impl<W: Write> XmlStreamWriter<W> {
             )));
         }
         Ok(())
-    }
-
-    fn attributes_share_expanded_name(&self, left: &str, right: &str) -> bool {
-        match (
-            namespace_declaration_prefix(left),
-            namespace_declaration_prefix(right),
-        ) {
-            (Some(left_prefix), Some(right_prefix)) => return left_prefix == right_prefix,
-            (Some(_), None) | (None, Some(_)) => return false,
-            (None, None) => {}
-        }
-        let (left_prefix, left_local) = left.split_once(':').unwrap_or(("", left));
-        let (right_prefix, right_local) = right.split_once(':').unwrap_or(("", right));
-        if left_local != right_local {
-            return false;
-        }
-        let left_namespace = (!left_prefix.is_empty())
-            .then(|| self.resolve_namespace(left_prefix))
-            .flatten();
-        let right_namespace = (!right_prefix.is_empty())
-            .then(|| self.resolve_namespace(right_prefix))
-            .flatten();
-        left_namespace == right_namespace
     }
 
     fn resolve_namespace(&self, prefix: &str) -> Option<&str> {

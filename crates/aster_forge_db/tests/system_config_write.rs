@@ -669,6 +669,69 @@ async fn postgres_preserves_encoded_writes_and_rolls_back_insert_and_update() {
 
 #[cfg(feature = "database-container-tests")]
 #[tokio::test]
+async fn mysql_default_seeding_rejects_collation_alias_without_changing_the_row() {
+    use aster_forge_test::{mysql::MysqlTestContainer, suite::TestContainerSuite};
+
+    static ALIAS_REGISTRY: ConfigRegistry = ConfigRegistry::new(&[ConfigDefinition {
+        key: "registered_key",
+        category: "system",
+        description: "registered metadata",
+        ..ConfigDefinition::private_system()
+    }]);
+    let suite = TestContainerSuite::new("asterforge-db-credentials");
+    let container = MysqlTestContainer::start(&suite).await;
+    let name = format!("config_{}", uuid::Uuid::new_v4().simple());
+    container.create_shared_database(&name).await;
+    let db = Database::connect(container.database_url(&name))
+        .await
+        .unwrap();
+    db.execute(&system_config::create_system_config_table(
+        db.get_database_backend(),
+    ))
+    .await
+    .unwrap();
+    db.execute_unprepared(
+        "ALTER TABLE system_config MODIFY COLUMN `key` VARCHAR(128)
+         CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL",
+    )
+    .await
+    .unwrap();
+    db.execute(&system_config::create_system_config_key_unique_index())
+        .await
+        .unwrap();
+    let original = system_config::upsert_prevalidated(
+        &db,
+        &ALIAS_REGISTRY,
+        SystemConfigUpsert {
+            key: "REGISTERED_KEY",
+            value: "operator value",
+            visibility: Some(ConfigVisibility::Public),
+            updated_by: Some(42),
+        },
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        let error = system_config::ensure_defaults(&db, &ALIAS_REGISTRY, &[])
+            .await
+            .unwrap_err();
+        assert!(!error.is_retryable());
+        assert!(error.to_string().contains("config key spelling conflicts"));
+        assert_eq!(
+            system_config::find_by_key(&db, "registered_key")
+                .await
+                .unwrap()
+                .unwrap(),
+            original,
+            "a conflicting seed must preserve every field on MySQL too"
+        );
+    }
+    db.close().await.unwrap();
+    container.drop_shared_database(&name).await;
+}
+
+#[cfg(feature = "database-container-tests")]
+#[tokio::test]
 async fn mysql_preserves_encoded_writes_and_rolls_back_insert_and_update() {
     use aster_forge_test::{mysql::MysqlTestContainer, suite::TestContainerSuite};
     let suite = TestContainerSuite::new("asterforge-db-credentials");

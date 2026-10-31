@@ -501,6 +501,37 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         &self.document.source()[range]
     }
 
+    pub(crate) fn lexical_attribute_count(self) -> usize {
+        let Some(data) = self.document.element_data(self.id) else {
+            return 0;
+        };
+        let parent_scope = self
+            .parent()
+            .and_then(|p| self.document.element_data(p.id))
+            .and_then(|p| p.namespace_scope);
+        let declarations = data
+            .namespace_scope
+            .filter(|scope| Some(*scope) != parent_scope)
+            .map_or(0, |scope| {
+                self.document.namespace_scopes[scope.index()].bindings.len()
+            });
+        data.attributes.len() + declarations
+    }
+
+    pub(crate) fn namespace_binding_count(self) -> usize {
+        let mut scope = self
+            .document
+            .element_data(self.id)
+            .and_then(|data| data.namespace_scope);
+        let mut count = 0;
+        while let Some(id) = scope {
+            let data = &self.document.namespace_scopes[id.index()];
+            count += data.bindings.len();
+            scope = data.parent;
+        }
+        count
+    }
+
     #[must_use]
     pub fn attributes(self) -> Attributes<'document, S> {
         let range = self
@@ -968,6 +999,16 @@ impl<'a> DocumentBuilder<'a> {
             });
             Some(id)
         };
+        let mut active_scope = namespace_scope;
+        let mut active_bindings = 0usize;
+        while let Some(id) = active_scope {
+            let scope = &self.namespace_scopes[id.index()];
+            active_bindings += scope.bindings.len();
+            if active_bindings > self.options.safety.max_namespace_bindings {
+                return Err(XmlSafetyError::TooManyNamespaces.into());
+            }
+            active_scope = scope.parent;
+        }
         if let Some(prefix) = prefix
             && self
                 .arena_view()

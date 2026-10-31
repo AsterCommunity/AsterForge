@@ -50,6 +50,7 @@ db.close().await?;
 - `process`：启用真实子进程 guard 和 loopback 临时端口分配。
 - `redis` / `postgres` / `mysql`：启用对应数据服务的容器 helper，各自隐含 `containers`。
 - `smtp`：启用 Mailpit 容器、SMTP endpoint、消息清理和消息计数 API，隐含 `containers`。
+- `logs`：启用局部日志捕获，并显式启用所需的 `tracing/std`；独立消费时不依赖其他 crate 的 feature 合并。
 
 ```toml
 [dev-dependencies]
@@ -111,7 +112,7 @@ snapshot。
 
 ## 状态机与错误边界
 
-`state` 模块在 `std::env::temp_dir()/aster-testcontainers-{suite}/` 下维护 per-service 的状态文件：
+`state` 模块在 Unix 的 `std::env::temp_dir()/aster-testcontainers-{euid}-{suite}/` 下维护 per-service 的状态文件，其中 `euid` 为有效用户 ID；非 Unix 平台仍使用 `std::env::temp_dir()/aster-testcontainers-{suite}/`：
 
 - `ContainerStateLock`：fs2 独占文件锁，保护 read-modify-write 周期。
 - `SharedContainerState`：登记存活测试进程 PID 和它们创建的资源名（如 per-test 数据库）。
@@ -121,7 +122,7 @@ snapshot。
 - `SuiteFixtureLock` / `SuiteFixtureState`：用于跨 nextest 进程复用产品拥有的迁移 template 或 schema snapshot。它保存 fixture/backend identity、container identity、migration/schema fingerprint、resource 和 producer version，并以临时文件 + rename 发布完整状态；产品在持锁期间验证或重建 fixture。
 - fixture lock/state 文件与容器状态一样包含 checkout instance hash；并行 worktree 不会争抢或覆盖彼此的 template metadata。
 - PostgreSQL / MySQL 孤儿库在删除前会转记到当前测试进程；即使回收过程再次中断，下一次运行仍能继续清理。产品完成整批 MySQL 清理后调用 `forget_resources()` 一次性解除登记。
-- 共享容器的 `start()` 只在真实服务探针通过后返回：PostgreSQL/MySQL 使用数据库连接，Redis 完成认证并执行 `PING`，Mailpit 同时检查 SMTP 与 HTTP API；不把镜像日志文案或仅建立 TCP 连接当作 readiness 契约。
+- 共享容器的 `start()` 只在真实服务探针通过后返回：PostgreSQL/MySQL 使用数据库连接，Redis 在复用已停止容器时有界等待 Docker 发布 host port，随后完成认证并执行 `PING`，Mailpit 同时检查 SMTP 与 HTTP API；不把镜像日志文案或仅建立 TCP 连接当作 readiness 契约。
 
 边界说明：
 
@@ -158,3 +159,9 @@ process.assert_running();
 
 - AsterDrive：`tests/common` 是这套机制的原始实现来源。
 - AsterYggdrasil：同样形态的共享容器状态机，验证了抽象可以跨产品复用。
+
+## 本地状态与日志测试支持
+
+Unix 容器状态目录包含 effective UID，并验证目录所有者与其他用户写权限。锁文件通过目录句柄相对打开，不跟随符号链接、不截断；状态以唯一 `0600` 临时文件原子替换，读取有 16 MiB 上限。拒绝 unsafe 目录/文件，不自动 chmod、删除或迁移旧状态；旧共享测试容器数据由测试所有者按保留策略处理。
+
+`logs` feature 提供 `logs::CapturedLogs`：`capture` 捕获同步调用，`capture_future` 为异步 future 的每次 poll 安装局部 subscriber，`text` 读取结果，不设置全局 subscriber。用于真实日志的脱敏、控制字符与记录边界回归测试。

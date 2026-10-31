@@ -61,6 +61,7 @@ multiple_unsafe_ops_per_block = "deny"
 undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
+rustix = { version = "1.1.6", features = ["fs", "process"] }
 opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics", "experimental_metrics_bound_instruments"] }
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "spec_unstable_metrics_views", "experimental_metrics_custom_reader", "experimental_metrics_bound_instruments"] }
 opentelemetry-prometheus = { version = "0.33.1", default-features = false }

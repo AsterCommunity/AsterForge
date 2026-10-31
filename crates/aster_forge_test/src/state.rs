@@ -10,7 +10,10 @@ use crate::suite::TestContainerSuite;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+#[cfg(not(unix))]
+use std::fs::OpenOptions;
+#[cfg(not(unix))]
 use std::io::{Read, Write};
 
 /// Serializable registry of test processes and the resources they created.
@@ -252,6 +255,8 @@ impl SharedContainerState {
 /// drops.
 pub struct ContainerStateLock {
     _file: File,
+    #[cfg(unix)]
+    directory: std::sync::Arc<aster_forge_utils::state_directory::StateDirectory>,
     state_path: std::path::PathBuf,
 }
 
@@ -264,9 +269,20 @@ impl ContainerStateLock {
     #[must_use]
     pub fn acquire(suite: &TestContainerSuite, service: &str) -> Self {
         let lock_path = suite.lock_path(service);
+        #[cfg(unix)]
+        let file = suite
+            .directory
+            .open_lock(
+                lock_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap(),
+            )
+            .unwrap_or_else(|error| panic!("unsafe test lock {}: {error}", lock_path.display()));
+        #[cfg(not(unix))]
         let file = OpenOptions::new()
             .create(true)
-            .truncate(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
@@ -284,6 +300,8 @@ impl ContainerStateLock {
         });
         Self {
             _file: file,
+            #[cfg(unix)]
+            directory: suite.directory.clone(),
             state_path: suite.state_path(service),
         }
     }
@@ -295,20 +313,42 @@ impl ContainerStateLock {
     /// Panics when the state file cannot be read or contains invalid JSON.
     #[must_use]
     pub fn load(&self) -> SharedContainerState {
-        if !self.state_path.exists() {
-            return SharedContainerState::default();
-        }
+        #[cfg(unix)]
+        let raw = {
+            let directory = &self.directory;
+            let bytes = match directory.read(
+                self.state_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap(),
+                16 * 1024 * 1024,
+            ) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return SharedContainerState::default();
+                }
+                Err(error) => panic!("unsafe test state read: {error}"),
+            };
+            String::from_utf8(bytes).unwrap()
+        };
+        #[cfg(not(unix))]
+        let raw = {
+            if !self.state_path.exists() {
+                return SharedContainerState::default();
+            }
 
-        let mut raw = String::new();
-        File::open(&self.state_path)
-            .and_then(|mut file| file.read_to_string(&mut raw))
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to read test container state {}: {error}",
-                    self.state_path.display()
-                )
-            });
+            let mut raw = String::new();
+            File::open(&self.state_path)
+                .and_then(|mut file| file.read_to_string(&mut raw))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to read test container state {}: {error}",
+                        self.state_path.display()
+                    )
+                });
 
+            raw
+        };
         let mut state = if raw.trim().is_empty() {
             SharedContainerState::default()
         } else {
@@ -331,26 +371,39 @@ impl ContainerStateLock {
     pub fn save(&self, state: &SharedContainerState) {
         let json = serde_json::to_vec(state)
             .unwrap_or_else(|error| panic!("failed to serialize test container state: {error}"));
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.state_path)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to open test container state {}: {error}",
-                    self.state_path.display()
-                )
-            });
-        file.write_all(&json)
-            .and_then(|()| file.write_all(b"\n"))
-            .and_then(|()| file.flush())
-            .unwrap_or_else(|error| {
-                panic!(
-                    "failed to write test container state {}: {error}",
-                    self.state_path.display()
-                )
-            });
+        #[cfg(unix)]
+        self.directory
+            .atomic_write(
+                self.state_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap(),
+                &json,
+            )
+            .unwrap_or_else(|error| panic!("failed to write state: {error}"));
+        #[cfg(not(unix))]
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.state_path)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to open test container state {}: {error}",
+                        self.state_path.display()
+                    )
+                });
+            file.write_all(&json)
+                .and_then(|()| file.write_all(b"\n"))
+                .and_then(|()| file.flush())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to write test container state {}: {error}",
+                        self.state_path.display()
+                    )
+                });
+        }
     }
 }
 
@@ -571,5 +624,28 @@ mod tests {
 
         let lock = ContainerStateLock::acquire(&suite, "leased");
         assert_eq!(lock.load().live_resources(), vec!["db_live"]);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod security_regression {
+    use super::*;
+    #[test]
+    fn planted_lock_link_does_not_truncate_target() {
+        let suite = TestContainerSuite::new(&format!("security-{}", std::process::id()));
+        let _guard = aster_forge_utils::raii::TempDirGuard::new(
+            suite.state_dir().to_path_buf(),
+            "container lock fixture",
+        );
+        let victim = suite.state_dir().join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        let lock = suite.lock_path("symlink-test");
+        std::os::unix::fs::symlink(&victim, &lock).unwrap();
+        let result =
+            std::panic::catch_unwind(|| ContainerStateLock::acquire(&suite, "symlink-test"));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        std::fs::remove_file(lock).unwrap();
+        std::fs::remove_file(victim).unwrap();
     }
 }

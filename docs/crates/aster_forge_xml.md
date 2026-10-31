@@ -150,6 +150,7 @@ let policy = XmlSafetyPolicy {
     max_attributes_per_element: 128,
     max_text_bytes: 512 * 1024,
     max_events: 100_000,
+    max_namespace_bindings: 128,
     reject_doctype: true,
 };
 
@@ -168,7 +169,7 @@ use aster_forge_xml::{XmlSafetyPolicy, xml_root_local_name};
 let method = xml_root_local_name(body, XmlSafetyPolicy::untrusted())?;
 ```
 
-`XmlSafetyError` 保留这些可映射分类：`InvalidPolicy`、`InputTooLarge`、`OutputTooLarge`、`ExternalEntity`、`TooDeep`、`TooManyElements`、`TooManyAttributes`、`TextTooLarge`、`TooManyEvents`、`InvalidEncoding`、`Malformed`。
+`XmlSafetyError` 保留这些可映射分类：`InvalidPolicy`、`InputTooLarge`、`OutputTooLarge`、`ExternalEntity`、`TooDeep`、`TooManyElements`、`TooManyAttributes`、`TooManyNamespaces`、`TextTooLarge`、`TooManyEvents`、`InvalidEncoding`、`Malformed`。
 
 ## 错误边界
 
@@ -178,6 +179,10 @@ let method = xml_root_local_name(body, XmlSafetyPolicy::untrusted())?;
 - `Error::Io`：reader/writer 的底层 I/O 失败。
 
 产品 API 层负责映射成 WebDAV/WOPI/对象存储协议响应和面向用户的文案。
+
+### 资源边界与 API 迁移
+
+`XmlSafetyPolicy::max_namespace_bindings` 独立限制同时在作用域内的 namespace 声明，默认 128；不再由深度乘属性数推导。显式构造 policy 的调用方必须补齐该字段。scanner、DOM、stream、capture 和 writer 使用相同计数语义，退出作用域释放配额，超限返回 `XmlSafetyError::TooManyNamespaces`。`XmlWriteOptions::max_namespace_bindings(...)` 可调整输出侧限制。`validated_subtree` 的属性配额包含其自身的 `xmlns` 声明，并把继承绑定计入 namespace 配额。writer 按 expanded name 建集合检查重复属性，保留别名前缀指向相同 namespace 时的重复拒绝。
 
 ## 测试要求
 

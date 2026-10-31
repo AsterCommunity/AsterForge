@@ -220,3 +220,9 @@ registry.register(driver)?;
 
 - AsterDrive：外部认证配置页、provider 测试、专用连接器接入。
 - AsterYggdrasil：较轻的外部认证登录链路，适合看 Forge driver 到产品用户绑定的边界。
+
+## 固定专用 provider 与日志边界
+
+Google 固定 `https://accounts.google.com` issuer；GitHub 和 QQ 固定各自官方 authorization/token/userinfo 地址。生产 driver 忽略这些目的地址覆盖，loopback 也不例外。GitHub Enterprise 或其他兼容服务使用通用 OIDC/OAuth2 driver。mock HTTP 测试在通用 driver 或私有低层协议函数中显式注入测试配置，不通过生产 preset 放开目标。
+
+scope 与 allowed-domain 列表用集合去重，保留第一次出现的顺序与既有规范化语义。无效 provider-options JSON 的日志仅记录错误分类、行号和列号，不写入原始文档或可能包含输入值的解析错误文本。

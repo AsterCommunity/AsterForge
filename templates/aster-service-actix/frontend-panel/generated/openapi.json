@@ -70,6 +70,20 @@
           "endpoint_not_found"
         ]
       },
+      "ApiErrorInfo_TupleUnit": {
+        "type": "object",
+        "required": [
+          "retryable"
+        ],
+        "properties": {
+          "diagnostic": {
+            "type": "null"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_TupleUnit_ApiErrorCode_TupleUnit": {
         "type": "object",
         "required": [
@@ -84,18 +98,7 @@
             "type": "null"
           },
           "error": {
-            "type": "object",
-            "required": [
-              "retryable"
-            ],
-            "properties": {
-              "diagnostic": {
-                "type": "null"
-              },
-              "retryable": {
-                "type": "boolean"
-              }
-            }
+            "$ref": "#/components/schemas/ApiErrorInfo_TupleUnit"
           },
           "msg": {
             "type": "string"

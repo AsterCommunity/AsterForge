@@ -49,9 +49,11 @@ fn build_http_service_component(
     let provider = state.metrics.provider();
     let mut server = HttpServer::new(move || {
         let app = App::new();
-        let app = match provider.clone() { Some(provider) => app.app_data(web::Data::new(provider)), None => app };
-        app
-            .wrap(middleware::Compress::default())
+        let app = match provider.clone() {
+            Some(provider) => app.app_data(web::Data::new(provider)),
+            None => app,
+        };
+        app.wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
             .wrap(aster_forge_middleware::actix::request_id::RequestIdMiddleware)
             .wrap(aster_forge_middleware::actix::security_headers::default_headers())

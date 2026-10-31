@@ -1,8 +1,7 @@
 //! Google `OpenID` Connect provider driver.
 //!
 //! Google sign-in is implemented as a fixed-issuer wrapper around the generic OIDC driver. The
-//! wrapper prevents manual endpoint drift while still allowing tests to inject a loopback issuer for
-//! local mock servers.
+//! wrapper prevents manual endpoint drift; mock servers exercise the generic OIDC driver.
 
 use async_trait::async_trait;
 
@@ -90,15 +89,12 @@ impl ExternalAuthProviderDriver for GoogleProviderDriver {
     }
 }
 
-/// Applies the Google preset while still allowing tests to inject a loopback issuer.
+/// Applies the fixed Google production issuer and claims preset.
 fn google_oidc_config(provider: &ExternalAuthProviderConfig) -> ExternalAuthProviderConfig {
     let mut provider = provider.clone();
     provider.provider_kind = ExternalAuthProviderKind::Google;
     provider.protocol = ExternalAuthProtocol::Oidc;
-    provider.issuer_url = provider
-        .issuer_url
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(GOOGLE_ISSUER_URL.to_string()));
+    provider.issuer_url = Some(GOOGLE_ISSUER_URL.to_owned());
     provider.authorization_url = None;
     provider.token_url = None;
     provider.userinfo_url = None;
@@ -172,12 +168,22 @@ mod tests {
     }
 
     #[test]
-    fn google_config_keeps_test_issuer_override() {
+    fn google_config_ignores_loopback_issuer_override() {
         let mut provider = provider();
         provider.issuer_url = Some("http://127.0.0.1:3000".to_string());
 
         let config = google_oidc_config(&provider);
 
-        assert_eq!(config.issuer_url.as_deref(), Some("http://127.0.0.1:3000"));
+        assert_eq!(config.issuer_url.as_deref(), Some(GOOGLE_ISSUER_URL));
+    }
+    #[test]
+    fn dedicated_provider_never_preserves_untrusted_destinations() {
+        let mut provider = provider();
+        provider.issuer_url = Some("https://attacker.invalid/issuer".into());
+        provider.authorization_url = Some("https://attacker.invalid/auth".into());
+        provider.token_url = Some("https://attacker.invalid/token".into());
+        provider.userinfo_url = Some("https://attacker.invalid/user".into());
+        let config = google_oidc_config(&provider);
+        assert_eq!(config.issuer_url.as_deref(), Some(GOOGLE_ISSUER_URL));
     }
 }

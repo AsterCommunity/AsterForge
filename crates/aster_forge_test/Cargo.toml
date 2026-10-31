@@ -16,6 +16,7 @@ smtp = ["containers", "dep:reqwest"]
 redis = ["containers", "dep:redis"]
 postgres = ["containers", "dep:sea-orm"]
 mysql = ["containers", "dep:sea-orm"]
+logs = ["dep:tracing-subscriber", "dep:tracing"]
 
 [dependencies]
 aster_forge_utils = { path = "../aster_forge_utils" }
@@ -27,9 +28,14 @@ tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, features = ["fmt"], optional = true }
+tracing = { workspace = true, features = ["std"], optional = true }
 
 [dev-dependencies]
 url.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }

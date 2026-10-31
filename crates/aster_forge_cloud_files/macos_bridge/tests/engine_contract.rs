@@ -21,6 +21,8 @@ struct Backend {
     file: CloudItem,
     contents: Bytes,
     fault: Fault,
+    metadata_calls: std::sync::atomic::AtomicUsize,
+    content_calls: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -77,6 +79,8 @@ impl Backend {
             file,
             contents: bytes,
             fault,
+            metadata_calls: std::sync::atomic::AtomicUsize::new(0),
+            content_calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -103,6 +107,8 @@ impl Backend {
 #[async_trait]
 impl CloudMetadataBackend for Backend {
     async fn get_item(&self, key: &CloudItemKey) -> BackendResult<CloudItem> {
+        self.metadata_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.fault == Fault::WrongIdentity && key == self.root.key() {
             return Ok(self.file.clone());
         }
@@ -187,6 +193,8 @@ impl CloudContentBackend for Backend {
         &self,
         request: &ContentReadRequest,
     ) -> BackendResult<ContentReadResponse> {
+        self.content_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.fault == Fault::ReadError {
             return Err(CloudBackendError::retryable(
                 CloudBackendErrorKind::TemporarilyUnavailable,
@@ -754,4 +762,82 @@ fn revision(value: &[u8]) -> MetadataRevision {
 
 fn content_revision(value: &[u8]) -> ContentRevision {
     ContentRevision::from_slice(value).expect("content revision should be valid")
+}
+
+#[tokio::test]
+async fn content_rejects_foreign_scopes_and_cross_engine_plans() {
+    let backend = Arc::new(Backend::fixture(Fault::None));
+    let local = MacosReadOnlyEngine::new(backend.clone(), backend.root.key().clone());
+    let foreign_scope = CloudScope::new(
+        CloudNamespaceId::new("foreign").unwrap(),
+        CloudRootId::new("other").unwrap(),
+    );
+    let foreign = MacosReadOnlyEngine::new(backend.clone(), key(&foreign_scope, "root"));
+    let identifier = MacosFileProviderIdentifier::encode(backend.file.key()).unwrap();
+    let revision = content_revision(b"content-v1");
+    assert!(
+        foreign
+            .prepare_content_fetch(&identifier, &revision)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        backend
+            .metadata_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    let plan = local
+        .prepare_content_fetch(&identifier, &revision)
+        .await
+        .unwrap();
+    assert!(
+        foreign
+            .read_content_chunk(&plan, 0, NonZeroU64::new(4).unwrap())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        backend
+            .content_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(
+        local
+            .read_content_chunk(&plan, 0, NonZeroU64::new(4).unwrap())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn content_checks_namespace_and_root_independently_before_backend_io() {
+    for (namespace, root) in [("foreign", "default"), ("macos-engine", "foreign")] {
+        let backend = Arc::new(Backend::fixture(Fault::None));
+        let scope = CloudScope::new(
+            CloudNamespaceId::new(namespace).unwrap(),
+            CloudRootId::new(root).unwrap(),
+        );
+        let engine = MacosReadOnlyEngine::new(backend.clone(), key(&scope, "root"));
+        let identifier = MacosFileProviderIdentifier::encode(backend.file.key()).unwrap();
+        assert!(
+            engine
+                .prepare_content_fetch(&identifier, &content_revision(b"content-v1"))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            backend
+                .metadata_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            backend
+                .content_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
 }

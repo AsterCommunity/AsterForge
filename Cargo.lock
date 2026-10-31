@@ -626,6 +626,7 @@ name = "aster_forge_cloud_files_linux"
 version = "0.1.0"
 dependencies = [
  "aster_forge_cloud_files_core",
+ "aster_forge_utils",
  "async-trait",
  "bytes",
  "fuser",
@@ -752,6 +753,7 @@ dependencies = [
  "actix-web",
  "aster_forge_crypto",
  "aster_forge_http",
+ "aster_forge_test",
  "aster_forge_utils",
  "aster_forge_validation",
  "async-trait",
@@ -808,6 +810,7 @@ version = "0.1.0"
 dependencies = [
  "aster_forge_runtime",
  "aster_forge_tasks",
+ "aster_forge_test",
  "aster_forge_utils",
  "aster_forge_validation",
  "async-trait",
@@ -941,11 +944,14 @@ dependencies = [
  "fs2",
  "redis",
  "reqwest",
+ "rustix",
  "sea-orm",
  "serde",
  "serde_json",
  "testcontainers",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
@@ -960,6 +966,7 @@ dependencies = [
  "md-5",
  "percent-encoding",
  "rand 0.10.3",
+ "rustix",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

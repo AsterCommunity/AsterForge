@@ -281,6 +281,60 @@ fn report_limits_reject_each_zero_field_and_bound_input_bytes() {
 }
 
 #[test]
+fn version_tree_selector_copy_budget_honors_the_caller_limit() {
+    let snapshot = report_snapshot(DavVersioningState::CheckedIn);
+    let namespace = format!("urn:{}", "n".repeat(256));
+    let body = format!(
+        "<D:version-tree xmlns:D='DAV:' xmlns:p='{namespace}'><D:prop><p:x/><p:y/></D:prop></D:version-tree>"
+    );
+    let copied_bytes = 2 * (namespace.len() + "p".len() + "x".len());
+    assert!(body.len() < copied_bytes);
+    let exact = DavReportLimits {
+        maximum_input_bytes: copied_bytes,
+        ..bounded_report_limits()
+    };
+    let request = plan_report_request_with_limits(&snapshot, body.as_bytes(), None, exact)
+        .expect("exact selector copy budget should be accepted");
+    let DavReportRequest::VersionTree(request) = request else {
+        panic!("expected version-tree request");
+    };
+    assert_eq!(request.properties.unwrap().len(), 2);
+    for maximum_input_bytes in [copied_bytes - 1, body.len()] {
+        assert_eq!(
+            plan_report_request_with_limits(
+                &snapshot,
+                body.as_bytes(),
+                None,
+                DavReportLimits {
+                    maximum_input_bytes,
+                    ..exact
+                },
+            ),
+            Err(DavReportPlanError::Xml(DavXmlError::TooLarge))
+        );
+    }
+    let duplicate = format!(
+        "<D:version-tree xmlns:D='DAV:' xmlns:p='{namespace}' xmlns:q='{namespace}'><D:prop><p:x/><q:x/></D:prop></D:version-tree>"
+    );
+    let request = plan_report_request_with_limits(
+        &snapshot,
+        duplicate.as_bytes(),
+        None,
+        DavReportLimits {
+            maximum_input_bytes: duplicate.len(),
+            ..exact
+        },
+    )
+    .unwrap();
+    let DavReportRequest::VersionTree(request) = request else {
+        panic!("expected version-tree request");
+    };
+    let properties = request.properties.unwrap();
+    assert_eq!(properties.len(), 1);
+    assert_eq!(properties[0].prefix.as_deref(), Some("p"));
+}
+
+#[test]
 fn report_limits_cover_exact_xml_depth_and_one_over() {
     let snapshot = report_snapshot(DavVersioningState::CheckedIn);
     let valid = bounded_report_limits();

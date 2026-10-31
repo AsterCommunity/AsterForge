@@ -454,3 +454,66 @@ fn original_writer_propagates_io_errors() {
         Err(Error::Io(_))
     ));
 }
+
+#[test]
+fn stream_accepts_exact_namespace_quota_and_reuses_sibling_scope() {
+    use aster_forge_xml::{XmlStreamEvent, XmlStreamReader};
+    let policy = XmlSafetyPolicy {
+        max_namespace_bindings: 2,
+        ..XmlSafetyPolicy::untrusted()
+    };
+    let exact = b"<r xmlns:a='urn:a'><a:x xmlns:b='urn:b'/></r>".as_slice();
+    let siblings =
+        b"<r><x xmlns:a='urn:a' xmlns:b='urn:b'/><x xmlns:c='urn:c' xmlns:d='urn:d'/></r>"
+            .as_slice();
+    for input in [exact, siblings] {
+        let mut reader = XmlStreamReader::new(Cursor::new(input), policy).unwrap();
+        while !matches!(reader.read_event().unwrap(), XmlStreamEvent::Eof) {}
+    }
+}
+
+#[test]
+fn active_namespace_limit_is_shared_by_scanner_dom_and_stream() {
+    use aster_forge_xml::{XmlStreamEvent, XmlStreamReader};
+    let policy = XmlSafetyPolicy {
+        max_namespace_bindings: 2,
+        ..XmlSafetyPolicy::untrusted()
+    };
+    let exact = b"<r xmlns:a='urn:a'><a:x xmlns:b='urn:b'/></r>";
+    validate_xml_input(exact, policy).unwrap();
+    BorrowedDocument::parse_with_options(
+        exact.as_slice(),
+        &ParseOptions::new().safety_policy(policy),
+    )
+    .unwrap();
+    let overflow = b"<r xmlns:a='urn:a'><a:x xmlns:b='urn:b' xmlns:c='urn:c'/></r>";
+    assert_eq!(
+        validate_xml_input(overflow, policy),
+        Err(XmlSafetyError::TooManyNamespaces)
+    );
+    assert!(matches!(
+        BorrowedDocument::parse_with_options(
+            overflow.as_slice(),
+            &ParseOptions::new().safety_policy(policy)
+        ),
+        Err(Error::Safety(XmlSafetyError::TooManyNamespaces))
+    ));
+    let mut reader = XmlStreamReader::new(Cursor::new(overflow), policy).unwrap();
+    loop {
+        match reader.read_event() {
+            Err(Error::Safety(XmlSafetyError::TooManyNamespaces)) => break,
+            Err(other) => panic!("wrong error: {other}"),
+            Ok(XmlStreamEvent::Eof) => panic!("namespace bound bypassed"),
+            Ok(_) => {}
+        }
+    }
+    // Sibling declarations leave scope and do not consume a cumulative lifetime quota.
+    let siblings =
+        b"<r><x xmlns:a='urn:a' xmlns:b='urn:b'/><x xmlns:c='urn:c' xmlns:d='urn:d'/></r>";
+    validate_xml_input(siblings, policy).unwrap();
+    BorrowedDocument::parse_with_options(
+        siblings.as_slice(),
+        &ParseOptions::new().safety_policy(policy),
+    )
+    .unwrap();
+}

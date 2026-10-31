@@ -40,6 +40,7 @@ url.workspace = true
 
 [dev-dependencies]
 actix-web.workspace = true
+aster_forge_test = { path = "../aster_forge_test", features = ["logs"] }
 tokio.workspace = true
 
 [lints]

@@ -32,6 +32,15 @@ pub fn normalize_relative_key(value: &str) -> Result<String> {
                     INVALID_RELATIVE_KEY_MESSAGE.to_string(),
                 ));
             }
+            segment
+                if segments.is_empty()
+                    && segment.as_bytes().get(1) == Some(&b':')
+                    && segment.as_bytes()[0].is_ascii_alphabetic() =>
+            {
+                return Err(StorageCoreError::InvalidObjectKey(
+                    INVALID_RELATIVE_KEY_MESSAGE.to_string(),
+                ));
+            }
             segment => segments.push(segment),
         }
     }
@@ -130,6 +139,22 @@ mod tests {
         );
         assert_eq!(normalize_relative_key("").unwrap(), ".");
         assert_eq!(normalize_relative_key("/").unwrap(), ".");
+    }
+
+    #[test]
+    fn normalizers_reject_windows_drive_paths() {
+        for key in [
+            "C:/outside/file",
+            "C:relative",
+            "C:\\outside\\file",
+            "/C:/file",
+            "./C:/file",
+        ] {
+            assert!(normalize_relative_key(key).is_err(), "{key}");
+            assert!(normalize_object_key(key).is_err(), "{key}");
+            assert!(normalize_object_prefix(key).is_err(), "{key}");
+        }
+        assert_eq!(normalize_object_key("folder/a:b").unwrap(), "folder/a:b");
     }
 
     #[test]

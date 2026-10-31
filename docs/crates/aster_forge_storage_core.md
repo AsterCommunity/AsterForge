@@ -86,6 +86,10 @@ S3-compatible adapter 仍然负责：
 - TLS 和代理配置。
 - driver 初始化和健康检查。
 
+### Windows 路径边界
+
+所有 object-key/prefix normalizer 都拒绝规范化后以 Windows drive designator 开头的值，包括 `C:/file`、`C:relative` 和隐藏在 `./` 后的盘符。合法对象段中的冒号（如 `folder/a:b`）继续保留，以保持 S3 对象 key 语义。映射到 Windows 文件系统的 adapter 必须拒绝或可逆编码冒号，避免 NTFS alternate data streams 产生数据流别名；文件系统 containment 和符号链接策略也由 adapter 负责。
+
 ## 测试要求
 
 - key 正常化和逃逸拒绝。

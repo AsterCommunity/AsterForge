@@ -28,6 +28,8 @@ pub mod net;
 pub mod numbers;
 pub mod paths;
 pub mod raii;
+#[cfg(unix)]
+pub mod state_directory;
 pub mod text;
 pub mod url;
 

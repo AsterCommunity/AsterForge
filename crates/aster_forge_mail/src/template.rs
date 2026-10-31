@@ -443,7 +443,7 @@ pub fn html_to_text(html: &str) -> String {
     let mut output = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut tag = String::new();
-    let mut ignored_tags = Vec::new();
+    let mut ignored_tags = IgnoredTags::default();
 
     for ch in html.chars() {
         if in_tag {
@@ -534,27 +534,41 @@ fn parse_tag(tag: &str) -> Option<ParsedTag> {
     })
 }
 
-fn update_ignored_tags(ignored_tags: &mut Vec<String>, tag: &ParsedTag) {
-    if !is_ignored_text_tag(&tag.name) || tag.is_self_closing {
-        return;
-    }
-
-    if tag.is_closing {
-        // Mis-nested ignored tags (e.g. `<script><style></script>`) must not
-        // wedge the stack: pop through the nearest matching open tag, or the
-        // rest of the document would be silently dropped from the text
-        // fallback.
-        if let Some(position) = ignored_tags.iter().rposition(|name| name == &tag.name) {
-            ignored_tags.truncate(position);
-        }
-        return;
-    }
-
-    ignored_tags.push(tag.name.clone());
+#[derive(Default)]
+struct IgnoredTags {
+    stack: Vec<usize>,
+    positions: [Vec<usize>; 4],
 }
 
-fn is_ignored_text_tag(name: &str) -> bool {
-    matches!(name, "head" | "script" | "style" | "title")
+impl IgnoredTags {
+    fn is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+}
+
+fn update_ignored_tags(ignored_tags: &mut IgnoredTags, tag: &ParsedTag) {
+    if tag.is_self_closing {
+        return;
+    }
+    let index = match tag.name.as_str() {
+        "head" => 0,
+        "script" => 1,
+        "style" => 2,
+        "title" => 3,
+        _ => return,
+    };
+    if tag.is_closing {
+        if let Some(position) = ignored_tags.positions[index].last().copied() {
+            while ignored_tags.stack.len() > position {
+                if let Some(popped) = ignored_tags.stack.pop() {
+                    ignored_tags.positions[popped].pop();
+                }
+            }
+        }
+    } else {
+        ignored_tags.positions[index].push(ignored_tags.stack.len());
+        ignored_tags.stack.push(index);
+    }
 }
 
 fn decode_html_entities(value: &str) -> String {
@@ -813,5 +827,32 @@ mod tests {
         let html = "<script>bad()</script><p>Hello</p><script><style></script><p>Still here</p>";
 
         assert_eq!(html_to_text(html), "Hello\nStill here");
+    }
+    #[test]
+    fn html_fallback_handles_large_unmatched_closing_tags_and_recovers() {
+        let html = format!(
+            "{}{}{}<p>visible</p>",
+            "<head>".repeat(20_000),
+            "</script>".repeat(20_000),
+            "</head>".repeat(20_000)
+        );
+        assert_eq!(html_to_text(&html), "visible");
+        assert_eq!(
+            html_to_text("<head><script>x</head><p>visible</p>"),
+            "visible"
+        );
+    }
+    #[test]
+    #[ignore = "controlled before/after CPU measurement"]
+    fn measure_ignored_tag_workload() {
+        let html = format!(
+            "{}{}{}<p>visible</p>",
+            "<head>".repeat(12_000),
+            "</script>".repeat(12_000),
+            "</head>".repeat(12_000)
+        );
+        let start = std::time::Instant::now();
+        assert_eq!(html_to_text(&html), "visible");
+        println!("mail_html_us={}", start.elapsed().as_micros());
     }
 }

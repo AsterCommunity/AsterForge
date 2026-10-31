@@ -19,6 +19,8 @@ pub enum XmlSafetyError {
     TooManyElements,
     /// An element has more attributes than the configured limit.
     TooManyAttributes,
+    /// Namespace declarations simultaneously in scope exceed the configured limit.
+    TooManyNamespaces,
     /// The total decoded text and CDATA size exceeds the configured limit.
     TextTooLarge,
     /// The parser emitted more events than the configured limit.
@@ -38,6 +40,7 @@ impl fmt::Display for XmlSafetyError {
             Self::ExternalEntity => "XML DTD and custom entity declarations are not allowed",
             Self::TooDeep => "XML nesting depth exceeds the configured limit",
             Self::TooManyElements => "XML element count exceeds the configured limit",
+            Self::TooManyNamespaces => "XML namespace bindings exceed the configured limit",
             Self::TooManyAttributes => "XML attribute count exceeds the configured limit",
             Self::TextTooLarge => "XML text size exceeds the configured limit",
             Self::TooManyEvents => "XML event count exceeds the configured limit",

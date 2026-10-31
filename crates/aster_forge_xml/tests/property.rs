@@ -147,6 +147,7 @@ proptest! {
             max_attributes_per_element: 128,
             max_text_bytes: max_input_bytes,
             max_events: 16_384,
+            max_namespace_bindings: 128,
             reject_doctype: true,
         };
         let _ = validate_xml_input(&input, policy);

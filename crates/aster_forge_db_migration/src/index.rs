@@ -74,7 +74,18 @@ fn drop_index_for_backend(
 ) -> IndexDropStatement {
     let mut statement = Index::drop();
     statement
-        .name(index_name.to_owned())
+        .name(index_name.replace(
+            if backend == DatabaseBackend::MySql {
+                '`'
+            } else {
+                '"'
+            },
+            if backend == DatabaseBackend::MySql {
+                "``"
+            } else {
+                "\"\""
+            },
+        ))
         .table(Alias::new(table_name));
     if backend != DatabaseBackend::MySql {
         statement.if_exists();
@@ -179,5 +190,18 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("requires a MySQL connection"));
+    }
+    #[tokio::test]
+    async fn hostile_index_name_cannot_execute_a_second_statement() {
+        let db = sea_orm_migration::sea_orm::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        db.execute_unprepared("CREATE TABLE sentinel (id INTEGER)")
+            .await
+            .unwrap();
+        let _ = drop_index_if_exists(&db, "sentinel", "absent\"; DROP TABLE sentinel; --").await;
+        db.execute_unprepared("INSERT INTO sentinel VALUES (1)")
+            .await
+            .unwrap();
     }
 }

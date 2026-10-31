@@ -216,6 +216,9 @@ mod engine {
             headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
         }
 
+        if !policy.allow_credentials {
+            headers.remove(header::ACCESS_CONTROL_ALLOW_CREDENTIALS);
+        }
         if policy.allow_credentials
             && !headers.contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
         {
@@ -321,3 +324,28 @@ mod engine {
 pub(crate) use engine::{
     CorsDecision, CorsSettings, apply_actual_headers, apply_origin_headers, evaluate,
 };
+
+#[cfg(all(test, any(feature = "actix", feature = "axum")))]
+mod inherited_credentials_regression {
+    use super::*;
+    #[test]
+    fn active_policy_removes_inherited_credentials_when_disabled() {
+        let policy = RuntimeCorsPolicy {
+            enabled: true,
+            allowed_origins: CorsAllowedOrigins::List(vec!["https://allowed.test".into()]),
+            allow_credentials: false,
+            max_age_secs: 60,
+        };
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            "true".parse().unwrap(),
+        );
+        headers.append(
+            http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            "true".parse().unwrap(),
+        );
+        engine::apply_origin_headers(&mut headers, &policy, "https://allowed.test").unwrap();
+        assert!(!headers.contains_key(http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
+    }
+}

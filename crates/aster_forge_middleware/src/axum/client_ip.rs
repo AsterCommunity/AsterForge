@@ -25,10 +25,24 @@ pub fn real_ip_from_trusted_headers(
     peer: IpAddr,
     trusted: &[IpNet],
 ) -> IpAddr {
-    let forwarded = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok());
-    aster_forge_utils::net::real_ip_from_forwarded_for(forwarded, peer, trusted)
+    if !aster_forge_utils::net::is_trusted_proxy(peer, trusted) {
+        return peer;
+    }
+    let mut forwarded = String::new();
+    for value in headers.get_all("x-forwarded-for") {
+        let Ok(value) = value.to_str() else {
+            return peer;
+        };
+        // Do not join malformed empty fields into a seemingly valid proxy chain.
+        if value.trim().is_empty() {
+            return peer;
+        }
+        if !forwarded.is_empty() {
+            forwarded.push(',');
+        }
+        forwarded.push_str(value);
+    }
+    aster_forge_utils::net::real_ip_from_forwarded_for(Some(&forwarded), peer, trusted)
 }
 
 /// Reads the TCP peer populated by `into_make_service_with_connect_info::<SocketAddr>()`.
@@ -136,5 +150,45 @@ mod tests {
         assert_eq!(real_ip_from_headers(&headers, peer, &trusted), peer);
         headers.insert("x-forwarded-for", HeaderValue::from_bytes(&[0xff]).unwrap());
         assert_eq!(real_ip_from_headers(&headers, peer, &trusted), peer);
+    }
+}
+
+#[cfg(test)]
+mod repeated_header_regression {
+    use super::*;
+    #[test]
+    fn trusted_proxy_appended_field_wins_over_spoofed_first_field() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-forwarded-for"
+                .parse::<http::header::HeaderName>()
+                .unwrap(),
+            "6.6.6.6".parse().unwrap(),
+        );
+        headers.append(
+            "x-forwarded-for"
+                .parse::<http::header::HeaderName>()
+                .unwrap(),
+            "198.51.100.2".parse().unwrap(),
+        );
+        let trusted = aster_forge_utils::net::parse_trusted_proxies(&["10.0.0.0/8".into()]);
+        assert_eq!(
+            real_ip_from_trusted_headers(&headers, "10.0.0.1".parse().unwrap(), &trusted),
+            "198.51.100.2".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            real_ip_from_trusted_headers(&headers, "192.0.2.1".parse().unwrap(), &trusted),
+            "192.0.2.1".parse::<IpAddr>().unwrap()
+        );
+        headers.append(
+            "x-forwarded-for"
+                .parse::<http::header::HeaderName>()
+                .unwrap(),
+            "invalid".parse().unwrap(),
+        );
+        assert_eq!(
+            real_ip_from_trusted_headers(&headers, "10.0.0.1".parse().unwrap(), &trusted),
+            "10.0.0.1".parse::<IpAddr>().unwrap()
+        );
     }
 }
