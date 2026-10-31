@@ -27,9 +27,13 @@ macro_rules! create_test_app {
         use actix_web::{App, test, web};
 
         let state = $state;
+        let app = App::new();
+        let app = match state.metrics.provider() {
+            Some(provider) => app.app_data(web::Data::new(provider)),
+            None => app,
+        };
         test::init_service(
-            App::new()
-                .wrap(actix_web::middleware::Compress::default())
+            app.wrap(actix_web::middleware::Compress::default())
                 .wrap(actix_web::middleware::Logger::default())
                 .wrap(aster_forge_middleware::actix::request_id::RequestIdMiddleware)
                 .wrap(aster_forge_middleware::actix::security_headers::default_headers())

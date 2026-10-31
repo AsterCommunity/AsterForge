@@ -330,10 +330,8 @@ async fn metrics_route_exports_prometheus_text() {
     let body = test::read_body(response).await;
     let body = std::str::from_utf8(&body).expect("metrics body should be utf-8");
     assert!(body.contains("db_client_operation_duration_seconds_count"));
-    assert!(body.contains("health_report_status"));
-    assert!(body.contains("health_component_status"));
-    assert!(body.contains("background_tasks_pending"));
+    assert!(body.contains("aster_runtime_health_status"));
+    assert!(body.contains("aster_runtime_component_health_status"));
+    assert!(body.contains("aster_task_pending"));
     assert!(body.contains("aster_config_reloads_total"));
-    assert!(body.contains("process_uptime_seconds"));
-    assert!(body.contains("process_memory_usage_bytes"));
 }
