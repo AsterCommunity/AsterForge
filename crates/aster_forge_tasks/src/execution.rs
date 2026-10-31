@@ -375,6 +375,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -458,7 +459,9 @@ mod tests {
         released: usize,
         cancel_requested: bool,
         canceled: usize,
-        cancel_on_retry: bool,
+        cancel_on_retry: AtomicBool,
+        retry_conflict: AtomicBool,
+        failed_conflict: AtomicBool,
         wakes: usize,
         transitions: Vec<&'static str>,
         processed_order: Vec<i64>,
@@ -567,6 +570,9 @@ mod tests {
             failure: TaskPermanentFailure<'_>,
         ) -> std::result::Result<bool, Self::Error> {
             let mut state = self.state();
+            if state.failed_conflict.load(Ordering::Acquire) {
+                return Ok(false);
+            }
             state.failed += 1;
             state.last_failed_steps = failure.failed_steps_json.map(str::to_string);
             Ok(true)
@@ -579,8 +585,10 @@ mod tests {
             _retry: TaskRetryUpdate<'_>,
         ) -> std::result::Result<bool, Self::Error> {
             let mut state = self.state();
-            if state.cancel_on_retry {
+            if state.cancel_on_retry.load(Ordering::Acquire) {
                 state.cancel_requested = true;
+                Ok(false)
+            } else if state.retry_conflict.load(Ordering::Acquire) {
                 Ok(false)
             } else {
                 state.retried += 1;
@@ -770,7 +778,7 @@ mod tests {
     #[tokio::test]
     async fn a_cancellation_racing_retry_is_acknowledged_instead_of_requeued() {
         let store = TestStore::with_results(vec![Err(TestError::Business("retry".to_string()))]);
-        store.state().cancel_on_retry = true;
+        store.state().cancel_on_retry.store(true, Ordering::Release);
         let result = process_claimed_task(
             store.clone(),
             task(7, 0, 3),
@@ -803,5 +811,87 @@ mod tests {
         assert_eq!(result.canceled, 1);
         assert_eq!(store.state().released, 0);
         assert!(store.state().processed_order.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancellation_control_error_is_counted_as_canceled() {
+        let store = TestStore::with_results(vec![Err(TestError::Core(
+            TaskCoreError::CancellationRequested {
+                task_id: 7,
+                processing_token: 2,
+            },
+        ))]);
+        store.state().cancel_requested = true;
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(result.succeeded, 0);
+        assert_eq!(store.state().canceled, 1);
+        assert_eq!(store.state().transitions, vec!["canceled"]);
+    }
+
+    #[tokio::test]
+    async fn stale_cancellation_control_error_does_not_claim_a_cancel_transition() {
+        let store = TestStore::with_results(vec![Err(TestError::Core(
+            TaskCoreError::CancellationRequested {
+                task_id: 7,
+                processing_token: 2,
+            },
+        ))]);
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::TaskDispatchOutcome::default());
+        assert_eq!(store.state().canceled, 0);
+        assert!(store.state().transitions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retry_and_failure_cas_conflicts_ignore_a_stale_worker() {
+        let retry = TestStore::with_results(vec![Err(TestError::Business("retry".to_string()))]);
+        retry.state().retry_conflict.store(true, Ordering::Release);
+        let result = process_claimed_task(
+            retry.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::TaskDispatchOutcome::default());
+        assert_eq!(retry.state().retried, 0);
+        assert!(retry.state().transitions.is_empty());
+
+        let failed = TestStore::with_results(vec![Err(TestError::Business("never".to_string()))]);
+        failed
+            .state()
+            .failed_conflict
+            .store(true, Ordering::Release);
+        let result = process_claimed_task(
+            failed.clone(),
+            task(7, 2, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::TaskDispatchOutcome::default());
+        assert_eq!(failed.state().failed, 0);
+        assert!(failed.state().transitions.is_empty());
     }
 }

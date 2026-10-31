@@ -660,6 +660,8 @@ mod tests {
         recorder.record_config_mutation("api", "upsert", "ok", 1);
         recorder.record_background_task_transition("cleanup", "completed");
         recorder.set_background_tasks_pending(2);
+        recorder.set_background_tasks_oldest_age_seconds(1.0);
+        recorder.record_task_lease_takeover("cleanup");
         recorder.record_external_operation("oidc", "token", "ok", 0.02);
         assert!(
             recorder

@@ -167,6 +167,14 @@ impl TaskLeaseGuard {
         Ok(())
     }
 
+    /// Returns the time remaining before an unrenewed lease becomes unsafe.
+    #[must_use]
+    pub fn remaining_renewal_budget(&self) -> Duration {
+        let state = self.lock_state();
+        self.renewal_timeout
+            .saturating_sub(state.last_renewed_at.elapsed())
+    }
+
     fn lock_state(&self) -> MutexGuard<'_, TaskLeaseGuardState> {
         match self.state.lock() {
             Ok(guard) => guard,
@@ -222,11 +230,20 @@ impl TaskExecutionContext {
     /// Returns [`TaskCoreError`] when shutdown wins before the requested sleep completes.
     pub async fn sleep_or_shutdown(&self, duration: Duration) -> Result<()> {
         self.lease_guard.ensure_active()?;
-        tokio::select! {
-            biased;
-            ()=self.shutdown_token.cancelled()=>self.lease_guard.ensure_active(),
-            ()=self.lease_guard.control_stop.cancelled()=>self.lease_guard.ensure_active(),
-            ()=tokio::time::sleep(duration)=>self.lease_guard.ensure_active(),
+        let operation = tokio::time::sleep(duration);
+        tokio::pin!(operation);
+        loop {
+            let renewal_budget = self.lease_guard.remaining_renewal_budget();
+            tokio::select! {
+                biased;
+                ()=self.shutdown_token.cancelled()=>return self.lease_guard.ensure_active(),
+                ()=self.lease_guard.control_stop.cancelled()=>return self.lease_guard.ensure_active(),
+                ()=&mut operation=>return self.lease_guard.ensure_active(),
+                ()=tokio::time::sleep(renewal_budget)=> {
+                    // A concurrent heartbeat may have renewed while the timer was ready.
+                    self.lease_guard.ensure_active()?;
+                }
+            }
         }
     }
 
@@ -236,11 +253,17 @@ impl TaskExecutionContext {
     ///
     /// Returns [`TaskCoreError`] when shutdown or lease loss has been observed.
     pub async fn stop_requested(&self) -> Result<()> {
-        tokio::select! {
-            ()=self.shutdown_token.cancelled()=>{},
-            ()=self.lease_guard.control_stop.cancelled()=>{},
+        loop {
+            let renewal_budget = self.lease_guard.remaining_renewal_budget();
+            tokio::select! {
+                biased;
+                ()=self.shutdown_token.cancelled()=>return self.lease_guard.ensure_active(),
+                ()=self.lease_guard.control_stop.cancelled()=>return self.lease_guard.ensure_active(),
+                ()=tokio::time::sleep(renewal_budget)=> {
+                    self.lease_guard.ensure_active()?;
+                }
+            }
         }
-        self.lease_guard.ensure_active()
     }
 }
 
@@ -298,6 +321,7 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
+    use std::sync::{Arc, Barrier};
     use tokio_util::sync::CancellationToken;
 
     use super::{
@@ -407,6 +431,90 @@ mod tests {
                 .unwrap()
                 .unwrap_err()
                 .is_task_cancellation_requested()
+        );
+    }
+
+    #[tokio::test]
+    async fn renewal_timeout_interrupts_sleep_and_pending_io_waits() {
+        let context = super::TaskExecutionContext::new(
+            TaskLease::new(2, 1),
+            Duration::from_millis(20),
+            CancellationToken::new(),
+        );
+        let sleeping = context.clone();
+        let waiting = context.clone();
+        let sleep =
+            tokio::spawn(async move { sleeping.sleep_or_shutdown(Duration::from_secs(1)).await });
+        let io = tokio::spawn(async move { waiting.stop_requested().await });
+        let sleep_error = tokio::time::timeout(Duration::from_secs(1), sleep)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        let io_error = tokio::time::timeout(Duration::from_secs(1), io)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(sleep_error.is_task_lease_renewal_timed_out());
+        assert!(io_error.is_task_lease_renewal_timed_out());
+    }
+
+    #[tokio::test]
+    async fn renewal_wait_timer_restarts_after_a_concurrent_heartbeat() {
+        let context = super::TaskExecutionContext::new(
+            TaskLease::new(3, 2),
+            Duration::from_millis(80),
+            CancellationToken::new(),
+        );
+        let waiting = context.clone();
+        let io = tokio::spawn(async move { waiting.stop_requested().await });
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        context.lease_guard().record_renewed();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !io.is_finished(),
+            "renewal must keep the original I/O wait alive"
+        );
+        let error = tokio::time::timeout(Duration::from_secs(1), io)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.is_task_lease_renewal_timed_out());
+    }
+
+    #[tokio::test]
+    async fn poisoned_lease_state_lock_recovers_and_clears_pending_io() {
+        let context = super::TaskExecutionContext::new(
+            TaskLease::new(4, 2),
+            Duration::from_secs(1),
+            CancellationToken::new(),
+        );
+        let guard = context.lease_guard().clone();
+        let failed = Arc::new(Barrier::new(2));
+        let thread_failed = failed.clone();
+        let lock = guard.state.clone();
+        let thread = std::thread::spawn(move || {
+            let _ = std::panic::catch_unwind(|| {
+                let _state = lock.lock().unwrap();
+                thread_failed.wait();
+                panic!("poison the lease state lock");
+            });
+        });
+        failed.wait();
+        thread.join().unwrap();
+        assert!(guard.ensure_active().is_ok());
+        let error = guard.mark_lost();
+        assert!(error.is_task_lease_lost());
+        assert!(
+            context
+                .stop_requested()
+                .await
+                .unwrap_err()
+                .is_task_lease_lost()
         );
     }
 }

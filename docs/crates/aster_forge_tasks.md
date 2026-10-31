@@ -224,11 +224,13 @@ let report = aster_forge_tasks::run_task_consumer(
     product_lane_consumer,
     stop_claiming,
     aster_forge_tasks::TaskConsumerConfig::default(),
-    role_health_status,
+    lane_health_status,
 ).await?;
 ```
 
-`TaskConsumer` 的 `concurrency()` 是本进程上限；runner 按空槽 claim，单个任务完成即可补位。
+每条 lane 和 scheduler group 必须使用独立的 `TaskRuntimeStatus`。status 属于单个 runner；产品层将多个 runner 和 scheduler 的健康状态聚合为角色级 readiness/liveness。禁止 runner 间、runner 与 scheduler 间共享 status，因为任何一个 runner 停止都会清空该实例的 active/running 状态。
+
+`TaskConsumer` 的 `concurrency()` 是本进程上限；runner 按空槽 claim，单个任务完成即可补位。claim 在独立 Tokio task 中运行，慢存储调用不会阻塞已启动 handler 的推进或 shutdown deadline。claim 在 shutdown 期间完成时，未启动的 lease 会 fenced release；超时 abort 的 claim 可能只能等待 lease 到期。
 不允许先 claim 再等 semaphore，也不等待整批最慢任务。定时轮询保证最终发现，
 `notified()` 只优化延迟；`idle_max_interval()` 给出无通知时的轮询上界。
 

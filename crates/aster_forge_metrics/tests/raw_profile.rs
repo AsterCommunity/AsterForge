@@ -30,6 +30,9 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
     ));
     recorder.role_readiness(true);
     recorder.db_pool("writer", 2, 1, Some(8));
+    recorder.set_background_tasks_pending(3);
+    recorder.set_background_tasks_oldest_age_seconds(2.5);
+    recorder.record_task_lease_takeover("archive");
     let raw = provider
         .export_prometheus(Duration::from_secs(1))
         .await
@@ -39,6 +42,7 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
         "# TYPE db_client_operation_duration_seconds histogram",
         "# TYPE db_client_connection_count gauge",
         "# TYPE aster_runtime_ready gauge",
+        "aster_task_lease_takeovers_total{kind=\"archive\"",
         "# TYPE target_info gauge",
         "aster_metrics_schema_version=\"aster-metrics/v1\"",
         "db_system_name=\"postgresql\"",
@@ -46,6 +50,13 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
     ] {
         assert!(raw.contains(expected), "missing {expected}: {raw}");
     }
+    assert!(
+        raw.lines()
+            .any(|line| { line.starts_with("aster_task_pending{") && line.ends_with("} 3") })
+    );
+    assert!(raw.lines().any(|line| {
+        line.starts_with("aster_task_pending_oldest_age_seconds{") && line.ends_with("} 2.5")
+    }));
     assert!(!raw.contains("db_queries_total"));
     assert!(!raw.contains("process_cpu_milliseconds_total"));
     let mut output = String::new();
