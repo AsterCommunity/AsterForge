@@ -299,6 +299,13 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
                 BackgroundTaskDispatchIteration::idle()
             },
         );
+        if has_work
+            && !self.phase.stopping()
+            && !stop.is_cancelled()
+            && self.consumer.concurrency() > self.executing.len()
+        {
+            self.next_poll = Instant::now();
+        }
     }
 
     fn failed_claim(&mut self, error: &impl std::fmt::Display) {
@@ -479,6 +486,7 @@ mod tests {
         release_mode: Arc<Mutex<ReleaseMode>>,
         ignore_cancel: bool,
         overclaim: bool,
+        poll_interval: Duration,
     }
 
     impl Store {
@@ -504,6 +512,7 @@ mod tests {
                     release_mode: Arc::default(),
                     ignore_cancel: false,
                     overclaim: false,
+                    poll_interval: Duration::from_millis(10),
                 },
                 receiver,
             )
@@ -518,7 +527,7 @@ mod tests {
             self.concurrency.load(Ordering::Acquire)
         }
         fn poll_interval(&self) -> Duration {
-            Duration::from_millis(10)
+            self.poll_interval
         }
         async fn notified(&self) {
             self.wake.notified().await;
@@ -1115,5 +1124,35 @@ mod tests {
         stop.cancel();
         runner.await.unwrap().unwrap();
         assert!(!status.is_running());
+    }
+    #[tokio::test(start_paused = true)]
+    async fn completion_during_claim_refills_remaining_slots_without_poll_delay() {
+        let (mut store, mut entered) = Store::new(&[0, 1, 2, 3, 4], 3);
+        store.poll_interval = Duration::from_mins(1);
+        let status = TaskRuntimeStatus::default();
+        let stop = CancellationToken::new();
+        let runner = tokio::spawn(run_task_consumer(
+            store.clone(),
+            stop.clone(),
+            config(),
+            status.clone(),
+        ));
+        for id in [0, 1, 2] {
+            assert_eq!(receive(&mut entered).await, id);
+        }
+        store.block_claim.store(true, Ordering::Release);
+        store.gates[0].add_permits(1);
+        until(|| store.claims.lock().unwrap().len() == 2).await;
+        store.gates[1].add_permits(1);
+        until(|| status.active() == 1).await;
+        store.claim_gate.add_permits(2);
+        // Each receive has a one-second bound, far below the sixty-second poll.
+        let a = receive(&mut entered).await;
+        let b = receive(&mut entered).await;
+        assert!(a == 3 || a == 4);
+        assert!(b == 3 || b == 4);
+        assert_ne!(a, b);
+        stop.cancel();
+        runner.await.unwrap().unwrap();
     }
 }

@@ -257,6 +257,7 @@ let report = aster_forge_tasks::run_task_consumer(
 产品定义可取消状态、权限、取消 API 和持久化状态机。Forge 要求实现：
 
 - `ExecutableTaskRecord::cancellation_requested()`：接管时已取消的快照不调用 handler。
+- `ClaimedTaskExecutionStore::confirm_task_succeeded`：在权威数据库确认同 task ID、同 processing token 的 Succeeded；处理函数返回 Ok 本身不足以报告成功。心跳持续到取消确认和结果处理完成，成功终态无需继续允许 heartbeat 更新 Processing 行。
 - `TaskHeartbeatStore` 返回 `TaskHeartbeatOutcome::{Renewed, Lost, CancellationRequested}`。
 - execution store 实现 typed cancellation 分类和同 token 的 `cancel_task_if_requested`。
 - handler 在有副作用的边界调用 `ensure_active()`，等待 I/O 时选择 `stop_requested()`；
