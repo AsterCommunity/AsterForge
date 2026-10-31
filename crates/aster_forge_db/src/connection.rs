@@ -335,7 +335,10 @@ pub async fn connect_reader_for_writer(
 }
 
 fn redacted_connection_error(error: &impl std::fmt::Display, url: &str) -> DbError {
-    let mut message = error.to_string().replace(url, "<redacted database URL>");
+    let mut message = error.to_string();
+    if !url.is_empty() {
+        message = message.replace(url, "<redacted database URL>");
+    }
     // Drivers may echo either the full URL or individual raw/percent-encoded userinfo fields.
     if let Ok(parsed) = aster_forge_utils::url::parse_url(url, "database URL") {
         for encoded in [Some(parsed.username()), parsed.password()]
@@ -582,6 +585,15 @@ mod tests {
     use aster_forge_test::temp::SqliteTestDatabase;
     use sea_orm::{ConnectionTrait, DbErr, TransactionTrait};
     use std::sync::Arc;
+
+    #[test]
+    fn empty_connection_url_preserves_the_driver_diagnostic() {
+        let message = "driver rejected an empty database URL";
+        assert_eq!(
+            super::redacted_connection_error(&message, "").to_string(),
+            crate::DbError::database_connection(message).to_string()
+        );
+    }
 
     #[test]
     fn credentialed_database_url_is_resolved_and_debug_is_redacted() {

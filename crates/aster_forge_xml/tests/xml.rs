@@ -456,6 +456,23 @@ fn original_writer_propagates_io_errors() {
 }
 
 #[test]
+fn stream_accepts_exact_namespace_quota_and_reuses_sibling_scope() {
+    use aster_forge_xml::{XmlStreamEvent, XmlStreamReader};
+    let policy = XmlSafetyPolicy {
+        max_namespace_bindings: 2,
+        ..XmlSafetyPolicy::untrusted()
+    };
+    let exact = b"<r xmlns:a='urn:a'><a:x xmlns:b='urn:b'/></r>".as_slice();
+    let siblings =
+        b"<r><x xmlns:a='urn:a' xmlns:b='urn:b'/><x xmlns:c='urn:c' xmlns:d='urn:d'/></r>"
+            .as_slice();
+    for input in [exact, siblings] {
+        let mut reader = XmlStreamReader::new(Cursor::new(input), policy).unwrap();
+        while !matches!(reader.read_event().unwrap(), XmlStreamEvent::Eof) {}
+    }
+}
+
+#[test]
 fn active_namespace_limit_is_shared_by_scanner_dom_and_stream() {
     use aster_forge_xml::{XmlStreamEvent, XmlStreamReader};
     let policy = XmlSafetyPolicy {

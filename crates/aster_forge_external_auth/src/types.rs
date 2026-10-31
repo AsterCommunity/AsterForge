@@ -197,7 +197,12 @@ pub fn parse_external_auth_provider_options(options: &str) -> ExternalAuthProvid
     serde_json::from_str::<ExternalAuthProviderOptions>(options)
         .unwrap_or_else(|error| {
             if !options.is_empty() && options != "{}" {
-                tracing::warn!(error = %error, "invalid external auth provider options JSON");
+                tracing::warn!(
+                    error_category = ?error.classify(),
+                    line = error.line(),
+                    column = error.column(),
+                    "invalid external auth provider options JSON"
+                );
             }
             ExternalAuthProviderOptions::default()
         })

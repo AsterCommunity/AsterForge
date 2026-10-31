@@ -245,9 +245,9 @@ pub async fn send_rendered_with(
         display_name: (!settings.from_name.is_empty()).then_some(settings.from_name.clone()),
     };
     tracing::debug!(
-        from = %from.address,
-        to = %to.address,
-        subject = %rendered.subject,
+        from = ?from.address,
+        to = ?to.address,
+        subject = ?rendered.subject,
         "mail: dispatching rendered message through configured sender"
     );
 

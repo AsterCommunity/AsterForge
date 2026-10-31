@@ -633,6 +633,10 @@ mod security_regression {
     #[test]
     fn planted_lock_link_does_not_truncate_target() {
         let suite = TestContainerSuite::new(&format!("security-{}", std::process::id()));
+        let _guard = aster_forge_utils::raii::TempDirGuard::new(
+            suite.state_dir().to_path_buf(),
+            "container lock fixture",
+        );
         let victim = suite.state_dir().join("victim");
         std::fs::write(&victim, b"keep").unwrap();
         let lock = suite.lock_path("symlink-test");

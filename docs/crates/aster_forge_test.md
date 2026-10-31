@@ -50,6 +50,7 @@ db.close().await?;
 - `process`：启用真实子进程 guard 和 loopback 临时端口分配。
 - `redis` / `postgres` / `mysql`：启用对应数据服务的容器 helper，各自隐含 `containers`。
 - `smtp`：启用 Mailpit 容器、SMTP endpoint、消息清理和消息计数 API，隐含 `containers`。
+- `logs`：启用局部日志捕获，并显式启用所需的 `tracing/std`；独立消费时不依赖其他 crate 的 feature 合并。
 
 ```toml
 [dev-dependencies]

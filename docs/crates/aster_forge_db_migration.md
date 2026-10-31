@@ -149,4 +149,4 @@ cargo clippy -p aster_forge_db_migration --all-targets -- -D warnings
 
 ## 标识符与 SQL 语句边界
 
-extension 名称作为单个双引号 PostgreSQL identifier 输出；索引名称按目标数据库转义内嵌引号，包含公开 PostgreSQL index builders。允许合法带引号、连字符或非 ASCII 的名称，不把名称当作 SQL 片段。产品继续拥有 migration 清单和名称来源；`execute_sqlite_statements` 明确执行调用方提供的 SQL，不是参数化查询入口。
+extension 名称作为单个双引号 PostgreSQL identifier 输出；索引名称按目标数据库转义内嵌引号，包含公开 PostgreSQL index builders。PostgreSQL helper 允许合法带引号、连字符或非 ASCII 的名称，不把名称当作 SQL 片段。`rename_mysql_index_if_exists` 的表名和新旧索引名则仅接受非空 ASCII 字母、数字和下划线，其他名称会被 `validate_mysql_identifier` 拒绝。产品继续拥有 migration 清单和名称来源；`execute_sqlite_statements` 明确执行调用方提供的 SQL，不是参数化查询入口。

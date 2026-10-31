@@ -7,7 +7,12 @@ mod tests {
 
     fn test_directory(name: &str) -> PathBuf {
         let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("aster-forge-cloud-files-{name}-{suffix}"))
+        let directory = std::env::temp_dir().join(format!(
+            "aster-forge-cloud-files-{name}-{}-{suffix}",
+            std::process::id()
+        ));
+        aster_forge_utils::state_directory::StateDirectory::open(&directory).unwrap();
+        directory
     }
 
     async fn accepted_create(
@@ -554,7 +559,7 @@ mod tests {
     async fn failed_remote_upload_commit_persist_does_not_publish_committed_content() {
         let directory = test_directory("upload-persist-failure");
         let remote_directory = directory.join("remote-state");
-        fs::create_dir_all(&remote_directory).unwrap();
+        aster_forge_utils::state_directory::StateDirectory::open(&remote_directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
         let generation = SessionGeneration::new(1).unwrap();
@@ -698,7 +703,7 @@ mod tests {
         let directory = test_directory("remote-persist-failure");
         fs::create_dir_all(&directory).unwrap();
         let remote_state_directory = directory.join("remote-state");
-        fs::create_dir_all(&remote_state_directory).unwrap();
+        aster_forge_utils::state_directory::StateDirectory::open(&remote_state_directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
         let generation = SessionGeneration::new(1).unwrap();
@@ -754,7 +759,10 @@ mod tests {
     fn durable_state_does_not_follow_predictable_temporary_links_and_is_private() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let directory = test_directory("state-security");
-        fs::create_dir_all(&directory).unwrap();
+        let _guard = aster_forge_utils::raii::TempDirGuard::new(
+            directory.clone(),
+            "durable state fixture",
+        );
         let victim = directory.join("victim");
         fs::write(&victim, b"keep").unwrap();
         symlink(&victim, directory.join("writeback.json.tmp")).unwrap();
@@ -764,8 +772,6 @@ mod tests {
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o777)).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         assert!(MemoryWritebackStore::new(cloud.scope.clone(), Some(&directory)).is_err());
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

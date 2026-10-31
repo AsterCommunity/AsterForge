@@ -12,7 +12,12 @@ mod namespace_tests {
 
     fn test_directory(name: &str) -> PathBuf {
         let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("aster-forge-cloud-namespace-{name}-{suffix}"))
+        let directory = std::env::temp_dir().join(format!(
+            "aster-forge-cloud-namespace-{name}-{}-{suffix}",
+            std::process::id()
+        ));
+        aster_forge_utils::state_directory::StateDirectory::open(&directory).unwrap();
+        directory
     }
 
     async fn activate(
