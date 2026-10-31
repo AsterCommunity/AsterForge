@@ -1,18 +1,25 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
-
-    fn test_directory(name: &str) -> PathBuf {
-        let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!(
-            "aster-forge-cloud-files-{name}-{}-{suffix}",
-            std::process::id()
-        ));
-        aster_forge_utils::state_directory::StateDirectory::open(&directory).unwrap();
-        directory
+    #[test]
+    fn state_fixture_cleans_up_during_unwind_even_when_state_becomes_a_file() {
+        for replace_with_file in [false, true] {
+            let (guard, directory) = test_directory("unwind-cleanup");
+            let root = guard.path().to_path_buf();
+            let result = std::panic::catch_unwind(move || {
+                let _guard = guard;
+                if replace_with_file {
+                    fs::remove_dir(&directory).unwrap();
+                    fs::write(&directory, b"blocking state file").unwrap();
+                } else {
+                    fs::write(directory.join("writeback.json"), b"checkpoint").unwrap();
+                }
+                panic!("exercise fixture unwind cleanup");
+            });
+            assert!(result.is_err());
+            assert!(!root.exists(), "fixture leaked {}", root.display());
+        }
     }
 
     async fn accepted_create(
@@ -66,11 +73,7 @@ mod tests {
 
     #[test]
     fn remote_startup_persists_a_restartable_snapshot() {
-        let directory = test_directory("remote-startup-snapshot");
-        let _guard = aster_forge_utils::raii::TempDirGuard::new(
-            directory.clone(),
-            "remote startup snapshot",
-        );
+        let (_directory_guard, directory) = test_directory("remote-startup-snapshot");
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let store = Arc::new(
             MemoryWritebackStore::new(cloud.scope.clone(), Some(&directory)).unwrap(),
@@ -345,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_upload_commit_before_local_outcome_recovers_after_restart() {
-        let directory = test_directory("upload-restart");
+        let (_directory_guard, directory) = test_directory("upload-restart");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -448,7 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_dirty_state_reconstructs_upload_intent_and_immutable_bytes() {
-        let directory = test_directory("legacy-upload");
+        let (_directory_guard, directory) = test_directory("legacy-upload");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -518,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_local_writeback_persist_does_not_publish_bytes_or_upload_intent() {
-        let directory = test_directory("writeback-persist-failure");
+        let (_directory_guard, directory) = test_directory("writeback-persist-failure");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -557,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_remote_upload_commit_persist_does_not_publish_committed_content() {
-        let directory = test_directory("upload-persist-failure");
+        let (_directory_guard, directory) = test_directory("upload-persist-failure");
         let remote_directory = directory.join("remote-state");
         aster_forge_utils::state_directory::StateDirectory::open(&remote_directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
@@ -611,7 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_commit_before_outcome_marker_recovers_after_restart() {
-        let directory = test_directory("remote-restart");
+        let (_directory_guard, directory) = test_directory("remote-restart");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -674,7 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_writeback_without_mutation_vector_is_recovered() {
-        let directory = test_directory("legacy-mutation");
+        let (_directory_guard, directory) = test_directory("legacy-mutation");
         fs::create_dir_all(&directory).unwrap();
         let (cloud, _) = MemoryCloud::fixture().unwrap();
         let scope = cloud.scope.clone();
@@ -700,7 +703,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_remote_persist_does_not_publish_an_in_memory_commit() {
-        let directory = test_directory("remote-persist-failure");
+        let (_directory_guard, directory) = test_directory("remote-persist-failure");
         fs::create_dir_all(&directory).unwrap();
         let remote_state_directory = directory.join("remote-state");
         aster_forge_utils::state_directory::StateDirectory::open(&remote_state_directory).unwrap();
@@ -758,11 +761,7 @@ mod tests {
     #[test]
     fn durable_state_does_not_follow_predictable_temporary_links_and_is_private() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let directory = test_directory("state-security");
-        let _guard = aster_forge_utils::raii::TempDirGuard::new(
-            directory.clone(),
-            "durable state fixture",
-        );
+        let (_directory_guard, directory) = test_directory("state-security");
         let victim = directory.join("victim");
         fs::write(&victim, b"keep").unwrap();
         symlink(&victim, directory.join("writeback.json.tmp")).unwrap();

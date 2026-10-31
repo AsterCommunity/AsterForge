@@ -927,3 +927,17 @@ fn serialize_state_document(document: &impl serde::Serialize) -> Result<Vec<u8>,
     serde_json::to_writer(&mut output, document)?;
     Ok(output.0)
 }
+
+// A private, random parent owns cleanup even when failure tests replace state with a file.
+#[cfg(test)]
+fn test_directory(name: &str) -> (aster_forge_utils::raii::TempDirGuard, PathBuf) {
+    let root = std::env::temp_dir().join(format!(
+        "aster-forge-cloud-files-{name}-{}",
+        aster_forge_utils::id::new_uuid()
+    ));
+    aster_forge_utils::state_directory::StateDirectory::open(&root).unwrap();
+    let guard = aster_forge_utils::raii::TempDirGuard::new(root.clone(), "cloud state fixture");
+    let directory = root.join("state");
+    aster_forge_utils::state_directory::StateDirectory::open(&directory).unwrap();
+    (guard, directory)
+}

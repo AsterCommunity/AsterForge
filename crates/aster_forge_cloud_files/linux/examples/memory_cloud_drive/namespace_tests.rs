@@ -4,21 +4,8 @@ mod namespace_tests {
     use aster_forge_cloud_files_linux::{
         LinuxInvalidation, LinuxRemoteChange, LinuxRemoteDelete, LinuxRemoteEntry,
     };
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     type MemoryEngine = LinuxWritableEngine<MemoryCloud, MemoryWritebackStore>;
-
-    fn test_directory(name: &str) -> PathBuf {
-        let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!(
-            "aster-forge-cloud-namespace-{name}-{}-{suffix}",
-            std::process::id()
-        ));
-        aster_forge_utils::state_directory::StateDirectory::open(&directory).unwrap();
-        directory
-    }
 
     async fn activate(
         state_directory: Option<&Path>,
@@ -402,7 +389,7 @@ mod namespace_tests {
 
     #[tokio::test]
     async fn namespace_overlay_and_stable_inodes_survive_a_new_mount_generation() {
-        let directory = test_directory("restart");
+        let (_directory_guard, directory) = test_directory("restart");
         fs::create_dir_all(&directory).unwrap();
         let generation_one = SessionGeneration::new(1).unwrap();
         let (engine, store, _) = activate(Some(&directory), generation_one).await;
@@ -466,7 +453,7 @@ mod namespace_tests {
         reason = "the restart scenario verifies the original create parent across upload, rename, persistence, and reload"
     )]
     async fn nested_create_upload_rename_and_reload_preserve_the_original_create_parent() {
-        let directory = test_directory("nested-upload-reload");
+        let (_directory_guard, directory) = test_directory("nested-upload-reload");
         fs::create_dir_all(&directory).unwrap();
         let generation = SessionGeneration::new(1).unwrap();
         let (engine, store, scope) = activate(Some(&directory), generation).await;
@@ -581,7 +568,7 @@ mod namespace_tests {
 
     #[tokio::test]
     async fn namespace_mutation_runner_reconciles_create_rename_and_delete_idempotently() {
-        let directory = test_directory("runner");
+        let (_directory_guard, directory) = test_directory("runner");
         fs::create_dir_all(&directory).unwrap();
         let generation = SessionGeneration::new(1).unwrap();
         let (engine, store, _) = activate(Some(&directory), generation).await;
@@ -683,7 +670,7 @@ mod namespace_tests {
 
     #[tokio::test]
     async fn fenced_or_failed_namespace_transactions_publish_no_overlay() {
-        let directory = test_directory("failure");
+        let (_directory_guard, directory) = test_directory("failure");
         fs::create_dir_all(&directory).unwrap();
         let generation = SessionGeneration::new(2).unwrap();
         let (engine, store, scope) = activate(Some(&directory), generation).await;
