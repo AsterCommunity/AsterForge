@@ -925,6 +925,33 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn no_available_local_slots_never_calls_the_store() {
+        struct NeverClaim;
+        #[async_trait::async_trait]
+        impl TaskClaimStore<TestTask, TestKind, TestLane> for NeverClaim {
+            type Error = crate::TaskCoreError;
+            async fn claim(
+                &self,
+                _: super::TaskClaimRequest<TestKind, TestLane>,
+            ) -> crate::Result<Vec<(TestTask, crate::TaskLease)>> {
+                panic!("zero local capacity must not reach the store")
+            }
+        }
+        let lane = TaskLaneConfig {
+            lane: TestLane::Default,
+            kinds: TEST_KINDS,
+            limit: 2,
+            cluster_limit: None,
+        };
+        assert!(
+            claim_due_for_lane(&NeverClaim, lane, 0, 60, |_| TestLane::Default)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn request_timing_saturates_and_token_overflow_is_checked() {
         let now = chrono::Utc::now();
