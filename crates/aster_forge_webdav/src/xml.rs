@@ -277,7 +277,10 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
             }
             include_seen = true;
             require_property_names(child)?;
-            include.extend(collect_requested_properties(child)?);
+            include.extend(collect_requested_properties(
+                child,
+                XmlSafetyPolicy::untrusted().max_input_bytes,
+            )?);
         } else if is_dav_element(child, "prop") {
             if kind.is_some() {
                 return Err(DavXmlError::InvalidGrammar);
@@ -285,6 +288,7 @@ pub fn parse_propfind_request(body: &[u8]) -> Result<DavPropfindRequest, DavXmlE
             require_property_names(child)?;
             kind = Some(DavPropfindRequest::Prop(collect_requested_properties(
                 child,
+                XmlSafetyPolicy::untrusted().max_input_bytes,
             )?));
         }
     }
@@ -437,7 +441,10 @@ pub(crate) fn parse_report_request(
     let document = parse_document_with_options(body, &options)?;
     let root = document.root();
     if is_dav_element(root, "version-tree") {
-        return Ok(DavParsedReport::VersionTree(parse_version_tree_prop(root)?));
+        return Ok(DavParsedReport::VersionTree(parse_version_tree_prop(
+            root,
+            maximum_input_bytes,
+        )?));
     }
     if is_dav_element(root, "expand-property") {
         return Ok(DavParsedReport::ExpandProperty(parse_expand_property(
@@ -492,11 +499,15 @@ fn is_dav_element<S: AsRef<[u8]>>(element: ElementRef<'_, S>, local_name: &str) 
 
 fn parse_version_tree_prop<S: AsRef<[u8]>>(
     root: ElementRef<'_, S>,
+    maximum_copy_bytes: usize,
 ) -> Result<Option<Vec<DavRequestedProperty>>, DavXmlError> {
     require_element_content(root)?;
     if let Some(prop) = unique_dav_child(root, "prop")? {
         require_property_names(prop)?;
-        return Ok(Some(collect_requested_properties(prop)?));
+        return Ok(Some(collect_requested_properties(
+            prop,
+            maximum_copy_bytes,
+        )?));
     }
     Ok(None)
 }
@@ -624,9 +635,9 @@ fn require_property_name<S: AsRef<[u8]>>(property: ElementRef<'_, S>) -> Result<
 
 fn collect_requested_properties<S: AsRef<[u8]>>(
     container: ElementRef<'_, S>,
+    mut remaining: usize,
 ) -> Result<Vec<DavRequestedProperty>, DavXmlError> {
     let mut seen = std::collections::HashSet::new();
-    let mut remaining = XmlSafetyPolicy::untrusted().max_input_bytes;
     let mut result = Vec::new();
     for element in container.child_elements() {
         if !seen.insert((element.namespace(), element.name())) {

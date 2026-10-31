@@ -552,6 +552,8 @@ sink 可以返回 `DavObservationError`，但调用边界必须使用 `publish_n
 
 ### 属性内存预算与 PATCH 版本操作
 
+VERSION-TREE 的 selector 复制预算使用调用方的 `DavReportLimits::maximum_input_bytes`；PROPFIND 使用共享 XML 默认输入上限。复制预算按去重后保留的 namespace、local name 和 prefix 的 UTF-8 字节累计，超限返回 `DavXmlError::TooLarge`。
+
 `build_live_propfind_item` 和 `build_live_propfind_item_with_provider` 显式接收 `DavPropertyMaterializationLimits`；不保留套默认值的旧入口。默认值为每资源 64 MiB 的字符串/节点保留预算和 4096 个属性，调用方可按产品负载调整。预算在下一项属性组装前检查源值，并累计已保留的内容；超限返回 `DavLivePropertyError::LimitExceeded`。它独立于最终 `DavMultiStatusLimits` 的序列化配额。PROPFIND 和 version-tree selector 按 namespace/local name 去重，保留第一次出现的 lexical prefix；解析期复制的 selector 字节总量也受输入配额约束。转换 owned dead-property、LOCK owner 或 PROPPATCH 子树前同样检查复制后的字符串总量，防止继承 namespace 放大；PROPPATCH 的全部操作及继承 `xml:lang` 的复制共享该预算；属性显式覆盖或清空语言值时保持原有继承语义。
 
 `plan_patch_request` 执行与 PUT 相同的内容版本保护，禁止 immutable version 和未允许 checkout 的 checked-in 修改。调用方必须把返回的 `DavPatchPlan::versioning` checkout/checkin 操作与 PATCH 原子应用放在产品事务内。Forge 不替产品执行版本落库、权限或审计。
