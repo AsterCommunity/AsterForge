@@ -11,6 +11,20 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{TaskCoreError, TaskLease, TaskLeaseGuard};
 
+/// Result of an authoritative lease renewal/control check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskHeartbeatOutcome {
+    Renewed,
+    Lost,
+    CancellationRequested,
+}
+
+impl From<bool> for TaskHeartbeatOutcome {
+    fn from(renewed: bool) -> Self {
+        if renewed { Self::Renewed } else { Self::Lost }
+    }
+}
+
 /// Product storage adapter used by the generic heartbeat loop.
 #[async_trait::async_trait]
 pub trait TaskHeartbeatStore: Send + Sync {
@@ -19,7 +33,7 @@ pub trait TaskHeartbeatStore: Send + Sync {
 
     /// Attempts to persist one heartbeat renewal for the given lease.
     ///
-    /// Returning `Ok(false)` means the conditional update did not match the current task status or
+    /// Returning `Ok(TaskHeartbeatOutcome::Lost)` means the conditional update did not match the current task status or
     /// processing token, so the worker must treat the lease as lost. Returning `Err(_)` is treated
     /// as a transient storage failure unless the in-memory lease guard has already timed out.
     async fn touch_task_heartbeat(
@@ -27,7 +41,7 @@ pub trait TaskHeartbeatStore: Send + Sync {
         lease: TaskLease,
         now: DateTime<Utc>,
         lease_expires_at: DateTime<Utc>,
-    ) -> std::result::Result<bool, Self::Error>;
+    ) -> std::result::Result<TaskHeartbeatOutcome, Self::Error>;
 }
 
 /// Runs heartbeat updates until stopped, the persisted lease is lost, or renewal times out.
@@ -91,24 +105,27 @@ where
 /// Returns an error when the heartbeat loses its lease or the store operation fails.
 pub fn evaluate_heartbeat_result<Error>(
     lease_guard: &TaskLeaseGuard,
-    result: std::result::Result<bool, Error>,
+    result: std::result::Result<TaskHeartbeatOutcome, Error>,
 ) -> std::result::Result<(), Error>
 where
     Error: From<TaskCoreError> + std::fmt::Display,
 {
     let lease = lease_guard.lease();
     match result {
-        Ok(true) => {
+        Ok(TaskHeartbeatOutcome::Renewed) => {
             lease_guard.record_renewed();
             Ok(())
         }
-        Ok(false) => {
+        Ok(TaskHeartbeatOutcome::Lost) => {
             tracing::info!(
                 task_id = lease.task_id,
                 processing_token = lease.processing_token,
                 "background task lease lost; stopping outdated worker"
             );
             Err(lease_guard.mark_lost().into())
+        }
+        Ok(TaskHeartbeatOutcome::CancellationRequested) => {
+            Err(lease_guard.mark_cancel_requested().into())
         }
         Err(error) => {
             tracing::warn!(
@@ -140,8 +157,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        TaskHeartbeatStore, evaluate_heartbeat_result, run_task_heartbeat_loop,
-        spawn_task_heartbeat_with_interval, stop_task_heartbeat,
+        TaskHeartbeatOutcome, TaskHeartbeatStore, evaluate_heartbeat_result,
+        run_task_heartbeat_loop, spawn_task_heartbeat_with_interval, stop_task_heartbeat,
     };
     use crate::{TaskCoreError, TaskLease, TaskLeaseGuard, task_lease_expires_at};
 
@@ -159,9 +176,9 @@ mod tests {
             _lease: TaskLease,
             _now: DateTime<Utc>,
             _lease_expires_at: DateTime<Utc>,
-        ) -> std::result::Result<bool, Self::Error> {
+        ) -> std::result::Result<TaskHeartbeatOutcome, Self::Error> {
             self.touches.fetch_add(1, Ordering::SeqCst);
-            Ok(self.should_match.load(Ordering::SeqCst))
+            Ok(self.should_match.load(Ordering::SeqCst).into())
         }
     }
 
@@ -169,7 +186,7 @@ mod tests {
     fn heartbeat_result_records_successful_renewal() {
         let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
-        evaluate_heartbeat_result::<TaskCoreError>(&guard, Ok(true))
+        evaluate_heartbeat_result::<TaskCoreError>(&guard, Ok(TaskHeartbeatOutcome::Renewed))
             .expect("heartbeat should renew");
 
         guard.ensure_active().expect("lease should remain active");
@@ -179,14 +196,33 @@ mod tests {
     fn heartbeat_result_marks_lost_on_false_update() {
         let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
 
-        let error = evaluate_heartbeat_result::<TaskCoreError>(&guard, Ok(false))
-            .expect_err("false update should lose lease");
+        let error =
+            evaluate_heartbeat_result::<TaskCoreError>(&guard, Ok(TaskHeartbeatOutcome::Lost))
+                .expect_err("false update should lose lease");
 
         assert!(error.is_task_lease_lost());
         assert!(
             guard
                 .ensure_active()
                 .is_err_and(|error| error.is_task_lease_lost())
+        );
+    }
+
+    #[test]
+    fn user_cancellation_is_distinct_from_shutdown_and_lease_loss() {
+        let guard = TaskLeaseGuard::new(TaskLease::new(7, 2), Duration::from_mins(1));
+        let error = evaluate_heartbeat_result::<TaskCoreError>(
+            &guard,
+            Ok(TaskHeartbeatOutcome::CancellationRequested),
+        )
+        .unwrap_err();
+        assert!(error.is_task_cancellation_requested());
+        assert!(!error.is_task_worker_shutdown_requested());
+        assert!(
+            guard
+                .ensure_active()
+                .unwrap_err()
+                .is_task_cancellation_requested()
         );
     }
 

@@ -21,6 +21,8 @@
 
 #[cfg(feature = "runtime-component")]
 mod component;
+#[cfg(feature = "runtime")]
+mod consumer;
 mod dedupe;
 mod dispatch;
 mod error;
@@ -49,12 +51,16 @@ pub use component::{
     background_task_component_from_shutdown, background_task_component_with_definitions,
     background_task_component_with_definitions_from_shutdown,
 };
+#[cfg(feature = "runtime")]
+pub use consumer::{
+    TaskConsumer, TaskConsumerConfig, TaskConsumerReport, TaskRuntimeStatus, run_task_consumer,
+};
 pub use dedupe::{TASK_DEDUPE_KEY_MAX_LEN, TaskDedupeKey, scheduled_task_dedupe_key};
 pub use dispatch::{
-    ClaimableTaskRecord, ClaimedTask, DispatchStats, TaskClaimCandidate, TaskClaimStore,
-    TaskDispatchOutcome, TaskLaneConfig, available_lane_capacity, claim_due_for_lane,
-    claim_limit_to_u64, dispatch_lanes, drain_dispatcher, run_claimed_task_batch,
-    run_with_concurrency_limit,
+    ClaimableTaskRecord, ClaimedTask, DispatchStats, TaskClaimCandidate, TaskClaimRequest,
+    TaskClaimStore, TaskDispatchOutcome, TaskLaneConfig, available_lane_capacity,
+    claim_due_for_lane, claim_limit_to_u64, dispatch_lanes, drain_dispatcher,
+    run_claimed_task_batch, run_with_concurrency_limit, task_claim_candidates,
 };
 pub use error::{Result, TaskCoreError};
 pub use execution::{
@@ -63,7 +69,7 @@ pub use execution::{
     run_claimed_task_batch_with_store,
 };
 pub use heartbeat::{
-    TaskHeartbeatStore, evaluate_heartbeat_result, run_task_heartbeat_loop,
+    TaskHeartbeatOutcome, TaskHeartbeatStore, evaluate_heartbeat_result, run_task_heartbeat_loop,
     spawn_task_heartbeat_with_interval, stop_task_heartbeat,
 };
 pub use lease::{

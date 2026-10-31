@@ -33,6 +33,11 @@ pub enum TaskCoreError {
         /// Processing token owned by the current worker.
         processing_token: i64,
     },
+    /// A user requested cooperative task cancellation; already committed effects remain.
+    #[error(
+        "background task cancellation requested for task #{task_id} with token {processing_token}"
+    )]
+    CancellationRequested { task_id: i64, processing_token: i64 },
     /// The current worker observed shutdown and should release its processing lease.
     #[error(
         "background task worker shutdown requested for task #{task_id} with token {processing_token}"
@@ -71,6 +76,12 @@ impl TaskCoreError {
     #[must_use]
     pub const fn is_task_lease_renewal_timed_out(&self) -> bool {
         matches!(self, Self::LeaseRenewalTimedOut { .. })
+    }
+
+    /// Returns whether the logical task has a persisted user cancellation request.
+    #[must_use]
+    pub const fn is_task_cancellation_requested(&self) -> bool {
+        matches!(self, Self::CancellationRequested { .. })
     }
 
     /// Returns whether this error means the current worker should stop for shutdown.

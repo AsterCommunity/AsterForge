@@ -21,6 +21,8 @@ use crate::{
 
 /// Minimal read-only view required to execute a claimed task.
 pub trait ExecutableTaskRecord<Kind>: TaskRecord<Kind> {
+    /// Whether a reclaimed snapshot is awaiting cancellation acknowledgement.
+    fn cancellation_requested(&self) -> bool;
     /// Number of attempts already persisted before the current execution.
     fn attempt_count(&self) -> i32;
 
@@ -68,6 +70,14 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
         context: TaskExecutionContext,
     ) -> std::result::Result<(), Self::Error>;
 
+    /// Confirms durable success for this exact task and processing token using authoritative
+    /// storage. A terminal success is valid even if heartbeats no longer renew Processing rows.
+    async fn confirm_task_succeeded(
+        &self,
+        task: &Task,
+        lease: TaskLease,
+    ) -> std::result::Result<bool, Self::Error>;
+
     /// Returns whether an error means the current worker has lost its persisted lease.
     fn is_lease_lost_error(&self, error: &Self::Error) -> bool;
 
@@ -76,6 +86,15 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
 
     /// Returns whether an error means cooperative shutdown should release the current lease.
     fn is_worker_shutdown_requested_error(&self, error: &Self::Error) -> bool;
+
+    /// Distinguishes user cancellation from worker shutdown and lease loss.
+    fn is_cancellation_requested_error(&self, error: &Self::Error) -> bool;
+    /// Atomically acknowledges a request only for this task's current processing token.
+    async fn cancel_task_if_requested(
+        &self,
+        task: &Task,
+        lease: TaskLease,
+    ) -> std::result::Result<bool, Self::Error>;
 
     /// Classifies an ordinary task failure for retry behavior.
     fn retry_class(&self, task: &Task, error: &Self::Error) -> TaskRetryClass;
@@ -90,6 +109,16 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
     async fn failed_steps_json(&self, task: &Task, display_error: &str) -> Option<String>;
 
     /// Marks the claimed task permanently failed.
+    ///
+    /// The same atomic CAS or transaction must check the task ID, processing token,
+    /// executable state, and absence of a persisted cancellation request. Transactions
+    /// must serialize against cancellation through row locks or an equivalent mechanism.
+    /// A token-only fence or an earlier cancellation read is insufficient. If cancellation committed
+    /// first, preserve it and all associated state; do not commit failure or its side effects.
+    /// Return `true` only after committing failure, or `false` without changes on cancellation
+    /// or a stale lease. On `false`, the runtime calls [`Self::cancel_task_if_requested`]
+    /// with the same lease to acknowledge cancellation or ignore a stale worker.
+    /// Storage failures must remain `Err`, rather than being reported as a CAS miss.
     async fn mark_task_failed(
         &self,
         task: &Task,
@@ -98,6 +127,15 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
     ) -> std::result::Result<bool, Self::Error>;
 
     /// Marks the claimed task retryable at a future timestamp.
+    ///
+    /// Atomically check the task ID, processing token, executable state, and absence of
+    /// persisted cancellation in the same CAS or transaction as the retry update. Transactions
+    /// must serialize against cancellation through row locks or an equivalent mechanism.
+    /// If cancellation committed first, preserve it and do not update attempts, steps,
+    /// retry timing, or related product state. Return `true` only after committing retry;
+    /// return `false` without changes on cancellation or a stale lease. The runtime then
+    /// calls [`Self::cancel_task_if_requested`] with the same lease to distinguish an
+    /// acknowledged cancellation from stale work. Propagate storage failures as `Err`.
     async fn mark_task_retry(
         &self,
         task: &Task,
@@ -106,6 +144,11 @@ pub trait ClaimedTaskExecutionStore<Task, Kind>: TaskHeartbeatStore + Clone + Se
     ) -> std::result::Result<bool, Self::Error>;
 
     /// Releases a processing lease during cooperative shutdown.
+    ///
+    /// Apply the same atomic token/state/cancellation fence as [`Self::mark_task_retry`].
+    /// Return `false` without changes when cancellation or another owner won; the runtime
+    /// checks [`Self::cancel_task_if_requested`] afterward. A release must not erase a
+    /// persisted user cancellation.
     async fn release_task_for_shutdown(
         &self,
         task: &Task,
@@ -174,10 +217,6 @@ where
 /// # Errors
 ///
 /// Returns a store error when heartbeat, processing, or fenced outcome persistence fails.
-#[expect(
-    clippy::too_many_lines,
-    reason = "Heartbeat shutdown, lease fencing, retry, and permanent failure form one claimed-task state transition."
-)]
 pub async fn process_claimed_task<Store, Task, Kind, LeaseExpiresFn, RetryDelayFn>(
     store: Store,
     task: Task,
@@ -204,25 +243,64 @@ where
     );
     let heartbeat_cancel_guard = heartbeat_stop.clone().drop_guard();
 
-    let task_result = match context.ensure_active() {
-        Ok(()) => store.process_task(&task, context).await,
-        Err(error) => Err(Store::Error::from(error)),
-    };
+    // Keep renewal alive through all result/control I/O. Always stop and join it on errors too.
+    let result = async {
+        if task.cancellation_requested() {
+            return Ok(cancellation_outcome(&store, &task, lease)
+                .await?
+                .unwrap_or_default());
+        }
+        let task_result = match context.ensure_active() {
+            Ok(()) => store.process_task(&task, context).await,
+            Err(error) => Err(Store::Error::from(error)),
+        };
+        complete_claimed_task(&store, &task, lease, task_result, config.retry_delay_secs).await
+    }
+    .await;
     drop(heartbeat_cancel_guard);
     stop_task_heartbeat(heartbeat_stop, heartbeat_handle).await;
+    result
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "Heartbeat shutdown, lease fencing, retry, and permanent failure form one claimed-task state transition."
+)]
+async fn complete_claimed_task<Store, Task, Kind, RetryDelayFn>(
+    store: &Store,
+    task: &Task,
+    lease: TaskLease,
+    task_result: std::result::Result<(), Store::Error>,
+    retry_delay_secs: RetryDelayFn,
+) -> std::result::Result<TaskDispatchOutcome, Store::Error>
+where
+    Store: ClaimedTaskExecutionStore<Task, Kind>,
+    Task: ExecutableTaskRecord<Kind>,
+    Kind: Copy + std::fmt::Display,
+    RetryDelayFn: Fn(i32) -> i64,
+{
+    if let Some(outcome) = cancellation_outcome(store, task, lease).await? {
+        return Ok(outcome);
+    }
 
     match task_result {
         Ok(()) => {
-            store.record_task_transition(&task, "succeeded");
+            if !store.confirm_task_succeeded(task, lease).await? {
+                return Ok(cancellation_outcome(store, task, lease)
+                    .await?
+                    .unwrap_or_default());
+            }
+            store.record_task_transition(task, "succeeded");
             Ok(TaskDispatchOutcome::succeeded())
         }
         Err(error)
             if store.is_lease_lost_error(&error)
                 || store.is_lease_renewal_timed_out_error(&error)
-                || store.is_worker_shutdown_requested_error(&error) =>
+                || store.is_worker_shutdown_requested_error(&error)
+                || store.is_cancellation_requested_error(&error) =>
         {
             if store.is_worker_shutdown_requested_error(&error)
-                && store.release_task_for_shutdown(&task, lease).await?
+                && store.release_task_for_shutdown(task, lease).await?
             {
                 store.wake_dispatcher();
             }
@@ -231,23 +309,25 @@ where
                 processing_token = lease.processing_token,
                 "background task worker stopped before completion; skipping stale completion"
             );
-            Ok(TaskDispatchOutcome::default())
+            Ok(cancellation_outcome(store, task, lease)
+                .await?
+                .unwrap_or_default())
         }
         Err(error) => {
             let attempt_count = task.attempt_count().saturating_add(1);
             let storage_error = store.storage_error(&error);
             let display_error = store.display_error(&storage_error);
-            let failed_steps_json = store.failed_steps_json(&task, &display_error).await;
-            let retry_class = store.retry_class(&task, &error);
+            let failed_steps_json = store.failed_steps_json(task, &display_error).await;
+            let retry_class = store.retry_class(task, &error);
             let should_auto_retry =
                 retry_class.should_auto_retry() && attempt_count < task.max_attempts();
 
             if should_auto_retry {
-                let retry_at = Utc::now()
-                    + chrono::Duration::seconds((config.retry_delay_secs)(attempt_count));
+                let retry_at =
+                    Utc::now() + chrono::Duration::seconds(retry_delay_secs(attempt_count));
                 let retried = store
                     .mark_task_retry(
-                        &task,
+                        task,
                         lease,
                         TaskRetryUpdate {
                             attempt_count,
@@ -264,7 +344,9 @@ where
                         processing_token = lease.processing_token,
                         "background task lease moved before retry state update; ignoring stale worker"
                     );
-                    return Ok(TaskDispatchOutcome::default());
+                    return Ok(cancellation_outcome(store, task, lease)
+                        .await?
+                        .unwrap_or_default());
                 }
 
                 tracing::warn!(
@@ -276,13 +358,13 @@ where
                     "background task failed; scheduled retry"
                 );
                 store.wake_dispatcher();
-                store.record_task_transition(&task, "retry");
+                store.record_task_transition(task, "retry");
                 Ok(TaskDispatchOutcome::retried())
             } else {
                 let finished_at = Utc::now();
                 let failed = store
                     .mark_task_failed(
-                        &task,
+                        task,
                         lease,
                         TaskPermanentFailure {
                             attempt_count,
@@ -300,7 +382,9 @@ where
                         processing_token = lease.processing_token,
                         "background task lease moved before failure state update; ignoring stale worker"
                     );
-                    return Ok(TaskDispatchOutcome::default());
+                    return Ok(cancellation_outcome(store, task, lease)
+                        .await?
+                        .unwrap_or_default());
                 }
 
                 tracing::warn!(
@@ -310,10 +394,26 @@ where
                     error = %display_error,
                     "background task permanently failed"
                 );
-                store.record_task_transition(&task, "failed");
+                store.record_task_transition(task, "failed");
                 Ok(TaskDispatchOutcome::failed())
             }
         }
+    }
+}
+
+async fn cancellation_outcome<Store, Task, Kind>(
+    store: &Store,
+    task: &Task,
+    lease: TaskLease,
+) -> std::result::Result<Option<TaskDispatchOutcome>, Store::Error>
+where
+    Store: ClaimedTaskExecutionStore<Task, Kind>,
+{
+    if store.cancel_task_if_requested(task, lease).await? {
+        store.record_task_transition(task, "canceled");
+        Ok(Some(TaskDispatchOutcome::canceled()))
+    } else {
+        Ok(None)
     }
 }
 
@@ -365,6 +465,7 @@ mod tests {
         attempt_count: i32,
         max_attempts: i32,
         order: i32,
+        cancel_requested: bool,
     }
 
     impl TaskRecord<TestKind> for TestTask {
@@ -386,6 +487,9 @@ mod tests {
     }
 
     impl ExecutableTaskRecord<TestKind> for TestTask {
+        fn cancellation_requested(&self) -> bool {
+            self.cancel_requested
+        }
         fn attempt_count(&self) -> i32 {
             self.attempt_count
         }
@@ -403,12 +507,29 @@ mod tests {
         Business(String),
     }
 
+    #[derive(Debug, Default, Clone, Copy)]
+    enum OutcomeWrite {
+        #[default]
+        Commit,
+        Stale,
+        Cancel,
+    }
+
     #[derive(Debug, Default)]
     struct StoreState {
         process_results: VecDeque<std::result::Result<(), TestError>>,
+        process_gate: Option<Arc<tokio::sync::Notify>>,
+        cancellation_gate: Option<Arc<tokio::sync::Notify>>,
+        cancellation_checks: usize,
+        success_confirmation: Option<std::result::Result<bool, TestError>>,
+        heartbeat_touches: usize,
         failed: usize,
         retried: usize,
         released: usize,
+        cancel_requested: bool,
+        canceled: usize,
+        retry_write: OutcomeWrite,
+        failed_write: OutcomeWrite,
         wakes: usize,
         transitions: Vec<&'static str>,
         processed_order: Vec<i64>,
@@ -444,21 +565,70 @@ mod tests {
             _lease: TaskLease,
             _now: DateTime<Utc>,
             _lease_expires_at: DateTime<Utc>,
-        ) -> std::result::Result<bool, Self::Error> {
-            Ok(true)
+        ) -> std::result::Result<crate::TaskHeartbeatOutcome, Self::Error> {
+            self.state().heartbeat_touches += 1;
+            Ok(crate::TaskHeartbeatOutcome::Renewed)
         }
     }
 
     #[async_trait::async_trait]
     impl ClaimedTaskExecutionStore<TestTask, TestKind> for TestStore {
+        async fn confirm_task_succeeded(
+            &self,
+            _: &TestTask,
+            _: TaskLease,
+        ) -> std::result::Result<bool, Self::Error> {
+            let state = self.state();
+            match &state.success_confirmation {
+                Some(value) => value.clone(),
+                None => Ok(true),
+            }
+        }
+
+        fn is_cancellation_requested_error(&self, error: &Self::Error) -> bool {
+            matches!(error,TestError::Core(error) if error.is_task_cancellation_requested())
+        }
+        async fn cancel_task_if_requested(
+            &self,
+            _: &TestTask,
+            _: TaskLease,
+        ) -> std::result::Result<bool, Self::Error> {
+            let gate = {
+                let mut state = self.state();
+                state.cancellation_checks += 1;
+                state.cancellation_gate.clone()
+            };
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
+            let mut state = self.state();
+            if state.cancel_requested {
+                state.cancel_requested = false;
+                state.canceled += 1;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+
         async fn process_task(
             &self,
             task: &TestTask,
-            _context: TaskExecutionContext,
+            context: TaskExecutionContext,
         ) -> std::result::Result<(), Self::Error> {
-            let mut state = self.state();
-            state.processed_order.push(task.id);
-            state.process_results.pop_front().unwrap_or(Ok(()))
+            let (gate, result) = {
+                let mut state = self.state();
+                state.processed_order.push(task.id);
+                (
+                    state.process_gate.clone(),
+                    state.process_results.pop_front().unwrap_or(Ok(())),
+                )
+            };
+            if let Some(gate) = gate {
+                gate.notified().await;
+                context.ensure_active()?;
+            }
+            result
         }
 
         fn is_lease_lost_error(&self, error: &Self::Error) -> bool {
@@ -499,6 +669,14 @@ mod tests {
             failure: TaskPermanentFailure<'_>,
         ) -> std::result::Result<bool, Self::Error> {
             let mut state = self.state();
+            match state.failed_write {
+                OutcomeWrite::Stale => return Ok(false),
+                OutcomeWrite::Cancel => {
+                    state.cancel_requested = true;
+                    return Ok(false);
+                }
+                OutcomeWrite::Commit => {}
+            }
             state.failed += 1;
             state.last_failed_steps = failure.failed_steps_json.map(str::to_string);
             Ok(true)
@@ -510,8 +688,18 @@ mod tests {
             _lease: TaskLease,
             _retry: TaskRetryUpdate<'_>,
         ) -> std::result::Result<bool, Self::Error> {
-            self.state().retried += 1;
-            Ok(true)
+            let mut state = self.state();
+            match state.retry_write {
+                OutcomeWrite::Cancel => {
+                    state.cancel_requested = true;
+                    Ok(false)
+                }
+                OutcomeWrite::Stale => Ok(false),
+                OutcomeWrite::Commit => {
+                    state.retried += 1;
+                    Ok(true)
+                }
+            }
         }
 
         async fn release_task_for_shutdown(
@@ -549,6 +737,7 @@ mod tests {
             id,
             attempt_count,
             max_attempts,
+            cancel_requested: false,
             order: i32::try_from(id).expect("test id should fit in i32"),
         }
     }
@@ -663,6 +852,7 @@ mod tests {
         assert_eq!(
             stats,
             DispatchStats {
+                canceled: 0,
                 claimed: 0,
                 succeeded: 2,
                 retried: 0,
@@ -670,5 +860,245 @@ mod tests {
             }
         );
         assert_eq!(store.state().processed_order, vec![1, 2]);
+    }
+    #[tokio::test]
+    async fn reclaimed_cancellation_never_runs_the_product_handler() {
+        let store = TestStore::with_results(vec![Ok(())]);
+        store.state().cancel_requested = true;
+        let mut task = task(7, 0, 3);
+        task.cancel_requested = true;
+        let result = process_claimed_task(
+            store.clone(),
+            task,
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(result.succeeded, 0);
+        assert!(store.state().processed_order.is_empty());
+        assert_eq!(store.state().canceled, 1);
+    }
+    #[tokio::test]
+    async fn a_cancellation_racing_retry_is_acknowledged_instead_of_requeued() {
+        let store = TestStore::with_results(vec![Err(TestError::Business("retry".to_string()))]);
+        store.state().retry_write = OutcomeWrite::Cancel;
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(result.retried, 0);
+        assert_eq!(store.state().retried, 0);
+        assert_eq!(store.state().transitions, vec!["canceled"]);
+    }
+    #[tokio::test]
+    async fn a_persisted_user_cancel_wins_over_process_shutdown() {
+        let store = TestStore::with_results(vec![Ok(())]);
+        store.state().cancel_requested = true;
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            stop,
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(store.state().released, 0);
+        assert!(store.state().processed_order.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancellation_control_error_is_counted_as_canceled() {
+        let store = TestStore::with_results(vec![Err(TestError::Core(
+            TaskCoreError::CancellationRequested {
+                task_id: 7,
+                processing_token: 2,
+            },
+        ))]);
+        store.state().cancel_requested = true;
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(result.succeeded, 0);
+        assert_eq!(store.state().canceled, 1);
+        assert_eq!(store.state().transitions, vec!["canceled"]);
+    }
+
+    #[tokio::test]
+    async fn stale_cancellation_control_error_does_not_claim_a_cancel_transition() {
+        let store = TestStore::with_results(vec![Err(TestError::Core(
+            TaskCoreError::CancellationRequested {
+                task_id: 7,
+                processing_token: 2,
+            },
+        ))]);
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::TaskDispatchOutcome::default());
+        assert_eq!(store.state().canceled, 0);
+        assert!(store.state().transitions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retry_and_failure_cas_conflicts_ignore_a_stale_worker() {
+        let retry = TestStore::with_results(vec![Err(TestError::Business("retry".to_string()))]);
+        retry.state().retry_write = OutcomeWrite::Stale;
+        let result = process_claimed_task(
+            retry.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::TaskDispatchOutcome::default());
+        assert_eq!(retry.state().retried, 0);
+        assert!(retry.state().transitions.is_empty());
+
+        let failed = TestStore::with_results(vec![Err(TestError::Business("never".to_string()))]);
+        failed.state().failed_write = OutcomeWrite::Stale;
+        let result = process_claimed_task(
+            failed.clone(),
+            task(7, 2, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, crate::TaskDispatchOutcome::default());
+        assert_eq!(failed.state().failed, 0);
+        assert!(failed.state().transitions.is_empty());
+    }
+    #[tokio::test(start_paused = true)]
+    async fn heartbeats_renew_a_handler_waiting_longer_than_its_original_lease() {
+        let store = TestStore::with_results(vec![Ok(())]);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        store.state().process_gate = Some(gate.clone());
+        let mut configuration = config();
+        configuration.heartbeat_interval = Duration::from_millis(10);
+        configuration.renewal_timeout = Duration::from_millis(30);
+        let worker = tokio::spawn(process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            configuration,
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(store.state().heartbeat_touches >= 8);
+        assert!(!worker.is_finished());
+        gate.notify_one();
+        assert_eq!(worker.await.unwrap().unwrap().succeeded, 1);
+        let touches = store.state().heartbeat_touches;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            store.state().heartbeat_touches,
+            touches,
+            "execution completion must join heartbeat before return"
+        );
+    }
+    #[tokio::test]
+    async fn permanent_failure_racing_a_cancellation_acknowledges_without_failure() {
+        let store = TestStore::with_results(vec![Err(TestError::Business("never".to_string()))]);
+        store.state().failed_write = OutcomeWrite::Cancel;
+        let result = process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.canceled, 1);
+        assert_eq!(result.failed, 0);
+        assert_eq!(store.state().failed, 0);
+        assert_eq!(store.state().transitions, vec!["canceled"]);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_ack_wait_keeps_heartbeats_alive_and_rejects_stale_success() {
+        let store = TestStore::with_results(vec![Ok(())]);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        store.state().cancellation_gate = Some(gate.clone());
+        let mut configuration = config();
+        configuration.heartbeat_interval = Duration::from_millis(10);
+        configuration.renewal_timeout = Duration::from_millis(30);
+        let worker = tokio::spawn(process_claimed_task(
+            store.clone(),
+            task(7, 0, 3),
+            TaskLease::new(7, 2),
+            CancellationToken::new(),
+            configuration,
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(store.state().cancellation_checks, 1);
+        assert!(
+            store.state().heartbeat_touches >= 8,
+            "heartbeat must continue while cancel acknowledgement is pending"
+        );
+        assert!(!worker.is_finished());
+        // Model a takeover detected by the authoritative terminal-state/token read.
+        store.state().success_confirmation = Some(Ok(false));
+        store.state().cancellation_gate = None;
+        gate.notify_one();
+        assert_eq!(
+            worker.await.unwrap().unwrap(),
+            crate::TaskDispatchOutcome::default()
+        );
+        assert!(store.state().transitions.is_empty());
+        let touches = store.state().heartbeat_touches;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(store.state().heartbeat_touches, touches);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn success_confirmation_failure_joins_heartbeat_without_reporting_success() {
+        let store = TestStore::with_results(vec![Ok(())]);
+        let expected = TestError::Business("confirmation unavailable".to_string());
+        store.state().success_confirmation = Some(Err(expected.clone()));
+        assert_eq!(
+            process_claimed_task(
+                store.clone(),
+                task(7, 0, 3),
+                TaskLease::new(7, 2),
+                CancellationToken::new(),
+                config()
+            )
+            .await
+            .unwrap_err(),
+            expected
+        );
+        assert!(store.state().transitions.is_empty());
+        let touches = store.state().heartbeat_touches;
+        tokio::time::sleep(Duration::from_mins(2)).await;
+        assert_eq!(store.state().heartbeat_touches, touches);
     }
 }

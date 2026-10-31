@@ -17,7 +17,9 @@ aster.runtime.health.status aster_runtime_health_status {state} Gauge
 aster.runtime.ready aster_runtime_ready {state} Gauge
 aster.task.handler.active aster_task_handler_active {execution} UpDownCounter
 aster.task.handler.duration aster_task_handler_duration_seconds s Histogram
+aster.task.lease.takeovers aster_task_lease_takeovers_total {takeover} Counter
 aster.task.pending aster_task_pending {task} Gauge
+aster.task.pending.oldest_age aster_task_pending_oldest_age_seconds s Gauge
 aster.task.retries aster_task_retries_total {retry} Counter
 aster.task.transitions aster_task_transitions_total {transition} Counter
 aster.telemetry.export.failures aster_telemetry_export_failures_total {failure} ObservableCounter

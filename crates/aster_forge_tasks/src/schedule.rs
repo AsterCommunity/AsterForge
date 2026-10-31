@@ -173,6 +173,7 @@ pub struct LeasedScheduledRuntimeConfig<
     PanicFn,
     RecordFn,
 > {
+    status: Option<crate::TaskRuntimeStatus>,
     namespace: &'static str,
     lease_id: String,
     lease_store: LeaseStore,
@@ -208,6 +209,7 @@ impl<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
         RecordFut: Future<Output = ()> + Send + 'static,
     {
         Self {
+            status: None,
             namespace,
             lease_id: lease_id.into(),
             lease_store,
@@ -222,6 +224,13 @@ impl<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
             _name: PhantomData,
             _outcome: PhantomData,
         }
+    }
+
+    /// Observes scheduler availability. A healthy standby is ready without owning the lease.
+    #[must_use]
+    pub fn status(mut self, status: crate::TaskRuntimeStatus) -> Self {
+        self.status = Some(status);
+        self
     }
 
     /// Sets the scheduled task claim TTL.
@@ -323,7 +332,7 @@ struct LeasedScheduledRuntimeParts<State, LeaseStore, ScheduleStore, PanicFn, Re
 /// Lease-scoped task group used by product registration closures.
 ///
 /// A value of this type exists only while Forge is building the worker group
-/// for one lease acquisition. Use [`Self::worker`] for singleton workers that
+/// for one lease acquisition. Use [`Self::singleton_worker`] for singleton workers that
 /// should run only on the active owner, and [`Self::scheduled`] for tasks that
 /// should additionally coordinate each firing through the scheduled task
 /// catalog.
@@ -347,7 +356,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     /// Spawns one lease-scoped singleton worker into this group.
-    pub fn worker<WorkerFn, WorkerFut>(&mut self, worker: WorkerFn)
+    pub fn singleton_worker<WorkerFn, WorkerFut>(&mut self, worker: WorkerFn)
     where
         WorkerFn: FnOnce(CancellationToken, State) -> WorkerFut,
         WorkerFut: Future<Output = ()> + Send + 'static,
@@ -462,6 +471,8 @@ async fn run_leased_scheduled_runtime_tasks<
     RecordFn: Clone + Send + Sync + 'static,
     Outcome: Send + 'static,
 {
+    let status = config.status.clone();
+    let _running = status.as_ref().map(crate::TaskRuntimeStatus::start);
     let parts = config.into_parts();
     let LeasedScheduledRuntimeParts {
         namespace,
@@ -476,7 +487,10 @@ async fn run_leased_scheduled_runtime_tasks<
     } = parts;
 
     aster_forge_runtime::run_runtime_lease_supervisor(
-        lease_store,
+        ObservedLeaseStore {
+            inner: lease_store,
+            status,
+        },
         lease_config,
         shutdown_token,
         move |leased_shutdown_token| {
@@ -1132,6 +1146,7 @@ mod tests {
         let scheduled_runs = Arc::new(AtomicUsize::new(0));
         let recorded_runs = Arc::new(AtomicUsize::new(0));
         let shutdown = CancellationToken::new();
+        let status = crate::TaskRuntimeStatus::default();
         let config = LeasedScheduledRuntimeConfig::new(
             "aster_test",
             "aster_test.background",
@@ -1154,6 +1169,7 @@ mod tests {
                 }
             },
         )
+        .status(status.clone())
         .claim_ttl(std::time::Duration::from_secs(30))
         .lease_ttl(std::time::Duration::from_secs(30))
         .lease_renew_interval(std::time::Duration::from_secs(10))
@@ -1174,7 +1190,7 @@ mod tests {
                     &'static str,
                 >| {
                     let worker_runs = worker_runs_for_group.clone();
-                    group.worker(move |shutdown_token, ()| async move {
+                    group.singleton_worker(move |shutdown_token, ()| async move {
                         worker_runs.fetch_add(1, Ordering::SeqCst);
                         shutdown_token.cancelled().await;
                     });
@@ -1189,6 +1205,9 @@ mod tests {
                 },
             )
             .await;
+
+        assert!(!status.is_running());
+        assert!(!status.ready());
 
         assert_eq!(acquired.load(Ordering::SeqCst), 1);
         assert_eq!(released.load(Ordering::SeqCst), 1);
@@ -1370,5 +1389,113 @@ mod tests {
             renewed,
             "renewal loop must stop before the claim is completed"
         );
+    }
+}
+
+struct ObservedLeaseStore<S> {
+    inner: S,
+    status: Option<crate::TaskRuntimeStatus>,
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use aster_forge_runtime::{RuntimeLeaseAcquire, RuntimeLeaseClaim, RuntimeLeaseStore};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct StandbyStore {
+        fail: AtomicBool,
+    }
+    #[async_trait::async_trait]
+    impl RuntimeLeaseStore for StandbyStore {
+        type Error = String;
+        async fn try_acquire(
+            &self,
+            _: RuntimeLeaseClaim<'_>,
+        ) -> Result<RuntimeLeaseAcquire, String> {
+            if self.fail.load(Ordering::Acquire) {
+                Err("database unavailable".to_string())
+            } else {
+                Ok(RuntimeLeaseAcquire::Standby { owner: None })
+            }
+        }
+        async fn renew(
+            &self,
+            _: &str,
+            _: &str,
+            _: DateTime<Utc>,
+            _: DateTime<Utc>,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+        async fn release(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn healthy_standby_is_ready_and_errors_loss_or_exit_are_not() {
+        let status = crate::TaskRuntimeStatus::default();
+        let running = status.start();
+        let store = ObservedLeaseStore {
+            inner: StandbyStore {
+                fail: AtomicBool::new(true),
+            },
+            status: Some(status.clone()),
+        };
+        let now = Utc::now();
+        let claim = RuntimeLeaseClaim {
+            lease_id: "scheduler",
+            owner_id: "standby",
+            now,
+            expires_at: now + chrono::Duration::seconds(30),
+        };
+        assert!(store.try_acquire(claim).await.is_err());
+        assert!(!status.ready());
+        store.inner.fail.store(false, Ordering::Release);
+        assert!(matches!(
+            store.try_acquire(claim).await.unwrap(),
+            RuntimeLeaseAcquire::Standby { .. }
+        ));
+        assert!(status.ready());
+        assert!(!store.renew("scheduler", "standby", now, now).await.unwrap());
+        assert!(!status.ready());
+        store.try_acquire(claim).await.unwrap();
+        assert!(status.ready());
+        drop(running);
+        assert!(!status.ready());
+    }
+}
+
+#[async_trait::async_trait]
+impl<S: aster_forge_runtime::RuntimeLeaseStore> aster_forge_runtime::RuntimeLeaseStore
+    for ObservedLeaseStore<S>
+{
+    type Error = S::Error;
+    async fn try_acquire(
+        &self,
+        claim: aster_forge_runtime::RuntimeLeaseClaim<'_>,
+    ) -> Result<aster_forge_runtime::RuntimeLeaseAcquire, Self::Error> {
+        let result = self.inner.try_acquire(claim).await;
+        if let Some(status) = &self.status {
+            status.observe_available(result.is_ok());
+        }
+        result
+    }
+    async fn renew(
+        &self,
+        lease_id: &str,
+        owner_id: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<bool, Self::Error> {
+        let result = self.inner.renew(lease_id, owner_id, now, expires_at).await;
+        if let Some(status) = &self.status {
+            status.observe_available(matches!(result, Ok(true)));
+        }
+        result
+    }
+    async fn release(&self, lease_id: &str, owner_id: &str) -> Result<(), Self::Error> {
+        self.inner.release(lease_id, owner_id).await
     }
 }

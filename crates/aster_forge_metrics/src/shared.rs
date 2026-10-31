@@ -22,6 +22,8 @@ crate::product_metrics! {
         config_mutations_total: counter("", "aster.config.mutations", "aster.config.mutations under aster-metrics/v1.", &["source", "operation", "status"]).with_unit("{operation}"),
         config_mutation_changed_keys: histogram_with_buckets("", "aster.config.mutation.changed_keys", "aster.config.mutation.changed_keys under aster-metrics/v1.", &["source", "operation", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0]).with_unit("{key}"),
         background_tasks_total: counter("", "aster.task.transitions", "aster.task.transitions under aster-metrics/v1.", &["kind", "status"]).with_unit("{transition}"),
+        background_tasks_oldest_age: gauge("", "aster.task.pending.oldest_age", "Age of the oldest durably queued task.", &[]).with_unit("s"),
+        task_lease_takeovers: counter("", "aster.task.lease.takeovers", "Expired processing leases successfully reclaimed by this instance.", &["kind"]).with_unit("{takeover}"),
         background_tasks_pending: gauge("", "aster.task.pending", "aster.task.pending under aster-metrics/v1.", &[]).with_unit("{task}"),
         background_task_retries_total: counter("", "aster.task.retries", "aster.task.retries under aster-metrics/v1.", &["kind"]).with_unit("{retry}"),
         external_operations_total: counter("", "aster.external.operations", "aster.external.operations under aster-metrics/v1.", &["system", "operation", "status"]).with_unit("{operation}"),
@@ -191,6 +193,13 @@ impl InfrastructureMetricSet {
         if status == "retry" {
             metrics.background_task_retries_total.inc(&[kind], 1);
         }
+    }
+
+    fn set_background_tasks_oldest_age_seconds(&self, seconds: f64) {
+        self.background_tasks_oldest_age.set(&[], seconds);
+    }
+    fn record_task_lease_takeover(&self, kind: &'static str) {
+        self.task_lease_takeovers.inc(&[kind], 1);
     }
 
     fn set_background_tasks_pending(&self, pending: u64) {
@@ -416,6 +425,14 @@ impl MetricsRecorder for InfrastructureMetricsRecorder {
 
     fn record_background_task_transition(&self, kind: &'static str, status: &'static str) {
         self.metrics.record_background_task_transition(kind, status);
+    }
+
+    fn set_background_tasks_oldest_age_seconds(&self, seconds: f64) {
+        self.metrics
+            .set_background_tasks_oldest_age_seconds(seconds);
+    }
+    fn record_task_lease_takeover(&self, kind: &'static str) {
+        self.metrics.record_task_lease_takeover(kind);
     }
 
     fn set_background_tasks_pending(&self, pending: u64) {

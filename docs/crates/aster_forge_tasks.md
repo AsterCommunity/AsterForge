@@ -39,7 +39,8 @@ aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge" }
 
 主要 API 分组：
 
-- `dispatch`：lane claim、并发执行、dispatch stats、drain。
+- `consumer`：独立的持久化队列消费、持续补位、状态与两阶段关闭（`runtime` feature）。
+- `dispatch`：原子 lane claim 契约、并发执行、dispatch stats、手动 drain。
 - `dedupe`：`TaskDedupeKey` 和 `scheduled_task_dedupe_key(...)`。
 - `execution`：claimed task 的完整执行生命周期。
 - `heartbeat`：lease heartbeat loop。
@@ -209,9 +210,71 @@ payload/result schema。数据库里已有的旧 wire value 也可以继续反�
 - 记录 metrics。
 - 唤醒 dispatcher。
 
-AsterDrive 已按这个模式直接使用 `claim_due_for_lane`、`run_claimed_task_batch_with_store`、
-Forge `TaskLease`/`TaskExecutionContext` 和 `drain_dispatcher`。Drive 只保留 SeaORM store、
+AsterDrive 常驻消费使用 `TaskConsumer`/`run_task_consumer`，手动 drain 使用 batch primitives。
+两者共享 `claim_due_for_lane`、`process_claimed_task`、Forge `TaskLease`/`TaskExecutionContext`。Drive 只保留 SeaORM store、
 稳定 API error code 映射、metrics，以及 task context 到产品 storage cancellation 的适配。
+
+## 独立消费者与原子认领（强制迁移）
+
+普通任务消费与调度领导权分开。每个 worker 为每条 lane 启动 `run_task_consumer`，
+共享调度组仅负责定时 firing。单机把两者组合进同一个进程，不维护第二套 handler。
+
+```rust
+let report = aster_forge_tasks::run_task_consumer(
+    product_lane_consumer,
+    stop_claiming,
+    aster_forge_tasks::TaskConsumerConfig::default(),
+    lane_health_status,
+).await?;
+```
+
+每条 lane 和 scheduler group 必须使用独立的 `TaskRuntimeStatus`。status 属于单个 runner；产品层将多个 runner 和 scheduler 的健康状态聚合为角色级 readiness/liveness。禁止 runner 间、runner 与 scheduler 间共享 status，因为任何一个 runner 停止都会清空该实例的 active/running 状态。
+
+`TaskConsumer` 的 `concurrency()` 是本进程上限；runner 按空槽 claim，单个任务完成即可补位。claim、release 和 handler 分别由 runner 内部的 JoinSet 持有；慢存储调用不会阻塞其他工作或 shutdown deadline。claim 在 shutdown 期间完成时，未启动的 lease 会 fenced release；release 也受最终关闭期限约束。最终期限到达后全部 abort 并 join，再允许关闭 audit/DB；未知结果的 claim 只能等待 lease 到期。runner 被丢弃时也会 abort 自己持有的任务，避免后台继续认领。空队列和 claim 错误保留轮询退避。
+不允许先 claim 再等 semaphore，也不等待整批最慢任务。定时轮询保证最终发现，
+`notified()` 只优化延迟；`idle_max_interval()` 给出无通知时的轮询上界。
+
+旧 `TaskClaimStore` 的分步查询接口已移除。产品实现唯一的
+`claim(TaskClaimRequest) -> Vec<(preclaim_snapshot, new_lease)>`：
+
+1. 在同一事务内锁共享额度行，重新读权威额度，按有效 processing lease 计数。
+2. 等锁后用 `request.at(Utc::now())` 刷新时间，限制为本地空槽与剩余额度的较小值。
+3. 选择候选并加行锁（支持时 `SKIP LOCKED`），CAS 更新 token、状态和 lease。
+4. 返回认领前快照及 token+1 的 lease；事务外不得先选候选或先数额度。
+
+`TaskLaneConfig.limit` 是本进程容量，`cluster_limit` 是产品提供的可选共享额度。
+`fast_continue`、旧锁 key 与 `.worker()` 已移除；单 owner worker 显式使用
+`.singleton_worker()`。事务 SQL、quota 配置和产品状态仍由产品拥有。
+
+默认 shutdown：立即停止 claim，等待已启动任务 20 秒，再协作取消 5 秒；总预算不得超过24小时。
+超时遗弃 future 时不提前释放 lease：blocking I/O 可能仍在退出，后续 owner 要等租约到期。
+产品组件外层 grace 应大于内部预算，并在关闭 audit/DB 前等待消费者。
+`TaskRuntimeStatus.ready()` 需要初始化、无 claim 错误且未 draining，空队列和健康 standby 都健康；
+`is_running()` 只表达本地活性，不把短暂数据库故障变成 liveness 失败。
+
+## 协作式持久化取消
+
+产品定义可取消状态、权限、取消 API 和持久化状态机。Forge 要求实现：
+
+- `ExecutableTaskRecord::cancellation_requested()`：接管时已取消的快照不调用 handler。
+- `ClaimedTaskExecutionStore::confirm_task_succeeded`：在权威数据库确认同 task ID、同 processing token 的 Succeeded；处理函数返回 Ok 本身不足以报告成功。心跳持续到取消确认和结果处理完成，成功终态无需继续允许 heartbeat 更新 Processing 行。
+- `TaskHeartbeatStore` 返回 `TaskHeartbeatOutcome::{Renewed, Lost, CancellationRequested}`。
+- execution store 实现 typed cancellation 分类和同 token 的 `cancel_task_if_requested`。
+- `mark_task_retry`、`mark_task_failed` 和 `release_task_for_shutdown` 必须在**同一条 fenced CAS 或同一事务**中检查 task ID、processing token、可执行状态及没有持久化取消请求。事务方案必须通过共享行锁或等价机制串行化取消与结果写入；只检查 token，或读取取消后无条件写入，均不符合契约。产品用 `Canceling` 表达取消时，写入条件必须排除该状态；用独立取消字段时，必须同时检查该字段。
+- handler 在有副作用的边界调用 `ensure_active()`，等待 I/O 时选择 `stop_requested()`；
+  它同时被进程关闭、lease 丢失、续约超时和用户取消唤醒。
+
+执行结束、失败/retry CAS 竞争和进程 shutdown 前均检查持久化取消；取消优先，不伪报成功。
+结果写入的返回协议是：`Ok(true)` 仅表示本次迁移已提交；取消或旧 lease 导致未写入时返回 `Ok(false)`，保留原有状态、attempt、steps、lease 和相关业务数据，不执行对应终态清理。runtime 随后用同一 lease 调用 `cancel_task_if_requested`：返回 `true` 才计入 canceled；返回 `false` 则按旧 owner 忽略，不记录 retry/failure/success。数据库错误必须返回 `Err`，不能伪装为 CAS 未命中。
+取消和结果写入按事务提交顺序决定胜者：取消先提交，后续 retry/failure/release 不得覆盖；retry 先提交，则后续取消按产品的队列取消规则处理。runtime 的事前、事后检查不能替代 adapter 内部的原子条件。产品须用真实持久化测试验证取消先提交、结果先提交、旧 token 和正常更新，并检查未命中时没有业务副作用。
+取消保留已提交的产品变更，Forge 不提供回滚承诺。外部副作用仍是至少一次语义。
+产品需把 publication receipt/checkpoint 与文件、配额、版本或业务变更放在同一 fenced 事务内。
+执行尝试只能清理 `cleanup_task_temp_dir_for_lease_in_root` 对应的 token 目录；
+整条 task 目录的删除属于终态保留期或显式清理。
+
+组件可 `.named("task_consumers")` / `.named("task_scheduler")` 分别挂载；
+元数据用 `.with_definition_filter(...)` 只注册实际运行定义。
+请求拥有的本地维护用 `.after_service()`，保持运行直到 HTTP producer 停止，随后才关闭依赖。
 
 ## Runtime worker
 
@@ -228,7 +291,7 @@ Forge `TaskLease`/`TaskExecutionContext` 和 `drain_dispatcher`。Drive 只保�
 - periodic task 的记录逻辑由产品传入 hook。
 - panic outcome 由产品决定如何持久化。
 - `periodic_sleep_duration` 对零间隔钳到 1 秒下限（与 dispatch worker 的 `effective_dispatch_base_interval` 一致），防止配置事故让 runner 热 spin、scheduled 版打爆数据库；非零的亚秒间隔不干预（快速测试、内存轮询是合法用法）。
-- `BackgroundTasks::shutdown` 会 drain 所有 worker 句柄：panic 退出的 worker 逐条记 `tracing::error!`（panic hook 之外补一层任务组上下文），被 `abort_all` 取消的 worker 属于预期路径不告警。
+- `BackgroundTasks::shutdown` 会 drain 所有 worker 句柄：panic 退出的 worker 逐条记 `tracing::error!`（panic hook 之外补一层任务组上下文）；被 `abort_all` 取消的 worker 不逐条记日志，但 grace 超时时 shutdown 会记录一次组级 `tracing::warn!`。
 
 多实例服务如果有一组 process-level singleton worker，优先使用
 `run_leased_background_tasks(...)`，不要在产品侧重复手写
@@ -274,7 +337,7 @@ let key = aster_forge_tasks::scheduled_task_dedupe_key(
 
 ```text
 dedupe key              -> 防重复创建任务
-processing_token lease  -> 防重复执行同一条任务
+processing_token lease  -> 限定当前 owner 可提交的状态；崩溃后仍可能再次执行
 runtime lease           -> 防多个实例同时运行调度器/维护循环
 scheduled task claim    -> 防多个实例同时运行同一个计划触发点
 ```
@@ -344,7 +407,6 @@ let config = aster_forge_tasks::LeasedScheduledRuntimeConfig::new(
 
 config
     .run(shutdown_token, |runtime| {
-        runtime.worker(spawn_background_task_dispatcher);
         runtime.scheduled(
             SystemRuntimeTaskKind::MailOutboxDispatch,
             mail_outbox_dispatch_interval,
@@ -361,7 +423,7 @@ config
     .await;
 ```
 
-`runtime.worker(...)` 适合后台 task dispatcher 这类只需要 runtime lease、不需要 scheduled catalog row 的常驻 worker。`runtime.scheduled(...)` 适合 mail outbox dispatch、audit cleanup、health check 这类固定周期任务。
+`runtime.singleton_worker(...)` 只用于确实需要全局单 owner 的常驻维护。普通持久化任务消费者必须独立启动，不能放进这个组，否则扩副本仍然只有一个进程消费。`runtime.scheduled(...)` 适合 mail outbox dispatch、audit cleanup、health check 这类固定周期任务。
 
 `run_scheduled_periodic_task` 是低阶 primitive，只有在产品已经自己管理 runtime lease 和 `BackgroundTasks` group 时才应该直接用。常规产品入口不要手写 owner id、lease supervisor、scheduled task registrar 这类 glue。
 
@@ -421,7 +483,7 @@ Forge 类型，也不要保留同签名转发 helper。
 
 ## 错误边界
 
-Forge 使用 `TaskCoreError` 表达 lease lost、renewal timeout、shutdown requested 等共享控制错误。产品应在 service 边界映射为自己的错误类型，并提供判断函数给 `ClaimedTaskExecutionStore`。
+Forge 使用 `TaskCoreError` 表达 lease lost、renewal timeout、shutdown requested、cancellation requested 等共享控制错误。产品应在 service 边界映射为自己的错误类型，并提供判断函数给 `ClaimedTaskExecutionStore`。
 
 不要保留无意义薄封装，例如只把 `TaskExecutionContext` 包一层但不增加产品语义。直接用 Forge 类型。
 
@@ -432,7 +494,9 @@ Forge 使用 `TaskCoreError` 表达 lease lost、renewal timeout、shutdown requ
 - task kind 与 registry 双向一致。
 - claim 使用 processing token fence。
 - heartbeat lost lease 后不会写成功状态。
-- shutdown 会 release processing task 到 retry。
+- shutdown 停止 claim；协作退出时 fenced release 到 retry，超时遗弃时保留 lease 到期接管。
+- 用户取消与 retry/shutdown 竞争、过期 Canceling 接管、旧 token 不得确认取消。
+- 单 worker 容量、持续补位、多个消费者、动态降容、集群额度和空队列健康。
 - retryable/permanent/manual failure 分类。
 - step JSON parse/serialize 和失败 step 标记。
 - dispatch lane 并发限制。
@@ -445,3 +509,16 @@ Forge 使用 `TaskCoreError` 表达 lease lost、renewal timeout、shutdown requ
   lease/heartbeat、claimed execution、drain 和 task temp primitives；产品侧只保留 task API、
   SeaORM store、稳定错误码、storage cancellation、双 temp root 规则、presentation、
   存储迁移任务和运行时任务记录等业务语义。
+
+## 本地验证与下游迁移
+
+公共任务 API 变更应同时验证消费者。Forge 提供从当前 workspace manifest 生成 patch 的脚本：
+
+```bash
+python3 ../AsterForge/scripts/local-consumer-patch.py > /tmp/forge-local.toml
+cargo test --config /tmp/forge-local.toml --lib
+```
+
+命令在下游仓库执行。遇到共享 sccache 服务导致本地 target 权限错误时，可临时加
+`--config 'build.rustc-wrapper=""'`。本地 patch 只验证当前源码，不能作为已发布 Git revision 的证据；
+发布后统一更新下游 revision，并在去掉 patch 后重新生成/验证 Cargo.lock。

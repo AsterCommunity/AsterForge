@@ -147,6 +147,12 @@ pub struct BackgroundTasks {
 }
 
 impl BackgroundTasks {
+    /// Overrides the enclosing join budget, including any consumer drain/cancellation stages.
+    #[must_use]
+    pub fn with_shutdown_grace(mut self, grace: Duration) -> Self {
+        self.shutdown_grace = grace;
+        self
+    }
     /// Creates a task collection with a fresh shutdown token and the default shutdown grace.
     #[must_use]
     pub fn new() -> Self {
@@ -797,10 +803,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_aborts_workers_after_custom_grace() {
-        let mut tasks = BackgroundTasks::with_shutdown_token_and_grace(
-            CancellationToken::new(),
-            Duration::from_millis(1),
-        );
+        let mut tasks = BackgroundTasks::with_shutdown_token(CancellationToken::new())
+            .with_shutdown_grace(Duration::from_millis(1));
         let calls = Arc::new(AtomicUsize::new(0));
 
         tasks.push({
