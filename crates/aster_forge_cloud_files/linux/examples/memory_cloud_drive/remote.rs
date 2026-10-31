@@ -135,13 +135,17 @@ impl MemoryRemoteMutationBackend {
                 .map(|value| value.parse::<u64>())
                 .transpose()?
                 .unwrap_or_default();
-        Ok(Self {
+        let backend = Self {
             namespace_store,
             state: Mutex::new(state),
             state_file,
             commit_pause: Duration::from_millis(pause_ms),
             upload_commit_pause: Duration::from_millis(upload_pause_ms),
-        })
+        };
+        // Replace the restored ledger with a private snapshot before exposing the backend,
+        // even when no pending operation will cause a later checkpoint.
+        backend.persist(&lock(&backend.state))?;
+        Ok(backend)
     }
 
     fn persist(&self, state: &RemoteMutationState) -> ExampleResult<()> {

@@ -59,6 +59,34 @@ mod tests {
             .map(|(_, bytes)| bytes.clone())
     }
 
+    #[test]
+    fn remote_startup_persists_a_restartable_snapshot() {
+        let directory = test_directory("remote-startup-snapshot");
+        let _guard = aster_forge_utils::raii::TempDirGuard::new(
+            directory.clone(),
+            "remote startup snapshot",
+        );
+        let (cloud, _) = MemoryCloud::fixture().unwrap();
+        let store = Arc::new(
+            MemoryWritebackStore::new(cloud.scope.clone(), Some(&directory)).unwrap(),
+        );
+        let backend = MemoryRemoteMutationBackend::new(store.clone(), Some(&directory)).unwrap();
+        let snapshot = fs::read(directory.join("remote.json")).unwrap();
+        let document: DurableRemoteDocument = serde_json::from_slice(&snapshot).unwrap();
+        assert_eq!(document.items.as_ref().unwrap().len(), cloud.items.len());
+        assert!(document.committed.is_empty());
+        assert!(document.uploads.is_empty());
+        drop(backend);
+
+        let restored = MemoryRemoteMutationBackend::new(store, Some(&directory)).unwrap();
+        let restored_state = lock(&restored.state);
+        assert_eq!(restored_state.items.len(), cloud.items.len());
+        for (key, item) in &cloud.items {
+            assert_eq!(restored_state.items.get(key), Some(item));
+        }
+        assert_eq!(fs::read(directory.join("remote.json")).unwrap(), snapshot);
+    }
+
     #[tokio::test]
     async fn write_acceptance_uploads_exact_immutable_bytes_and_clears_current_dirty_state() {
         let (cloud, _) = MemoryCloud::fixture().unwrap();
@@ -678,6 +706,7 @@ mod tests {
         let acceptance = accepted_create(&store, &scope, generation).await;
         let backend =
             MemoryRemoteMutationBackend::new(store, Some(&remote_state_directory)).unwrap();
+        fs::remove_file(remote_state_directory.join("remote.json")).unwrap();
         fs::remove_dir(&remote_state_directory).unwrap();
         fs::write(&remote_state_directory, b"file").unwrap();
         let intent = acceptance.created().mutation_intent();
