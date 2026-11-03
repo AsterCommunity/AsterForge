@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, instrument::WithSubscriber};
 
 use crate::{
     BackgroundTaskDispatchBackoff, BackgroundTaskDispatchIteration, BackgroundTaskDispatchTrigger,
@@ -33,8 +34,16 @@ pub trait TaskConsumer: Clone + Send + Sync + 'static {
     fn idle_max_interval(&self) -> Duration {
         self.poll_interval()
     }
-    /// Waits for an optional enqueue/config notification.
-    async fn notified(&self);
+    /// Stable product-defined consumer/lane identity; never a task payload or user value.
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+    /// Broadcast enqueue/config signal. Each runner subscribes independently before startup.
+    fn wakeup(&self) -> &crate::TaskWakeup;
+    /// Bounded error classification for diagnostics; raw Display/Debug is never logged.
+    fn error_kind(&self, _error: &Self::Error) -> &'static str {
+        "unknown"
+    }
     /// Atomically claims no more than `available` tasks, applying any cluster-wide quota.
     async fn claim(&self, available: usize) -> Result<Vec<Self::Task>, Self::Error>;
     /// Executes with heartbeat, fencing, retry and cooperative cancellation.
@@ -160,6 +169,7 @@ impl ConsumerPhase {
 }
 
 struct ClaimBatch<C: TaskConsumer> {
+    sequence: u64,
     reserved: usize,
     result: Result<Vec<C::Task>, C::Error>,
 }
@@ -176,6 +186,9 @@ struct ConsumerRuntime<C: TaskConsumer> {
     cancellation: CancellationToken,
     next_poll: Instant,
     backoff: BackgroundTaskDispatchBackoff,
+    next_trigger: &'static str,
+    concurrency: usize,
+    claim_sequence: u64,
 }
 
 impl<C: TaskConsumer> ConsumerRuntime<C> {
@@ -184,7 +197,11 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             consumer.poll_interval(),
             consumer.idle_max_interval(),
         );
+        let concurrency = consumer.concurrency();
         Self {
+            next_trigger: "startup",
+            concurrency,
+            claim_sequence: 0,
             consumer,
             status,
             config,
@@ -214,11 +231,17 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             self.consumer.poll_interval(),
             self.consumer.idle_max_interval(),
         );
-        self.next_poll = Instant::now()
-            + self.backoff.sleep_duration(
-                self.consumer.poll_interval(),
-                self.consumer.idle_max_interval(),
-            );
+        let delay = self.backoff.sleep_duration(
+            self.consumer.poll_interval(),
+            self.consumer.idle_max_interval(),
+        );
+        tracing::trace!(
+            ?trigger,
+            poll_delay_seconds = delay.as_secs_f64(),
+            "task consumer next poll"
+        );
+        self.next_poll = Instant::now() + delay;
+        self.next_trigger = "timer";
     }
 
     fn completed_execution(
@@ -233,11 +256,21 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             Ok(Ok(outcome)) => self.report.stats.add_outcome(outcome),
             Ok(Err(error)) => {
                 self.report.execution_errors += 1;
-                tracing::warn!(%error, "task consumer execution failed");
+                tracing::warn!(
+                    error_kind = self.consumer.error_kind(&error),
+                    "task consumer execution failed"
+                );
             }
             Err(error) => {
                 self.report.execution_errors += 1;
-                tracing::error!(%error, "task consumer handler failed; its lease will expire");
+                tracing::error!(
+                    error_kind = if error.is_panic() {
+                        "panic"
+                    } else {
+                        "join_canceled"
+                    },
+                    "task consumer handler failed; its lease will expire"
+                );
             }
         }
         self.record_iteration(
@@ -245,6 +278,7 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             BackgroundTaskDispatchIteration::active(),
         );
         self.next_poll = Instant::now();
+        self.next_trigger = "execution_completed";
     }
 
     fn completed_claim(
@@ -255,14 +289,20 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
         let batch = match result {
             Ok(batch) => batch,
             Err(error) => {
-                self.failed_claim(&error);
+                self.failed_claim(if error.is_panic() {
+                    "panic"
+                } else {
+                    "join_canceled"
+                });
                 return;
             }
         };
+        let _claim =
+            tracing::trace_span!("task_claim_result", claim_sequence = batch.sequence).entered();
         let tasks = match batch.result {
             Ok(tasks) => tasks,
             Err(error) => {
-                self.failed_claim(&error);
+                self.failed_claim(self.consumer.error_kind(&error));
                 return;
             }
         };
@@ -275,15 +315,35 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
                 .saturating_sub(self.executing.len()),
         );
         let has_work = !tasks.is_empty();
+        tracing::trace!(
+            reserved,
+            available,
+            claimed = tasks.len(),
+            active = self.executing.len(),
+            "task consumer claim result"
+        );
         for (index, task) in tasks.into_iter().enumerate() {
             let runner = self.consumer.clone();
             if self.phase.stopping() || stop.is_cancelled() || index >= available {
-                self.releasing
-                    .spawn(async move { runner.release_unstarted(task).await });
+                self.releasing.spawn(
+                    async move { runner.release_unstarted(task).await }
+                        .in_current_span()
+                        .with_current_subscriber(),
+                );
             } else {
                 let cancellation = self.cancellation.clone();
-                self.executing
-                    .spawn(async move { runner.execute(task, cancellation).await });
+                let scheduled = Instant::now();
+                self.executing.spawn(
+                    async move {
+                        tracing::debug!(
+                            queue_delay_seconds = scheduled.elapsed().as_secs_f64(),
+                            "task consumer execution started"
+                        );
+                        runner.execute(task, cancellation).await
+                    }
+                    .in_current_span()
+                    .with_current_subscriber(),
+                );
                 self.report.stats.claimed += 1;
             }
         }
@@ -305,13 +365,14 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             && self.consumer.concurrency() > self.executing.len()
         {
             self.next_poll = Instant::now();
+            self.next_trigger = "capacity_refill";
         }
     }
 
-    fn failed_claim(&mut self, error: &impl std::fmt::Display) {
+    fn failed_claim(&mut self, error_kind: &'static str) {
         self.report.claim_errors += 1;
         self.status.0.claim_failed.store(true, Ordering::Release);
-        tracing::warn!(%error, "task consumer claim failed");
+        tracing::warn!(error_kind, "task consumer claim failed");
         self.record_iteration(
             BackgroundTaskDispatchTrigger::Timer,
             BackgroundTaskDispatchIteration::failed(),
@@ -323,11 +384,21 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 self.report.release_errors += 1;
-                tracing::warn!(%error, "unstarted task release failed; awaiting lease expiry");
+                tracing::warn!(
+                    error_kind = self.consumer.error_kind(&error),
+                    "unstarted task release failed; awaiting lease expiry"
+                );
             }
             Err(error) => {
                 self.report.release_errors += 1;
-                tracing::error!(%error, "unstarted task release panicked; awaiting lease expiry");
+                tracing::error!(
+                    error_kind = if error.is_panic() {
+                        "panic"
+                    } else {
+                        "join_canceled"
+                    },
+                    "unstarted task release panicked; awaiting lease expiry"
+                );
             }
         }
     }
@@ -339,13 +410,41 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
             .saturating_sub(self.executing.len());
         if available > 0 {
             let runner = self.consumer.clone();
-            self.claiming.spawn(async move {
-                ClaimBatch {
-                    reserved: available,
-                    result: runner.claim(available).await,
+            self.claim_sequence = self.claim_sequence.wrapping_add(1);
+            let sequence = self.claim_sequence;
+            self.claiming.spawn(
+                async move {
+                    let started = Instant::now();
+                    tracing::trace!(available, "task consumer claim started");
+                    let result = runner.claim(available).await;
+                    tracing::trace!(
+                        available,
+                        elapsed_seconds = started.elapsed().as_secs_f64(),
+                        outcome = if result.is_ok() { "returned" } else { "error" },
+                        "task consumer claim finished"
+                    );
+                    ClaimBatch {
+                        sequence,
+                        reserved: available,
+                        result,
+                    }
                 }
-            });
+                .instrument(tracing::trace_span!(
+                    "task_claim",
+                    claim_sequence = self.claim_sequence,
+                    trigger = self.next_trigger,
+                    available,
+                    active = self.executing.len()
+                ))
+                .with_current_subscriber(),
+            );
         } else {
+            tracing::trace!(
+                active = self.executing.len(),
+                concurrency = self.consumer.concurrency(),
+                reason = "local_capacity",
+                "task consumer claim skipped"
+            );
             if self.consumer.concurrency() == 0 {
                 self.status.observe_available(true);
             }
@@ -357,6 +456,12 @@ impl<C: TaskConsumer> ConsumerRuntime<C> {
     }
 
     async fn abandon(&mut self) {
+        tracing::warn!(
+            executions = self.executing.len(),
+            claims = self.claiming.len(),
+            releases = self.releasing.len(),
+            "task consumer abandoning work at deadline"
+        );
         self.report.abandoned = self.executing.len();
         self.report.abandoned_claims = self.claiming.len();
         self.report.abandoned_releases = self.releasing.len();
@@ -392,17 +497,45 @@ pub async fn run_task_consumer<C: TaskConsumer>(
     if stop_claiming.is_cancelled() {
         return Ok(TaskConsumerReport::default());
     }
+    let mut wakeup = consumer.wakeup().subscribe();
+    let span = tracing::info_span!("task_consumer", consumer = consumer.name(), consumer_id = %uuid::Uuid::new_v4(), wakeup_id = %consumer.wakeup().id());
+    run_consumer_loop(consumer, stop_claiming, config, status, &mut wakeup)
+        .instrument(span)
+        .await
+}
+
+async fn run_consumer_loop<C: TaskConsumer>(
+    consumer: C,
+    stop_claiming: CancellationToken,
+    config: TaskConsumerConfig,
+    status: TaskRuntimeStatus,
+    wakeup: &mut tokio::sync::watch::Receiver<()>,
+) -> crate::Result<TaskConsumerReport> {
     let _running = status.start();
+    tracing::info!(
+        concurrency = consumer.concurrency(),
+        "task consumer started"
+    );
     let mut runtime = ConsumerRuntime::new(consumer, status, config);
     let _cancel_on_drop = runtime.cancellation.clone().drop_guard();
     loop {
         if runtime.phase.stopping() && runtime.idle() {
             break;
         }
+        let concurrency = runtime.consumer.concurrency();
+        if concurrency != runtime.concurrency {
+            tracing::info!(
+                previous = runtime.concurrency,
+                concurrency,
+                "task consumer concurrency changed"
+            );
+            runtime.concurrency = concurrency;
+        }
         let deadline = runtime.phase.deadline();
         tokio::select! {
             biased;
             () = stop_claiming.cancelled(), if !runtime.phase.stopping() => {
+                tracing::info!("task consumer draining");
                 runtime.status.0.draining.store(true, Ordering::Release);
                 runtime.phase = ConsumerPhase::Draining(Instant::now() + runtime.config.drain_timeout);
             }
@@ -410,6 +543,7 @@ pub async fn run_task_consumer<C: TaskConsumer>(
                 if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; }
             }, if deadline.is_some() => {
                 if matches!(runtime.phase, ConsumerPhase::Draining(_)) {
+                    tracing::info!("task consumer cancellation phase");
                     runtime.cancellation.cancel();
                     runtime.phase = ConsumerPhase::Cancelling(Instant::now() + runtime.config.cancellation_timeout);
                 } else {
@@ -427,14 +561,22 @@ pub async fn run_task_consumer<C: TaskConsumer>(
                 runtime.completed_release(result);
             }
             () = tokio::time::sleep_until(runtime.next_poll), if !runtime.phase.stopping() && runtime.claiming.is_empty() => {
+                tracing::trace!(trigger = runtime.next_trigger, "task consumer polling");
                 runtime.poll();
             }
-            () = runtime.consumer.notified(), if !runtime.phase.stopping() => {
+            _ = wakeup.changed(), if !runtime.phase.stopping() && runtime.claiming.is_empty() => {
+                tracing::debug!(trigger = "notification", "task consumer awakened");
                 runtime.record_iteration(BackgroundTaskDispatchTrigger::Wakeup, BackgroundTaskDispatchIteration::idle());
                 runtime.next_poll = Instant::now();
+                runtime.next_trigger = "notification";
             }
         }
     }
+    tracing::info!(
+        claimed = runtime.report.stats.claimed,
+        abandoned = runtime.report.abandoned,
+        "task consumer stopped"
+    );
     Ok(runtime.report)
 }
 
@@ -473,8 +615,9 @@ mod tests {
         failing: Arc<AtomicBool>,
         claim_gate: Arc<Semaphore>,
         block_claim: Arc<AtomicBool>,
+        empty_claim_once: Arc<AtomicBool>,
         claiming: Arc<Notify>,
-        wake: Arc<Notify>,
+        wake: crate::TaskWakeup,
         entered: mpsc::UnboundedSender<usize>,
         gates: Arc<Vec<Semaphore>>,
         released: Arc<Mutex<Vec<usize>>>,
@@ -499,8 +642,9 @@ mod tests {
                     failing: Arc::default(),
                     claim_gate: Arc::new(Semaphore::new(0)),
                     block_claim: Arc::default(),
+                    empty_claim_once: Arc::default(),
                     claiming: Arc::default(),
-                    wake: Arc::default(),
+                    wake: crate::TaskWakeup::default(),
                     entered,
                     gates: Arc::new((0..16).map(|_| Semaphore::new(0)).collect()),
                     released: Arc::default(),
@@ -529,8 +673,8 @@ mod tests {
         fn poll_interval(&self) -> Duration {
             self.poll_interval
         }
-        async fn notified(&self) {
-            self.wake.notified().await;
+        fn wakeup(&self) -> &crate::TaskWakeup {
+            &self.wake
         }
         async fn claim(&self, available: usize) -> Result<Vec<usize>, Self::Error> {
             let _in_flight = InFlight::enter(self.claims_live.clone());
@@ -543,11 +687,15 @@ mod tests {
                     .is_err(),
                 "injected claim panic"
             );
+            let return_empty = self.empty_claim_once.swap(false, Ordering::AcqRel);
             if self.block_claim.load(Ordering::Acquire) {
                 self.claim_gate.acquire().await.unwrap().forget();
             }
             if self.failing.load(Ordering::Acquire) {
                 return Err("database unavailable");
+            }
+            if return_empty {
+                return Ok(Vec::new());
             }
             let mut queue = self.queue.lock().unwrap();
             let count = queue.len().min(available + usize::from(self.overclaim));
@@ -976,7 +1124,7 @@ mod tests {
         until(|| store.claims_live.load(Ordering::SeqCst) == 0).await;
         assert!(!status.ready());
         store.queue.lock().unwrap().push_back(0);
-        store.wake.notify_one();
+        store.wake.notify();
         receive(&mut entered).await;
         assert!(status.ready());
         stop.cancel();
@@ -1152,6 +1300,111 @@ mod tests {
         assert!(a == 3 || a == 4);
         assert!(b == 3 || b == 4);
         assert_ne!(a, b);
+        stop.cancel();
+        runner.await.unwrap().unwrap();
+    }
+    async fn settle() {
+        for _ in 0..128 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn five_idle_lanes_all_wake_and_only_target_executes_without_timer() {
+        let wake = crate::TaskWakeup::default();
+        let stop = CancellationToken::new();
+        let mut stores = Vec::new();
+        let mut receivers = Vec::new();
+        let mut runners = Vec::new();
+        for _ in 0..5 {
+            let (mut store, entered) = Store::new(&[], 1);
+            store.poll_interval = Duration::from_mins(1);
+            store.wake = wake.clone();
+            runners.push(tokio::spawn(run_task_consumer(
+                store.clone(),
+                stop.clone(),
+                config(),
+                TaskRuntimeStatus::default(),
+            )));
+            stores.push(store);
+            receivers.push(entered);
+        }
+        settle().await;
+        assert!(
+            stores
+                .iter()
+                .all(|store| store.claims.lock().unwrap().len() == 1)
+        );
+        let enqueued = Instant::now();
+        stores[4].queue.lock().unwrap().push_back(0);
+        wake.notify();
+        settle().await;
+        assert_eq!(receivers[4].try_recv().unwrap(), 0);
+        assert!(
+            receivers[..4]
+                .iter_mut()
+                .all(|receiver| receiver.try_recv().is_err())
+        );
+        assert_eq!(
+            Instant::now(),
+            enqueued,
+            "enqueue must not wait for polling"
+        );
+        assert!(
+            stores
+                .iter()
+                .all(|store| store.claims.lock().unwrap().len() == 2)
+        );
+        stop.cancel();
+        for runner in runners {
+            runner.await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn notification_during_empty_claim_is_retained_after_claim_returns() {
+        let (mut store, mut entered) = Store::new(&[], 1);
+        store.poll_interval = Duration::from_mins(1);
+        store.block_claim.store(true, Ordering::Release);
+        store.empty_claim_once.store(true, Ordering::Release);
+        let stop = CancellationToken::new();
+        let runner = tokio::spawn(run_task_consumer(
+            store.clone(),
+            stop.clone(),
+            config(),
+            TaskRuntimeStatus::default(),
+        ));
+        settle().await;
+        assert_eq!(store.claims_live.load(Ordering::SeqCst), 1);
+        store.queue.lock().unwrap().push_back(0);
+        let enqueued = Instant::now();
+        store.wake.notify();
+        settle().await;
+        store.block_claim.store(false, Ordering::Release);
+        store.claim_gate.add_permits(1);
+        settle().await;
+        assert_eq!(entered.try_recv().unwrap(), 0);
+        assert_eq!(Instant::now(), enqueued);
+        stop.cancel();
+        runner.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_discovers_enqueue_before_subscription_without_notification() {
+        let (mut store, mut entered) = Store::new(&[0], 1);
+        store.poll_interval = Duration::from_mins(1);
+        store.wake.notify();
+        let stop = CancellationToken::new();
+        let started = Instant::now();
+        let runner = tokio::spawn(run_task_consumer(
+            store,
+            stop.clone(),
+            config(),
+            TaskRuntimeStatus::default(),
+        ));
+        settle().await;
+        assert_eq!(entered.try_recv().unwrap(), 0);
+        assert_eq!(Instant::now(), started);
         stop.cancel();
         runner.await.unwrap().unwrap();
     }

@@ -20,6 +20,7 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 - Schema constants, builders, entities, and store predicates must remain aligned. Treat field-width and index-name changes as compatibility changes.
 - Claim, renew, complete, lease takeover, and mail try-claim writes need owner, token, or timestamp fences. Never create a race with a read-then-write sequence.
 - Retry only errors backed by driver evidence and safe replay semantics. Do not blindly replay non-idempotent writes or work that already produced external side effects.
+- Transaction diagnostics capture the real caller before entering async execution, preserve operation ancestry, and report phase/outcome/timing without raw callback errors or SQL. A dropped future has unknown durable outcome; observability must not alter transaction or retry control flow.
 - Product errors from transaction callbacks return unchanged. Begin, commit, and rollback failures define the Forge DB boundary, and rollback failure must not replace the original callback error.
 - Query helpers accept allowlisted columns or typed inputs, never arbitrary field strings that can be concatenated into SQL.
 - Handle PostgreSQL, MySQL, and SQLite dialect differences explicitly. Passing only an in-memory SQLite test proves very little about cross-backend correctness.

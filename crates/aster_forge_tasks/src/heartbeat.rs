@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, instrument::WithSubscriber};
 
 use crate::{TaskCoreError, TaskLease, TaskLeaseGuard};
 
@@ -93,9 +94,14 @@ where
     Store: TaskHeartbeatStore + 'static,
     LeaseExpiresFn: Fn(DateTime<Utc>) -> DateTime<Utc> + Send + Sync + 'static,
 {
-    tokio::spawn(async move {
-        run_task_heartbeat_loop(store, lease_guard, stop_token, interval, lease_expires_at).await;
-    })
+    tokio::spawn(
+        async move {
+            run_task_heartbeat_loop(store, lease_guard, stop_token, interval, lease_expires_at)
+                .await;
+        }
+        .in_current_span()
+        .with_current_subscriber(),
+    )
 }
 
 /// Evaluates one persisted heartbeat result and updates the in-memory lease guard.
@@ -127,11 +133,11 @@ where
         Ok(TaskHeartbeatOutcome::CancellationRequested) => {
             Err(lease_guard.mark_cancel_requested().into())
         }
-        Err(error) => {
+        Err(_error) => {
             tracing::warn!(
                 task_id = lease.task_id,
                 processing_token = lease.processing_token,
-                error = %error,
+                error_kind = "heartbeat_store_error",
                 "background task heartbeat update failed; continuing and retrying next heartbeat"
             );
             lease_guard.ensure_active().map_err(Error::from)
@@ -142,8 +148,11 @@ where
 /// Stops and awaits a heartbeat worker.
 pub async fn stop_task_heartbeat(stop_token: CancellationToken, heartbeat_handle: JoinHandle<()>) {
     stop_token.cancel();
-    if let Err(error) = heartbeat_handle.await {
-        tracing::warn!(error = %error, "background task heartbeat worker stopped unexpectedly");
+    if let Err(_error) = heartbeat_handle.await {
+        tracing::warn!(
+            error_kind = "join_error",
+            "background task heartbeat worker stopped unexpectedly"
+        );
     }
 }
 

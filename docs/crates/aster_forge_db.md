@@ -765,7 +765,7 @@ let user = transaction::with_transaction(
 
 - begin、commit、rollback 失败是 Forge DB 边界错误，来源类型是 `DbError`。
 - `with_transaction` 的回调错误是产品或子系统错误，会原样返回，不会包装成 `DbError`。
-- `with_transaction` 的错误类型需要满足 `E: From<DbError> + std::fmt::Display`，这样 commit/begin 失败可以进入产品错误边界，rollback 日志也能记录回调错误。
+- `with_transaction` 的错误类型需要满足 `E: From<DbError> + std::fmt::Display`，这样 commit/begin 失败可以进入产品错误边界；诊断只记录阶段与分类，回调原始错误不进入日志。
 - 回调失败后 rollback 如果也失败，函数仍然返回原始回调错误，同时记录 rollback 失败日志；不要用 rollback 失败覆盖业务失败。
 - `with_transaction` 不会自动重跑回调。产品需要重试时，应在完整事务边界外重新 begin，
   并只对 `database_error_kind(...)` 识别出的可重试错误重跑；已经执行外部对象存储、邮件、
@@ -798,6 +798,29 @@ let file = transaction::with_transaction_retry(
 由产品决定。
 
 不要把校验错误、权限错误、协议错误等业务失败转换成 `DbError`。如果子系统有自己的错误类型，例如协议层错误，可以直接为该类型实现 `From<DbError>`，或者先转成产品错误再由子系统错误接收。
+
+### 事务诊断
+
+`with_transaction` / `with_transaction_retry` 保持原调用方式与错误返回语义，
+同步 `#[track_caller]` 入口在构造 future 时捕获真实 caller，再执行 async body；不再把 helper
+自身的 `transaction.rs` 行号作为业务调用点。每次边界有独立 `transaction_id`，retry 另有 attempt。
+调用者需要稳定业务 operation 时，把**包含 helper 调用的外层 async block**放进静态 operation span：
+
+```rust,ignore
+use tracing::Instrument;
+async {
+    transaction::with_transaction(db, async |txn| {
+        repository::claim(txn).await
+    }).await
+}.instrument(tracing::trace_span!("storage_claim", operation = "quota_claim")).await
+```
+
+用 `RUST_LOG=info,aster_forge_db::transaction=trace` 定向开启阶段日志；无需把全局 SQL/SDK 调为 DEBUG。
+TRACE 记录 begin、callback、commit/rollback 的单调秒数、真实 caller 和稳定 outcome。
+WARN 记录边界失败及 future drop；drop 不推断取消来源、不宣称回滚已完成，commit 错误不伪报成功。
+这些是可观察的整个 begin/callback/finalization 耗时，不把 pool acquire、服务端锁等待等没有独立
+测量的时间拆成假指标。helper 既不打印原始回调错误/DSN/SQL 参数，也不修改返回给产品的错误。
+重试条件、结果不确定时禁止重放、rollback 失败不覆盖原 callback error 等语义保持不变。
 
 ## 错误边界
 

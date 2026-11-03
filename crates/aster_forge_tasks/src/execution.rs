@@ -12,12 +12,45 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::{
     TaskDispatchOutcome, TaskExecutionContext, TaskHeartbeatStore, TaskLease, TaskRecord,
     TaskRetryClass, run_claimed_task_batch, spawn_task_heartbeat_with_interval,
     stop_task_heartbeat,
 };
+
+struct ExecutionObservation {
+    started: std::time::Instant,
+    finished: bool,
+}
+impl ExecutionObservation {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            finished: false,
+        }
+    }
+    fn finish(&mut self, outcome: &'static str) {
+        self.finished = true;
+        tracing::debug!(
+            outcome,
+            elapsed_seconds = self.started.elapsed().as_secs_f64(),
+            "task execution finished"
+        );
+    }
+}
+impl Drop for ExecutionObservation {
+    fn drop(&mut self) {
+        if !self.finished {
+            tracing::warn!(
+                outcome = "dropped",
+                elapsed_seconds = self.started.elapsed().as_secs_f64(),
+                "task execution dropped; durable outcome unknown"
+            );
+        }
+    }
+}
 
 /// Minimal read-only view required to execute a claimed task.
 pub trait ExecutableTaskRecord<Kind>: TaskRecord<Kind> {
@@ -36,7 +69,7 @@ pub struct TaskPermanentFailure<'a> {
     pub attempt_count: i32,
     /// Truncated/storable error string.
     pub storage_error: &'a str,
-    /// Human-facing error string used for logs and step details.
+    /// Human-facing error string used for product step details; never logged by Forge.
     pub display_error: &'a str,
     /// Serialized task steps after marking the active step failed, if available.
     pub failed_steps_json: Option<&'a str>,
@@ -54,7 +87,7 @@ pub struct TaskRetryUpdate<'a> {
     pub retry_at: DateTime<Utc>,
     /// Truncated/storable error string.
     pub storage_error: &'a str,
-    /// Human-facing error string used for logs and step details.
+    /// Human-facing error string used for product step details; never logged by Forge.
     pub display_error: &'a str,
     /// Serialized task steps after marking the active step failed, if available.
     pub failed_steps_json: Option<&'a str>,
@@ -231,35 +264,59 @@ where
     LeaseExpiresFn: Fn(DateTime<Utc>) -> DateTime<Utc> + Copy + Send + Sync + 'static,
     RetryDelayFn: Fn(i32) -> i64 + Copy + Send + Sync + 'static,
 {
-    let context = TaskExecutionContext::new(lease, config.renewal_timeout, shutdown_token);
-    let lease_guard = context.lease_guard().clone();
-    let heartbeat_stop = CancellationToken::new();
-    let heartbeat_handle = spawn_task_heartbeat_with_interval(
-        store.clone(),
-        lease_guard.clone(),
-        heartbeat_stop.clone(),
-        config.heartbeat_interval,
-        config.lease_expires_at,
-    );
-    let heartbeat_cancel_guard = heartbeat_stop.clone().drop_guard();
+    let span = tracing::info_span!("task_execution", task_id = task.id(), kind = %task.kind(), processing_token = lease.processing_token);
+    async move {
+        let mut observation = ExecutionObservation::new();
+        let context = TaskExecutionContext::new(lease, config.renewal_timeout, shutdown_token);
+        let lease_guard = context.lease_guard().clone();
+        let heartbeat_stop = CancellationToken::new();
+        let heartbeat_handle = spawn_task_heartbeat_with_interval(
+            store.clone(),
+            lease_guard.clone(),
+            heartbeat_stop.clone(),
+            config.heartbeat_interval,
+            config.lease_expires_at,
+        );
+        let heartbeat_cancel_guard = heartbeat_stop.clone().drop_guard();
 
-    // Keep renewal alive through all result/control I/O. Always stop and join it on errors too.
-    let result = async {
-        if task.cancellation_requested() {
-            return Ok(cancellation_outcome(&store, &task, lease)
-                .await?
-                .unwrap_or_default());
+        // Keep renewal alive through all result/control I/O. Always stop and join it on errors too.
+        let result = async {
+            if task.cancellation_requested() {
+                return Ok(cancellation_outcome(&store, &task, lease)
+                    .await?
+                    .unwrap_or_default());
+            }
+            let task_result = match context.ensure_active() {
+                Ok(()) => {
+                    tracing::debug!("task handler started");
+                    let started = std::time::Instant::now();
+                    let result = store.process_task(&task, context).await;
+                    tracing::debug!(
+                        elapsed_seconds = started.elapsed().as_secs_f64(),
+                        outcome = if result.is_ok() { "returned" } else { "error" },
+                        "task handler finished"
+                    );
+                    result
+                }
+                Err(error) => Err(Store::Error::from(error)),
+            };
+            complete_claimed_task(&store, &task, lease, task_result, config.retry_delay_secs).await
         }
-        let task_result = match context.ensure_active() {
-            Ok(()) => store.process_task(&task, context).await,
-            Err(error) => Err(Store::Error::from(error)),
-        };
-        complete_claimed_task(&store, &task, lease, task_result, config.retry_delay_secs).await
+        .await;
+        drop(heartbeat_cancel_guard);
+        stop_task_heartbeat(heartbeat_stop, heartbeat_handle).await;
+        observation.finish(match &result {
+            Ok(outcome) if outcome.succeeded > 0 => "succeeded",
+            Ok(outcome) if outcome.retried > 0 => "retry",
+            Ok(outcome) if outcome.failed > 0 => "failed",
+            Ok(outcome) if outcome.canceled > 0 => "canceled",
+            Ok(_) => "no_transition",
+            Err(_) => "control_error",
+        });
+        result
     }
-    .await;
-    drop(heartbeat_cancel_guard);
-    stop_task_heartbeat(heartbeat_stop, heartbeat_handle).await;
-    result
+    .instrument(span)
+    .await
 }
 
 #[expect(
@@ -304,7 +361,17 @@ where
             {
                 store.wake_dispatcher();
             }
+            let reason = if store.is_worker_shutdown_requested_error(&error) {
+                "shutdown"
+            } else if store.is_cancellation_requested_error(&error) {
+                "cancellation"
+            } else if store.is_lease_renewal_timed_out_error(&error) {
+                "renewal_timeout"
+            } else {
+                "lease_lost"
+            };
             tracing::info!(
+                reason,
                 task_id = task.id(),
                 processing_token = lease.processing_token,
                 "background task worker stopped before completion; skipping stale completion"
@@ -354,7 +421,7 @@ where
                     kind = %task.kind(),
                     attempt_count,
                     retry_at = %retry_at,
-                    error = %display_error,
+                    error_kind = "handler_error",
                     "background task failed; scheduled retry"
                 );
                 store.wake_dispatcher();
@@ -391,7 +458,7 @@ where
                     task_id = task.id(),
                     kind = %task.kind(),
                     attempt_count,
-                    error = %display_error,
+                    error_kind = "handler_error",
                     "background task permanently failed"
                 );
                 store.record_task_transition(task, "failed");

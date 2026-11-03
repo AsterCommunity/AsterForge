@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::time::Duration;
+use tracing::Instrument;
 
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
@@ -136,39 +137,62 @@ where
     Lane: Copy + Eq + std::fmt::Debug + Send + Sync + 'static,
     LaneFn: Fn(Kind) -> Lane,
 {
-    let max_claim = available_slots.min(lane_config.limit);
-    if max_claim == 0 {
-        return Ok(Vec::new());
-    }
-    let now = Utc::now();
-    let request = TaskClaimRequest {
-        lane: lane_config,
-        max_claim,
-        now,
-        stale_before: now,
-        lease_expires_at: now,
-        processing_stale_secs,
-    }
-    .at(now);
-    let claimed = store.claim(request).await?;
-    if claimed.len() > max_claim {
-        return Err(TaskCoreError::invalid_value("store exceeded local claim capacity").into());
-    }
-    let mut seen = std::collections::HashSet::new();
-    for (task, lease) in &claimed {
-        if task_lane(task.kind()) != lane_config.lane
-            || !lane_config.kinds.contains(&task.kind())
-            || lease.task_id != task.id()
-            || task.processing_token().checked_add(1) != Some(lease.processing_token)
-            || !seen.insert(task.id())
-        {
-            return Err(TaskCoreError::invalid_value(
-                "store returned an invalid or duplicate claim",
-            )
-            .into());
+    let span = tracing::trace_span!(
+        "lane_claim",
+        lane = ?lane_config.lane,
+        local_limit = lane_config.limit,
+        available_slots
+    );
+    async move {
+        let max_claim = available_slots.min(lane_config.limit);
+        if max_claim == 0 {
+            tracing::trace!(reason = "local_capacity", "lane claim skipped");
+            return Ok(Vec::new());
         }
-    }
-    Ok(claimed)
+        let now = Utc::now();
+        let request = TaskClaimRequest {
+            lane: lane_config,
+            max_claim,
+            now,
+            stale_before: now,
+            lease_expires_at: now,
+            processing_stale_secs,
+        }
+        .at(now);
+        let started = std::time::Instant::now();
+        let claimed = match store.claim(request).await {
+            Ok(claimed) => {
+                tracing::trace!(elapsed_seconds = started.elapsed().as_secs_f64(), claimed = claimed.len(), "lane claim store returned");
+                claimed
+            },
+            Err(error) => {
+                tracing::warn!(elapsed_seconds = started.elapsed().as_secs_f64(), error_kind = "claim_store_error", "lane claim store failed");
+                return Err(error);
+            }
+        };
+        if claimed.len() > max_claim {
+            return Err(TaskCoreError::invalid_value("store exceeded local claim capacity").into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (task, lease) in &claimed {
+            if task_lane(task.kind()) != lane_config.lane
+                || !lane_config.kinds.contains(&task.kind())
+                || lease.task_id != task.id()
+                || task.processing_token().checked_add(1) != Some(lease.processing_token)
+                || !seen.insert(task.id())
+            {
+                tracing::warn!(reason = "invalid_claim", "lane claim contract rejected");
+                return Err(TaskCoreError::invalid_value(
+                    "store returned an invalid or duplicate claim",
+                )
+                .into());
+            }
+        }
+        for (task, lease) in &claimed {
+            tracing::debug!(task_id = task.id(), kind = %task.kind(), processing_token = lease.processing_token, "task lease claimed");
+        }
+        Ok(claimed)
+    }.instrument(span).await
 }
 
 /// Returns remaining lane capacity after subtracting currently active tasks.

@@ -232,7 +232,56 @@ let report = aster_forge_tasks::run_task_consumer(
 
 `TaskConsumer` 的 `concurrency()` 是本进程上限；runner 按空槽 claim，单个任务完成即可补位。claim、release 和 handler 分别由 runner 内部的 JoinSet 持有；慢存储调用不会阻塞其他工作或 shutdown deadline。claim 在 shutdown 期间完成时，未启动的 lease 会 fenced release；release 也受最终关闭期限约束。最终期限到达后全部 abort 并 join，再允许关闭 audit/DB；未知结果的 claim 只能等待 lease 到期。runner 被丢弃时也会 abort 自己持有的任务，避免后台继续认领。空队列和 claim 错误保留轮询退避。
 不允许先 claim 再等 semaphore，也不等待整批最慢任务。定时轮询保证最终发现，
-`notified()` 只优化延迟；`idle_max_interval()` 给出无通知时的轮询上界。
+`TaskWakeup` 通知只优化延迟；`idle_max_interval()` 给出无通知时的轮询上界。
+
+### 可靠唤醒与本地诊断
+
+`TaskConsumer::wakeup()` 返回实例拥有的 `TaskWakeup`；替换原来的
+`async notified()` / 共享 `Notify::notify_one()`。进程内的多条 consumer 可以共用
+同一个 `TaskWakeup`，每个 runner 会在 startup claim 前独立订阅。持久化入队或配置提交后
+调用 `wakeup.notify()`，所有已订阅 runner 都会看到变化；没有正在等待 `changed()` 时也保留未读
+变化，claim I/O 期间不会丢通知。重复通知合并，不为每个事件累计内存队列。
+
+```rust
+use aster_forge_tasks::TaskWakeup;
+let wakeup = TaskWakeup::default();
+// 把同一个 wakeup.clone() 注入每条产品 TaskConsumer。
+// product_repository.insert(...).await?; // durable commit 必须先成功
+wakeup.notify();
+```
+
+可运行的双 consumer 示例（内存队列仅作适配演示）：
+
+```bash
+RUST_LOG=info,aster_forge_tasks=trace cargo run -p aster_forge_tasks --features runtime --example consumer_wakeup
+```
+
+新订阅不会重放旧通知；runner 每次启动必做 claim，因此启动前入队不会等计时器。
+它是进程内优化，不是跨进程消息总线或队列权威；其他进程写入仍通过有界 polling 发现。
+产品给 `TaskConsumer::name()` 提供静态 lane 名，`error_kind()` 提供安全、有界的错误分类。
+不要用用户输入、payload 或原始错误字符串作诊断字段。
+
+不需要 OTLP collector 即可使用本地 tracing。定向过滤示例：
+
+```text
+RUST_LOG=info,aster_forge_tasks=trace,aster_forge_db::transaction=trace
+```
+
+- INFO：consumer 启动、容量变化、drain/cancel/stop；`consumer_id` 为每次 runner 独立 UUID。
+- DEBUG：通知发送/接收、成功领取的 task ID/kind/lease generation、handler 开始/完成及结果。
+- TRACE：startup/timer/notification/completion/refill 原因、退避秒数、本地 active/reserved/available、
+  claim sequence、claim start/end/count/耗时。空队列轮询不在 INFO/DEBUG 刷屏。
+- ERROR/WARN：仅有界失败类别、控制阶段和耗时，不写 callback/SDK 原始错误。
+
+spawn 出来的 claim、execution、release 和 heartbeat 保留父 consumer span 和 subscriber；
+同一 consumer 的 `claim_sequence` 关联 claim 与后续执行，execution span 包含 task identity。
+handler 返回与权威成功确认仍是两个阶段；drop 记录 outcome unknown，不能伪称取消或成功。
+日志中的高基数 ID 只用于关联，不会自动注入 metrics label。
+
+产品 adapter 仍需在同一父 span 下记录 enqueue commit、共享 quota、候选选择与 CAS 的实际阶段；
+Forge 只能观察整个 store claim 的开始、返回和结果，不能从空结果推断“额度满”还是“没有候选”，
+也不能把 store 总耗时说成数据库锁等待时间。使用 `aster_forge_db::transaction` 时，
+claim 的 consumer/lane/sequence 可与真实 caller/transaction ID、begin/callback/commit/rollback 阶段关联。
 
 旧 `TaskClaimStore` 的分步查询接口已移除。产品实现唯一的
 `claim(TaskClaimRequest) -> Vec<(preclaim_snapshot, new_lease)>`：

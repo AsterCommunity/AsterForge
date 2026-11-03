@@ -23,6 +23,7 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 - Retry, permanent, manual, timeout, and shutdown classifications come from explicit contracts, never error-string matching.
 - Dedupe-key length, namespace, and wire stability are cross-process persistence contracts.
 - Runtime/task registries must keep enums, wire values, presentation codes, and actually scheduled definitions consistent in both directions.
+- Consumer wakeups use per-runner subscriptions to `TaskWakeup`; enqueue notifications must reach every subscribed lane and survive in-flight claims. Never restore a shared competing `Notify::notify_one` adapter. Diagnostics preserve consumer/claim/task ancestry, use bounded safe fields, and keep idle polls at TRACE.
 - With `runtime` and `runtime-component` disabled, the spec, retry, and step core remains lightweight.
 
 ## Validation
