@@ -232,7 +232,7 @@ let report = aster_forge_tasks::run_task_consumer(
 
 `TaskConsumer` 的 `concurrency()` 是本进程上限；runner 按空槽 claim，单个任务完成即可补位。claim、release 和 handler 分别由 runner 内部的 JoinSet 持有；慢存储调用不会阻塞其他工作或 shutdown deadline。claim 在 shutdown 期间完成时，未启动的 lease 会 fenced release；release 也受最终关闭期限约束。最终期限到达后全部 abort 并 join，再允许关闭 audit/DB；未知结果的 claim 只能等待 lease 到期。runner 被丢弃时也会 abort 自己持有的任务，避免后台继续认领。空队列和 claim 错误保留轮询退避。
 不允许先 claim 再等 semaphore，也不等待整批最慢任务。定时轮询保证最终发现，
-`notified()` 只优化延迟；`idle_max_interval()` 给出无通知时的轮询上界。
+`TaskWakeup` 通知只优化延迟；`idle_max_interval()` 给出无通知时的轮询上界。
 
 ### 可靠唤醒与本地诊断
 

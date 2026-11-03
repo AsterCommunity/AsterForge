@@ -11,7 +11,7 @@ publish = false
 [features]
 default = []
 openapi = ["dep:utoipa"]
-runtime = ["dep:aster_forge_runtime"]
+runtime = ["dep:aster_forge_runtime", "dep:uuid"]
 runtime-component = ["runtime"]
 
 [dependencies]
@@ -28,7 +28,7 @@ tokio = { workspace = true, features = ["fs"] }
 tokio-util.workspace = true
 tracing.workspace = true
 utoipa = { workspace = true, optional = true }
-uuid.workspace = true
+uuid = { workspace = true, optional = true }
 
 [lints]
 workspace = true

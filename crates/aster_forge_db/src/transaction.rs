@@ -24,6 +24,7 @@ use tracing::Instrument;
 
 /// Per-future stage timing; captures no SQL, connection URL, or callback error text.
 struct TransactionObservation {
+    attempt: u32,
     phase: &'static str,
     started: std::time::Instant,
     phase_started: std::time::Instant,
@@ -31,9 +32,10 @@ struct TransactionObservation {
 }
 
 impl TransactionObservation {
-    fn new() -> Self {
-        tracing::trace!(phase = "begin", "transaction phase started");
+    fn new(attempt: u32) -> Self {
+        tracing::trace!(attempt, phase = "begin", "transaction phase started");
         Self {
+            attempt,
             phase: "begin",
             started: std::time::Instant::now(),
             phase_started: std::time::Instant::now(),
@@ -42,18 +44,20 @@ impl TransactionObservation {
     }
     fn phase(&mut self, phase: &'static str) {
         tracing::trace!(
+            attempt = self.attempt,
             phase = self.phase,
             elapsed_seconds = self.phase_started.elapsed().as_secs_f64(),
             "transaction phase finished"
         );
         self.phase = phase;
         self.phase_started = std::time::Instant::now();
-        tracing::trace!(phase, "transaction phase started");
+        tracing::trace!(attempt = self.attempt, phase, "transaction phase started");
     }
     fn finish(&mut self, outcome: &'static str) {
         self.finished = true;
         if outcome == "committed" || outcome == "callback_error_rolled_back" {
             tracing::trace!(
+                attempt = self.attempt,
                 phase = self.phase,
                 phase_seconds = self.phase_started.elapsed().as_secs_f64(),
                 elapsed_seconds = self.started.elapsed().as_secs_f64(),
@@ -62,6 +66,7 @@ impl TransactionObservation {
             );
         } else {
             tracing::warn!(
+                attempt = self.attempt,
                 phase = self.phase,
                 elapsed_seconds = self.started.elapsed().as_secs_f64(),
                 outcome,
@@ -75,6 +80,7 @@ impl Drop for TransactionObservation {
     fn drop(&mut self) {
         if !self.finished {
             tracing::warn!(
+                attempt = self.attempt,
                 phase = self.phase,
                 elapsed_seconds = self.started.elapsed().as_secs_f64(),
                 outcome = "dropped_outcome_unknown",
@@ -211,7 +217,7 @@ where
         let mut attempt = 0;
         loop {
             tracing::trace!(attempt, "transaction retry attempt");
-            let mut observation = TransactionObservation::new();
+            let mut observation = TransactionObservation::new(attempt);
             let txn = match db.begin().await {
                 Ok(txn) => txn,
                 Err(error) => {
@@ -321,7 +327,7 @@ where
         caller_line = location.line()
     );
     async move {
-        let mut observation = TransactionObservation::new();
+        let mut observation = TransactionObservation::new(0);
         let txn = match begin(db).await {
             Ok(txn) => txn,
             Err(error) => {
@@ -339,7 +345,13 @@ where
                         Ok(value)
                     }
                     Err(error) => {
-                        observation.finish("commit_error_outcome_unknown");
+                        observation.finish(
+                            if commit_outcome_known_rolled_back(error.database_error_kind()) {
+                                "commit_error_rolled_back"
+                            } else {
+                                "commit_error_outcome_unknown"
+                            },
+                        );
                         Err(E::from(error))
                     }
                 }
@@ -778,5 +790,125 @@ mod tests {
         let text = logs.text();
         assert!(text.contains("callback_error_rollback_failed"), "{text}");
         assert!(!text.contains("secret-callback-canary"), "{text}");
+    }
+    #[tokio::test]
+    async fn retry_begin_failure_records_every_attempt_without_invoking_callback() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let db = sqlite_db().await;
+        db.close_by_ref().await.unwrap();
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let predicates = AtomicUsize::new(0);
+        let callbacks = AtomicUsize::new(0);
+        let config = crate::retry::RetryConfig {
+            max_retries: 2,
+            base_delay_ms: 0,
+            max_delay_ms: 0,
+        };
+        let result = logs
+            .capture_future(async {
+                super::with_transaction_retry(
+                    &db,
+                    &config,
+                    |_txn| {
+                        callbacks.fetch_add(1, Ordering::SeqCst);
+                        Box::pin(async { Ok::<_, DbError>(()) })
+                    },
+                    |_| {
+                        predicates.fetch_add(1, Ordering::SeqCst);
+                        true
+                    },
+                )
+                .await
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(callbacks.load(Ordering::SeqCst), 0);
+        assert_eq!(predicates.load(Ordering::SeqCst), 2);
+        let text = logs.text();
+        for attempt in 0..=2 {
+            assert!(
+                text.lines()
+                    .any(|line| line.contains(&format!("attempt={attempt}"))
+                        && line.contains("outcome=\"begin_error\"")),
+                "{text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_commit_unknown_is_never_replayed_even_when_policy_accepts_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let db = sqlite_db().await;
+        db.execute_unprepared("PRAGMA foreign_keys=ON; CREATE TABLE parent (id INTEGER PRIMARY KEY); CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);").await.unwrap();
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let callbacks = AtomicUsize::new(0);
+        let config = crate::retry::RetryConfig {
+            max_retries: 2,
+            base_delay_ms: 0,
+            max_delay_ms: 0,
+        };
+        let result = logs
+            .capture_future(async {
+                super::with_transaction_retry(
+                    &db,
+                    &config,
+                    |txn| {
+                        callbacks.fetch_add(1, Ordering::SeqCst);
+                        Box::pin(async move {
+                            txn.execute_unprepared("INSERT INTO child VALUES (1,99)")
+                                .await
+                                .map_err(DbError::from)?;
+                            Ok::<_, DbError>(())
+                        })
+                    },
+                    |_| true,
+                )
+                .await
+            })
+            .await;
+        assert!(matches!(result, Err(DbError::CommitOutcomeUnknown { .. })));
+        assert_eq!(callbacks.load(Ordering::SeqCst), 1);
+        let text = logs.text();
+        assert!(text.contains("commit_error_outcome_unknown"), "{text}");
+        assert!(text.contains("attempt=0"), "{text}");
+        assert!(!text.contains("INSERT INTO"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn retry_rollback_failure_retains_callback_error_and_attempt_identity() {
+        let db = sqlite_db().await;
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let config = crate::retry::RetryConfig {
+            max_retries: 0,
+            base_delay_ms: 0,
+            max_delay_ms: 0,
+        };
+        let result = logs
+            .capture_future(async {
+                super::with_transaction_retry(
+                    &db,
+                    &config,
+                    |txn| {
+                        Box::pin(async move {
+                            txn.execute_unprepared("ROLLBACK")
+                                .await
+                                .map_err(DbError::from)
+                                .map_err(ProductError::from)?;
+                            Err::<(), _>(ProductError::Validation("secret-retry-canary"))
+                        })
+                    },
+                    |_| false,
+                )
+                .await
+            })
+            .await;
+        assert_eq!(
+            result.unwrap_err(),
+            ProductError::Validation("secret-retry-canary")
+        );
+        let text = logs.text();
+        assert!(text.contains("callback_error_rollback_failed"), "{text}");
+        assert!(text.contains("attempt=0"), "{text}");
+        assert!(!text.contains("secret-retry-canary"), "{text}");
     }
 }
