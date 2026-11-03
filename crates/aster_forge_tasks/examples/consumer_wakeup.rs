@@ -1,4 +1,4 @@
-//! Run with RUST_LOG=info,aster_forge_tasks=trace and --features runtime.
+//! Run with `RUST_LOG=info,aster_forge_tasks=trace` and `--features runtime`.
 //! The in-memory queue stands in for product persistence; it is not a durable store.
 
 use std::sync::{Arc, Mutex};
