@@ -39,6 +39,8 @@ mod schedule;
 mod spec;
 mod steps;
 mod temp;
+#[cfg(feature = "runtime")]
+mod wakeup;
 
 /// Stable component name used for background task workers.
 pub const BACKGROUND_TASKS_COMPONENT: &str = "background_tasks";
@@ -107,3 +109,5 @@ pub use temp::{
     cleanup_runtime_temp_root, cleanup_task_temp_dir_for_lease_in_root,
     cleanup_task_temp_dir_for_task_in_root, cleanup_temp_dir, prepare_task_temp_dir_in_root,
 };
+#[cfg(feature = "runtime")]
+pub use wakeup::TaskWakeup;

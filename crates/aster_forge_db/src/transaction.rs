@@ -20,34 +20,65 @@ use crate::{DbError, Result, database_error_kind};
 use sea_orm::TransactionSession;
 use std::panic::Location;
 use std::{future::Future, ops::AsyncFnOnce, pin::Pin, time::Duration};
+use tracing::Instrument;
 
-struct RollbackGuard {
-    file: &'static str,
-    line: u32,
-    armed: bool,
+/// Per-future stage timing; captures no SQL, connection URL, or callback error text.
+struct TransactionObservation {
+    phase: &'static str,
+    started: std::time::Instant,
+    phase_started: std::time::Instant,
+    finished: bool,
 }
 
-impl RollbackGuard {
-    fn new(location: &'static Location<'static>) -> Self {
+impl TransactionObservation {
+    fn new() -> Self {
+        tracing::trace!(phase = "begin", "transaction phase started");
         Self {
-            file: location.file(),
-            line: location.line(),
-            armed: true,
+            phase: "begin",
+            started: std::time::Instant::now(),
+            phase_started: std::time::Instant::now(),
+            finished: false,
         }
     }
-
-    fn disarm(&mut self) {
-        self.armed = false;
+    fn phase(&mut self, phase: &'static str) {
+        tracing::trace!(
+            phase = self.phase,
+            elapsed_seconds = self.phase_started.elapsed().as_secs_f64(),
+            "transaction phase finished"
+        );
+        self.phase = phase;
+        self.phase_started = std::time::Instant::now();
+        tracing::trace!(phase, "transaction phase started");
+    }
+    fn finish(&mut self, outcome: &'static str) {
+        self.finished = true;
+        if outcome == "committed" || outcome == "callback_error_rolled_back" {
+            tracing::trace!(
+                phase = self.phase,
+                phase_seconds = self.phase_started.elapsed().as_secs_f64(),
+                elapsed_seconds = self.started.elapsed().as_secs_f64(),
+                outcome,
+                "transaction finished"
+            );
+        } else {
+            tracing::warn!(
+                phase = self.phase,
+                elapsed_seconds = self.started.elapsed().as_secs_f64(),
+                outcome,
+                "transaction boundary failed"
+            );
+        }
     }
 }
 
-impl Drop for RollbackGuard {
+impl Drop for TransactionObservation {
     fn drop(&mut self) {
-        if self.armed {
+        if !self.finished {
             tracing::warn!(
-                file = self.file,
-                line = self.line,
-                "transaction dropped before explicit commit/rollback; relying on rollback-on-drop"
+                phase = self.phase,
+                elapsed_seconds = self.started.elapsed().as_secs_f64(),
+                outcome = "dropped_outcome_unknown",
+                "transaction future dropped before boundary completion"
             );
         }
     }
@@ -153,12 +184,13 @@ fn commit_outcome_known_rolled_back(kind: Option<crate::DatabaseErrorKind>) -> b
 /// # Errors
 ///
 /// Returns an error when transaction setup, execution, or finalization fails.
-pub async fn with_transaction_retry<C, F, T, E, P>(
+#[track_caller]
+pub fn with_transaction_retry<C, F, T, E, P>(
     db: &C,
     config: &crate::retry::RetryConfig,
     mut operation: F,
     should_retry: P,
-) -> std::result::Result<T, E>
+) -> impl Future<Output = std::result::Result<T, E>>
 where
     C: sea_orm::TransactionTrait,
     F: for<'txn> FnMut(
@@ -168,70 +200,99 @@ where
     E: From<DbError> + std::fmt::Display,
     P: Fn(&E) -> bool,
 {
-    let mut attempt = 0;
-    loop {
-        let txn = match db.begin().await {
-            Ok(txn) => txn,
-            Err(error) => {
-                let error = E::from(database_operation_with_context(&error, "begin transaction"));
-                if attempt < config.max_retries && should_retry(&error) {
-                    tokio::time::sleep(transaction_delay(config, attempt)).await;
-                    attempt += 1;
-                    continue;
-                }
-                return Err(error);
-            }
-        };
-
-        match operation(&txn).await {
-            Ok(value) => match txn.commit().await {
-                Ok(()) => return Ok(value),
+    let location = Location::caller();
+    let span = tracing::info_span!(
+        "db_transaction_retry",
+        transaction_id = %uuid::Uuid::new_v4(),
+        caller_file = location.file(),
+        caller_line = location.line()
+    );
+    async move {
+        let mut attempt = 0;
+        loop {
+            tracing::trace!(attempt, "transaction retry attempt");
+            let mut observation = TransactionObservation::new();
+            let txn = match db.begin().await {
+                Ok(txn) => txn,
                 Err(error) => {
-                    let kind = database_error_kind(&error);
-                    let classified_error = E::from(match kind {
-                        Some(kind) => DbError::database_operation_classified(
-                            format!("commit transaction: {error}"),
-                            kind,
-                        ),
-                        None => DbError::database_operation(format!("commit transaction: {error}")),
-                    });
-                    match commit_failure_action(
-                        should_retry(&classified_error),
-                        commit_outcome_known_rolled_back(kind),
-                        attempt,
-                        config.max_retries,
-                    ) {
-                        CommitFailureAction::Retry => {
-                            tokio::time::sleep(transaction_delay(config, attempt)).await;
-                            attempt += 1;
+                    observation.finish("begin_error");
+                    let error =
+                        E::from(database_operation_with_context(&error, "begin transaction"));
+                    if attempt < config.max_retries && should_retry(&error) {
+                        tokio::time::sleep(transaction_delay(config, attempt)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
+
+            observation.phase("callback");
+            match operation(&txn).await {
+                Ok(value) => {
+                    observation.phase("commit");
+                    match txn.commit().await {
+                        Ok(()) => {
+                            observation.finish("committed");
+                            return Ok(value);
                         }
-                        CommitFailureAction::ReturnKnownFailure => return Err(classified_error),
-                        CommitFailureAction::ReturnOutcomeUnknown => {
-                            return Err(E::from(DbError::commit_outcome_unknown(
-                                format!("commit transaction: {error}"),
-                                kind,
-                            )));
+                        Err(error) => {
+                            let kind = database_error_kind(&error);
+                            let classified_error = E::from(match kind {
+                                Some(kind) => DbError::database_operation_classified(
+                                    format!("commit transaction: {error}"),
+                                    kind,
+                                ),
+                                None => DbError::database_operation(format!(
+                                    "commit transaction: {error}"
+                                )),
+                            });
+                            observation.finish(if commit_outcome_known_rolled_back(kind) {
+                                "commit_error_rolled_back"
+                            } else {
+                                "commit_error_outcome_unknown"
+                            });
+                            match commit_failure_action(
+                                should_retry(&classified_error),
+                                commit_outcome_known_rolled_back(kind),
+                                attempt,
+                                config.max_retries,
+                            ) {
+                                CommitFailureAction::Retry => {
+                                    tokio::time::sleep(transaction_delay(config, attempt)).await;
+                                    attempt += 1;
+                                }
+                                CommitFailureAction::ReturnKnownFailure => {
+                                    return Err(classified_error);
+                                }
+                                CommitFailureAction::ReturnOutcomeUnknown => {
+                                    return Err(E::from(DbError::commit_outcome_unknown(
+                                        format!("commit transaction: {error}"),
+                                        kind,
+                                    )));
+                                }
+                            }
                         }
                     }
                 }
-            },
-            Err(error) => {
-                if let Err(rollback_error) = txn.rollback().await {
-                    tracing::warn!(
-                        callback_error = %error,
-                        rollback_error = %rollback_error,
-                        "transaction rollback failed after callback error"
-                    );
+                Err(error) => {
+                    observation.phase("rollback");
+                    observation.finish(if txn.rollback().await.is_err() {
+                        "callback_error_rollback_failed"
+                    } else {
+                        "callback_error_rolled_back"
+                    });
+                    if attempt < config.max_retries && should_retry(&error) {
+                        tokio::time::sleep(transaction_delay(config, attempt)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error);
                 }
-                if attempt < config.max_retries && should_retry(&error) {
-                    tokio::time::sleep(transaction_delay(config, attempt)).await;
-                    attempt += 1;
-                    continue;
-                }
-                return Err(error);
             }
         }
     }
+    .instrument(span)
 }
 
 /// Runs a transaction callback with consistent tracing and rollback guarding.
@@ -242,52 +303,59 @@ where
 /// # Errors
 ///
 /// Returns an error when transaction setup, execution, or finalization fails.
-pub async fn with_transaction<C, F, T, E>(db: &C, operation: F) -> std::result::Result<T, E>
+#[track_caller]
+pub fn with_transaction<C, F, T, E>(
+    db: &C,
+    operation: F,
+) -> impl Future<Output = std::result::Result<T, E>>
 where
     C: sea_orm::TransactionTrait,
     F: for<'txn> AsyncFnOnce(&'txn C::Transaction) -> std::result::Result<T, E>,
     E: From<DbError> + std::fmt::Display,
 {
     let location = Location::caller();
-    tracing::debug!(
-        file = location.file(),
-        line = location.line(),
-        "beginning transaction"
+    let span = tracing::info_span!(
+        "db_transaction",
+        transaction_id = %uuid::Uuid::new_v4(),
+        caller_file = location.file(),
+        caller_line = location.line()
     );
-    let txn = begin(db).await.map_err(E::from)?;
-    let mut rollback_guard = RollbackGuard::new(location);
-
-    match operation(&txn).await {
-        Ok(value) => {
-            rollback_guard.disarm();
-            commit(txn).await.map_err(E::from)?;
-            tracing::debug!(
-                file = location.file(),
-                line = location.line(),
-                "committed transaction"
-            );
-            Ok(value)
-        }
-        Err(error) => {
-            tracing::debug!(
-                file = location.file(),
-                line = location.line(),
-                error = %error,
-                "rolling back transaction after callback error"
-            );
-            rollback_guard.disarm();
-            if let Err(rollback_error) = rollback(txn).await {
-                tracing::error!(
-                    file = location.file(),
-                    line = location.line(),
-                    callback_error = %error,
-                    rollback_error = %rollback_error,
-                    "transaction rollback failed after callback error"
-                );
+    async move {
+        let mut observation = TransactionObservation::new();
+        let txn = match begin(db).await {
+            Ok(txn) => txn,
+            Err(error) => {
+                observation.finish("begin_error");
+                return Err(E::from(error));
             }
-            Err(error)
+        };
+        observation.phase("callback");
+        match operation(&txn).await {
+            Ok(value) => {
+                observation.phase("commit");
+                match commit(txn).await {
+                    Ok(()) => {
+                        observation.finish("committed");
+                        Ok(value)
+                    }
+                    Err(error) => {
+                        observation.finish("commit_error_outcome_unknown");
+                        Err(E::from(error))
+                    }
+                }
+            }
+            Err(error) => {
+                observation.phase("rollback");
+                if rollback(txn).await.is_err() {
+                    observation.finish("callback_error_rollback_failed");
+                } else {
+                    observation.finish("callback_error_rolled_back");
+                }
+                Err(error)
+            }
         }
     }
+    .instrument(span)
 }
 
 #[cfg(test)]
@@ -572,5 +640,143 @@ mod tests {
         rollback(txn).await.expect("rollback should succeed");
 
         assert_eq!(count_rows(&db).await, 0);
+    }
+    #[tokio::test]
+    async fn diagnostics_preserve_caller_operation_and_redact_callback_errors() {
+        use tracing::Instrument;
+        let db = sqlite_db().await;
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let mut actual_line = 0;
+        logs.capture_future(async {
+            let parent = tracing::trace_span!("product_operation", operation = "quota_claim");
+            async {
+                actual_line = line!() + 1;
+                super::with_transaction(&db, async |_txn| Ok::<_, DbError>(()))
+                    .await
+                    .unwrap();
+                let error = super::with_transaction(&db, async |_txn| {
+                    Err::<(), _>(ProductError::Validation("secret-callback-canary"))
+                })
+                .await
+                .unwrap_err();
+                assert_eq!(error, ProductError::Validation("secret-callback-canary"));
+            }
+            .instrument(parent)
+            .await;
+        })
+        .await;
+        let text = logs.text();
+        assert!(
+            text.contains(&format!("caller_line={actual_line}")),
+            "{text}"
+        );
+        for field in [
+            "transaction_id=",
+            "operation=\"quota_claim\"",
+            "phase=\"begin\"",
+            "phase=\"callback\"",
+            "phase=\"commit\"",
+            "outcome=\"committed\"",
+            "outcome=\"callback_error_rolled_back\"",
+            "elapsed_seconds=",
+        ] {
+            assert!(text.contains(field), "missing {field}: {text}");
+        }
+        assert!(!text.contains("secret-callback-canary"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn dropping_callback_reports_phase_and_rolls_back_without_logging_error() {
+        let db = sqlite_db().await;
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        logs.capture_future(async {
+            let entered = tokio::sync::Notify::new();
+            let mut future = Box::pin(super::with_transaction(&db, async |_txn| {
+                entered.notify_one();
+                std::future::pending::<()>().await;
+                Ok::<_, DbError>(())
+            }));
+            tokio::select! {
+                result = &mut future => panic!("unexpected completion: {result:?}"),
+                () = entered.notified() => {}
+            }
+            drop(future);
+        })
+        .await;
+        let text = logs.text();
+        assert!(text.contains("phase=\"callback\""), "{text}");
+        assert!(text.contains("dropped_outcome_unknown"), "{text}");
+        // Dropping must release the only SQLite connection.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            super::with_transaction(&db, async |_txn| Ok::<_, DbError>(())),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn begin_failure_records_boundary_without_raw_database_error() {
+        let db = sqlite_db().await;
+        db.close_by_ref().await.unwrap();
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let result = logs
+            .capture_future(async {
+                super::with_transaction(&db, async |_txn| Ok::<_, DbError>(())).await
+            })
+            .await;
+        assert!(result.is_err());
+        let text = logs.text();
+        assert!(text.contains("outcome=\"begin_error\""), "{text}");
+        assert!(!text.contains("Connection pool closed"), "{text}");
+    }
+    #[tokio::test]
+    async fn deferred_constraint_commit_failure_is_not_reported_as_success() {
+        let db = sqlite_db().await;
+        db.execute_unprepared("PRAGMA foreign_keys = ON; CREATE TABLE parent (id INTEGER PRIMARY KEY); CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);").await.unwrap();
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let result = logs
+            .capture_future(async {
+                super::with_transaction(&db, async |txn| {
+                    txn.execute_unprepared("INSERT INTO child VALUES (1, 99)")
+                        .await
+                        .map_err(DbError::from)?;
+                    Ok::<_, DbError>(())
+                })
+                .await
+            })
+            .await;
+        assert!(result.is_err());
+        let text = logs.text();
+        assert!(text.contains("commit_error_outcome_unknown"), "{text}");
+        assert!(!text.contains("INSERT INTO"), "{text}");
+        assert!(!text.contains("outcome=\"committed\""), "{text}");
+    }
+
+    #[tokio::test]
+    async fn rollback_failure_preserves_original_product_error() {
+        let db = sqlite_db().await;
+        let logs = aster_forge_test::logs::CapturedLogs::default();
+        let result = logs
+            .capture_future(async {
+                super::with_transaction(&db, async |txn| {
+                    // Deliberately desynchronize SQLite from the ORM to force rollback failure.
+                    txn.execute_unprepared("ROLLBACK")
+                        .await
+                        .map_err(DbError::from)
+                        .map_err(ProductError::from)?;
+                    Err::<(), _>(ProductError::Validation("secret-callback-canary"))
+                })
+                .await
+            })
+            .await;
+        assert_eq!(
+            result.unwrap_err(),
+            ProductError::Validation("secret-callback-canary")
+        );
+        let text = logs.text();
+        assert!(text.contains("callback_error_rollback_failed"), "{text}");
+        assert!(!text.contains("secret-callback-canary"), "{text}");
     }
 }

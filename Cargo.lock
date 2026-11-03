@@ -922,6 +922,7 @@ name = "aster_forge_tasks"
 version = "0.1.0"
 dependencies = [
  "aster_forge_runtime",
+ "aster_forge_test",
  "aster_forge_utils",
  "async-trait",
  "chrono",
@@ -933,7 +934,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]
