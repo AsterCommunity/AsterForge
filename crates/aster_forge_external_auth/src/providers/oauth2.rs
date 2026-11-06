@@ -817,73 +817,82 @@ mod tests {
 #[cfg(test)]
 mod injected_transport_tests {
     use super::*;
+    /// Serve one token response and retain the complete request for protocol assertions.
+    async fn token_endpoint(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let len = socket.read(&mut chunk).await.unwrap();
+                assert!(len > 0);
+                bytes.extend_from_slice(&chunk[..len]);
+                let request = String::from_utf8_lossy(&bytes);
+                if let Some(end) = request.find("\r\n\r\n") {
+                    let length = request[..end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+        (url, server)
+    }
+
     #[tokio::test]
     async fn injected_token_exchange_preserves_form_authentication_and_validates_token_response() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         for (secret, status, body, expected) in [
             (
                 true,
                 "200 OK",
                 r#"{"access_token":"issued-token","token_type":"Bearer"}"#,
-                Some("issued-token"),
+                Ok("issued-token"),
             ),
             (
                 false,
                 "200 OK",
                 r#"{"access_token":"public-token"}"#,
-                Some("public-token"),
+                Ok("public-token"),
             ),
             (
                 true,
                 "200 OK",
                 r#"{"access_token":" ","token_type":"Bearer"}"#,
-                None,
+                Err("missing access_token"),
             ),
             (
                 true,
                 "200 OK",
                 r#"{"access_token":"token","token_type":"MAC"}"#,
-                None,
+                Err("unsupported token_type"),
             ),
             (
                 true,
                 "400 Bad Request",
                 r#"{"error":"invalid_grant"}"#,
-                None,
+                Err("400 Bad Request; error=invalid_grant"),
             ),
         ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!("http://{}/token", listener.local_addr().unwrap());
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut bytes = Vec::new();
-                loop {
-                    let mut chunk = [0; 4096];
-                    let len = socket.read(&mut chunk).await.unwrap();
-                    assert!(len > 0);
-                    bytes.extend_from_slice(&chunk[..len]);
-                    let request = String::from_utf8_lossy(&bytes);
-                    if let Some(end) = request.find("\r\n\r\n") {
-                        let length = request[..end]
-                            .lines()
-                            .find_map(|line| {
-                                line.to_ascii_lowercase()
-                                    .strip_prefix("content-length: ")
-                                    .and_then(|value| value.parse::<usize>().ok())
-                            })
-                            .unwrap();
-                        if bytes.len() >= end + 4 + length {
-                            break;
-                        }
-                    }
-                }
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                socket.write_all(response.as_bytes()).await.unwrap();
-                String::from_utf8(bytes).unwrap()
-            });
+            let (url, server) = token_endpoint(status, body).await;
             let mut provider = crate::registry::tests_for_transport_config();
             provider.token_url = Some(url);
             provider.client_secret = secret.then(|| "request-secret".into());
@@ -903,7 +912,16 @@ mod injected_transport_tests {
                 "verifier",
             )
             .await;
-            assert_eq!(result.ok().as_deref(), expected);
+            match (result, expected) {
+                (Ok(token), Ok(expected)) => assert_eq!(token, expected),
+                (Err(ExternalAuthError::InvalidCredentials(message)), Err(expected)) => {
+                    assert!(
+                        message.contains(expected),
+                        "unexpected authentication failure: {message}"
+                    );
+                }
+                other => panic!("unexpected token-exchange result: {other:?}"),
+            }
             let request = server.await.unwrap();
             assert!(request.starts_with("POST /token HTTP/1.1"));
             assert!(request.contains("TokenProduct/42"));
@@ -928,7 +946,7 @@ mod injected_transport_tests {
     }
 
     #[tokio::test]
-    async fn injected_transport_preserves_product_ua_redirect_and_timeout() {
+    async fn injected_transport_preserves_product_ua_and_redirect() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -945,7 +963,6 @@ mod injected_transport_tests {
             aster_forge_http::HttpClient::builder()
                 .no_proxy()
                 .user_agent("Product/42")
-                .timeout(std::time::Duration::from_millis(50))
                 .build()
                 .unwrap(),
         );
@@ -953,5 +970,46 @@ mod injected_transport_tests {
         let response = client.get(url).send().await.unwrap();
         assert_eq!(response.status(), 307);
         assert!(server.await.unwrap().contains("Product/42"));
+    }
+
+    /// The server accepts the request but never sends headers: only the injected pool may time out.
+    #[tokio::test]
+    async fn injected_transport_preserves_product_timeout() {
+        use std::time::Duration;
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            received_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .timeout(Duration::from_millis(50))
+                .build()
+                .unwrap(),
+        );
+        let client = oauth2_http_client(&provider).unwrap();
+        // The generous outer guard prevents a hung test; passing it is never counted as the client timeout.
+        let result = tokio::time::timeout(Duration::from_secs(2), client.get(url).send()).await;
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        received_rx
+            .await
+            .expect("fixture must receive the request before the client deadline");
+        let error = result
+            .expect("injected deadline must fire before the test guard")
+            .unwrap_err();
+        assert!(
+            error.is_timeout(),
+            "expected the injected transport timeout: {error}"
+        );
     }
 }

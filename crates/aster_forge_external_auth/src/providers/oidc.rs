@@ -417,7 +417,7 @@ mod injected_transport_tests {
     }
 
     #[tokio::test]
-    async fn injected_transport_preserves_product_ua_redirect_and_timeout() {
+    async fn injected_transport_preserves_product_ua_and_redirect() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -434,7 +434,6 @@ mod injected_transport_tests {
             aster_forge_http::HttpClient::builder()
                 .no_proxy()
                 .user_agent("Product/42")
-                .timeout(std::time::Duration::from_millis(50))
                 .build()
                 .unwrap(),
         );
@@ -442,5 +441,47 @@ mod injected_transport_tests {
         let response = client.client.get(url).send().await.unwrap();
         assert_eq!(response.status(), 307);
         assert!(server.await.unwrap().contains("Product/42"));
+    }
+
+    /// The server accepts the request but never sends headers: only the injected pool may time out.
+    #[tokio::test]
+    async fn injected_transport_preserves_product_timeout() {
+        use std::time::Duration;
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            received_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .timeout(Duration::from_millis(50))
+                .build()
+                .unwrap(),
+        );
+        let client = oidc_http_client(&provider).unwrap();
+        // The generous outer guard prevents a hung test; passing it is never counted as the client timeout.
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), client.client.get(url).send()).await;
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        received_rx
+            .await
+            .expect("fixture must receive the request before the client deadline");
+        let error = result
+            .expect("injected deadline must fire before the test guard")
+            .unwrap_err();
+        assert!(
+            error.is_timeout(),
+            "expected the injected transport timeout: {error}"
+        );
     }
 }
