@@ -93,6 +93,10 @@ pub struct ExternalAuthProviderConfig {
     pub avatar_url_claim: Option<String>,
     /// Optional application-owned User-Agent for outbound provider API requests.
     pub outbound_http_user_agent: Option<String>,
+    /// Trusted product transport. Its UA, redirect, proxy, TLS, timeout and observation
+    /// policies take precedence over the fallback UA above. Never supplied by an untrusted plugin.
+    #[cfg(any(feature = "oauth2", feature = "oidc"))]
+    pub outbound_http_client: Option<aster_forge_http::HttpClient>,
 }
 
 impl fmt::Debug for ExternalAuthProviderConfig {
@@ -121,7 +125,7 @@ impl fmt::Debug for ExternalAuthProviderConfig {
             .field("groups_claim", &self.groups_claim)
             .field("avatar_url_claim", &self.avatar_url_claim)
             .field("outbound_http_user_agent", &self.outbound_http_user_agent)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

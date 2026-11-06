@@ -231,9 +231,13 @@ impl ExternalAuthProviderDriver for OAuth2ProviderDriver {
 ///
 /// GitHub rejects API calls without a User-Agent header, so keep the project
 /// user agent on the shared client instead of setting it per request.
-pub(super) fn oauth2_http_client(provider: &ExternalAuthProviderConfig) -> Result<reqwest::Client> {
-    reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
+pub(super) fn oauth2_http_client(
+    provider: &ExternalAuthProviderConfig,
+) -> Result<aster_forge_http::HttpClient> {
+    if let Some(client) = &provider.outbound_http_client {
+        return Ok(client.clone());
+    }
+    aster_forge_http::HttpClient::builder()
         .timeout(std::time::Duration::from_secs(TOKEN_ENDPOINT_TIMEOUT_SECS))
         .user_agent(outbound_http_user_agent(provider))
         .build()
@@ -282,7 +286,7 @@ fn build_pkce_challenge(verifier: &str) -> String {
 }
 
 pub(super) async fn exchange_code_for_token(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     code: &str,
     redirect_uri: &str,
@@ -344,7 +348,7 @@ pub(super) async fn exchange_code_for_token(
 }
 
 async fn send_token_request(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     token_request: OAuth2TokenRequest<'_>,
 ) -> Result<reqwest::Response> {
     let form = {
@@ -434,7 +438,7 @@ fn sanitize_error_fragment(value: &str) -> String {
 }
 
 pub(super) async fn fetch_userinfo(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     access_token: &str,
 ) -> Result<Value> {
@@ -636,6 +640,8 @@ mod tests {
             groups_claim: None,
             avatar_url_claim: None,
             outbound_http_user_agent: None,
+            #[cfg(any(feature = "oauth2", feature = "oidc"))]
+            outbound_http_client: None,
         }
     }
 
@@ -805,5 +811,37 @@ mod tests {
         assert!(message.contains("www-authenticate=Bearer"));
 
         handle.stop(true).await;
+    }
+}
+
+#[cfg(test)]
+mod injected_transport_tests {
+    use super::*;
+    #[tokio::test]
+    async fn injected_transport_preserves_product_ua_redirect_and_timeout() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            let len = socket.read(&mut bytes).await.unwrap();
+            socket.write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8_lossy(&bytes[..len]).to_string()
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("must-not-override-product".into());
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .user_agent("Product/42")
+                .timeout(std::time::Duration::from_millis(50))
+                .build()
+                .unwrap(),
+        );
+        let client = oauth2_http_client(&provider).unwrap();
+        let response = client.get(url).send().await.unwrap();
+        assert_eq!(response.status(), 307);
+        assert!(server.await.unwrap().contains("Product/42"));
     }
 }

@@ -129,12 +129,11 @@ impl MetricsProviderBuilder {
         let timeout = config.timeout;
         // reqwest's blocking client must be built outside an async runtime.
         let client = std::thread::spawn(move || {
-            reqwest::blocking::Client::builder()
+            aster_forge_http::HttpClient::builder()
                 .timeout(timeout)
                 .connect_timeout(timeout)
-                .redirect(reqwest::redirect::Policy::none())
                 .no_proxy()
-                .build()
+                .build_blocking()
         })
         .join()
         .map_err(|_| MetricError::Initialization)?
@@ -538,11 +537,10 @@ mod tests {
             let mut config = config(endpoint);
             config.max_response_bytes = limit;
             let exporter = HttpExporter {
-                client: reqwest::blocking::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
+                client: aster_forge_http::HttpClient::builder()
                     .no_proxy()
                     .timeout(config.timeout)
-                    .build()
+                    .build_blocking()
                     .unwrap(),
                 config,
                 diagnostics: OtlpExportDiagnostics::default(),
@@ -569,10 +567,10 @@ mod tests {
             drop(stream);
         });
         let exporter = HttpExporter {
-            client: reqwest::blocking::Client::builder()
+            client: aster_forge_http::HttpClient::builder()
                 .no_proxy()
                 .timeout(config.timeout)
-                .build()
+                .build_blocking()
                 .unwrap(),
             config,
             diagnostics: OtlpExportDiagnostics::default(),

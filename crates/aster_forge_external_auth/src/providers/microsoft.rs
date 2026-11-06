@@ -342,7 +342,7 @@ async fn discover_microsoft_provider(
     let discovery_url = microsoft_discovery_url(configured_issuer)?;
     let http_client = oidc_http_client(provider)?;
     let response = http_client
-        .reqwest()
+        .http()
         .get(discovery_url.as_str())
         .send()
         .await
@@ -624,6 +624,8 @@ mod tests {
             groups_claim: None,
             avatar_url_claim: Some("picture".to_string()),
             outbound_http_user_agent: None,
+            #[cfg(any(feature = "oauth2", feature = "oidc"))]
+            outbound_http_client: None,
         }
     }
 

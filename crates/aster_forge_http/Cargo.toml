@@ -8,11 +8,16 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+default = []
+blocking = ["reqwest/blocking"]
+
 [dependencies]
 futures.workspace = true
 http.workspace = true
-reqwest = { workspace = true, features = ["stream"] }
+reqwest = { workspace = true, features = ["stream", "json", "form", "query", "multipart"] }
 thiserror.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "net"] }

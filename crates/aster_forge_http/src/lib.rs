@@ -11,8 +11,12 @@
     )
 )]
 
+mod builder;
+mod client;
 mod reqwest_client;
 mod response_body;
 
+pub use builder::HttpClientBuilder;
+pub use client::{HttpClient, HttpObservation, HttpObserver, HttpOutcome, HttpRequestBuilder};
 pub use reqwest_client::{BufferedHttpError, execute_reqwest_buffered_limited};
 pub use response_body::read_reqwest_body_limited;

@@ -225,7 +225,7 @@ fn qq_oauth2_config(provider: &ExternalAuthProviderConfig) -> ExternalAuthProvid
 }
 
 async fn exchange_qq_code_for_token(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     code: &str,
     redirect_uri: &str,
@@ -290,7 +290,7 @@ async fn exchange_qq_code_for_token(
 }
 
 async fn fetch_qq_openid(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     access_token: &str,
 ) -> Result<String> {
@@ -337,7 +337,7 @@ async fn fetch_qq_openid(
 }
 
 async fn fetch_qq_userinfo(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     access_token: &str,
     openid: &str,
@@ -513,6 +513,8 @@ mod tests {
             groups_claim: None,
             avatar_url_claim: None,
             outbound_http_user_agent: None,
+            #[cfg(any(feature = "oauth2", feature = "oidc"))]
+            outbound_http_client: None,
         }
     }
 

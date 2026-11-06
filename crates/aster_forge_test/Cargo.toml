@@ -12,13 +12,14 @@ publish = false
 default = []
 containers = ["dep:fs2", "dep:serde", "dep:serde_json", "dep:testcontainers", "dep:tokio"]
 process = []
-smtp = ["containers", "dep:reqwest"]
+smtp = ["dep:aster_forge_http", "containers", "dep:reqwest"]
 redis = ["containers", "dep:redis"]
 postgres = ["containers", "dep:sea-orm"]
 mysql = ["containers", "dep:sea-orm"]
 logs = ["dep:tracing-subscriber", "dep:tracing"]
 
 [dependencies]
+aster_forge_http = { path = "../aster_forge_http", optional = true }
 aster_forge_utils = { path = "../aster_forge_utils" }
 fs2 = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }

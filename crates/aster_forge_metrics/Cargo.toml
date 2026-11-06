@@ -12,10 +12,11 @@ publish = false
 default = []
 allocator-metrics = ["dep:aster_forge_alloc"]
 backend-prometheus = ["dep:prometheus", "dep:opentelemetry-prometheus"]
-otlp = ["dep:opentelemetry-proto", "dep:prost", "dep:reqwest", "reqwest/blocking"]
+otlp = ["dep:aster_forge_http", "dep:opentelemetry-proto", "dep:prost", "dep:reqwest", "reqwest/blocking"]
 runtime-health = ["dep:aster_forge_runtime"]
 
 [dependencies]
+aster_forge_http = { path = "../aster_forge_http", features = ["blocking"], optional = true }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-prometheus = { workspace = true, optional = true }

@@ -129,6 +129,7 @@ fn runtime_provider_config(
         protocol: provider.protocol,
         // ...产品持久化字段映射...
         outbound_http_user_agent: Some(PRODUCT_USER_AGENT.to_string()),
+        outbound_http_client: None,
     }
 }
 ```
@@ -226,3 +227,14 @@ registry.register(driver)?;
 Google 固定 `https://accounts.google.com` issuer；GitHub 和 QQ 固定各自官方 authorization/token/userinfo 地址。生产 driver 忽略这些目的地址覆盖，loopback 也不例外。GitHub Enterprise 或其他兼容服务使用通用 OIDC/OAuth2 driver。mock HTTP 测试在通用 driver 或私有低层协议函数中显式注入测试配置，不通过生产 preset 放开目标。
 
 scope 与 allowed-domain 列表用集合去重，保留第一次出现的顺序与既有规范化语义。无效 provider-options JSON 的日志仅记录错误分类、行号和列号，不写入原始文档或可能包含输入值的解析错误文本。
+
+
+## 产品 HTTP transport 注入
+
+启用 `oauth2` 或 `oidc` 时，`ExternalAuthProviderConfig` 新增
+`outbound_http_client: Option<aster_forge_http::HttpClient>`，消费者的 config literal 要补上该字段。
+产品应注入一个按自身策略装配并可复用的 client；其 UA、redirect、timeout、proxy/TLS 和
+observer 优先于 fallback UA。OAuth2 token/userinfo、GitHub/QQ 扩展请求以及 OIDC
+发现/JWKS/token/Microsoft discovery 都使用该 client，不再自行组装另一个 pool。
+未注入时使用 Forge factory 的安全默认值和原有协议总期限。不要将可信 client 注入接口
+当成 plugin capability API；权限授权、凭据存储、审计仍归产品。

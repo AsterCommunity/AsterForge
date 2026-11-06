@@ -191,7 +191,7 @@ fn github_oauth2_config(provider: &ExternalAuthProviderConfig) -> ExternalAuthPr
 }
 
 async fn fetch_verified_primary_email(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     access_token: &str,
 ) -> Result<Option<String>> {
@@ -279,6 +279,8 @@ mod tests {
             groups_claim: None,
             avatar_url_claim: None,
             outbound_http_user_agent: None,
+            #[cfg(any(feature = "oauth2", feature = "oidc"))]
+            outbound_http_client: None,
         }
     }
 
