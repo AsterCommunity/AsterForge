@@ -817,6 +817,106 @@ mod tests {
 #[cfg(test)]
 mod injected_transport_tests {
     use super::*;
+    #[tokio::test]
+    async fn injected_token_exchange_preserves_form_authentication_and_validates_token_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (secret, status, body, expected) in [
+            (
+                true,
+                "200 OK",
+                r#"{"access_token":"issued-token","token_type":"Bearer"}"#,
+                Some("issued-token"),
+            ),
+            (
+                false,
+                "200 OK",
+                r#"{"access_token":"public-token"}"#,
+                Some("public-token"),
+            ),
+            (
+                true,
+                "200 OK",
+                r#"{"access_token":" ","token_type":"Bearer"}"#,
+                None,
+            ),
+            (
+                true,
+                "200 OK",
+                r#"{"access_token":"token","token_type":"MAC"}"#,
+                None,
+            ),
+            (
+                true,
+                "400 Bad Request",
+                r#"{"error":"invalid_grant"}"#,
+                None,
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/token", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let len = socket.read(&mut chunk).await.unwrap();
+                    assert!(len > 0);
+                    bytes.extend_from_slice(&chunk[..len]);
+                    let request = String::from_utf8_lossy(&bytes);
+                    if let Some(end) = request.find("\r\n\r\n") {
+                        let length = request[..end]
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .and_then(|value| value.parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                String::from_utf8(bytes).unwrap()
+            });
+            let mut provider = crate::registry::tests_for_transport_config();
+            provider.token_url = Some(url);
+            provider.client_secret = secret.then(|| "request-secret".into());
+            provider.outbound_http_client = Some(
+                aster_forge_http::HttpClient::builder()
+                    .no_proxy()
+                    .user_agent("TokenProduct/42")
+                    .build()
+                    .unwrap(),
+            );
+            let client = oauth2_http_client(&provider).unwrap();
+            let result = exchange_code_for_token(
+                &client,
+                &provider,
+                "a+b &",
+                "http://localhost/callback",
+                "verifier",
+            )
+            .await;
+            assert_eq!(result.ok().as_deref(), expected);
+            let request = server.await.unwrap();
+            assert!(request.starts_with("POST /token HTTP/1.1"));
+            assert!(request.contains("TokenProduct/42"));
+            let form = request.split_once("\r\n\r\n").unwrap().1;
+            let fields = url::form_urlencoded::parse(form.as_bytes())
+                .collect::<std::collections::HashMap<_, _>>();
+            assert_eq!(fields.get("code").unwrap(), "a+b &");
+            assert_eq!(fields.get("code_verifier").unwrap(), "verifier");
+            assert_eq!(fields.get("client_id").unwrap(), "client-id");
+            assert_eq!(fields.contains_key("client_secret"), secret);
+        }
+    }
+
     #[test]
     fn invalid_fallback_ua_is_an_initialization_error_and_debug_redacts_credentials() {
         let mut provider = crate::registry::tests_for_transport_config();
