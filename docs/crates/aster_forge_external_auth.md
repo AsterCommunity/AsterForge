@@ -116,7 +116,8 @@ Forge 到第 5 步结束。第 6 步必须留在产品仓库。
 - 直接使用 `ExternalAuthProfile`、`ExternalAuthCallback` 和 `ExternalAuthProviderTestResult`；除非产品 API schema 确实不同，不要复制同字段 DTO 再逐字段转换。
 - 产品只需实现一次 `ExternalAuthError` 到产品错误类型的分类映射，让普通 `?` 保持调用点干净。
 
-下面这种 model-to-runtime 转换是必要的持久化 adapter，不属于薄封装：
+下面这种 model-to-runtime 转换是必要的持久化 adapter，不属于薄封装。
+示例假定依赖启用了 `oauth2` 或 `oidc`（包括通过 github/google/microsoft/qq 间接启用）：
 
 ```rust
 fn runtime_provider_config(
@@ -133,6 +134,11 @@ fn runtime_provider_config(
     }
 }
 ```
+
+如果依赖使用 `default-features = false` 且没有启用 `oauth2`/`oidc`，配置结构中没有
+`outbound_http_client` 字段，删除示例中该行即可。不要在产品中复制 Forge 的
+`#[cfg(feature = "oauth2")]`：Rust cfg 检查的是当前产品的 feature，只有产品显式声明并
+转发了对应 feature 时才能这样条件编译。
 
 `EXTERNAL_AUTH_TYPE_STORAGE_LEN` 固定共享 provider kind / protocol 的最小持久化列宽。新 migration 应引用这个契约或保持至少相同宽度；历史 migration 已发布后不要回改，只在后续 migration 中修正不足。
 
@@ -181,7 +187,9 @@ assert_eq!(return_path, "/settings?tab=login");
 - 为 outbound provider request 注入产品自己的 User-Agent；不要把共享 crate 名称暴露给外部 provider。
 
 OIDC driver 使用 `aster_forge_http` 上的 `reqwest 0.13` bounded adapter 执行 discovery、
-JWKS 和 token 请求。共享 driver 固定禁止自动 redirect、设置 15 秒 timeout，并限制响应体；
+JWKS 和 token 请求，并始终限制响应体。未注入 client 时，factory 禁止自动 redirect，
+共享 driver 设置 15 秒 timeout；注入时采用产品 client 的 transport 策略，产品应通过
+`HttpClient::builder()` 保持禁止重定向并选择适合自己的期限；
 产品仍负责注入自己的 User-Agent。`openidconnect` 的默认 reqwest feature 不应重新启用，
 否则会把另一代 HTTP transport 带回完整依赖图。
 

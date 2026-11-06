@@ -373,6 +373,49 @@ pub(super) fn profile_from_id_token(
 #[cfg(test)]
 mod injected_transport_tests {
     use super::*;
+    #[test]
+    fn invalid_fallback_ua_is_an_initialization_error_and_debug_redacts_credentials() {
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("bad\r\nua".into());
+        assert!(oidc_http_client(&provider).is_err());
+        let debug = format!("{provider:?}");
+        assert!(!debug.contains("client-secret"));
+        assert!(debug.contains("REDACTED"));
+    }
+
+    #[tokio::test]
+    async fn oidc_buffered_adapter_keeps_injected_identity_and_response_contract() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/jwks", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            let len = socket.read(&mut bytes).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"keys\":[]}").await.unwrap();
+            String::from_utf8_lossy(&bytes[..len]).to_string()
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .user_agent("OidcProduct/42")
+                .build()
+                .unwrap(),
+        );
+        let client = oidc_http_client(&provider).unwrap();
+        let request = openidconnect::http::Request::get(url)
+            .body(Vec::new())
+            .unwrap();
+        let response = client.call(request).await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["content-type"], "application/json");
+        assert_eq!(response.body(), br#"{"keys":[]}"#);
+        assert!(server.await.unwrap().contains("OidcProduct/42"));
+        #[cfg(feature = "microsoft")]
+        assert!(format!("{:?}", client.http()).contains("HttpClient"));
+    }
+
     #[tokio::test]
     async fn injected_transport_preserves_product_ua_redirect_and_timeout() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

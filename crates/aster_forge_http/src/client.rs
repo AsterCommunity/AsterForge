@@ -23,6 +23,7 @@ pub struct HttpObservation {
 
 /// Product-owned, non-blocking telemetry sink. Implementations must not panic.
 pub trait HttpObserver: Send + Sync {
+    /// Consume one completed or cancelled exchange without blocking the transport.
     fn observe(&self, observation: HttpObservation);
 }
 
@@ -62,6 +63,7 @@ impl HttpClient {
         }
     }
 
+    /// Prepare a method/URL request whose execution stays bound to this pool and observer.
     pub fn request(
         &self,
         method: reqwest::Method,
@@ -73,21 +75,27 @@ impl HttpClient {
         }
     }
 
+    /// Prepare GET without consuming a response body or following redirects.
     pub fn get(&self, url: impl reqwest::IntoUrl) -> HttpRequestBuilder {
         self.request(reqwest::Method::GET, url)
     }
+    /// Prepare POST; protocol code owns retry and body replay decisions.
     pub fn post(&self, url: impl reqwest::IntoUrl) -> HttpRequestBuilder {
         self.request(reqwest::Method::POST, url)
     }
+    /// Prepare PUT while keeping provider signing and body ownership at the caller.
     pub fn put(&self, url: impl reqwest::IntoUrl) -> HttpRequestBuilder {
         self.request(reqwest::Method::PUT, url)
     }
+    /// Prepare DELETE without adding retries for a potentially mutating operation.
     pub fn delete(&self, url: impl reqwest::IntoUrl) -> HttpRequestBuilder {
         self.request(reqwest::Method::DELETE, url)
     }
+    /// Prepare HEAD, preserving the method for signed metadata probes.
     pub fn head(&self, url: impl reqwest::IntoUrl) -> HttpRequestBuilder {
         self.request(reqwest::Method::HEAD, url)
     }
+    /// Prepare PATCH without transforming the protocol payload.
     pub fn patch(&self, url: impl reqwest::IntoUrl) -> HttpRequestBuilder {
         self.request(reqwest::Method::PATCH, url)
     }
@@ -152,6 +160,7 @@ pub struct HttpRequestBuilder {
     builder: reqwest::RequestBuilder,
 }
 impl HttpRequestBuilder {
+    /// Add one request header; invalid names/values become a build error before network I/O.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         reqwest::header::HeaderName: TryFrom<K>,
@@ -162,34 +171,42 @@ impl HttpRequestBuilder {
         self.builder = self.builder.header(key, value);
         self
     }
+    /// Merge request-specific headers without installing cross-request credentials.
     pub fn headers(mut self, headers: reqwest::header::HeaderMap) -> Self {
         self.builder = self.builder.headers(headers);
         self
     }
+    /// Attach bytes or a streaming body without buffering or changing its size hint.
     pub fn body(mut self, body: impl Into<reqwest::Body>) -> Self {
         self.builder = self.builder.body(body);
         self
     }
+    /// Encode JSON using reqwest and set its content type without a second serialization pass.
     pub fn json<T: serde::Serialize + ?Sized>(mut self, value: &T) -> Self {
         self.builder = self.builder.json(value);
         self
     }
+    /// Encode a protocol form using reqwest URL encoding and content type rules.
     pub fn form<T: serde::Serialize + ?Sized>(mut self, value: &T) -> Self {
         self.builder = self.builder.form(value);
         self
     }
+    /// Append encoded query pairs before the caller builds and signs the final URL.
     pub fn query<T: serde::Serialize + ?Sized>(mut self, value: &T) -> Self {
         self.builder = self.builder.query(value);
         self
     }
+    /// Attach a streamed multipart form with reqwest-owned boundary framing.
     pub fn multipart(mut self, form: reqwest::multipart::Form) -> Self {
         self.builder = self.builder.multipart(form);
         self
     }
+    /// Add an authorization header to this request only, never the shared pool.
     pub fn bearer_auth(mut self, token: impl std::fmt::Display) -> Self {
         self.builder = self.builder.bearer_auth(token);
         self
     }
+    /// Encode request-scoped Basic authorization using reqwest semantics.
     pub fn basic_auth<U: std::fmt::Display, P: std::fmt::Display>(
         mut self,
         username: U,
@@ -198,14 +215,17 @@ impl HttpRequestBuilder {
         self.builder = self.builder.basic_auth(username, password);
         self
     }
+    /// Override the pool total deadline for this exchange, including its response body.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.builder = self.builder.timeout(timeout);
         self
     }
+    /// Select the request HTTP version without changing provider headers.
     pub fn version(mut self, version: http::Version) -> Self {
         self.builder = self.builder.version(version);
         self
     }
+    /// Clone a replayable request while retaining its pool/observer; streamed bodies return None.
     pub fn try_clone(&self) -> Option<Self> {
         Some(Self {
             client: self.client.clone(),
@@ -220,6 +240,7 @@ impl HttpRequestBuilder {
         self.builder.build()
     }
 
+    /// Build and execute through the same observation boundary as signed requests.
     /// # Errors
     /// Returns request preparation or transport errors.
     pub async fn send(self) -> Result<reqwest::Response, reqwest::Error> {

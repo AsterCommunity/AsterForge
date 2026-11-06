@@ -39,18 +39,22 @@ impl Default for HttpClientBuilder {
     }
 }
 impl HttpClientBuilder {
+    /// Set product identity; malformed header values fail construction before network I/O.
     pub fn user_agent(mut self, value: impl Into<String>) -> Self {
         self.user_agent = value.into();
         self
     }
+    /// Bound connection establishment independently from response or transfer deadlines.
     pub fn connect_timeout(mut self, value: Duration) -> Self {
         self.connect_timeout = value;
         self
     }
+    /// Bound each idle read, including waiting for response headers during streamed uploads.
     pub fn read_timeout(mut self, value: Duration) -> Self {
         self.read_timeout = Some(value);
         self
     }
+    /// Bound the whole exchange through response-body consumption.
     pub fn timeout(mut self, value: Duration) -> Self {
         self.timeout = Some(value);
         self
@@ -60,18 +64,22 @@ impl HttpClientBuilder {
         self.timeout = None;
         self
     }
+    /// Disable idle-read timing only when the protocol owns progress and acknowledgement limits.
     pub fn without_read_timeout(mut self) -> Self {
         self.read_timeout = None;
         self
     }
+    /// Set how long an idle reusable connection remains in this pool.
     pub fn pool_idle_timeout(mut self, value: Duration) -> Self {
         self.idle_timeout = value;
         self
     }
+    /// Bound idle connections retained per host; this is not an active-request concurrency limit.
     pub fn pool_max_idle_per_host(mut self, value: usize) -> Self {
         self.idle_per_host = value;
         self
     }
+    /// Disable automatic environment proxies and any previously selected explicit proxy.
     pub fn no_proxy(mut self) -> Self {
         self.proxy = ProxyPolicy::Disabled;
         self
@@ -81,6 +89,7 @@ impl HttpClientBuilder {
         self.proxy = ProxyPolicy::Explicit(Box::new(value));
         self
     }
+    /// Extend server trust roots while retaining certificate and hostname verification.
     pub fn add_root_certificate(mut self, value: reqwest::Certificate) -> Self {
         self.roots.push(value);
         self
@@ -91,6 +100,7 @@ impl HttpClientBuilder {
         self.proxy = ProxyPolicy::Disabled;
         self
     }
+    /// Install the product observer for async execution; blocking SDKs own their own observation.
     pub fn observer(mut self, value: Arc<dyn HttpObserver>) -> Self {
         self.observer = Some(value);
         self

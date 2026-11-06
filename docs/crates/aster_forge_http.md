@@ -15,7 +15,7 @@ Forge 负责：
 
 产品或协议 crate 继续负责：
 
-- endpoint、redirect、timeout、proxy、TLS 和 User-Agent 策略。
+- endpoint、timeout、proxy、TLS 和 User-Agent 策略；factory 固定禁止自动 redirect。
 - 各调用点使用的具体字节上限。
 - 非 2xx 状态处理和产品错误映射。
 - response body 的协议解析。
@@ -49,8 +49,8 @@ let response = aster_forge_http::execute_reqwest_buffered_limited(
 ```
 
 该 helper 适合要求 `http::Request<Vec<u8>>` / `http::Response<Vec<u8>>` adapter 的协议库，
-例如 `openidconnect::AsyncHttpClient`。redirect 和 timeout 行为来自调用方传入的
-`reqwest::Client`。
+例如 `openidconnect::AsyncHttpClient`。调用方传入由 `HttpClient::builder()` 装配的
+`HttpClient`：factory 禁止自动 redirect，timeout 等其余策略由产品显式配置。
 
 ## 测试要求
 

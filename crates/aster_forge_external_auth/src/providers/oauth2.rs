@@ -817,6 +817,16 @@ mod tests {
 #[cfg(test)]
 mod injected_transport_tests {
     use super::*;
+    #[test]
+    fn invalid_fallback_ua_is_an_initialization_error_and_debug_redacts_credentials() {
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("bad\r\nua".into());
+        assert!(oauth2_http_client(&provider).is_err());
+        let debug = format!("{provider:?}");
+        assert!(!debug.contains("client-secret"));
+        assert!(debug.contains("REDACTED"));
+    }
+
     #[tokio::test]
     async fn injected_transport_preserves_product_ua_redirect_and_timeout() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
