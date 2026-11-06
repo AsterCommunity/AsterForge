@@ -32,12 +32,12 @@ const OIDC_SNAPSHOT_MAX_LEN: usize = 255;
 pub(super) const OIDC_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
 pub(super) struct OidcHttpClient {
-    client: reqwest::Client,
+    client: aster_forge_http::HttpClient,
 }
 
 impl OidcHttpClient {
     #[cfg(feature = "microsoft")]
-    pub(super) fn reqwest(&self) -> &reqwest::Client {
+    pub(super) fn http(&self) -> &aster_forge_http::HttpClient {
         &self.client
     }
 }
@@ -235,8 +235,12 @@ pub(super) fn start_authorization_with_oidc_client(
 }
 
 pub(super) fn oidc_http_client(provider: &ExternalAuthProviderConfig) -> Result<OidcHttpClient> {
-    let client = reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
+    if let Some(client) = &provider.outbound_http_client {
+        return Ok(OidcHttpClient {
+            client: client.clone(),
+        });
+    }
+    let client = aster_forge_http::HttpClient::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent(outbound_http_user_agent(provider))
         .build()
@@ -364,4 +368,93 @@ pub(super) fn profile_from_id_token(
         display_name,
         preferred_username,
     })
+}
+
+#[cfg(test)]
+mod injected_transport_tests {
+    use super::*;
+    #[test]
+    fn invalid_fallback_ua_is_an_initialization_error_and_debug_redacts_credentials() {
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("bad\r\nua".into());
+        assert!(oidc_http_client(&provider).is_err());
+        let debug = format!("{provider:?}");
+        assert!(!debug.contains("client-secret"));
+        assert!(debug.contains("REDACTED"));
+    }
+
+    #[tokio::test]
+    async fn oidc_buffered_adapter_keeps_injected_identity_and_response_contract() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/jwks", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            let len = socket.read(&mut bytes).await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"keys\":[]}").await.unwrap();
+            String::from_utf8_lossy(&bytes[..len]).to_string()
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .user_agent("OidcProduct/42")
+                .build()
+                .unwrap(),
+        );
+        let client = oidc_http_client(&provider).unwrap();
+        let request = openidconnect::http::Request::get(url)
+            .body(Vec::new())
+            .unwrap();
+        let response = client.call(request).await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["content-type"], "application/json");
+        assert_eq!(response.body(), br#"{"keys":[]}"#);
+        assert!(server.await.unwrap().contains("OidcProduct/42"));
+        #[cfg(feature = "microsoft")]
+        assert!(format!("{:?}", client.http()).contains("HttpClient"));
+    }
+
+    #[tokio::test]
+    async fn injected_transport_preserves_product_ua_and_redirect() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            let len = socket.read(&mut bytes).await.unwrap();
+            socket.write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8_lossy(&bytes[..len]).to_string()
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("must-not-override-product".into());
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .user_agent("Product/42")
+                .build()
+                .unwrap(),
+        );
+        let client = oidc_http_client(&provider).unwrap();
+        let response = client.client.get(url).send().await.unwrap();
+        assert_eq!(response.status(), 307);
+        assert!(server.await.unwrap().contains("Product/42"));
+    }
+
+    /// Verify this provider's injection entrypoint retains the product deadline.
+    #[tokio::test]
+    async fn injected_transport_preserves_product_timeout() {
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_millis(50))
+                .build()
+                .unwrap(),
+        );
+        let client = oidc_http_client(&provider).unwrap();
+        super::super::test_support::assert_injected_timeout(client.client).await;
+    }
 }

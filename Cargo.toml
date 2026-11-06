@@ -104,6 +104,7 @@ quote = "1"
 openidconnect = { version = "4.0.1", default-features = false }
 rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 redis = { version = "1.8.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+rcgen = "0.14"
 reqwest = { version = "0.13", features = ["json"] }
 sea-orm = { version = "2.0.4", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
@@ -116,6 +117,7 @@ sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 testcontainers = { version = "0.28", features = ["reusable-containers"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-rustls = "0.26"
 tokio-util = "0.7"
 tower = "0.5"
 tracing = { version = "0.1.44", default-features = false }

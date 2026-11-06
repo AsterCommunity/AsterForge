@@ -125,7 +125,12 @@ mod tests {
                     .expect("test server should write body");
             }
         });
-        let response = reqwest::get(format!("http://{addr}/"))
+        let response = crate::HttpClient::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{addr}/"))
+            .send()
             .await
             .expect("test request should succeed");
         server.await.expect("test server should finish");

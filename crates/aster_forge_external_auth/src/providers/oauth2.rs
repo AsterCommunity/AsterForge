@@ -231,9 +231,13 @@ impl ExternalAuthProviderDriver for OAuth2ProviderDriver {
 ///
 /// GitHub rejects API calls without a User-Agent header, so keep the project
 /// user agent on the shared client instead of setting it per request.
-pub(super) fn oauth2_http_client(provider: &ExternalAuthProviderConfig) -> Result<reqwest::Client> {
-    reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::none())
+pub(super) fn oauth2_http_client(
+    provider: &ExternalAuthProviderConfig,
+) -> Result<aster_forge_http::HttpClient> {
+    if let Some(client) = &provider.outbound_http_client {
+        return Ok(client.clone());
+    }
+    aster_forge_http::HttpClient::builder()
         .timeout(std::time::Duration::from_secs(TOKEN_ENDPOINT_TIMEOUT_SECS))
         .user_agent(outbound_http_user_agent(provider))
         .build()
@@ -282,7 +286,7 @@ fn build_pkce_challenge(verifier: &str) -> String {
 }
 
 pub(super) async fn exchange_code_for_token(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     code: &str,
     redirect_uri: &str,
@@ -344,7 +348,7 @@ pub(super) async fn exchange_code_for_token(
 }
 
 async fn send_token_request(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     token_request: OAuth2TokenRequest<'_>,
 ) -> Result<reqwest::Response> {
     let form = {
@@ -434,7 +438,7 @@ fn sanitize_error_fragment(value: &str) -> String {
 }
 
 pub(super) async fn fetch_userinfo(
-    http_client: &reqwest::Client,
+    http_client: &aster_forge_http::HttpClient,
     provider: &ExternalAuthProviderConfig,
     access_token: &str,
 ) -> Result<Value> {
@@ -636,6 +640,8 @@ mod tests {
             groups_claim: None,
             avatar_url_claim: None,
             outbound_http_user_agent: None,
+            #[cfg(any(feature = "oauth2", feature = "oidc"))]
+            outbound_http_client: None,
         }
     }
 
@@ -805,5 +811,187 @@ mod tests {
         assert!(message.contains("www-authenticate=Bearer"));
 
         handle.stop(true).await;
+    }
+}
+
+#[cfg(test)]
+mod injected_transport_tests {
+    use super::*;
+    /// Serve one token response and retain the complete request for protocol assertions.
+    async fn token_endpoint(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let len = socket.read(&mut chunk).await.unwrap();
+                assert!(len > 0);
+                bytes.extend_from_slice(&chunk[..len]);
+                let request = String::from_utf8_lossy(&bytes);
+                if let Some(end) = request.find("\r\n\r\n") {
+                    let length = request[..end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn injected_token_exchange_preserves_form_authentication_and_validates_token_response() {
+        for (secret, status, body, expected) in [
+            (
+                true,
+                "200 OK",
+                r#"{"access_token":"issued-token","token_type":"Bearer"}"#,
+                Ok("issued-token"),
+            ),
+            (
+                false,
+                "200 OK",
+                r#"{"access_token":"public-token"}"#,
+                Ok("public-token"),
+            ),
+            (
+                true,
+                "200 OK",
+                r#"{"access_token":" ","token_type":"Bearer"}"#,
+                Err("missing access_token"),
+            ),
+            (
+                true,
+                "200 OK",
+                r#"{"access_token":"token","token_type":"MAC"}"#,
+                Err("unsupported token_type"),
+            ),
+            (
+                true,
+                "400 Bad Request",
+                r#"{"error":"invalid_grant"}"#,
+                Err("400 Bad Request; error=invalid_grant"),
+            ),
+        ] {
+            let (url, server) = token_endpoint(status, body).await;
+            let mut provider = crate::registry::tests_for_transport_config();
+            provider.token_url = Some(url);
+            provider.client_secret = secret.then(|| "request-secret".into());
+            provider.outbound_http_client = Some(
+                aster_forge_http::HttpClient::builder()
+                    .no_proxy()
+                    .user_agent("TokenProduct/42")
+                    .build()
+                    .unwrap(),
+            );
+            let client = oauth2_http_client(&provider).unwrap();
+            let result = exchange_code_for_token(
+                &client,
+                &provider,
+                "a+b &",
+                "http://localhost/callback",
+                "verifier",
+            )
+            .await;
+            match (result, expected) {
+                (Ok(token), Ok(expected)) => assert_eq!(token, expected),
+                (Err(ExternalAuthError::InvalidCredentials(message)), Err(expected)) => {
+                    assert!(
+                        message.contains(expected),
+                        "unexpected authentication failure: {message}"
+                    );
+                }
+                other => panic!("unexpected token-exchange result: {other:?}"),
+            }
+            let request = server.await.unwrap();
+            assert!(request.starts_with("POST /token HTTP/1.1"));
+            assert!(request.contains("TokenProduct/42"));
+            let form = request.split_once("\r\n\r\n").unwrap().1;
+            let fields = url::form_urlencoded::parse(form.as_bytes())
+                .collect::<std::collections::HashMap<_, _>>();
+            assert_eq!(fields.get("code").unwrap(), "a+b &");
+            assert_eq!(fields.get("code_verifier").unwrap(), "verifier");
+            assert_eq!(fields.get("client_id").unwrap(), "client-id");
+            assert_eq!(fields.get("grant_type").unwrap(), "authorization_code");
+            assert_eq!(
+                fields.get("redirect_uri").unwrap(),
+                "http://localhost/callback"
+            );
+            if secret {
+                assert_eq!(fields.get("client_secret").unwrap(), "request-secret");
+            }
+            assert_eq!(fields.contains_key("client_secret"), secret);
+        }
+    }
+
+    #[test]
+    fn invalid_fallback_ua_is_an_initialization_error_and_debug_redacts_credentials() {
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("bad\r\nua".into());
+        assert!(oauth2_http_client(&provider).is_err());
+        let debug = format!("{provider:?}");
+        assert!(!debug.contains("client-secret"));
+        assert!(debug.contains("REDACTED"));
+    }
+
+    #[tokio::test]
+    async fn injected_transport_preserves_product_ua_and_redirect() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 2048];
+            let len = socket.read(&mut bytes).await.unwrap();
+            socket.write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8_lossy(&bytes[..len]).to_string()
+        });
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_user_agent = Some("must-not-override-product".into());
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .user_agent("Product/42")
+                .build()
+                .unwrap(),
+        );
+        let client = oauth2_http_client(&provider).unwrap();
+        let response = client.get(url).send().await.unwrap();
+        assert_eq!(response.status(), 307);
+        assert!(server.await.unwrap().contains("Product/42"));
+    }
+
+    /// Verify this provider's injection entrypoint retains the product deadline.
+    #[tokio::test]
+    async fn injected_transport_preserves_product_timeout() {
+        let mut provider = crate::registry::tests_for_transport_config();
+        provider.outbound_http_client = Some(
+            aster_forge_http::HttpClient::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_millis(50))
+                .build()
+                .unwrap(),
+        );
+        let client = oauth2_http_client(&provider).unwrap();
+        super::super::test_support::assert_injected_timeout(client).await;
     }
 }

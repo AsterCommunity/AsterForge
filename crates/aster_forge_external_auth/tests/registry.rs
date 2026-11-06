@@ -117,6 +117,8 @@ fn provider_config(
         groups_claim: None,
         avatar_url_claim: None,
         outbound_http_user_agent: None,
+        #[cfg(any(feature = "oauth2", feature = "oidc"))]
+        outbound_http_client: None,
     }
 }
 

@@ -333,6 +333,34 @@ pub fn default_registry() -> &'static ExternalAuthProviderRegistry {
     REGISTRY.get_or_init(ExternalAuthProviderRegistry::new)
 }
 
+#[cfg(all(test, any(feature = "oauth2", feature = "oidc")))]
+pub(crate) fn tests_for_transport_config() -> ExternalAuthProviderConfig {
+    ExternalAuthProviderConfig {
+        id: 1,
+        key: "test-oidc".to_string(),
+        provider_kind: ExternalAuthProviderKind::Oidc,
+        protocol: crate::types::ExternalAuthProtocol::Oidc,
+        options: crate::types::ExternalAuthProviderOptions::default(),
+        issuer_url: Some("https://issuer.example.com".to_string()),
+        authorization_url: None,
+        token_url: None,
+        userinfo_url: None,
+        client_id: "client-id".to_string(),
+        client_secret: Some("client-secret".to_string()),
+        scopes: "openid email profile".to_string(),
+        subject_claim: None,
+        username_claim: None,
+        display_name_claim: None,
+        email_claim: None,
+        email_verified_claim: None,
+        groups_claim: None,
+        avatar_url_claim: None,
+        outbound_http_user_agent: None,
+        #[cfg(any(feature = "oauth2", feature = "oidc"))]
+        outbound_http_client: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,6 +494,8 @@ mod tests {
             groups_claim: None,
             avatar_url_claim: None,
             outbound_http_user_agent: None,
+            #[cfg(any(feature = "oauth2", feature = "oidc"))]
+            outbound_http_client: None,
         }
     }
 

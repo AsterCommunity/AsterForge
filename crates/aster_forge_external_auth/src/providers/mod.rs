@@ -16,3 +16,6 @@ pub mod oauth2;
 pub mod oidc;
 #[cfg(feature = "qq")]
 pub mod qq;
+
+#[cfg(all(test, any(feature = "oauth2", feature = "oidc")))]
+mod test_support;

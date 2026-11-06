@@ -25,7 +25,7 @@ pub enum BufferedHttpError {
 /// when the configured limit is exceeded or streaming fails, or a response-build error when the
 /// buffered response cannot be reconstructed.
 pub async fn execute_reqwest_buffered_limited(
-    client: &reqwest::Client,
+    client: &super::HttpClient,
     request: http::Request<Vec<u8>>,
     max_response_bytes: usize,
 ) -> Result<http::Response<Vec<u8>>, BufferedHttpError> {
@@ -93,9 +93,13 @@ mod tests {
             .body(Vec::new())
             .expect("test request should build");
 
-        let response = execute_reqwest_buffered_limited(&reqwest::Client::new(), request, 4)
-            .await
-            .expect("bounded request should succeed");
+        let response = execute_reqwest_buffered_limited(
+            &crate::HttpClient::builder().build().unwrap(),
+            request,
+            4,
+        )
+        .await
+        .expect("bounded request should succeed");
 
         assert_eq!(response.status(), http::StatusCode::ACCEPTED);
         assert_eq!(response.headers()["x-test"], "yes");
@@ -112,9 +116,13 @@ mod tests {
             .body(Vec::new())
             .expect("test request should build");
 
-        let error = execute_reqwest_buffered_limited(&reqwest::Client::new(), request, 4)
-            .await
-            .expect_err("oversized body should fail");
+        let error = execute_reqwest_buffered_limited(
+            &crate::HttpClient::builder().build().unwrap(),
+            request,
+            4,
+        )
+        .await
+        .expect_err("oversized body should fail");
 
         assert!(matches!(error, BufferedHttpError::ResponseBody(_)));
         assert!(error.to_string().contains("exceeds 4 bytes limit"));

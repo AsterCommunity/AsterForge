@@ -12,7 +12,7 @@ use testcontainers::{GenericImage, ImageExt, ReuseDirective, runners::AsyncRunne
 pub struct SmtpTestContainer {
     smtp_address: SocketAddr,
     api_base_url: String,
-    client: reqwest::Client,
+    client: aster_forge_http::HttpClient,
     _container: ContainerAsync<GenericImage>,
     _lease: ContainerLease,
 }
@@ -58,7 +58,9 @@ impl SmtpTestContainer {
         assert!(smtp_ready, "Mailpit SMTP endpoint did not become ready");
 
         let api_base_url = format!("http://127.0.0.1:{api_port}");
-        let client = reqwest::Client::new();
+        let client = aster_forge_http::HttpClient::builder()
+            .build()
+            .expect("test HTTP client");
         let api_ready = wait_until(
             Duration::from_secs(90),
             Duration::from_millis(250),

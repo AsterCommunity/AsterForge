@@ -116,7 +116,8 @@ Forge 到第 5 步结束。第 6 步必须留在产品仓库。
 - 直接使用 `ExternalAuthProfile`、`ExternalAuthCallback` 和 `ExternalAuthProviderTestResult`；除非产品 API schema 确实不同，不要复制同字段 DTO 再逐字段转换。
 - 产品只需实现一次 `ExternalAuthError` 到产品错误类型的分类映射，让普通 `?` 保持调用点干净。
 
-下面这种 model-to-runtime 转换是必要的持久化 adapter，不属于薄封装：
+下面这种 model-to-runtime 转换是必要的持久化 adapter，不属于薄封装。
+示例假定依赖启用了 `oauth2` 或 `oidc`（包括通过 github/google/microsoft/qq 间接启用）：
 
 ```rust
 fn runtime_provider_config(
@@ -129,9 +130,15 @@ fn runtime_provider_config(
         protocol: provider.protocol,
         // ...产品持久化字段映射...
         outbound_http_user_agent: Some(PRODUCT_USER_AGENT.to_string()),
+        outbound_http_client: None,
     }
 }
 ```
+
+如果依赖使用 `default-features = false` 且没有启用 `oauth2`/`oidc`，配置结构中没有
+`outbound_http_client` 字段，删除示例中该行即可。不要在产品中复制 Forge 的
+`#[cfg(feature = "oauth2")]`：Rust cfg 检查的是当前产品的 feature，只有产品显式声明并
+转发了对应 feature 时才能这样条件编译。
 
 `EXTERNAL_AUTH_TYPE_STORAGE_LEN` 固定共享 provider kind / protocol 的最小持久化列宽。新 migration 应引用这个契约或保持至少相同宽度；历史 migration 已发布后不要回改，只在后续 migration 中修正不足。
 
@@ -180,7 +187,9 @@ assert_eq!(return_path, "/settings?tab=login");
 - 为 outbound provider request 注入产品自己的 User-Agent；不要把共享 crate 名称暴露给外部 provider。
 
 OIDC driver 使用 `aster_forge_http` 上的 `reqwest 0.13` bounded adapter 执行 discovery、
-JWKS 和 token 请求。共享 driver 固定禁止自动 redirect、设置 15 秒 timeout，并限制响应体；
+JWKS 和 token 请求，并始终限制响应体。未注入 client 时，factory 禁止自动 redirect，
+共享 driver 设置 15 秒 timeout；注入时采用产品 client 的 transport 策略，产品应通过
+`HttpClient::builder()` 保持禁止重定向并选择适合自己的期限；
 产品仍负责注入自己的 User-Agent。`openidconnect` 的默认 reqwest feature 不应重新启用，
 否则会把另一代 HTTP transport 带回完整依赖图。
 
@@ -226,3 +235,14 @@ registry.register(driver)?;
 Google 固定 `https://accounts.google.com` issuer；GitHub 和 QQ 固定各自官方 authorization/token/userinfo 地址。生产 driver 忽略这些目的地址覆盖，loopback 也不例外。GitHub Enterprise 或其他兼容服务使用通用 OIDC/OAuth2 driver。mock HTTP 测试在通用 driver 或私有低层协议函数中显式注入测试配置，不通过生产 preset 放开目标。
 
 scope 与 allowed-domain 列表用集合去重，保留第一次出现的顺序与既有规范化语义。无效 provider-options JSON 的日志仅记录错误分类、行号和列号，不写入原始文档或可能包含输入值的解析错误文本。
+
+
+## 产品 HTTP transport 注入
+
+启用 `oauth2` 或 `oidc` 时，`ExternalAuthProviderConfig` 新增
+`outbound_http_client: Option<aster_forge_http::HttpClient>`，消费者的 config literal 要补上该字段。
+产品应注入一个按自身策略装配并可复用的 client；其 UA、redirect、timeout、proxy/TLS 和
+observer 优先于 fallback UA。OAuth2 token/userinfo、GitHub/QQ 扩展请求以及 OIDC
+发现/JWKS/token/Microsoft discovery 都使用该 client，不再自行组装另一个 pool。
+未注入时使用 Forge factory 的安全默认值和原有协议总期限。不要将可信 client 注入接口
+当成 plugin capability API；权限授权、凭据存储、审计仍归产品。
