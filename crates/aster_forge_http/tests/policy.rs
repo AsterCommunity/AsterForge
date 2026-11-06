@@ -287,7 +287,7 @@ fn blocking_factory_preserves_proxy_dns_tls_root_and_no_redirect_contracts() {
 
 #[cfg(feature = "blocking")]
 #[test]
-fn blocking_default_proxy_policy_and_invalid_identity_are_explicit() {
+fn blocking_default_identity_and_invalid_identity_are_explicit() {
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -304,6 +304,7 @@ fn blocking_default_proxy_policy_and_invalid_identity_are_explicit() {
         String::from_utf8_lossy(&bytes[..len]).to_string()
     });
     let client = HttpClient::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(2))
         .build_blocking()
         .unwrap();
