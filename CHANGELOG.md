@@ -34,6 +34,8 @@
 
 ### Security
 
+- Mail outbox diagnostics escape recipient, template and failure text on every retry/permanent-failure and persistence-error path, including historical rows. Email validation rejects control characters before trimming.
+
 - **Bounded XML and WebDAV (breaking)** — Add an independent active-namespace quota (128 by default), count namespace declarations in embedded-subtree limits, and avoid pairwise writer attribute checks. PROPFIND/version-tree selectors deduplicate expanded names and bound copied bytes; property composers now require explicit `DavPropertyMaterializationLimits`. PATCH enforces immutable/checked-in version rules and returns the automatic checkout/checkin action for product transactions.
 - **Persistence and identity boundaries** — Reject unsafe blob shards and Windows drive-qualified object keys; fence macOS content reads to the engine scope. Audit records validate before admission and return `RecordError::Invalid` without blocking valid records. Configuration updates and default seeding reject collation aliases before modifying the conflicting row and preserve system visibility; database diagnostics redact credential-bearing URLs and overlapping raw/encoded userinfo. Migration helpers quote extension/index identifiers as data.
 - **External auth provider destinations (breaking)** — Dedicated Google, GitHub and QQ drivers use official destinations unconditionally. Use generic OIDC/OAuth2 for custom issuers or compatible services. Provider-option diagnostics omit rejected documents; mail diagnostic fields escape control characters. Scope/domain deduplication, mail fallback parsing and saturated cache reservations avoid repeated full scans while preserving order, fallback and TTL semantics.

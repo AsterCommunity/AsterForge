@@ -462,7 +462,7 @@ where
         if !try_claim(context.id).await? {
             tracing::debug!(
                 mail_outbox_id = context.id,
-                template_code = %context.template_code,
+                template_code = ?context.template_code,
                 "mail outbox claim skipped because row was already claimed"
             );
             continue;
@@ -471,7 +471,7 @@ where
         stats.claimed += 1;
         tracing::debug!(
             mail_outbox_id = context.id,
-            template_code = %context.template_code,
+            template_code = ?context.template_code,
             attempt_count = context.attempt_count,
             "claimed mail outbox row"
         );
@@ -480,7 +480,7 @@ where
             Ok(subject) => {
                 tracing::debug!(
                     mail_outbox_id = context.id,
-                    template_code = %context.template_code,
+                    template_code = ?context.template_code,
                     "mail outbox delivery succeeded"
                 );
                 match retry_mark_sent(context.id, config.mark_sent_retry_delays_ms, &mut mark_sent)
@@ -494,18 +494,18 @@ where
                     Ok(false) => {
                         tracing::warn!(
                             mail_outbox_id = context.id,
-                            template_code = %context.template_code,
-                            to = %context.to_address,
+                            template_code = ?context.template_code,
+                            to = ?context.to_address,
                             "mark_sent affected 0 rows after successful delivery; state will be rechecked"
                         );
                     }
                     Err(error) => {
                         tracing::error!(
                             mail_outbox_id = context.id,
-                            template_code = %context.template_code,
-                            to = %context.to_address,
+                            template_code = ?context.template_code,
+                            to = ?context.to_address,
                             stale_secs = config.processing_stale_secs,
-                            error = %error,
+                            error = ?error.to_string(),
                             "CRITICAL: mail delivery succeeded but mark_sent failed after all retries; \
                              row remains Processing and may be re-claimed, causing duplicate delivery"
                         );
@@ -528,10 +528,10 @@ where
                         }
                         tracing::warn!(
                             mail_outbox_id = context.id,
-                            template_code = %context.template_code,
-                            to = %context.to_address,
+                            template_code = ?context.template_code,
+                            to = ?context.to_address,
                             attempt_count,
-                            error = %error_message,
+                            error = ?error_message,
                             "mail outbox delivery permanently failed"
                         );
                     }
@@ -552,11 +552,11 @@ where
                         }
                         tracing::warn!(
                             mail_outbox_id = context.id,
-                            template_code = %context.template_code,
-                            to = %context.to_address,
+                            template_code = ?context.template_code,
+                            to = ?context.to_address,
                             attempt_count,
                             retry_delay_secs,
-                            error = %error_message,
+                            error = ?error_message,
                             "mail outbox delivery failed; scheduled retry"
                         );
                     }
@@ -920,6 +920,54 @@ mod tests {
         assert_eq!(context.template_code, "login_email_code");
         assert_eq!(context.to_address, "operator@example.com");
         assert_eq!(context.to_name.as_deref(), Some("Operator"));
+    }
+
+    #[tokio::test]
+    async fn historical_rows_cannot_inject_retry_or_permanent_failure_log_records() {
+        for attempt_count in [0, 2] {
+            let logs = aster_forge_test::logs::CapturedLogs::default();
+            let stats = logs
+                .capture_future(dispatch_mail_outbox(
+                    &MailOutboxDispatchConfig::new(
+                        20,
+                        60,
+                        1,
+                        MailOutboxRetryPolicy::new(3, DEFAULT_ERROR_MAX_LEN),
+                    ),
+                    move |_, _| async move {
+                        Ok::<_, String>(vec![NonCloneDispatchRow {
+                            id: 7,
+                            attempt_count,
+                            template_code: "template\nforged".to_string(),
+                            to_address: "a\r\nforged@example.com".to_string(),
+                            to_name: None,
+                            payload_json: String::new(),
+                        }])
+                    },
+                    |_| async { Ok::<_, String>(true) },
+                    |_| async { Err::<String, _>("transport\nforged\u{1b}[31m".to_string()) },
+                    |_, _| async { Ok::<_, String>(true) },
+                    |_, _, _, _| async { Ok::<_, String>(true) },
+                    |_, _, _| async { Ok::<_, String>(true) },
+                    |_, _, _| async {},
+                    |_, _, _| async {},
+                ))
+                .await
+                .unwrap();
+            assert_eq!(stats.retried + stats.failed, 1);
+            let text = logs.text();
+            assert_eq!(text.lines().count(), 4, "{text}");
+            assert_eq!(
+                text.lines()
+                    .filter(|line| line.starts_with(" WARN "))
+                    .count(),
+                1,
+                "{text}"
+            );
+            assert!(text.contains("a\\r\\nforged@example.com"), "{text}");
+            assert!(text.contains("transport\\nforged"), "{text}");
+            assert!(!text.contains('\u{1b}'));
+        }
     }
 
     #[tokio::test]

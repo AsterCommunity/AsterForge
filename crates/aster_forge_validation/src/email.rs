@@ -13,6 +13,11 @@ use crate::{Result, ValidationError};
 /// Returns an error when the address exceeds 254 bytes, does not contain exactly one `@`, has an
 /// empty local or domain part, or has no dot in its domain.
 pub fn validate_email(email: &str) -> Result<()> {
+    if email.chars().any(char::is_control) {
+        return Err(ValidationError::new(
+            "email must not contain control characters",
+        ));
+    }
     if email.len() > 254 {
         return Err(ValidationError::new("email is too long"));
     }
@@ -37,6 +42,11 @@ pub fn validate_email(email: &str) -> Result<()> {
 ///
 /// Returns an error when the normalized address fails [`validate_email`].
 pub fn normalize_email(email: &str) -> Result<String> {
+    if email.chars().any(char::is_control) {
+        return Err(ValidationError::new(
+            "email must not contain control characters",
+        ));
+    }
     let normalized = email.trim().to_ascii_lowercase();
     validate_email(&normalized)?;
     Ok(normalized)
@@ -58,6 +68,19 @@ pub fn email_domain(email: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{email_domain, normalize_email, validate_email};
+
+    #[test]
+    fn email_rejects_control_characters_before_normalization() {
+        for email in [
+            "alice\n@example.com",
+            "alice@example.com\r\n",
+            "a\0b@example.com",
+            "a\u{85}b@example.com",
+        ] {
+            assert!(normalize_email(email).is_err());
+            assert!(validate_email(email).is_err());
+        }
+    }
 
     #[test]
     fn validate_email_requires_exactly_one_at_separator() {
