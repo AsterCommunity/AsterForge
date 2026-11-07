@@ -67,7 +67,7 @@ opentelemetry_sdk = { version = "0.33.1", default-features = false, features = [
 opentelemetry-prometheus = { version = "0.33.1", default-features = false }
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "metrics"] }
 prost = "0.14"
-actix-web = "4.18.1"
+actix-web = "4.18.2"
 actix-governor = "0.10"
 axum = "0.8.9"
 aes-gcm = "0.11"
@@ -101,7 +101,7 @@ percent-encoding = "2.3"
 proc-macro2 = "1"
 quick-xml = { version = "0.42", default-features = false }
 quote = "1"
-openidconnect = { version = "4.0.1", default-features = false }
+openidconnect = { version = "4.1.0", default-features = false }
 rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 redis = { version = "1.8.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 rcgen = "0.14"

@@ -34,6 +34,8 @@
 
 ### Security
 
+- Upgrade Actix Web to 4.18.2 and locked Actix HTTP to 3.20.3, closing the request decompression and chunked-trailer advisories. Refresh Rust 1.95-compatible dependencies and OIDC 4.1.0, update the service template, and remove its obsolete proc-macro-error2 exception; audit exceptions explicitly distinguish unresolved upstream cryptography/HTTP2 risks from the test-only tar maintenance warning.
+
 - Mail outbox diagnostics escape recipient, template and failure text on every retry/permanent-failure and persistence-error path, including historical rows. Email validation rejects control characters before trimming.
 
 - **Bounded XML and WebDAV (breaking)** — Add an independent active-namespace quota (128 by default), count namespace declarations in embedded-subtree limits, and avoid pairwise writer attribute checks. PROPFIND/version-tree selectors deduplicate expanded names and bound copied bytes; property composers now require explicit `DavPropertyMaterializationLimits`. PATCH enforces immutable/checked-in version rules and returns the automatic checkout/checkin action for product transactions.

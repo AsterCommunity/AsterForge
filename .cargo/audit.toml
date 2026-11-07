@@ -1,5 +1,5 @@
 # cargo-audit 配置
-# 忽略已确认不影响本项目的上游传递依赖 advisory
+# 仅列精确上游例外；包含无兼容修复的残留风险，不表示漏洞已经修复
 
 [advisories]
 ignore = [
@@ -17,9 +17,24 @@ ignore = [
     "RUSTSEC-2024-0436",
 
     # h2 0.3.27 unbounded empty DATA frames (RUSTSEC-2026-0258)
-    # actix-http 3.19.0 仍依赖 h2 ^0.3；AsterDrive
+    # actix-http 3.20.3 仍依赖 h2 ^0.3；当前 Actix adapter
     # 没有可直接替换的 h2 版本，因为 h2 0.4 不满足该依赖的 semver 约束。
     # 保留审计阻塞并不能修复上游协议栈；待 actix-http 发布切换到 h2 >= 0.4.16
     # 的版本后立即删除本项并刷新 Cargo.lock。当前 PR 不扩大为替换 Actix HTTP 栈。
     "RUSTSEC-2026-0258",
+
+    # crypto-bigint 0.5.5 timing variability (RUSTSEC-2026-0387)
+    # 仅 all-features/rust-crypto 后端经 jsonwebtoken 11.1.0 -> p256/p384 ->
+    # elliptic-curve 0.13.8 引入；默认 aws-lc-rs 路径没有此版本。修复要求 >=0.7.6，
+    # jsonwebtoken 的 rust_crypto 当前仍要求旧 RustCrypto 族，无法用 semver 兼容更新替换。
+    # Forge 只暴露 HMAC JWT，不调用这些 ECDSA/私钥整数操作；保留公开后端 feature。
+    # 待 jsonwebtoken 更新该依赖链后升级并删除本项。此例外不表示侧信道已修复。
+    "RUSTSEC-2026-0387",
+
+    # astral-tokio-tar 0.6.4 unmaintained (RUSTSEC-2026-0440)
+    # 2026-11-07 复核：仅 aster_forge_test 的 testcontainers 0.28.0 容器 fixture 使用。
+    # crate 所有版本停维；testcontainers 最新发布版与官方 main 仍依赖它，当前无替代升级。
+    # 本例外只接受测试依赖维护告警，不忽略其他 tar 漏洞；不引入 vendor/fork。
+    # 待 testcontainers 发布迁移 tar-codec 等受维护实现的版本后升级并删除本项。
+    "RUSTSEC-2026-0440",
 ]

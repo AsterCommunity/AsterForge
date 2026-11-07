@@ -1,5 +1,5 @@
 # cargo-audit 配置
-# 忽略经当前调用路径复核、未形成可利用攻击面的上游 advisory
+# 仅列精确上游例外；包含无兼容修复的残留风险，不表示漏洞已经修复
 
 [advisories]
 ignore = [
@@ -7,8 +7,13 @@ ignore = [
     # 纯编译期宏，零运行时代码，无安全风险
     "RUSTSEC-2024-0436",
 
-    # proc-macro-error2 2.0.1 unmaintained
-    # 仅通过 SeaORM 的 proc-macro 编译期路径引入
-    # RustSec 标记为 unmaintained，非已知漏洞；不进入服务运行时攻击面
-    "RUSTSEC-2026-0173",
+    # h2 0.3.27 empty DATA frame DoS (RUSTSEC-2026-0258)
+    # actix-http 3.20.3 仍要求 h2 ^0.3，修复只发布于 >=0.4.16，不能跨minor替换。
+    # 此项保留尚无兼容升级的上游风险；Actix 迁移后删除，不表示漏洞已修复。
+    "RUSTSEC-2026-0258",
+
+    # astral-tokio-tar (RUSTSEC-2026-0440)
+    # 仅 testcontainers/Forge test fixture 引入；所有版本停维，当前上游未迁移。
+    # 只接受这条维护状态告警；上游发布受维护替代实现后升级并删除，不忽略其他tar漏洞。
+    "RUSTSEC-2026-0440",
 ]

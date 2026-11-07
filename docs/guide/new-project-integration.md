@@ -9,6 +9,7 @@ Forge 提供 `cargo generate` 模板，适合新 Aster 服务从一开始就按 
 ```bash
 cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
   templates/aster-service-actix \
+  --no-workspace \
   --name aster_product_service
 ```
 
@@ -16,9 +17,12 @@ cargo generate --git https://github.com/AsterCommunity/AsterForge.git \
 
 ```bash
 cargo generate --path templates/aster-service-actix \
+  --no-workspace \
   --name aster_product_service \
   --define server_port=3000
 ```
+
+生成新服务或测试 fixture 时显式使用 `--no-workspace`，并把验证输出放在已有 Cargo workspace 之外。否则生成器会自动把项目加入父 workspace，并重新序列化父 `Cargo.toml`，造成与模板验证无关的清单重排和注释丢失。
 
 模板生成的是一个可编译的产品骨架，不是业务完整实现。它已经接好 `AsterRuntime`、Actix HTTP、database handles、migration crate、background task shutdown、mail outbox shutdown drain、audit lifecycle 和基础健康接口；产品侧仍然要补自己的产品表 migration、配置 registry、API、权限、audit action/detail、task payload/result 和邮件模板渲染。
 
