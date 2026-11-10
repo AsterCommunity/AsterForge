@@ -119,7 +119,7 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 | `aster_forge_db` | 无 | `all`, `audit-log`, `mail-outbox`, `runtime-component`, `runtime-lease`, `scheduled-task`, `system-config` | 连接、transaction、pagination 等基础能力默认可用；共享表/store 按需启用。 |
 | `aster_forge_db_migration` | 无 | 无 | Migration 并发协调、跨数据库 index/search helper、主键和 UTC/JSON column builder；产品保留 migration list 和历史兼容策略。 |
 | `aster_forge_mail` | 无 | `persistence`, `runtime-component`, `openapi` | sender/template 默认可用；SeaORM outbox model 和 runtime drain component 分开启用。 |
-| `aster_forge_metrics` | 无 | `backend-prometheus`, `otlp`, `runtime-health`, `allocator-metrics` | 产品显式创建 provider 并添加 reader；pull/push 可同时开启。 |
+| `aster_forge_metrics` | `rustls-aws-lc-rs`（仅 OTLP 启用后转发） | `backend-prometheus`, `otlp`, `runtime-health`, `allocator-metrics` | 产品显式创建 provider 并添加 reader；pull/push 可同时开启。 |
 | `aster_forge_tasks` | 无 | `runtime`, `runtime-component`, `openapi` | retry、dedupe、steps、spec 默认可用；worker/scheduled runtime 和 component factory 分开启用。 |
 | `aster_forge_webdav` | 无 | `actix` | transport-neutral 协议内核默认可用；Actix adapter 显式启用。 |
 
@@ -512,3 +512,5 @@ bash scripts/test-auth-features.sh
 做到这些，新项目才算真正接上 Forge，而不是把 Forge 当成零散工具箱。 
 
 观测接入的已交付能力、消费者固定版本与未来 traces 边界见[消费者证据索引](./reference-projects.md#观测消费者证据索引)。初始化本地 logging 不代表已组合 OTel layer。
+
+HTTP / crypto 的 alpha.1 后续 feature 拆分：产品显式为 `aster_forge_http` 选择 `json`、`form`、`query`、`multipart`、`stream`、`blocking`、`http2`、`charset`、`system-proxy` 和所需 TLS 后端；`aster_forge_crypto` 显式选择 `password`、`sha256`、`hmac-sha256`、`secret-envelope`。默认 HTTP 无 TLS、crypto 无算法；不能靠同一 workspace 中其他成员的 feature 合并补齐。参见 [HTTP feature/TLS 合同](../crates/aster_forge_http.md#cargo-features-与-tls-后端) 和 [crypto 接入](../crates/aster_forge_crypto.md#cargo-接入)。

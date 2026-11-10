@@ -22,6 +22,47 @@ Forge 负责：
 
 这个 crate 不提供全局 client、endpoint registry 或产品错误类型。
 
+## Cargo features 与 TLS 后端
+
+默认 features 为空；基础能力包含 bytes body、请求签名入口、observer 和有界响应读取，不隐式启用 HTTPS。
+workspace 的 reqwest 也关闭默认 features；下游 `default-features = false` 不再被 Forge 的依赖声明抵消。
+
+| Feature | 能力 |
+| --- | --- |
+| `json` / `form` / `query` | 分别提供请求 builder 的 `.json()` / `.form()` / `.query()` |
+| `multipart` | `.multipart()` 与 reqwest multipart 类型 |
+| `stream` | reqwest streaming body/response API；有界读体自身无需此 feature |
+| `blocking` | `build_blocking()` |
+| `http2` / `charset` / `system-proxy` | HTTP/2、响应 charset 解码、系统代理发现 |
+| `rustls-aws-lc-rs` | rustls + AWS-LC 默认密码提供者，使用平台信任验证 |
+| `rustls-ring` | rustls + ring；产品入口必须先显式安装 ring provider |
+| `rustls` | rustls 无内置 provider；供产品显式安装第三方或自选 provider |
+| `native-tls` / `native-tls-vendored` | 平台 native TLS；后者在使用 OpenSSL 的平台编译 vendored OpenSSL |
+
+ACME 类 JSON/bytes 消费方只需：
+
+```toml
+aster_forge_http = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["json", "rustls-aws-lc-rs"] }
+```
+
+这些 feature 拆分在 计划在尚未发布的 `0.1.0-alpha.2` 中交付；使用新版本或本次实现的固定 Git revision，不能把新 feature 名加在旧 alpha.1 依赖上。
+
+ring 的应用启动代码（应用显式依赖 `rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }`）：
+
+```rust
+rustls::crypto::ring::default_provider()
+    .install_default()
+    .map_err(|_| ProductError::conflicting_crypto_provider())?;
+```
+
+Forge 不自动安装全局 provider。多个 TLS/provider feature 可以因 Cargo 合并同时存在；产品需要固定 TLS 实现时使用
+`HttpClient::builder().tls_backend(TlsBackend::Rustls)` 或 `TlsBackend::Native`，async/blocking 一致。
+未显式选择时沿用 reqwest 对已编译后端的默认选择；provider 冲突由产品入口处理。
+未编译 TLS 时不暴露证书及 TLS selector API；关闭 TLS feature 不等于关闭证书验证，HTTPS 需要显式选择一个受验证的后端。
+
+外部认证默认保持 rustls/AWS-LC；切换时关闭其默认 feature 后显式选择 provider 和 TLS feature。
+metrics 默认的 `rustls-aws-lc-rs` 只在启用 OTLP 时转发，不单独引入 HTTP；Mailpit 的本地 HTTP fixture 只请求 JSON。
+
 ## 读取有界响应体
 
 ```rust
@@ -75,7 +116,7 @@ let response = client.execute(request).await?;
 ```
 
 默认禁止自动重定向和自动重试，设置非空通用 UA、5 秒连接、30 秒读取/总超时，
-90 秒 idle pool、每 host 8 个 idle connection。产品必须注入自己的 UA；代理默认继承系统，
+90 秒 idle pool、每 host 8 个 idle connection。产品必须注入自己的 UA；启用 `system-proxy` 时代理默认继承系统，
 可显式禁用或配置。TLS 保留证书和 hostname 验证，可添加信任根，不提供 insecure bypass。
 DNS 地址固定强制禁用代理，不受 builder 调用顺序影响。
 流式协议可显式取消总期限/读取期限，但必须自己提供取消、进度和确认响应边界。
@@ -94,3 +135,7 @@ blocking transport 与 async 共用 UA/redirect/proxy/TLS/pool 装配规则，�
 
 运行 `python3 scripts/check-http-construction.py --self-test` 检查新增构造旁路。
 底层 raw reqwest builder 只允许存在于 `aster_forge_http/src/builder.rs` 的 async/blocking 两处。
+
+独立消费检查：`python3 scripts/test-http-crypto-features.py`。fixture 在 workspace 外解析，检查最小依赖、单 feature、组合、禁用 API、AWS-LC/ring/native TLS 隔离；crate 测试验证 TLS trust/hostname、请求保持、取消与有界读取。
+
+依赖数量参考（2026-11-11，reqwest 0.13.5，`aarch64-apple-darwin`）：相同 rustls + JSON 消费配置，从 alpha.1 的 115 个普通依赖包降至 91 个。用 workspace 外 fixture 的 `cargo tree --target aarch64-apple-darwin --edges normal --prefix none --format '{p}'` 去重；不计 consumer、dev/build 依赖，不用整个 lockfile 的跨平台条目数冒充实际依赖面。数字受平台和依赖版本影响，不是二进制体积或吞吐量保证。

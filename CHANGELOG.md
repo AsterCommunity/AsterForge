@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **HTTP and crypto features (breaking; ten affected crates advance to alpha.2)** — HTTP consumers explicitly select request encodings, streaming, blocking, HTTP/2, charset, system proxy and TLS backends. Rustls supports AWS-LC, ring or an application-installed provider; async/blocking TLS selection preserves certificate and hostname verification. Bounded reads no longer require streaming or futures executors. Crypto consumers select Argon2 password hashing, SHA-256, HMAC-SHA256 and the existing secret-envelope format independently. Update consumer features instead of relying on workspace unification; authentication and OTLP retain an explicit, replaceable rustls/AWS-LC default.
+
 ## [0.1.0-alpha.1] - 2026-11-11
 
 ### Added

@@ -1,3 +1,5 @@
+mod support;
+
 use aster_forge_http::{HttpClient, HttpObservation, HttpObserver, HttpOutcome};
 use std::{
     sync::{Arc, Mutex},
@@ -9,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 struct Events(Mutex<Vec<HttpObservation>>);
 impl HttpObserver for Events {
     fn observe(&self, event: HttpObservation) {
+        support::initialize_tls();
         self.0.lock().unwrap().push(event);
     }
 }
@@ -30,6 +33,7 @@ async fn server(
 }
 #[tokio::test]
 async fn shared_factory_preserves_signed_request_and_never_follows_redirects() {
+    support::initialize_tls();
     let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let response: &'static [u8] = Box::leak(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{}/leak\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",target.local_addr().unwrap()).into_bytes().into_boxed_slice());
     let (url, received) = server(response, Duration::ZERO).await;
@@ -67,6 +71,7 @@ async fn shared_factory_preserves_signed_request_and_never_follows_redirects() {
 }
 #[tokio::test]
 async fn observer_distinguishes_timeout_and_dropped_request_cancellation() {
+    support::initialize_tls();
     let events = Arc::new(Events::default());
     let (url, task) = server(
         b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
@@ -98,6 +103,7 @@ async fn observer_distinguishes_timeout_and_dropped_request_cancellation() {
 }
 #[tokio::test]
 async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
+    support::initialize_tls();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -154,8 +160,10 @@ async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
     assert_eq!(events.0.lock().unwrap().len(), 2);
 }
 
+#[cfg(all(feature = "json", feature = "query", feature = "form"))]
 #[tokio::test]
 async fn request_builders_preserve_method_headers_encoding_and_request_deadline() {
+    support::initialize_tls();
     let client = HttpClient::builder().no_proxy().build().unwrap();
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("x-provider-version", "one".parse().unwrap());
@@ -218,8 +226,10 @@ async fn request_builders_preserve_method_headers_encoding_and_request_deadline(
     assert_eq!(format!("{client:?}"), "HttpClient { .. }");
 }
 
+#[cfg(feature = "multipart")]
 #[tokio::test]
 async fn streamed_multipart_is_not_clonable_and_keeps_boundary_body_and_auth() {
+    support::initialize_tls();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -275,6 +285,7 @@ async fn streamed_multipart_is_not_clonable_and_keeps_boundary_body_and_auth() {
 
 #[tokio::test]
 async fn preparation_connect_and_protocol_failures_have_distinct_observation_boundaries() {
+    support::initialize_tls();
     let events = Arc::new(Events::default());
     let client = HttpClient::builder()
         .no_proxy()
@@ -298,6 +309,7 @@ async fn preparation_connect_and_protocol_failures_have_distinct_observation_bou
 
 #[tokio::test]
 async fn request_timeout_overrides_the_pool_deadline() {
+    support::initialize_tls();
     let (url, task) = server(
         b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
         Duration::from_millis(100),

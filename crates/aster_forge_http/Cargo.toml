@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_http"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,13 +13,26 @@ publish = true
 [features]
 default = []
 blocking = ["reqwest/blocking"]
+json = ["reqwest/json", "dep:serde"]
+form = ["reqwest/form", "dep:serde"]
+query = ["reqwest/query", "dep:serde"]
+multipart = ["reqwest/multipart"]
+stream = ["reqwest/stream"]
+http2 = ["reqwest/http2"]
+charset = ["reqwest/charset"]
+system-proxy = ["reqwest/system-proxy"]
+rustls = ["reqwest/rustls-no-provider"]
+rustls-aws-lc-rs = ["rustls", "reqwest/rustls"]
+rustls-ring = ["rustls", "dep:rustls", "rustls/ring"]
+native-tls = ["reqwest/native-tls"]
+native-tls-vendored = ["native-tls", "reqwest/native-tls-vendored"]
 
 [dependencies]
-futures.workspace = true
 http.workspace = true
-reqwest = { workspace = true, features = ["stream", "json", "form", "query", "multipart"] }
+reqwest.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
 thiserror.workspace = true
-serde.workspace = true
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 rcgen.workspace = true

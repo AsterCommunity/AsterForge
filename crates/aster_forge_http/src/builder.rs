@@ -2,6 +2,18 @@
 use crate::{HttpClient, HttpObserver};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
+/// Explicit TLS selection when Cargo feature unification enables more than one backend.
+#[cfg(any(feature = "rustls", feature = "native-tls"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TlsBackend {
+    /// Rustls with AWS-LC fallback or the provider selected at application startup.
+    #[cfg(feature = "rustls")]
+    Rustls,
+    /// The platform's native TLS implementation.
+    #[cfg(feature = "native-tls")]
+    Native,
+}
+
 /// Product-neutral client assembly. Redirects and automatic retries are always disabled.
 /// Transport retries and protocol redirects must be explicitly implemented by the caller.
 #[must_use]
@@ -13,7 +25,10 @@ pub struct HttpClientBuilder {
     idle_timeout: Duration,
     idle_per_host: usize,
     proxy: ProxyPolicy,
+    #[cfg(any(feature = "rustls", feature = "native-tls"))]
     roots: Vec<reqwest::Certificate>,
+    #[cfg(any(feature = "rustls", feature = "native-tls"))]
+    tls_backend: Option<TlsBackend>,
     pinned: Vec<(String, Vec<SocketAddr>)>,
     observer: Option<Arc<dyn HttpObserver>>,
 }
@@ -32,7 +47,10 @@ impl Default for HttpClientBuilder {
             idle_timeout: Duration::from_secs(90),
             idle_per_host: 8,
             proxy: ProxyPolicy::System,
+            #[cfg(any(feature = "rustls", feature = "native-tls"))]
             roots: Vec::new(),
+            #[cfg(any(feature = "rustls", feature = "native-tls"))]
+            tls_backend: None,
             pinned: Vec::new(),
             observer: None,
         }
@@ -89,7 +107,15 @@ impl HttpClientBuilder {
         self.proxy = ProxyPolicy::Explicit(Box::new(value));
         self
     }
+    /// Select a compiled TLS backend without changing certificate or hostname verification.
+    /// With no override, reqwest chooses its default among the compiled backends.
+    #[cfg(any(feature = "rustls", feature = "native-tls"))]
+    pub fn tls_backend(mut self, backend: TlsBackend) -> Self {
+        self.tls_backend = Some(backend);
+        self
+    }
     /// Extend server trust roots while retaining certificate and hostname verification.
+    #[cfg(any(feature = "rustls", feature = "native-tls"))]
     pub fn add_root_certificate(mut self, value: reqwest::Certificate) -> Self {
         self.roots.push(value);
         self
@@ -130,6 +156,16 @@ impl HttpClientBuilder {
         if !self.pinned.is_empty() {
             builder = builder.no_proxy();
         }
+        #[cfg(any(feature = "rustls", feature = "native-tls"))]
+        if let Some(backend) = self.tls_backend {
+            builder = match backend {
+                #[cfg(feature = "rustls")]
+                TlsBackend::Rustls => builder.tls_backend_rustls(),
+                #[cfg(feature = "native-tls")]
+                TlsBackend::Native => builder.tls_backend_native(),
+            };
+        }
+        #[cfg(any(feature = "rustls", feature = "native-tls"))]
         for certificate in self.roots {
             builder = builder.add_root_certificate(certificate);
         }
@@ -168,6 +204,16 @@ impl HttpClientBuilder {
         if !self.pinned.is_empty() {
             builder = builder.no_proxy();
         }
+        #[cfg(any(feature = "rustls", feature = "native-tls"))]
+        if let Some(backend) = self.tls_backend {
+            builder = match backend {
+                #[cfg(feature = "rustls")]
+                TlsBackend::Rustls => builder.tls_backend_rustls(),
+                #[cfg(feature = "native-tls")]
+                TlsBackend::Native => builder.tls_backend_native(),
+            };
+        }
+        #[cfg(any(feature = "rustls", feature = "native-tls"))]
         for certificate in self.roots {
             builder = builder.add_root_certificate(certificate);
         }

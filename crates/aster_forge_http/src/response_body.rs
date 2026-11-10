@@ -1,5 +1,3 @@
-use futures::StreamExt;
-
 /// Reads a reqwest response body while enforcing a strict byte limit.
 ///
 /// A declared `Content-Length` above `max_bytes` is rejected before streaming. The same limit is
@@ -11,7 +9,7 @@ use futures::StreamExt;
 /// Returns the caller-provided error when the declared or observed body exceeds `max_bytes`,
 /// when the response stream fails, or when the accumulated size would overflow `usize`.
 pub async fn read_reqwest_body_limited<E>(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
     context: &str,
     max_bytes: usize,
     map_error: impl Fn(String) -> E,
@@ -24,9 +22,11 @@ pub async fn read_reqwest_body_limited<E>(
         )));
     }
     let mut body = Vec::with_capacity(max_bytes.min(4096));
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| map_error(format!("{context}: {error}")))?;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| map_error(format!("{context}: {error}")))?
+    {
         extend_body_limited(&mut body, &chunk, context, max_bytes, &map_error)?;
     }
     Ok(body)
@@ -125,6 +125,7 @@ mod tests {
                     .expect("test server should write body");
             }
         });
+        crate::test_support::initialize_tls();
         let response = crate::HttpClient::builder()
             .no_proxy()
             .build()

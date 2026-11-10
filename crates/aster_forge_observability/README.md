@@ -13,19 +13,19 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ```toml
 [dependencies]
-aster_forge_observability = "=0.1.0-alpha.1"
+aster_forge_observability = { git = "https://github.com/AsterCommunity/AsterForge", version = "=0.1.0-alpha.2" }
 ```
 
 ## Features
 
 Default features: `actix`.
 
-Available features: `actix`, `axum`, `prometheus`. Select features according to the integration documentation.
+Available features: `actix`, `axum`, `prometheus`. The `rustls-aws-lc-rs` metrics feature is forwarded only for OTLP consumers. Select features according to the integration documentation.
 
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_observability)
-- [Rust API reference](https://docs.rs/aster_forge_observability/0.1.0-alpha.1)
+- [Rust API reference](https://docs.rs/aster_forge_observability/0.1.0-alpha.2)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 

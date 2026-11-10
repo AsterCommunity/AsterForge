@@ -17,14 +17,21 @@
 )]
 
 pub mod hash;
+#[cfg(feature = "secret-envelope")]
 pub mod secret_envelope;
 
+pub use hash::bytes_to_hex;
+#[cfg(feature = "hmac-sha256")]
+pub use hash::hmac_sha256_hex;
+#[cfg(feature = "password")]
 pub use hash::{
     PasswordHashPolicy, PasswordHashVerification, PasswordHashVerificationLimits,
-    PasswordHashWorkFactor, bytes_to_hex, hash_password, hash_password_with_policy,
-    hmac_sha256_hex, new_sha256, sha256_digest_to_hex, sha256_hex, validate_password_hash,
+    PasswordHashWorkFactor, hash_password, hash_password_with_policy, validate_password_hash,
     verify_password, verify_password_with_policy,
 };
+#[cfg(feature = "sha256")]
+pub use hash::{new_sha256, sha256_digest_to_hex, sha256_hex};
+#[cfg(feature = "secret-envelope")]
 pub use secret_envelope::{decrypt_secret, encrypt_secret};
 
 /// Result type returned by `aster_forge_crypto` helpers.

@@ -85,6 +85,7 @@ mod tests {
 
     #[tokio::test]
     async fn buffered_client_preserves_status_headers_and_body() {
+        crate::test_support::initialize_tls();
         let address = spawn_response(
             b"HTTP/1.1 202 Accepted\r\nContent-Length: 4\r\nX-Test: yes\r\nConnection: close\r\n\r\nbody",
         )
@@ -108,6 +109,7 @@ mod tests {
 
     #[tokio::test]
     async fn buffered_client_rejects_chunked_body_over_limit() {
+        crate::test_support::initialize_tls();
         let address = spawn_response(
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n14\r\nsecret-response-body\r\n0\r\n\r\n",
         )

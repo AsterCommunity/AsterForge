@@ -1,8 +1,8 @@
 # aster_forge_macros
 
-产品无关的声明式宏。当前提供 `wire_enum!`，为字符串协议枚举生成已知值映射、`Unknown(String)`、Serde 编解码及 owned String 转换。
+Product-neutral declarative macros. The crate currently provides `wire_enum!`, which generates known-value mappings, an `Unknown(String)` variant, Serde support, and owned `String` conversions for string-valued protocol enums.
 
-不包含产品状态名、协议决策、验证方法或运行时；不是 proc-macro，无生产依赖。调用方直接依赖启用 `derive` 的 `serde`。
+It does not define product status names, protocol decisions, validation methods, or runtime behavior. It is a declarative macro crate, not a procedural macro, and has no production dependencies. Consumers must depend directly on `serde` with its `derive` feature enabled.
 
 ```rust
 use aster_forge_macros::wire_enum;
@@ -18,13 +18,13 @@ wire_enum! {
 assert_eq!(Status::from("future".to_owned()), Status::Unknown("future".into()));
 ```
 
-映射严格区分大小写；空字符串、Unicode 和其他未知值逐字保留。非字符串输入拒绝反序列化。`Unknown` 是保留变体名，至少声明一个已知变体，重复 wire 值编译失败。已知变体元数据用于文档，不支持对单个变体使用 `cfg` 或覆盖 Serde 表示；按条件启用时对整次宏调用使用 `cfg`。调用方仍须限制响应体大小、判断未知值能否执行，并映射产品错误。宏生成的 Serde 路径要求依赖名为 `serde`。
+Mappings are case-sensitive; empty strings, Unicode, and other unknown values are preserved verbatim. Non-string inputs are rejected during deserialization. `Unknown` is a reserved variant name, at least one known variant is required, and duplicate wire values fail at compile time. Known-variant metadata is used for documentation. Per-variant `cfg` attributes and custom Serde representations are not supported; apply `cfg` to the entire macro invocation when conditionally enabling it. Consumers remain responsible for bounding response bodies, deciding whether an unknown value is executable, and mapping product errors. The generated Serde paths require the consumer dependency to be named `serde`.
 
 ```sh
 cargo test -p aster_forge_macros --locked
 cargo clippy -p aster_forge_macros --all-targets --locked -- -D warnings
 ```
 
-测试覆盖已知/未知字符串往返、大小写、空值、Unicode、长值、控制字符、非字符串拒绝、路径卫生和编译失败契约。完整接入说明见仓库的 `docs/crates/aster_forge_macros.md`。
+Tests cover known and unknown string round-trips, case sensitivity, empty values, Unicode, long values, control characters, rejection of non-string inputs, path hygiene, and compile-fail contracts. See [`docs/crates/aster_forge_macros.md`](../../docs/crates/aster_forge_macros.md) for the full integration guide.
 
 License: MIT OR Apache-2.0.

@@ -1,3 +1,5 @@
+#![cfg(all(feature = "password", feature = "hmac-sha256"))]
+
 use aster_forge_crypto::{
     CryptoError, PasswordHashPolicy, PasswordHashVerificationLimits, PasswordHashWorkFactor,
     hash_password, hash_password_with_policy, hmac_sha256_hex, verify_password,

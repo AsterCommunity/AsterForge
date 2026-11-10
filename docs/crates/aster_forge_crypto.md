@@ -25,10 +25,20 @@ authenticated secret envelope。
 
 ```toml
 [dependencies]
-aster_forge_crypto = { git = "https://github.com/AsterCommunity/AsterForge" }
+aster_forge_crypto = { git = "https://github.com/AsterCommunity/AsterForge", features = ["password", "sha256", "hmac-sha256", "secret-envelope"] }
 ```
 
-当前没有 feature flag。
+默认 features 为空，`bytes_to_hex` 和错误分类始终可用。按需选择：
+
+| Feature | API 与依赖 |
+| --- | --- |
+| `password` | Argon2id、PHC 校验和密码策略；只引入 Argon2 |
+| `sha256` | SHA-256 digest、hex 和增量 hasher |
+| `hmac-sha256` | HMAC-SHA-256；同时启用 `sha256` |
+| `secret-envelope` | 现有 v1 AES-256-GCM/HKDF-SHA256 envelope；同时启用 `sha256` |
+
+未启用的算法模块和 API 不参与编译，算法及持久化格式不改变。`aster_forge_auth/password` 只领取 `password`；external-auth 的 state/token 摘要只领取 `sha256`。
+这是 alpha.1 之后的 feature 收紧；旧消费者须显式补齐 feature，不能依赖 workspace 里其他成员的 feature 合并。HTTP 的 rustls/AWS-LC/ring 是 TLS provider 选择，与这里的算法能力选择分别配置。
 
 ## 密码哈希
 

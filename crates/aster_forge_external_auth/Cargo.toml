@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_external_auth"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,9 +11,12 @@ readme = "README.md"
 publish = true
 
 [features]
-default = ["oidc", "oauth2"]
+default = ["oidc", "oauth2", "rustls-aws-lc-rs"]
 openapi = ["dep:utoipa"]
 sea-orm = ["dep:sea-orm"]
+rustls-aws-lc-rs = ["aster_forge_http?/rustls-aws-lc-rs"]
+rustls-ring = ["aster_forge_http?/rustls-ring"]
+native-tls = ["aster_forge_http?/native-tls"]
 oidc = ["dep:aster_forge_http", "dep:openidconnect", "dep:reqwest"]
 oauth2 = ["dep:aster_forge_http", "dep:base64", "dep:rand", "dep:reqwest", "dep:sha2"]
 github = ["oauth2"]
@@ -22,15 +25,15 @@ microsoft = ["oidc"]
 qq = ["oauth2"]
 
 [dependencies]
-aster_forge_crypto = { path = "../aster_forge_crypto", version = "=0.1.0-alpha.1" }
-aster_forge_http = { path = "../aster_forge_http", version = "=0.1.0-alpha.1", optional = true }
+aster_forge_crypto = { path = "../aster_forge_crypto", version = "=0.1.0-alpha.2", features = ["sha256"] }
+aster_forge_http = { path = "../aster_forge_http", version = "=0.1.0-alpha.2", features = ["json"], optional = true }
 aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1" }
 aster_forge_validation = { path = "../aster_forge_validation", version = "=0.1.0-alpha.1" }
 async-trait.workspace = true
 base64 = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
+reqwest = { workspace = true, features = ["json"], optional = true }
 sea-orm = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -42,7 +45,7 @@ url.workspace = true
 
 [dev-dependencies]
 actix-web.workspace = true
-aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["logs"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.2", features = ["logs"] }
 tokio.workspace = true
 
 [lints]

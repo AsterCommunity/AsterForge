@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_metrics"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,14 +11,17 @@ readme = "README.md"
 publish = true
 
 [features]
-default = []
+default = ["rustls-aws-lc-rs"]
 allocator-metrics = ["dep:aster_forge_alloc"]
 backend-prometheus = ["dep:prometheus", "dep:opentelemetry-prometheus"]
+rustls-aws-lc-rs = ["aster_forge_http?/rustls-aws-lc-rs"]
+rustls-ring = ["aster_forge_http?/rustls-ring"]
+native-tls = ["aster_forge_http?/native-tls"]
 otlp = ["dep:aster_forge_http", "dep:opentelemetry-proto", "dep:prost", "dep:reqwest", "reqwest/blocking"]
 runtime-health = ["dep:aster_forge_runtime"]
 
 [dependencies]
-aster_forge_http = { path = "../aster_forge_http", version = "=0.1.0-alpha.1", features = ["blocking"], optional = true }
+aster_forge_http = { path = "../aster_forge_http", version = "=0.1.0-alpha.2", features = ["blocking"], optional = true }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-prometheus = { workspace = true, optional = true }

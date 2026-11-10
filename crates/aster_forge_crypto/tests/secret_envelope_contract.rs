@@ -1,3 +1,5 @@
+#![cfg(feature = "secret-envelope")]
+
 use aster_forge_crypto::{CryptoError, decrypt_secret, encrypt_secret};
 
 const MASTER_KEY: &[u8] = b"forge-secret-envelope-test-master-key";

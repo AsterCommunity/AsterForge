@@ -290,3 +290,7 @@ cargo run --release -p aster_forge_metrics --features backend-prometheus --examp
 HTTP recorder 增加显式 scheme 参数，全部内部调用方同步迁移，不保留转发 facade。Actix/Axum 在 body EOF/error/drop 完成计量，探针与 scrape 固定路径排除。未知 route/status 作为空属性并在导出时省略。with_profile(namespace, version) 显式选择产品 Resource schema。
 
 role_readiness 来自产品 ready 端点同一结果；health diagnostics 0/1/2 独立。db_pool 接受原生 idle/used/max，DbHandles::record_pool_metrics("main", recorder) 使用应用唯一池身份与 writer/reader 角色组合名称，不执行 SQL。task_handler_active/finished 是本地 handler 执行事实，不保证持久业务成功。其他已确认任务状态转换另计。累计 CPU 合并模式来源于 sysinfo，不伪造 user/system 拆分。库不声明尚未实现的 outbound HTTP/RPC、完整 lease/recovery 遥测。
+
+## OTLP 的 TLS 编译选择
+
+alpha.2版本的默认 `rustls-aws-lc-rs` feature 仅在启用 `otlp`、实际存在 HTTP 依赖时转发，不为仅使用本地指标的进程引入 TLS。切换后端时关闭默认 features，并与 `otlp` 一起选择 `rustls-ring` 或 `native-tls`。ring 的 provider 由产品入口安装；Exporter 不安装全局 provider。仅 HTTP 的本地 Collector 可不选择 TLS。JSON/form/multipart 不随 protobuf exporter 隐式启用。

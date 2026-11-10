@@ -128,3 +128,5 @@ cargo test -p aster_forge_observability --no-default-features --features axum,pr
 AsterDrive 的 `src/api/routes/health` 与 metrics Basic Auth middleware 是产品集成参考；路径和认证策略保留在 Drive。新项目先参照上面的显式注入形态，再按自身部署策略选择认证，不必复制 Drive 的业务配置树。
 
 固定 Drive 调用点、消费者验证与发行边界见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)；本 crate 的名称不代表已提供 tracing/logging exporters。
+
+The alpha.2 metrics dependency keeps the observability crate on the matching shared feature contract; its own Actix/Axum and Prometheus adapter features remain unchanged.

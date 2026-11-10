@@ -246,3 +246,7 @@ observer 优先于 fallback UA。OAuth2 token/userinfo、GitHub/QQ 扩展请求�
 发现/JWKS/token/Microsoft discovery 都使用该 client，不再自行组装另一个 pool。
 未注入时使用 Forge factory 的安全默认值和原有协议总期限。不要将可信 client 注入接口
 当成 plugin capability API；权限授权、凭据存储、审计仍归产品。
+
+## HTTP 编译能力与 TLS 后端
+
+alpha.1 之后，连接器显式请求 HTTP 的 `json` 和 crypto 的 `sha256`，不再引入 Argon2 或 secret-envelope 算法。默认保留 `oidc`、`oauth2`、`rustls-aws-lc-rs`。关闭默认 features 后分别选择 provider 和 `rustls-aws-lc-rs`、`rustls-ring` 或 `native-tls`；ring 需要产品入口显式安装 provider。TLS 只在 HTTP 连接器存在时转发；产品注入的客户端仍拥有运行时策略。
