@@ -26,6 +26,7 @@ pub use response_body::read_reqwest_body_limited;
 #[cfg(test)]
 mod test_support {
     /// Initialize the provider at the test application boundary before constructing any client.
+    /// Keep provider selection in sync with tests/support/mod.rs; integration tests are separate crates.
     pub fn initialize_tls() {
         #[cfg(feature = "rustls")]
         {
