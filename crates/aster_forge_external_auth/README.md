@@ -26,7 +26,7 @@ Default features: `oidc`, `oauth2`, `rustls-aws-lc-rs`.
 
 Available features: `github`, `google`, `microsoft`, `oauth2`, `oidc`, `openapi`, `qq`, `sea-orm`, `rustls-aws-lc-rs`, `rustls-ring`, `native-tls`. Select features according to the integration documentation.
 
-HTTP encodings are explicit; the crypto dependency selects only SHA-256. To replace TLS, disable defaults and select provider and backend features together. Applications using ring must initialize its provider at startup. These backend controls target the next release after `0.1.0-alpha.2`.
+HTTP encodings are explicit; the crypto dependency selects only SHA-256. To replace TLS, disable defaults and select provider and backend features together. Applications using ring must initialize its provider at startup. These backend controls are planned for `0.1.0-alpha.2`, which is not yet published.
 
 ## Documentation
 

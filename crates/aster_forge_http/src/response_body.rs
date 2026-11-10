@@ -125,6 +125,7 @@ mod tests {
                     .expect("test server should write body");
             }
         });
+        crate::test_support::initialize_tls();
         let response = crate::HttpClient::builder()
             .no_proxy()
             .build()

@@ -19,7 +19,7 @@ axum = ["dep:axum"]
 [dependencies]
 actix-web = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-aster_forge_metrics = { path = "../aster_forge_metrics", version = "=0.1.0-alpha.2" }
+aster_forge_metrics = { path = "../aster_forge_metrics", version = "=0.1.0-alpha.2", default-features = false }
 tracing.workspace = true
 
 [lints]

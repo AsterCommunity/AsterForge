@@ -25,7 +25,7 @@ No algorithms are enabled by default; lowercase `bytes_to_hex` and error classif
 - `hmac-sha256`: HMAC-SHA-256, including `sha256`.
 - `secret-envelope`: existing v1 AES-256-GCM/HKDF-SHA256 envelope, including `sha256`.
 
-Select only the algorithms your application needs. Algorithms, fixed vectors and persisted formats are unchanged. These features target the next release after `0.1.0-alpha.2`.
+Select only the algorithms your application needs. Algorithms, fixed vectors and persisted formats are unchanged. These features are planned for `0.1.0-alpha.2`, which is not yet published.
 
 ## Documentation
 

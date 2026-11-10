@@ -24,7 +24,7 @@ Default features: `rustls-aws-lc-rs`, forwarded only when OTLP activates HTTP.
 
 Available features: `allocator-metrics`, `backend-prometheus`, `otlp`, `runtime-health`, `rustls-aws-lc-rs`, `rustls-ring`, `native-tls`. Select features according to the integration documentation.
 
-For a different OTLP TLS backend, disable default features and select it explicitly; ring provider initialization belongs to the product entrypoint. These backend controls target the next release after `0.1.0-alpha.2`.
+For a different OTLP TLS backend, disable default features and select it explicitly; ring provider initialization belongs to the product entrypoint. These backend controls are planned for `0.1.0-alpha.2`, which is not yet published.
 
 ## Documentation
 

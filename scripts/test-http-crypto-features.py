@@ -13,6 +13,7 @@ CRYPTO = ["password", "sha256", "hmac-sha256", "secret-envelope"]
 
 
 def cargo(path, args, features=(), failure=None):
+    """Run Cargo in an isolated consumer and check the expected outcome."""
     cmd = ["cargo", *args, "--manifest-path", str(path / "Cargo.toml")]
     if os.environ.get("FORGE_FEATURE_TEST_OFFLINE"):
         cmd += ["--offline"]
@@ -27,6 +28,7 @@ def cargo(path, args, features=(), failure=None):
 
 
 def fixture(path, kind, features):
+    """Create a consumer workspace with explicit feature forwarding."""
     path.mkdir()
     (path / "src").mkdir()
     crate = f"aster_forge_{kind}"
@@ -59,18 +61,21 @@ futures-util = { version = "0.3", default-features = false, features = ["std"], 
 
 
 def resolved(path, features):
+    """Return resolved package features without parent-workspace unification."""
     metadata = json.loads(cargo(path, ["metadata", "--format-version", "1"], features))
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     return {p["name"]: set(nodes[p["id"]]["features"]) for p in metadata["packages"] if p["id"] in nodes}
 
 
 def negative(path, source, expression, diagnostic):
+    """Verify a disabled API fails compilation with the intended diagnostic."""
     (path / "src/main.rs").write_text(f"fn main() {{ {expression}; }}\n")
     cargo(path, ["check"], failure=diagnostic)
     (path / "src/main.rs").write_text(source)
 
 
 def main():
+    """Exercise feature combinations, dependency isolation and unavailable APIs."""
     with tempfile.TemporaryDirectory(prefix="forge-feature-consumers-") as directory:
         base = Path(directory)
         http, crypto = base / "http", base / "crypto"
@@ -143,6 +148,27 @@ aster_forge_external_auth = {{ path = {json.dumps(str(ROOT / "crates/aster_forge
         external_deps = resolved(external, [])
         assert not {"form", "query", "multipart", "stream", "charset", "http2", "system-proxy"} & external_deps["reqwest"], external_deps["reqwest"]
         assert external_deps["aster_forge_crypto"] <= {"sha256", "default"} and "sha256" in external_deps["aster_forge_crypto"], external_deps["aster_forge_crypto"]
+        metrics = base / "metrics-consumer"
+        metrics.mkdir()
+        (metrics / "src").mkdir()
+        (metrics / "src/main.rs").write_text("fn main() {}\n")
+        manifest = '[workspace]\n[package]\nname = "metrics-feature-consumer"\nversion = "0.0.0"\nedition = "2024"\n[features]\nring = ["aster_forge_metrics/rustls-ring"]\n[dependencies]\n'
+        for name, extra in [
+            ("metrics", ', default-features = false, features = ["otlp"]'),
+            ("db", ', default-features = false'),
+            ("middleware", ', default-features = false, features = ["metrics"]'),
+            ("observability", ', default-features = false, features = ["prometheus"]'),
+        ]:
+            crate = f"aster_forge_{name}"
+            manifest += f'{crate} = {{ path = {json.dumps(str(ROOT / "crates" / crate))}{extra} }}\n'
+        (metrics / "Cargo.toml").write_text(manifest)
+        for features in [[], ["ring"]]:
+            cargo(metrics, ["check"], features)
+            deps = resolved(metrics, features)
+            assert "rustls-aws-lc-rs" not in deps["aster_forge_metrics"], deps["aster_forge_metrics"]
+            assert "__rustls-aws-lc-rs" not in deps["reqwest"], deps["reqwest"]
+            assert "native-tls" not in deps["reqwest"], deps["reqwest"]
+        print("PASS combined DB/middleware/observability: HTTP-only and ring OTLP keep AWS-LC disabled", flush=True)
         print("PASS isolated dependency trees, downstream external auth and disabled APIs", flush=True)
 
 

@@ -45,7 +45,7 @@ ACME 类 JSON/bytes 消费方只需：
 aster_forge_http = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["json", "rustls-aws-lc-rs"] }
 ```
 
-这些 feature 拆分在 `0.1.0-alpha.2` 之后交付；使用新版本或本次实现的固定 Git revision，不能把新 feature 名加在旧 alpha.1 依赖上。
+这些 feature 拆分在 计划在尚未发布的 `0.1.0-alpha.2` 中交付；使用新版本或本次实现的固定 Git revision，不能把新 feature 名加在旧 alpha.1 依赖上。
 
 ring 的应用启动代码（应用显式依赖 `rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }`）：
 

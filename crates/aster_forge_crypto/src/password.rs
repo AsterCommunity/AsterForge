@@ -793,4 +793,57 @@ mod tests {
             ));
         }
     }
+    #[test]
+    fn standalone_defaults_match_the_default_policy() {
+        let policy = PasswordHashPolicy::default();
+        assert_eq!(PasswordHashWorkFactor::default(), policy.work_factor());
+        assert_eq!(
+            PasswordHashVerificationLimits::default(),
+            policy.verification_limits()
+        );
+    }
+
+    #[test]
+    fn public_validation_checks_encoding_extensions_and_exact_resource_limits() {
+        let policy = lightweight_policy();
+        let hash = hash_password_with_policy("password", &policy).unwrap();
+        validate_password_hash(&hash, policy.verification_limits()).unwrap();
+        assert!(matches!(
+            validate_password_hash("not PHC", policy.verification_limits()),
+            Err(CryptoError::PasswordHash(_))
+        ));
+        for extension in ["keyid=YWJj", "data=YWJj"] {
+            let extended = hash.replacen("p=1", &format!("p=1,{extension}"), 1);
+            for result in [
+                validate_password_hash(&extended, policy.verification_limits()),
+                verify_password_with_policy("password", &extended, &policy).map(|_| ()),
+            ] {
+                assert!(
+                    matches!(result, Err(CryptoError::PasswordHash(message)) if message.contains("not supported"))
+                );
+            }
+        }
+        let over = hash.replacen("m=8", "m=9", 1);
+        assert!(matches!(
+            validate_password_hash(&over, policy.verification_limits()),
+            Err(CryptoError::PasswordHashVerificationLimit {
+                parameter: "m",
+                actual: 9,
+                maximum: 8
+            })
+        ));
+    }
+
+    #[test]
+    fn verifier_errors_are_not_reported_as_password_mismatches() {
+        let policy = lightweight_policy();
+        let hash = hash_password_with_policy("password", &policy).unwrap();
+        let mut fields: Vec<_> = hash.split('$').collect();
+        fields[4] = "YWJj";
+        let short_salt = fields.join("$");
+        assert!(matches!(
+            verify_password_with_policy("password", &short_salt, &policy),
+            Err(CryptoError::PasswordHash(_))
+        ));
+    }
 }

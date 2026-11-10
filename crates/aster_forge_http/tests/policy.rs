@@ -1,3 +1,5 @@
+mod support;
+
 use aster_forge_http::HttpClient;
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
 use std::sync::Arc;
@@ -21,6 +23,7 @@ async fn origin() -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
 }
 #[tokio::test]
 async fn explicit_proxy_and_pinned_dns_have_an_order_independent_boundary() {
+    support::initialize_tls();
     // An HTTP forward proxy receives the absolute target, without needing target DNS.
     let (proxy, task) = origin().await;
     let client = HttpClient::builder()
@@ -83,6 +86,7 @@ async fn explicit_proxy_and_pinned_dns_have_an_order_independent_boundary() {
 }
 #[tokio::test]
 async fn idle_read_timer_does_not_become_a_whole_download_deadline() {
+    support::initialize_tls();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -183,6 +187,7 @@ fn tls_backends() -> Vec<aster_forge_http::TlsBackend> {
 #[cfg(any(feature = "rustls", feature = "native-tls"))]
 #[tokio::test]
 async fn added_trust_roots_preserve_certificate_and_hostname_validation() {
+    support::initialize_tls();
     let (root, config) = certificate();
     for (backend, trusted, host, expected) in tls_backends().into_iter().flat_map(|backend| {
         [
@@ -237,6 +242,7 @@ fn blocking_factory_preserves_proxy_dns_tls_root_and_no_redirect_contracts() {
         io::{Read, Write},
         net::TcpListener,
     };
+    support::initialize_tls();
     let (root, _config) = certificate();
     for pin_first in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -315,6 +321,7 @@ fn blocking_default_identity_and_invalid_identity_are_explicit() {
         io::{Read, Write},
         net::TcpListener,
     };
+    support::initialize_tls();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let task = std::thread::spawn(move || {
@@ -357,6 +364,7 @@ fn blocking_default_identity_and_invalid_identity_are_explicit() {
 #[cfg(all(feature = "blocking", any(feature = "rustls", feature = "native-tls")))]
 #[test]
 fn blocking_tls_selection_preserves_trust_and_hostname_validation() {
+    support::initialize_tls();
     let (root, config) = certificate();
     for backend in tls_backends() {
         for (trusted, host, expected) in [

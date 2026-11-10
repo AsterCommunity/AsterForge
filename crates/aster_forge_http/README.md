@@ -19,7 +19,7 @@ HTTPS requires an explicit backend: `rustls-aws-lc-rs`, `rustls-ring`, `rustls` 
 
 When Cargo unifies multiple backends, `.tls_backend(TlsBackend::Rustls)` or `TlsBackend::Native` makes the application choice explicit for async and blocking clients. Bounded response reads work without the `stream` feature.
 
-These feature boundaries target the next release after `0.1.0-alpha.2`; use the matching release or Git revision.
+These feature boundaries are planned for `0.1.0-alpha.2`, which is not yet published; use the matching release or Git revision.
 
 ## Documentation
 
