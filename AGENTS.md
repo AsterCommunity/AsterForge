@@ -127,6 +127,7 @@ When code and documentation disagree, determine whether the code is wrong or the
 - The workspace uses Rust 1.94+ and edition 2024.
 - Prefer declaring dependencies in the root `Cargo.toml` under `[workspace.dependencies]`, then reference workspace dependencies from individual crates as needed.
 - Name new crates with the `aster_forge_*` prefix.
+- Product-neutral string-enum generation belongs in `aster_forge_macros`; protocol variants and execution policy stay in consumers. Read its crate AGENTS.md and docs before editing.
 - Public APIs must have explicit boundaries and should avoid exposing implementation details.
 - Do not use `unwrap`, `expect`, `panic`, `todo`, or `unimplemented` by default. Most crates deny these Clippy lints in non-test builds.
 - Use unsafe only when genuinely necessary and include an accurate `SAFETY:` explanation. `aster_forge_alloc` applies stricter unsafe requirements.

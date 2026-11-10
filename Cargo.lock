@@ -849,6 +849,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster_forge_macros"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aster_forge_mail"
 version = "0.1.0"
 dependencies = [

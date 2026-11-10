@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/aster_forge_macros",
     "crates/aster_forge_middleware",
     "crates/aster_forge_observability",
     "crates/aster_forge_audit",

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Product-neutral `aster_forge_macros::wire_enum!` generates string protocol enums with exact known-value mapping, lossless unknown strings, Serde support, and compile-time rejection of duplicate wire values. Consumers retain protocol and execution policy.
+
 - Correlated local task/transaction diagnostics with consumer instance, trigger, capacity, claim sequence and timing, task lease identity, real transaction caller, phase timing and safe outcomes. Spawned work preserves context; idle polling stays at TRACE and raw handler/callback errors are omitted.
 
 - Framework-neutral typed REST envelopes in `aster_forge_api::response`, preserving omitted data, explicit null, empty-object responses and optional typed error diagnostics. Product-defined codes are checked against success/error state during construction and deserialization; OpenAPI supports multiple codes/DTOs and nested references.

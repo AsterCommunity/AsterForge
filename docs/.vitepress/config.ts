@@ -25,6 +25,7 @@ function getVersion(): string {
 const version = getVersion()
 
 const cratePages = [
+  ["Declarative macros", "/crates/aster_forge_macros"],
   ["Alloc", "/crates/aster_forge_alloc"],
   ["API", "/crates/aster_forge_api"],
   ["API docs macros", "/crates/aster_forge_api_docs_macros"],
