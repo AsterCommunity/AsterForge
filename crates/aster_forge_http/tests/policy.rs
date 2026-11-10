@@ -1,5 +1,7 @@
 use aster_forge_http::HttpClient;
-use std::{sync::Arc, time::Duration};
+#[cfg(any(feature = "rustls", feature = "native-tls"))]
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn origin() -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
@@ -139,6 +141,7 @@ async fn idle_read_timer_does_not_become_a_whole_download_deadline() {
         .unwrap();
 }
 
+#[cfg(any(feature = "rustls", feature = "native-tls"))]
 fn certificate() -> (
     reqwest::Certificate,
     Arc<tokio_rustls::rustls::ServerConfig>,
@@ -150,27 +153,45 @@ fn certificate() -> (
     let cert = rcgen::generate_simple_self_signed(vec!["provider.test".into()]).unwrap();
     let root = reqwest::Certificate::from_der(cert.cert.der()).unwrap();
     let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
-    let config = ServerConfig::builder_with_provider(Arc::new(
-        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .unwrap()
-    .with_no_client_auth()
-    .with_single_cert(
-        vec![CertificateDer::from(cert.cert.der().to_vec())],
-        key.into(),
-    )
-    .unwrap();
+    #[cfg(feature = "rustls-ring")]
+    let provider = tokio_rustls::rustls::crypto::ring::default_provider();
+    #[cfg(not(feature = "rustls-ring"))]
+    let provider = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider();
+    // The test executable, like a product entrypoint, explicitly initializes its provider.
+    let _ = provider.clone().install_default();
+    let config = ServerConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(cert.cert.der().to_vec())],
+            key.into(),
+        )
+        .unwrap();
     (root, Arc::new(config))
 }
+#[cfg(any(feature = "rustls", feature = "native-tls"))]
+fn tls_backends() -> Vec<aster_forge_http::TlsBackend> {
+    vec![
+        #[cfg(feature = "rustls")]
+        aster_forge_http::TlsBackend::Rustls,
+        #[cfg(feature = "native-tls")]
+        aster_forge_http::TlsBackend::Native,
+    ]
+}
+
+#[cfg(any(feature = "rustls", feature = "native-tls"))]
 #[tokio::test]
 async fn added_trust_roots_preserve_certificate_and_hostname_validation() {
     let (root, config) = certificate();
-    for (trusted, host, expected) in [
-        (false, "provider.test", false),
-        (true, "provider.test", true),
-        (true, "wrong.test", false),
-    ] {
+    for (backend, trusted, host, expected) in tls_backends().into_iter().flat_map(|backend| {
+        [
+            (false, "provider.test", false),
+            (true, "provider.test", true),
+            (true, "wrong.test", false),
+        ]
+        .map(|(trusted, host, expected)| (backend, trusted, host, expected))
+    }) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let acceptor = tokio_rustls::TlsAcceptor::from(config.clone());
@@ -187,7 +208,9 @@ async fn added_trust_roots_preserve_certificate_and_hostname_validation() {
                 tls.shutdown().await.unwrap();
             }
         });
-        let builder = HttpClient::builder().resolve_to_addrs(host, &[addr]);
+        let builder = HttpClient::builder()
+            .tls_backend(backend)
+            .resolve_to_addrs(host, &[addr]);
         let builder = if trusted {
             builder.add_root_certificate(root.clone())
         } else {
@@ -207,7 +230,7 @@ async fn added_trust_roots_preserve_certificate_and_hostname_validation() {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", any(feature = "rustls", feature = "native-tls")))]
 #[test]
 fn blocking_factory_preserves_proxy_dns_tls_root_and_no_redirect_contracts() {
     use std::{
@@ -329,4 +352,62 @@ fn blocking_default_identity_and_invalid_identity_are_explicit() {
             .build()
             .is_err()
     );
+}
+
+#[cfg(all(feature = "blocking", any(feature = "rustls", feature = "native-tls")))]
+#[test]
+fn blocking_tls_selection_preserves_trust_and_hostname_validation() {
+    let (root, config) = certificate();
+    for backend in tls_backends() {
+        for (trusted, host, expected) in [
+            (false, "provider.test", false),
+            (true, "provider.test", true),
+            (true, "wrong.test", false),
+        ] {
+            let config = config.clone();
+            let (ready, address) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async move {
+                        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        ready.send(listener.local_addr().unwrap()).unwrap();
+                        let (socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                            .await.unwrap().unwrap();
+                        if let Ok(mut tls) = tokio_rustls::TlsAcceptor::from(config).accept(socket).await {
+                            let mut bytes = [0; 1024];
+                            assert!(tls.read(&mut bytes).await.unwrap() > 0);
+                            tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+                            tls.shutdown().await.unwrap();
+                        }
+                    });
+            });
+            let addr = address.recv_timeout(Duration::from_secs(5)).unwrap();
+            let builder = HttpClient::builder()
+                .tls_backend(backend)
+                .timeout(Duration::from_secs(5))
+                .resolve_to_addrs(host, &[addr]);
+            let builder = if trusted {
+                builder.add_root_certificate(root.clone())
+            } else {
+                builder
+            };
+            let response = builder
+                .build_blocking()
+                .unwrap()
+                .get(format!("https://{host}:{}/", addr.port()))
+                .send();
+            assert_eq!(
+                response.is_ok(),
+                expected,
+                "backend={backend:?} trusted={trusted} host={host}"
+            );
+            if let Ok(response) = response {
+                assert_eq!(response.text().unwrap(), "ok");
+            }
+            server.join().unwrap();
+        }
+    }
 }

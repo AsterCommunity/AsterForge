@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_auth"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,7 +17,7 @@ rust-crypto = ["jsonwebtoken/rust_crypto"]
 password = ["dep:aster_forge_crypto"]
 
 [dependencies]
-aster_forge_crypto = { path = "../aster_forge_crypto", version = "=0.1.0-alpha.1", optional = true }
+aster_forge_crypto = { path = "../aster_forge_crypto", version = "=0.1.0-alpha.2", features = ["password"], optional = true }
 async-trait.workspace = true
 jsonwebtoken.workspace = true
 serde.workspace = true

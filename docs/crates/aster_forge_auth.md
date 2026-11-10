@@ -152,3 +152,5 @@ AsterDrive 的 `services/auth/local/tokens` 保存产品 policy/claims projectio
 Drive 账号 generation 使用同事务的原子递增，改密、账号级撤销、MFA 重置、管理员状态修改和 reuse 不再覆盖并发版本。负值或 `i64::MAX` 视为不可继续递增，返回基础设施失败并回滚，不能饱和后仍宣称旧 access 已撤销。持久化的亚秒级 `last_seen_at` 不因秒级 JWT 时间倒退；缺失 UA/IP 保留历史字段，但 replay 决策只使用本次请求证据。
 
 AsterGate 后续使用 UUID subject 和独立 issuer/audience/key，保留自己的实体、即时撤销、system permissions、step-up 和 audit；不能照搬 Drive 的 access 到期窗口。
+
+`password` 在 alpha.2 feature 拆分中仅启用 `aster_forge_crypto/password`，不再隐式编译 SHA-256/HMAC/secret-envelope；JWT 的 AWS-LC/RustCrypto 后端仍按本页规则独立选择。

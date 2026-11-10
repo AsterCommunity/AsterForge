@@ -154,6 +154,7 @@ async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
     assert_eq!(events.0.lock().unwrap().len(), 2);
 }
 
+#[cfg(all(feature = "json", feature = "query", feature = "form"))]
 #[tokio::test]
 async fn request_builders_preserve_method_headers_encoding_and_request_deadline() {
     let client = HttpClient::builder().no_proxy().build().unwrap();
@@ -218,6 +219,7 @@ async fn request_builders_preserve_method_headers_encoding_and_request_deadline(
     assert_eq!(format!("{client:?}"), "HttpClient { .. }");
 }
 
+#[cfg(feature = "multipart")]
 #[tokio::test]
 async fn streamed_multipart_is_not_clonable_and_keeps_boundary_body_and_auth() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

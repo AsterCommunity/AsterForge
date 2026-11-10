@@ -37,4 +37,4 @@ utoipa = { workspace = true, optional = true }
 workspace = true
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["logs"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.2", features = ["logs"] }

@@ -8,19 +8,23 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ```toml
 [dependencies]
-aster_forge_http = "=0.1.0-alpha.1"
+aster_forge_http = { git = "https://github.com/AsterCommunity/AsterForge", features = ["json", "rustls-aws-lc-rs"] }
 ```
 
 ## Features
 
-Default features: none.
+No features are enabled by default. Select request encodings (`json`, `form`, `query`, `multipart`), `stream`, `blocking`, `http2`, `charset`, and `system-proxy` independently.
 
-Available features: `blocking`. Select features according to the integration documentation.
+HTTPS requires an explicit backend: `rustls-aws-lc-rs`, `rustls-ring`, `rustls` with an application-installed provider, or `native-tls` / `native-tls-vendored`. For ring, install `rustls::crypto::ring::default_provider()` at the application entrypoint before building clients. Forge never installs a global crypto provider. Certificate and hostname verification stay enabled.
+
+When Cargo unifies multiple backends, `.tls_backend(TlsBackend::Rustls)` or `TlsBackend::Native` makes the application choice explicit for async and blocking clients. Bounded response reads work without the `stream` feature.
+
+These feature boundaries target the next release after `0.1.0-alpha.2`; use the matching release or Git revision.
 
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_http)
-- [Rust API reference](https://docs.rs/aster_forge_http/0.1.0-alpha.1)
+- [Rust API reference](https://docs.rs/aster_forge_http/0.1.0-alpha.2)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 

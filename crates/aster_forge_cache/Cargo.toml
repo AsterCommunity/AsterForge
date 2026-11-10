@@ -33,7 +33,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["redis"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.2", features = ["redis"] }
 criterion.workspace = true
 futures.workspace = true
 

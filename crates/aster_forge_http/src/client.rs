@@ -182,21 +182,25 @@ impl HttpRequestBuilder {
         self
     }
     /// Encode JSON using reqwest and set its content type without a second serialization pass.
+    #[cfg(feature = "json")]
     pub fn json<T: serde::Serialize + ?Sized>(mut self, value: &T) -> Self {
         self.builder = self.builder.json(value);
         self
     }
     /// Encode a protocol form using reqwest URL encoding and content type rules.
+    #[cfg(feature = "form")]
     pub fn form<T: serde::Serialize + ?Sized>(mut self, value: &T) -> Self {
         self.builder = self.builder.form(value);
         self
     }
     /// Append encoded query pairs before the caller builds and signs the final URL.
+    #[cfg(feature = "query")]
     pub fn query<T: serde::Serialize + ?Sized>(mut self, value: &T) -> Self {
         self.builder = self.builder.query(value);
         self
     }
     /// Attach a streamed multipart form with reqwest-owned boundary framing.
+    #[cfg(feature = "multipart")]
     pub fn multipart(mut self, form: reqwest::multipart::Form) -> Self {
         self.builder = self.builder.multipart(form);
         self
