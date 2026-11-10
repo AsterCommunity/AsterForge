@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_cache"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared cache abstractions and backend constructors for Aster services"
+readme = "README.md"
+publish = true
 
 [features]
 default = ["memory"]
@@ -16,8 +18,8 @@ redis = ["memory", "dep:aster_forge_utils", "dep:redis"]
 runtime-component = ["dep:aster_forge_runtime"]
 
 [dependencies]
-aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
-aster_forge_utils = { path = "../aster_forge_utils", optional = true }
+aster_forge_runtime = { path = "../aster_forge_runtime", version = "=0.1.0-alpha.1", optional = true }
+aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1", optional = true }
 async-trait.workspace = true
 bloomfilter = { workspace = true, optional = true }
 dashmap.workspace = true
@@ -31,7 +33,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", features = ["redis"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["redis"] }
 criterion.workspace = true
 futures.workspace = true
 

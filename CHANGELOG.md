@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-11-11
+
 ### Added
+
+- First crates.io alpha release of all 33 AsterForge workspace crates. Each crate owns its version independently; this release uses `0.1.0-alpha.1` throughout, explicit internal dependency versions, and package README metadata.
 
 - Product-neutral `aster_forge_macros::wire_enum!` generates string protocol enums with exact known-value mapping, lossless unknown strings, Serde support, and compile-time rejection of duplicate wire values. Consumers retain protocol and execution policy.
 
@@ -45,4 +49,5 @@
 - **External auth provider destinations (breaking)** — Dedicated Google, GitHub and QQ drivers use official destinations unconditionally. Use generic OIDC/OAuth2 for custom issuers or compatible services. Provider-option diagnostics omit rejected documents; mail diagnostic fields escape control characters. Scope/domain deduplication, mail fallback parsing and saturated cache reservations avoid repeated full scans while preserving order, fallback and TTL semantics.
 - **HTTP and local state boundaries** — Both HTTP transports combine repeated forwarding fields before trusted-proxy resolution; an active CORS policy disabling credentials removes inherited credential headers. Unix test state uses verified per-user directories, non-truncating no-follow locks and private atomic files. The Linux memory example uses the same state-file mechanics, replaces restored ledgers with private files before mounting, and bounds documents to 16 MiB with 1 MiB upload chunks; it remains a synthetic adapter.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/1ba5754792ae94bd8888b03d09ada1644b2107c0...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterForge/releases/tag/v0.1.0-alpha.1

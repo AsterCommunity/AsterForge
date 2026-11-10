@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_storage_core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared storage utility helpers for Aster services"
+readme = "README.md"
+publish = true
 
 [dependencies]
 http.workspace = true

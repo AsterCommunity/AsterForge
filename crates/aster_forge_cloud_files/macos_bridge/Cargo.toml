@@ -1,18 +1,20 @@
 [package]
 name = "aster_forge_cloud_files_macos_bridge"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Product-neutral Rust bridge contracts for Apple File Provider extensions"
+readme = "README.md"
+publish = true
 
 [lib]
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-aster_forge_cloud_files_core = { path = "../core" }
+aster_forge_cloud_files_core = { path = "../core", version = "=0.1.0-alpha.1" }
 base64.workspace = true
 bytes.workspace = true
 thiserror.workspace = true

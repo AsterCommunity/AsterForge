@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_mail"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared mail infrastructure helpers for Aster services"
+readme = "README.md"
+publish = true
 
 [features]
 default = []
@@ -19,10 +21,10 @@ runtime-component = [
 ]
 
 [dependencies]
-aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
-aster_forge_tasks = { path = "../aster_forge_tasks", default-features = false, optional = true }
-aster_forge_utils = { path = "../aster_forge_utils" }
-aster_forge_validation = { path = "../aster_forge_validation" }
+aster_forge_runtime = { path = "../aster_forge_runtime", version = "=0.1.0-alpha.1", optional = true }
+aster_forge_tasks = { path = "../aster_forge_tasks", version = "=0.1.0-alpha.1", default-features = false, optional = true }
+aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1" }
+aster_forge_validation = { path = "../aster_forge_validation", version = "=0.1.0-alpha.1" }
 async-trait.workspace = true
 lettre.workspace = true
 sea-orm = { workspace = true, optional = true }
@@ -35,4 +37,4 @@ utoipa = { workspace = true, optional = true }
 workspace = true
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", features = ["logs"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["logs"] }

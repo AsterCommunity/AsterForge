@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_config"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared runtime configuration primitives for Aster services"
+readme = "README.md"
+publish = true
 
 [features]
 default = []
@@ -16,8 +18,8 @@ sea-orm = ["dep:sea-orm"]
 
 [dependencies]
 async-trait.workspace = true
-aster_forge_events = { path = "../aster_forge_events" }
-aster_forge_utils = { path = "../aster_forge_utils" }
+aster_forge_events = { path = "../aster_forge_events", version = "=0.1.0-alpha.1" }
+aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1" }
 futures.workspace = true
 redis = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
@@ -30,7 +32,7 @@ tracing.workspace = true
 utoipa = { workspace = true, optional = true }
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", features = ["redis"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["redis"] }
 tokio = { workspace = true, features = ["test-util"] }
 uuid.workspace = true
 

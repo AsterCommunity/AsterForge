@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_macros"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral declarative macros for lossless string protocol enums"
 readme = "README.md"
-publish = false
+publish = true
 
 [dev-dependencies]
 serde = { workspace = true, features = ["derive"] }

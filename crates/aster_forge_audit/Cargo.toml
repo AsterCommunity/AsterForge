@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_audit"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared audit runtime integration for Aster services"
+readme = "README.md"
+publish = true
 
 [features]
 default = []
@@ -15,15 +17,15 @@ database-container-tests = ["db-writer"]
 mail-outbox-dependency = ["dep:aster_forge_mail"]
 
 [dependencies]
-aster_forge_db = { path = "../aster_forge_db", default-features = false, features = ["audit-log"], optional = true }
-aster_forge_mail = { path = "../aster_forge_mail", default-features = false, optional = true }
-aster_forge_runtime = { path = "../aster_forge_runtime" }
+aster_forge_db = { path = "../aster_forge_db", version = "=0.1.0-alpha.1", default-features = false, features = ["audit-log"], optional = true }
+aster_forge_mail = { path = "../aster_forge_mail", version = "=0.1.0-alpha.1", default-features = false, optional = true }
+aster_forge_runtime = { path = "../aster_forge_runtime", version = "=0.1.0-alpha.1" }
 sea-orm = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", features = ["postgres"] }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1", features = ["postgres"] }
 uuid.workspace = true
 chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

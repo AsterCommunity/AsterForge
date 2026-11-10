@@ -2,7 +2,7 @@
 
 `aster_forge_test` 提供 Aster 产品共享的集成测试基础设施：隔离临时目录、文件型 SQLite fixture、可复用 Docker 容器（testcontainers）、跨进程容器状态登记、真实子进程 guard 和异步等待工具。目标是让每个产品的测试套件不必重复实现测试资源命名、生命周期清理、容器复用、状态锁、孤儿资源清理和进程日志收敛。
 
-这是测试支持 crate，`publish = false`，只作为 dev-dependency 使用。所有失败路径直接 panic，因为测试设施出错时测试本来就不该继续。
+这是独立发布的测试支持 crate，产品只应将其作为 dev-dependency 使用。所有失败路径直接 panic，因为测试设施出错时测试本来就不该继续。
 
 ## 适用场景
 

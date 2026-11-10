@@ -1,18 +1,20 @@
 [package]
 name = "aster_forge_panic"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared panic hook and crash report writer for Aster services"
+readme = "README.md"
+publish = true
 
 [dependencies]
 chrono = { workspace = true, features = ["clock"] }
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test" }
+aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.1" }
 
 [lints]
 workspace = true

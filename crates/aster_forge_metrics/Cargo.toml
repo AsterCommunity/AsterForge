@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_metrics"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Shared metrics recorder traits and subsystem registration primitives"
+readme = "README.md"
+publish = true
 
 [features]
 default = []
@@ -16,7 +18,7 @@ otlp = ["dep:aster_forge_http", "dep:opentelemetry-proto", "dep:prost", "dep:req
 runtime-health = ["dep:aster_forge_runtime"]
 
 [dependencies]
-aster_forge_http = { path = "../aster_forge_http", features = ["blocking"], optional = true }
+aster_forge_http = { path = "../aster_forge_http", version = "=0.1.0-alpha.1", features = ["blocking"], optional = true }
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-prometheus = { workspace = true, optional = true }
@@ -25,8 +27,8 @@ prost = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 parking_lot.workspace = true
 hashbrown.workspace = true
-aster_forge_alloc = { path = "../aster_forge_alloc", optional = true }
-aster_forge_runtime = { path = "../aster_forge_runtime", optional = true }
+aster_forge_alloc = { path = "../aster_forge_alloc", version = "=0.1.0-alpha.1", optional = true }
+aster_forge_runtime = { path = "../aster_forge_runtime", version = "=0.1.0-alpha.1", optional = true }
 prometheus = { workspace = true, optional = true }
 sysinfo.workspace = true
 thiserror.workspace = true

@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_file_classification"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "File extension parsing and category classification helpers"
+readme = "README.md"
+publish = true
 
 [features]
 default = []

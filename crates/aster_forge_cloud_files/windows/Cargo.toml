@@ -1,15 +1,17 @@
 [package]
 name = "aster_forge_cloud_files_windows"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "Windows Cloud Files bindings for the product-neutral Forge cloud-files core"
+readme = "README.md"
+publish = true
 
 [dependencies]
-aster_forge_cloud_files_core = { path = "../core" }
+aster_forge_cloud_files_core = { path = "../core", version = "=0.1.0-alpha.1" }
 bytes.workspace = true
 thiserror.workspace = true
 

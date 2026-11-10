@@ -1,12 +1,14 @@
 [package]
 name = "aster_forge_observability"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+description = "HTTP observability endpoints for Aster services"
+readme = "README.md"
+publish = true
 
 [features]
 default = ["actix"]
@@ -17,7 +19,7 @@ axum = ["dep:axum"]
 [dependencies]
 actix-web = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-aster_forge_metrics = { path = "../aster_forge_metrics" }
+aster_forge_metrics = { path = "../aster_forge_metrics", version = "=0.1.0-alpha.1" }
 tracing.workspace = true
 
 [lints]
