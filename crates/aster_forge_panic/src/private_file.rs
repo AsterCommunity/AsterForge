@@ -7,12 +7,12 @@ use crate::ReportWriter;
 
 /// Preopened private report file with nonblocking lock acquisition.
 ///
-/// Unix: walks every path component using directory descriptors and NOFOLLOW,
+/// Linux: walks every path component using directory descriptors and NOFOLLOW,
 /// creates missing directories with 0700 and files with 0600, rejects parent
 /// traversal, links, special files, foreign ownership and group/other file access.
 /// Existing files are never chmodded or truncated. Ancestors must be managed by
 /// the application/OS; this does not defend against an attacker with the same UID.
-/// Non-Unix: fails closed; inject a writer enforcing the product's ACL policy.
+/// Other platforms (including macOS): fail closed; inject a writer enforcing the product's ACL policy.
 /// Open failures are retained as unavailable; no file IO occurs during install
 /// after this constructor, and no lazy initialization can block another panic.
 pub struct PrivateReportWriter {
@@ -51,7 +51,8 @@ impl ReportWriter for PrivateReportWriter {
     }
 }
 
-#[cfg(unix)]
+/// Opens through directory descriptors and validates the resulting Linux inode.
+#[cfg(target_os = "linux")]
 fn open_private(path: &Path) -> io::Result<File> {
     use rustix::fs::{self, Mode, OFlags};
     use std::path::Component;
@@ -112,7 +113,8 @@ fn open_private(path: &Path) -> io::Result<File> {
     Err(invalid())
 }
 
-#[cfg(not(unix))]
+/// Rejects platforms whose private ACL semantics have not been implemented.
+#[cfg(not(target_os = "linux"))]
 fn open_private(_path: &Path) -> io::Result<File> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
@@ -120,7 +122,7 @@ fn open_private(_path: &Path) -> io::Result<File> {
     ))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use aster_forge_test::temp::TestTempDir;
@@ -188,7 +190,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 #[test]
 fn unwritable_directory_fails_without_panic() {
     use std::os::unix::fs::PermissionsExt;
@@ -203,4 +205,29 @@ fn unwritable_directory_fails_without_panic() {
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
     assert!(!root.join("crash.log").exists());
+}
+
+/// Unsupported platforms must reject even safe-looking files before mutation.
+#[cfg(all(test, not(target_os = "linux")))]
+#[test]
+fn unsupported_acl_platform_does_not_open_or_create() {
+    let directory = aster_forge_test::temp::TestTempDir::new("panic-unsupported-acl");
+    let existing = directory.join("existing");
+    std::fs::write(&existing, "original").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    for path in [existing.clone(), directory.join("nested/new")] {
+        let error = open_private(&path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(
+            PrivateReportWriter::new(&path)
+                .write_report("secret")
+                .is_err()
+        );
+    }
+    assert_eq!(std::fs::read_to_string(existing).unwrap(), "original");
+    assert!(!directory.join("nested").exists());
 }

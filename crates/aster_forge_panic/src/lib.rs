@@ -215,15 +215,18 @@ pub fn install_panic_hook(config: PanicHookConfig) -> InstallOutcome {
     outcome
 }
 
+/// Produces the default public UTC timestamp with a fixed precision.
 fn utc_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
+/// Renders private source context, including panics without a source location.
 fn format_location(location: Option<(&str, u32, u32)>) -> String {
     location.map_or_else(
         || "<unknown>".into(),
         |(file, line, column)| format!("{file}:{line}:{column}"),
     )
 }
+/// Renders only the deliberately limited public diagnostic fields.
 fn human_notice(diagnostic: &PublicDiagnostic) -> String {
     format!(
         "{} encountered an unexpected internal error. Private diagnostic report: {}. Timestamp: {}",
@@ -249,6 +252,7 @@ struct PanicContext {
     message: String,
 }
 
+/// Extracts common string payloads without exposing them to public sinks.
 fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
@@ -259,6 +263,7 @@ fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
+/// Combines explicit repository metadata for the private report.
 fn issue_report_target(repository: &str, issue_template: &str) -> String {
     let repository = repository.trim_end_matches('/');
     let issue_template = issue_template.trim_start_matches('/');
@@ -271,6 +276,7 @@ fn issue_report_target(repository: &str, issue_template: &str) -> String {
     }
 }
 
+/// Renders sensitive developer context for the private writer only.
 fn render_crash_report(context: &PanicContext, backtrace: &str) -> String {
     let report_target = issue_report_target(&context.repository, &context.issue_template);
     format!(

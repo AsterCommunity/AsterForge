@@ -13,7 +13,7 @@
 aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-没有 feature flag。Unix 文件策略依赖 rustix，时间使用 chrono；JSON 序列化由产品选择。
+没有 feature flag。Linux 文件策略依赖 rustix，时间使用 chrono；JSON 序列化由产品选择。
 
 ## 最小接入
 
@@ -39,10 +39,10 @@ let outcome = install_panic_hook(
 
 默认 `PrivateReportWriter` 在安装时打开文件，不在 panic 时延迟创建：
 
-- Unix 逐级使用目录描述符与 NOFOLLOW，拒绝路径中的符号链接、`..`、特殊文件与硬链接；新目录 0700，新文件 0600。
+- Linux 逐级使用目录描述符与 NOFOLLOW，拒绝路径中的符号链接、`..`、特殊文件与硬链接；新目录 0700，新文件 0600。
 - 已有文件必须属于当前有效 UID，且无 group/other 权限；拒绝不安全文件，既不 chmod 也不截断。允许私有已有文件追加。
-- 产品/OS 必须管理祖先目录；不防御相同 UID 的恶意进程。含 OS 符号链接的可信根（如 macOS 临时目录）应由产品启动阶段先解析可信根，然后追加托管路径。
-- 非 Unix 默认拒绝落盘，产品应注入执行私有 ACL 策略的 writer。
+- 产品/OS 必须管理祖先目录；不防御相同 UID 的恶意进程。含 OS 符号链接的可信根应由产品启动阶段先解析可信根，然后追加托管路径。
+- 其他平台（包括 macOS）默认拒绝落盘，产品应注入执行私有 ACL 策略的 writer。macOS ACL 可在 0600 模式位之外授权其他用户，当前默认 writer 不具备可靠 ACL 校验，不能以模式位冒充完整隐私保证。
 - `PrivateReportWriter::try_new` 可在正常启动阶段返回具体错误；默认打开失败仅使报告不可用，不阻止 hook 安装。
 
 ## 安装与失败合同

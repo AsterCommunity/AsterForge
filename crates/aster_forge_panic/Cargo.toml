@@ -13,7 +13,7 @@ publish = true
 [dependencies]
 chrono = { workspace = true, features = ["clock"] }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
 
 [dev-dependencies]

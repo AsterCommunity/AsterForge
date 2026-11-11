@@ -2,10 +2,9 @@ use aster_forge_panic::{
     DiagnosticSink, InstallOutcome, PanicHookConfig, PanicOutput, PublicDiagnostic, ReportWriter,
     install_panic_hook,
 };
-#[cfg(unix)]
 use aster_forge_test::temp::TestTempDir;
 use std::io::{self, Write};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 
 struct JsonSink;
 impl DiagnosticSink for JsonSink {
@@ -23,10 +22,25 @@ impl DiagnosticSink for BrokenSink {
         Err(io::ErrorKind::BrokenPipe.into())
     }
 }
+/// Test-only transport: isolates hook behavior from platform permission policy.
+struct TestWriter(Mutex<std::fs::File>);
+impl TestWriter {
+    fn new(path: &std::path::Path) -> Self {
+        Self(Mutex::new(std::fs::File::create(path).unwrap()))
+    }
+}
+impl ReportWriter for TestWriter {
+    fn write_report(&self, report: &str) -> io::Result<()> {
+        self.0
+            .try_lock()
+            .map_err(|_| io::Error::from(io::ErrorKind::WouldBlock))?
+            .write_all(report.as_bytes())
+    }
+}
 struct GateWriter {
     entered: Arc<Barrier>,
     release: Arc<Barrier>,
-    writer: aster_forge_panic::PrivateReportWriter,
+    writer: TestWriter,
 }
 impl ReportWriter for GateWriter {
     fn write_report(&self, report: &str) -> io::Result<()> {
@@ -73,9 +87,11 @@ fn child() {
         .with_timestamp(fixed_time);
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
+    if !matches!(mode.as_str(), "failed" | "unavailable" | "default") {
+        config.report_writer = Some(Arc::new(TestWriter::new(&config.crash_log_path)));
+    }
     if mode == "busy" {
-        let writer =
-            aster_forge_panic::PrivateReportWriter::try_new(&config.crash_log_path).unwrap();
+        let writer = TestWriter::new(&config.crash_log_path);
         config = config.with_report_writer(Arc::new(GateWriter {
             entered: entered.clone(),
             release: release.clone(),
@@ -139,7 +155,6 @@ fn child() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn isolated_output_policies() {
     for mode in [
@@ -148,6 +163,7 @@ fn isolated_output_policies() {
         "silent",
         "failed",
         "unavailable",
+        "default",
         "broken",
         "concurrent",
         "busy",
@@ -173,19 +189,22 @@ fn isolated_output_policies() {
         }
         match mode {
             "human" => assert!(stderr.contains("HookTest encountered")),
-            "json" | "failed" | "unavailable" => {
+            "json" | "failed" | "unavailable" | "default" => {
                 let events: Vec<serde_json::Value> = stderr
                     .lines()
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
                 assert_eq!(events.len(), 2);
-                assert_eq!(events[0]["report_written"], mode == "json");
+                assert_eq!(
+                    events[0]["report_written"],
+                    mode == "json" || (mode == "default" && cfg!(target_os = "linux"))
+                );
                 assert_eq!(events[0]["timestamp"], "2030-01-02T03:04:05.000Z");
             }
-            "host" => assert_eq!(stderr, "host-hook\nhost-hook\n"),
+            "host" => assert_eq!(stderr.replace("\r\n", "\n"), "host-hook\nhost-hook\n"),
             _ => assert!(stderr.is_empty(), "{mode}: {stderr}"),
         }
-        if mode == "failed" {
+        if mode == "failed" || (mode == "default" && !cfg!(target_os = "linux")) {
             assert!(!path.exists());
         } else if mode == "unavailable" {
             assert!(path.is_dir());
@@ -197,7 +216,11 @@ fn isolated_output_policies() {
             assert!(report.contains("Timestamp: 2030-01-02T03:04:05.000Z"));
             assert!(report.contains("Thread:    <unnamed>"));
             assert!(report.contains("issues/new?template=bug_report.yml"));
-            assert!(report.contains("Location:  crates/aster_forge_panic/tests/hook.rs:"));
+            assert!(
+                report
+                    .replace('\\', "/")
+                    .contains("Location:  crates/aster_forge_panic/tests/hook.rs:")
+            );
             assert!(report.contains("secret-"));
             if mode == "busy" {
                 assert!(!report.contains("secret-skipped"));
