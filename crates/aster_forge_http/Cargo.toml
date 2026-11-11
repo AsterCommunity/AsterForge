@@ -30,7 +30,7 @@ native-tls-vendored = ["native-tls", "reqwest/native-tls-vendored"]
 [dependencies]
 http.workspace = true
 reqwest.workspace = true
-rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
+rustls = { workspace = true, optional = true }
 thiserror.workspace = true
 serde = { workspace = true, optional = true }
 
@@ -38,7 +38,7 @@ serde = { workspace = true, optional = true }
 rcgen.workspace = true
 tokio-rustls.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["io-util", "net"] }
+tokio = { workspace = true, features = ["io-util", "net", "sync"] }
 
 [lints]
 workspace = true

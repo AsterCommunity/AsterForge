@@ -108,11 +108,19 @@ async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        for index in 0..2 {
-            let mut bytes = [0; 1024];
-            let len = socket.read(&mut bytes).await.unwrap();
-            assert!(len > 0);
-            let request = String::from_utf8_lossy(&bytes[..len]).to_ascii_lowercase();
+        for (index, agent) in ["session-a", "session-b", "shared-default"]
+            .iter()
+            .enumerate()
+        {
+            // Read complete headers; a TCP read is not an HTTP message boundary.
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                bytes.push(byte[0]);
+            }
+            let request = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+            assert!(request.contains(&format!("user-agent: {agent}\r\n")));
             assert_eq!(
                 request.contains("authorization: bearer per-request"),
                 index == 0
@@ -126,12 +134,14 @@ async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
     let events = Arc::new(Events::default());
     let client = HttpClient::builder()
         .no_proxy()
+        .user_agent("shared-default")
         .observer(events.clone())
         .build()
         .unwrap();
     assert_eq!(
         client
             .get(&url)
+            .header("user-agent", "session-a")
             .bearer_auth("per-request")
             .send()
             .await
@@ -145,6 +155,7 @@ async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
         client
             .clone()
             .get(&url)
+            .header("user-agent", "session-b")
             .send()
             .await
             .unwrap()
@@ -153,11 +164,16 @@ async fn cloned_clients_reuse_one_pool_and_observe_each_exchange_once() {
             .unwrap(),
         "ok"
     );
+    // Neither session's UA nor credentials become defaults for later requests.
+    assert_eq!(
+        client.get(&url).send().await.unwrap().text().await.unwrap(),
+        "ok"
+    );
     tokio::time::timeout(Duration::from_secs(2), task)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(events.0.lock().unwrap().len(), 2);
+    assert_eq!(events.0.lock().unwrap().len(), 3);
 }
 
 #[cfg(all(feature = "json", feature = "query", feature = "form"))]
@@ -330,4 +346,33 @@ async fn request_timeout_overrides_the_pool_deadline() {
             .is_timeout()
     );
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_sessions_can_extend_deadlines_without_changing_other_requests() {
+    support::initialize_tls();
+    let client = HttpClient::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(20))
+        .build()
+        .unwrap();
+    let (long_url, long_server) = server(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+        Duration::from_millis(150),
+    )
+    .await;
+    let (short_url, short_server) = server(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        Duration::from_millis(150),
+    )
+    .await;
+    let other_session = client.clone();
+    let (long, short) = tokio::join!(
+        client.get(long_url).timeout(Duration::from_secs(2)).send(),
+        other_session.get(short_url).send(),
+    );
+    assert_eq!(long.unwrap().text().await.unwrap(), "ok");
+    assert!(short.unwrap_err().is_timeout());
+    long_server.await.unwrap();
+    short_server.await.unwrap();
 }

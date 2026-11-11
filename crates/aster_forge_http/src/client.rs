@@ -27,7 +27,14 @@ pub trait HttpObserver: Send + Sync {
     fn observe(&self, observation: HttpObservation);
 }
 
-/// A shared connection pool with one execution/observation boundary.
+/// A caller-owned handle to a shared connection pool and observation boundary.
+///
+/// [`Clone::clone`] is cheap: it shares the underlying reqwest client, connection pool,
+/// transport configuration and observer. It does **not** copy connections or build a new pool.
+/// Inject a clone into each service/session once; no additional `Arc<HttpClient>` is needed.
+/// Each [`HttpClientBuilder::build`](crate::HttpClientBuilder::build) creates an independent
+/// pool: use separate builds for different TLS trust, proxy or connection policies.
+/// Credentials, per-session User-Agent and deadlines belong on individual requests.
 /// No deref or raw-client accessor: request builders cannot bypass execution.
 #[derive(Clone)]
 pub struct HttpClient {

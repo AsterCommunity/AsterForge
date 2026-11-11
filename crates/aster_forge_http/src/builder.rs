@@ -57,7 +57,8 @@ impl Default for HttpClientBuilder {
     }
 }
 impl HttpClientBuilder {
-    /// Set product identity; malformed header values fail construction before network I/O.
+    /// Set the pool-wide default identity; malformed values fail before network I/O.
+    /// For shared multi-session clients, override User-Agent on each request instead.
     pub fn user_agent(mut self, value: impl Into<String>) -> Self {
         self.user_agent = value.into();
         self
@@ -72,7 +73,8 @@ impl HttpClientBuilder {
         self.read_timeout = Some(value);
         self
     }
-    /// Bound the whole exchange through response-body consumption.
+    /// Set the default whole-exchange deadline through response-body consumption.
+    /// Each request can override this using `HttpRequestBuilder::timeout`.
     pub fn timeout(mut self, value: Duration) -> Self {
         self.timeout = Some(value);
         self
@@ -132,6 +134,8 @@ impl HttpClientBuilder {
         self
     }
 
+    /// Create a new, independent connection pool. Clone the returned handle to share it.
+    /// Construction configures transport resources but sends no HTTP request.
     /// # Errors
     /// Returns a reqwest configuration error before any request is sent.
     pub fn build(self) -> Result<HttpClient, reqwest::Error> {

@@ -122,6 +122,89 @@ DNS 地址固定强制禁用代理，不受 builder 调用顺序影响。
 流式协议可显式取消总期限/读取期限，但必须自己提供取消、进度和确认响应边界。
 `HttpClient` clone 共享连接池；没有 raw client accessor 或 Deref。
 
+## 调用方持有的共享生命周期
+
+`HttpClient::clone()` 只克隆共享句柄：底层 reqwest client、TCP 连接池、传输配置和 observer 都是同一份，
+**不会复制连接池，也不会新建连接**。每次 `HttpClient::builder().build()` 才会创建独立池。
+产品把 clone 注入 service/session 一次即可，无需额外 `Arc<HttpClient>`，后续请求不必逐层传递池参数。
+连接池允许并发请求，但不保证所有请求只使用一条 TCP 连接；HTTP/1 并发通常需要多条连接。
+完整消费响应体有利于 keep-alive 复用；有界读取超限或取消时不要为了复用而无界读完响应。
+
+### 池策略与请求策略
+
+| 作用域 | 策略 | 接入方式 |
+| --- | --- | --- |
+| 池 | TLS backend、根证书、proxy、DNS pinning、connect timeout、idle timeout/数量、observer | 在 builder 中配置；不兼容的信任或代理边界分别 build |
+| 池上的请求默认值 | 通用 User-Agent、whole-request timeout、idle-read timeout | builder 设置；不是会话状态 |
+| 单次请求 | 账户/会话 User-Agent、Authorization、whole-request timeout | `.header(USER_AGENT, ...)`、`.bearer_auth(...)` / `.basic_auth(...)`、`.timeout(...)` |
+
+请求级 total timeout 覆盖 builder 的 total timeout，既可缩短也可延长，并涵盖响应体消费；
+它不覆盖 connect timeout 或 idle-read timeout。需要长请求时必须同时考虑这两个独立限制。
+请求 override 不会修改共享默认值，也不会污染下一账户；不要把首个账户的 UA、凭据或 deadline 放进池初始化闭包。
+本契约针对 Forge builder 构造的 client；`From<reqwest::Client>` / `observed` 接收的外部 client 仍由调用方保证
+默认 header、cookie 或其他自定义状态的隔离，Forge 不会清除外部配置。
+
+### 批量 CLI 与惰性服务
+
+无需新增 `HttpPool` 同义包装，直接在调用方的 command/service state 中保存
+`Arc<tokio::sync::OnceCell<HttpClient>>`；调用方开启 Tokio `sync` feature。Forge 不新增运行时依赖或全局单例。
+
+```rust
+use aster_forge_http::HttpClient;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
+
+// 创建一次，覆盖整条批量命令或嵌入服务生命周期。
+let http = Arc::new(OnceCell::<HttpClient>::new());
+// 本地 list/show 等路径直接返回，不调用 get_or_try_init。
+let client = http.get_or_try_init(|| async {
+    HttpClient::builder().user_agent("ExampleProduct/1.0").build()
+}).await?;
+// 产品 service/session 保存 client.clone()；惰性 session 也可保存 http.clone()。
+```
+
+`get_or_try_init` 将并发初始化串行化，仅保存成功结果；失败或初始化 future 被取消后可以重试。
+这是初始化重试，不是业务 HTTP 请求自动重放。失败不会永久缓存，也不会自动退避；反复配置错误的报告和退避由产品决定。
+初始化只包含共同的传输配置，不能采用“首个账户的配置胜出”。信任/代理策略变化需要创建并注入新的独立 state/client，不能修改现有池。
+
+可运行的 [shared_client.rs](https://github.com/AsterCommunity/AsterForge/blob/master/crates/aster_forge_http/examples/shared_client.rs)
+展示批量 CLI 和惰性 session：共享 state 只注入一次，无参数运行是完全离线的本地路径。
+嵌入服务可让所有 job 共享同一 AppState，并发调用 session；drop 调用方 state 不会撤销仍被 session/request 持有的句柄。
+客户端寿命随最后一个持有者结束；产品仍负责停止新任务、取消或排空在途请求。
+
+### 嵌入服务的提前初始化
+
+如果服务需要启动时报告配置错误，直接 build 并注入 `HttpClient` clone，连 OnceCell 都不需要：
+
+```rust
+use aster_forge_http::HttpClient;
+use std::time::Duration;
+
+struct RemoteService {
+    http: HttpClient,
+}
+impl RemoteService {
+    async fn fetch(&self, url: &str) -> Result<reqwest::Response, reqwest::Error> {
+        self.http.get(url)
+            .header(reqwest::header::USER_AGENT, "ExampleProduct/session-a")
+            .timeout(Duration::from_secs(15))
+            .send().await
+    }
+}
+let http = HttpClient::builder().user_agent("ExampleProduct/1.0").build()?;
+let first = RemoteService { http: http.clone() };
+let second = RemoteService { http: http.clone() };
+// first 和 second 共享同一池；产品负责 status、读体上限和协议解析。
+```
+
+ACME directory、nonce、账户 JWS、CA 重试和协议响应上限继续属于 ACME，不随连接池共享迁入 Forge。
+
+验证本契约：`cargo test -p aster_forge_http --test client` 证明 clone 跨会话复用同一条 loopback TCP 连接，
+请求 UA/凭据不泄漏，短/长请求 deadline 相互独立；`cargo test -p aster_forge_http --example shared_client`
+验证本地路径不初始化、并发仅初始化一次、失败和取消后可重试。
+
+## 观测与检查
+
 `HttpObserver` 只接收 method、status、outcome、duration，不接收 URL、header、响应正文。
 观测边界是开始执行到响应头，不是响应体 EOF；future 被 drop 记录 Cancelled。
 文件传输的完整生命周期指标仍由产品负责，observer 不把短期响应头成功冒充传输完成。
