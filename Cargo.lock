@@ -942,6 +942,8 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "aster_forge_test",
  "chrono",
+ "rustix",
+ "serde_json",
 ]
 
 [[package]]

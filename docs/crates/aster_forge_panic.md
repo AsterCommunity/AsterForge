@@ -1,20 +1,10 @@
 # aster_forge_panic
 
-`aster_forge_panic` 提供共享 panic hook 和 crash report writer。它负责在 panic 时输出用户可见提示、写 crash log、捕获 backtrace，并给出 issue report 目标。
+提供显式安装的进程级 panic hook、backtrace 捕获与 best-effort 报告。完整开发报告与公开诊断分离；数据目录、JSON envelope、隐私、恢复和退出策略归产品所有。没有 runtime/observability 依赖，也不会发送网络请求。
 
-## 适用场景
+## 适用场景与边界
 
-- 服务启动时安装统一 panic hook。
-- panic 时写入 `data/crash.log` 或产品指定路径。
-- 在 stderr 输出简洁崩溃提示。
-- 记录 app name、version、repository、platform、thread、location、message、backtrace。
-
-不适合放在这里的内容：
-
-- 产品级错误恢复。
-- 进程 supervisor。
-- telemetry 上报。
-- 自动创建 GitHub issue。
+仅在可执行程序入口、创建工作线程前安装。嵌入式库不能接管宿主 hook。正常错误继续返回 `Result`；`JoinError`、`catch_unwind` 和退出策略由产品处理，hook 不是恢复机制。
 
 ## Cargo 接入
 
@@ -23,52 +13,50 @@
 aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-当前没有 feature flag。
+没有 feature flag。Linux 文件策略依赖 rustix，时间使用 chrono；JSON 序列化由产品选择。
 
-## 安装 hook
+## 最小接入
 
 ```rust
-aster_forge_panic::install_panic_hook(
-    aster_forge_panic::PanicHookConfig::new(
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_REPOSITORY"),
-    )
-    .with_crash_log_path("data/crash.log"),
+use aster_forge_panic::{install_panic_hook, PanicHookConfig, PanicOutput};
+
+let outcome = install_panic_hook(
+    PanicHookConfig::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"), "")
+        .with_crash_log_path("data/crash.log")
+        .with_output(PanicOutput::Silent),
 );
 ```
 
-Rust panic hook 是进程级全局状态。第一次安装的配置会被保留，后续不要在测试或子模块里随便重复安装不同配置。
+默认 `PanicOutput::Human` 在 stderr 输出简短提示；`Silent` 完全不输出；`Sink(Arc<dyn DiagnosticSink>)` 由产品选择输出通道和 JSON envelope。见[可编译 CLI 示例](https://github.com/AsterCommunity/AsterForge/blob/master/crates/aster_forge_panic/examples/cli.rs)。
 
-## 配置
+`PublicDiagnostic` 只有应用名、时间、报告写入结果，永远没有原始 payload、location、backtrace、文件路径或 writer 错误。失败也不会将完整报告回退到 stderr。应用名和自定义时间是产品提供的公开值，不能放凭据。
 
-核心类型：
+## 时间、私有 writer 与隐私
 
-- `PanicHookConfig`
-- `DEFAULT_CRASH_LOG_PATH`
-- `DEFAULT_ISSUE_TEMPLATE`
+默认时间固定为 UTC RFC3339 毫秒（`Z`），可通过 `.with_timestamp(fn() -> String)` 注入产品策略或固定测试时间。
 
-可配置项：
+完整报告含 payload、源码路径和 backtrace，**可能含敏感信息**。仅 `ReportWriter` 接收报告；通过 `.with_report_writer(Arc<dyn ReportWriter>)` 接入产品私有文件、过滤/脱敏和持久化策略。writer 返回的错误不会进入公开输出。
 
-- `app_name`
-- `version`
-- `repository`
-- `crash_log_path`
-- `issue_template`
+默认 `PrivateReportWriter` 在安装时打开文件，不在 panic 时延迟创建：
 
-## 接入边界
+- Linux 逐级使用目录描述符与 NOFOLLOW，拒绝路径中的符号链接、`..`、特殊文件与硬链接；新目录 0700，新文件 0600。
+- 已有文件必须属于当前有效 UID，且无 group/other 权限；拒绝不安全文件，既不 chmod 也不截断。允许私有已有文件追加。
+- 产品/OS 必须管理祖先目录；不防御相同 UID 的恶意进程。含 OS 符号链接的可信根应由产品启动阶段先解析可信根，然后追加托管路径。
+- 其他平台（包括 macOS）默认拒绝落盘，产品应注入执行私有 ACL 策略的 writer。macOS ACL 可在 0600 模式位之外授权其他用户，当前默认 writer 不具备可靠 ACL 校验，不能以模式位冒充完整隐私保证。
+- `PrivateReportWriter::try_new` 可在正常启动阶段返回具体错误；默认打开失败仅使报告不可用，不阻止 hook 安装。
 
-panic hook 是最后防线，不是错误处理机制。产品代码仍然应该正常返回 `Result`，尤其是启动、数据库、外部认证、任务执行这些路径。
+## 安装与失败合同
 
-如果 panic hook 写 crash log 失败，会把完整 report 输出到 stderr。这是为了确保容器日志里至少有诊断信息。stderr 写出是 best-effort：stderr 关闭或断管时写入错误被忽略——在 panic hook 里 panic 会双重 panic 直接 abort，恰好丢掉这个 crate 要捕获的崩溃诊断。
+`install_panic_hook` 返回 `InstallOutcome`。首次安装替换已有 hook，**不链式调用**旧 hook，避免旧输出泄漏完整报告。后续调用返回 `AlreadyInstalled` 且不执行 `set_hook`；宿主后来替换 hook 时也不重新抢回。panicking thread 调用返回 `PanickingThread`。并发宿主自行调用 `set_hook` 不在此合同内。
+
+hook 使用 try_lock 串行化完整处理；其他线程同时 panic 时跳过报告，不等待占用的 hook。默认文件 writer 也使用 try_lock。文件与 stderr I/O、用户 writer/sink 错误均 best-effort 忽略，不产生原始报告回退。同步文件/输出 I/O 本身没有超时保证。
+
+**自定义 writer、sink 和时钟必须不 panic、不阻塞等待锁。** Rust 在 hook 内二次 panic 会直接 abort，不能依赖 `catch_unwind` 救回。分配失败、栈溢出、abort 类故障也不保证报告生成。
 
 ## 测试要求
 
-- 渲染 crash report 的纯函数路径应覆盖。
-- 产品启动测试确认 hook 安装不影响正常日志初始化。
-- 不要在普通单元测试里触发真实 panic hook 写全局文件，容易污染并发测试。
+纯函数覆盖非字符串 payload、缺失 location、UTC；真实全局 hook 使用独立子进程验证 human/JSON/silent、首次安装、旧宿主 hook 交互、writer/sink 失败与并发 panic。文件测试覆盖追加、权限、链接、目录失败与锁占用。不要污染测试进程全局状态或仓库 `data/`。
 
 ## 参考项目
 
-- AsterDrive：可参考启动期安装和 issue template 配置。
-- AsterYggdrasil：已删除本地薄封装后，可直接调用 Forge panic hook。
+AsterDrive / AsterYggdrasil 提供服务入口安装参考；AsterACME 的 CLI 输出与私有状态策略由其产品 adapter 实现，本票不自动更新下游依赖。
