@@ -2,11 +2,30 @@
 
 Shared panic hook and crash report writer for Aster services.
 
-This crate implements the full crash-reporting behavior used by Aster
-services: a process-wide panic hook, a lazily opened crash log, backtrace
-capture for developer diagnostics, user-facing stderr notices, and a
-repository issue target. Product crates provide names, versions, repository
-URLs, and crash log paths through `PanicHookConfig`.
+Executable-only, first-install panic reporting with UTC timestamps, private
+full reports and separate human, silent or product-defined diagnostic output.
+`ReportWriter` lets products enforce their own secure storage/redaction policy;
+`DiagnosticSink` lets CLIs preserve their JSON envelope. Public diagnostics never
+receive raw payloads, backtraces, locations, file paths or writer error text.
+
+```rust
+use aster_forge_panic::{install_panic_hook, PanicHookConfig, PanicOutput};
+
+install_panic_hook(
+    PanicHookConfig::new("my-cli", "1.0", "")
+        .with_output(PanicOutput::Silent),
+);
+```
+
+The default writer opens during installation. On Unix it rejects symlinks in all
+path components, unsafe existing file permissions/ownership and hard links;
+new directories/files use 0700/0600. Other platforms require an injected writer
+for private ACLs. Callbacks must not panic or block. Concurrent panic reporting
+is best-effort and skips events while another hook invocation is active.
+Repeated installation never replaces a later host hook. No prior hook is chained.
+This hook does not recover panics or decide process exit policy.
+
+See the [CLI example](examples/cli.rs) for product-defined JSON output.
 
 Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-neutral shared runtime foundation for Aster services.
 

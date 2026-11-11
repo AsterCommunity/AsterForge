@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **Panic reporting (breaking)** — Separate sensitive reports from public human/silent/custom diagnostics; inject product report writers, JSON sinks and timestamp policy. Default timestamps are UTC RFC3339; failed writes never expose raw reports on stderr. Unix private files reject symlinks, unsafe permissions and hard links; other platforms require a product writer. Installation now happens once without chaining prior hooks or replacing later host hooks. Public config literals/trait derives and the install return type change; callbacks must not panic or block.
+
 - **HTTP and crypto features (breaking; ten affected crates advance to alpha.2)** — HTTP consumers explicitly select request encodings, streaming, blocking, HTTP/2, charset, system proxy and TLS backends. Rustls supports AWS-LC, ring or an application-installed provider; async/blocking TLS selection preserves certificate and hostname verification. Bounded reads no longer require streaming or futures executors. Crypto consumers select Argon2 password hashing, SHA-256, HMAC-SHA256 and the existing secret-envelope format independently. Update consumer features instead of relying on workspace unification; authentication and OTLP retain an explicit, replaceable rustls/AWS-LC default.
 
 ## [0.1.0-alpha.1] - 2026-11-11

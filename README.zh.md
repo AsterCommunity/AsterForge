@@ -58,6 +58,8 @@ aster_forge_runtime::AsterRuntime::builder()
 | 工具类 | [`aster_forge_macros`](https://forge.docs.astercosm.com/crates/aster_forge_macros)、 [`aster_forge_crypto`](https://forge.docs.astercosm.com/crates/aster_forge_crypto)、[`aster_forge_utils`](https://forge.docs.astercosm.com/crates/aster_forge_utils)、[`aster_forge_validation`](https://forge.docs.astercosm.com/crates/aster_forge_validation) |
 | 认证机制 | [`aster_forge_auth`](https://forge.docs.astercosm.com/crates/aster_forge_auth) |
 
+panic 报告支持私有 writer 与独立的人类、静默或产品 CLI 输出策略，详见 [panic 合同](https://forge.docs.astercosm.com/crates/aster_forge_panic)。
+
 ## 集成规则
 
 - 产品权限、面向用户的错误、业务 repository、API 语义、任务 payload/结果、审计 action/详情和展示规则，留在产品仓库中。

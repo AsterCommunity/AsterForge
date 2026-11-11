@@ -58,6 +58,8 @@ All crate names use the `aster_forge_*` prefix. The workspace targets Rust `1.95
 | Utilities | [`aster_forge_macros`](https://forge.docs.astercosm.com/crates/aster_forge_macros), [`aster_forge_crypto`](https://forge.docs.astercosm.com/crates/aster_forge_crypto), [`aster_forge_utils`](https://forge.docs.astercosm.com/crates/aster_forge_utils), [`aster_forge_validation`](https://forge.docs.astercosm.com/crates/aster_forge_validation), [`aster_forge_xml`](https://forge.docs.astercosm.com/crates/aster_forge_xml) |
 | Authentication | [`aster_forge_auth`](https://forge.docs.astercosm.com/crates/aster_forge_auth) |
 
+Panic reporting supports private report writers and separate human, silent or product-defined CLI diagnostics; see the [panic contract](https://forge.docs.astercosm.com/crates/aster_forge_panic).
+
 ## Integration rules
 
 - Keep product permissions, user-facing errors, business repositories, API semantics, task payloads/results, audit actions/details, and presentation rules in the product repository.

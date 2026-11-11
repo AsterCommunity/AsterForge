@@ -125,6 +125,8 @@ Feature 边界要保持显式。默认 feature 只应该带最小可用内核，
 
 `aster_forge_db::sort::SortOrder` 与 `aster_forge_api::SortOrder` 是同一个类型。API 层解析出的排序方向可以直接传给 DB sort helper。`pagination::fetch_offset_page` 会通过 `E: From<DbError>` 返回产品错误类型，因此产品 repository 不需要复制 pagination helper 或为每个调用点手写 `map_err`。
 
+panic hook 只在可执行入口显式安装；CLI 按产品输出合同选择 `PanicOutput::Silent` 或自定义 sink，完整报告只交给私有 writer。默认 UTC、文件权限及首次安装行为见 [panic 合同](../crates/aster_forge_panic.md)。
+
 ## main.rs 目标形态
 
 入口应该只表达“初始化资源，然后把组件交给 runtime”。不要在 `main.rs` 里手写 shutdown 顺序、task drain、mail drain、audit flush、db close。

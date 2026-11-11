@@ -13,9 +13,9 @@ This file supplements [`../../AGENTS.md`](../../AGENTS.md) and applies only to `
 
 ## Change Constraints
 
-- The panic path should minimize allocation, locking, and dependencies. File-write failure needs a stderr fallback and must never trigger another panic inside the hook.
+- The panic path should minimize allocation, locking, and dependencies. File-write failure must never expose the full report or writer error on public output, or trigger another panic inside the hook.
 - Hook and configuration follow a process-global first-install contract. Do not add mutable global behavior that silently changes targets at runtime.
-- Crash reports must not record secrets, tokens, complete request bodies, or product user data.
+- Full reports can contain arbitrary panic payloads and sensitive backtraces: keep them private. Public sinks must never receive those fields. Products own redaction/custom report writer policy.
 - Issue URLs and paths come from explicit configuration only. This crate does not perform network requests or submit issues.
 - Tests must not write to the repository's `data/` directory. Use isolated temporary paths or subprocesses.
 
