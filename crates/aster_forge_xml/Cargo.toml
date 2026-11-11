@@ -11,15 +11,15 @@ readme = "README.md"
 publish = true
 
 [dependencies]
-aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1" }
+aster_forge_utils = { workspace = true }
 quick-xml = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-libc = "0.2"
-proptest = "1.12.0"
-roxmltree = "0.21.2"
-xmltree = "0.12.0"
+libc = { workspace = true }
+proptest = { workspace = true }
+roxmltree = { workspace = true }
+xmltree = { workspace = true }
 
 [[bench]]
 name = "xml_bench"

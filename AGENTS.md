@@ -126,6 +126,7 @@ When code and documentation disagree, determine whether the code is wrong or the
 
 - The workspace uses Rust 1.94+ and edition 2024.
 - Prefer declaring dependencies in the root `Cargo.toml` under `[workspace.dependencies]`, then reference workspace dependencies from individual crates as needed.
+- Keep all workspace member dependency versions (including internal path + exact release versions) in `[workspace.dependencies]`; members inherit with `workspace = true` and retain their own optional flags and capability features. If any consumer disables defaults, disable them in the workspace declaration; a consumer that intentionally needs defaults must explicitly enable them. Do not let inheritance silently widen TLS/backend or other feature boundaries. Standalone template/fuzz workspaces keep their own dependency roots.
 - Name new crates with the `aster_forge_*` prefix.
 - Product-neutral string-enum generation belongs in `aster_forge_macros`; protocol variants and execution policy stay in consumers. Read its crate AGENTS.md and docs before editing.
 - Public APIs must have explicit boundaries and should avoid exposing implementation details.

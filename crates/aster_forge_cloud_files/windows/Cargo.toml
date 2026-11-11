@@ -11,7 +11,7 @@ readme = "README.md"
 publish = true
 
 [dependencies]
-aster_forge_cloud_files_core = { path = "../core", version = "=0.1.0-alpha.1" }
+aster_forge_cloud_files_core = { workspace = true }
 bytes.workspace = true
 thiserror.workspace = true
 

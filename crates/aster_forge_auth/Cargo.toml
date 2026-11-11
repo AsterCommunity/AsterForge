@@ -17,7 +17,7 @@ rust-crypto = ["jsonwebtoken/rust_crypto"]
 password = ["dep:aster_forge_crypto"]
 
 [dependencies]
-aster_forge_crypto = { path = "../aster_forge_crypto", version = "=0.1.0-alpha.2", features = ["password"], optional = true }
+aster_forge_crypto = { workspace = true, features = ["password"], optional = true }
 async-trait.workspace = true
 jsonwebtoken.workspace = true
 serde.workspace = true

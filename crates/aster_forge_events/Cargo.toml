@@ -16,7 +16,7 @@ redis = ["dep:redis"]
 
 [dependencies]
 async-trait.workspace = true
-aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1" }
+aster_forge_utils = { workspace = true }
 futures.workspace = true
 redis = { workspace = true, optional = true }
 thiserror.workspace = true
@@ -25,7 +25,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.2", features = ["redis"] }
+aster_forge_test = { workspace = true, features = ["redis"] }
 uuid.workspace = true
 
 [[test]]

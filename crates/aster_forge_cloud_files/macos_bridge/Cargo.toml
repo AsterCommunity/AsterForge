@@ -14,7 +14,7 @@ publish = true
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
-aster_forge_cloud_files_core = { path = "../core", version = "=0.1.0-alpha.1" }
+aster_forge_cloud_files_core = { workspace = true }
 base64.workspace = true
 bytes.workspace = true
 thiserror.workspace = true

@@ -16,7 +16,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
-aster_forge_test = { path = "../aster_forge_test", version = "=0.1.0-alpha.2", features = ["mysql", "postgres"] }
+aster_forge_test = { workspace = true, features = ["mysql", "postgres"] }
 tokio = { workspace = true, features = ["sync"] }
 
 [[test]]

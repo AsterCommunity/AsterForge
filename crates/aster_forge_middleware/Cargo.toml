@@ -15,8 +15,8 @@ actix-governor = { workspace = true, optional = true }
 actix-web = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 cookie = { workspace = true, optional = true }
-aster_forge_metrics = { path = "../aster_forge_metrics", version = "=0.1.0-alpha.2", default-features = false, optional = true }
-aster_forge_utils = { path = "../aster_forge_utils", version = "=0.1.0-alpha.1" }
+aster_forge_metrics = { workspace = true, optional = true }
+aster_forge_utils = { workspace = true }
 base64.workspace = true
 futures.workspace = true
 governor.workspace = true
