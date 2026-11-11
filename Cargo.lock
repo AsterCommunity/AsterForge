@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_panic"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "aster_forge_test",
  "chrono",
