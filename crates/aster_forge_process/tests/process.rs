@@ -88,6 +88,16 @@ fn child(mode: &str) {
             println!("{}", child.id());
             std::io::stdout().flush().unwrap();
         }
+        "orphan-chain" => {
+            // The middle process prints the leaf PID and exits before this
+            // root does. The surviving leaf still owns both output pipes.
+            let mut middle = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--fixture", "orphan-pipes"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap();
+            assert!(middle.wait().unwrap().success());
+        }
         "streams" => {
             std::io::stdout()
                 .write_all(&vec![b'o'; 128 * 1024])
@@ -260,7 +270,9 @@ async fn check_stdin_error_survives_timeout() {
 async fn check_orphan_exit() {
     #[cfg(target_os = "linux")]
     let _subreaper = ScopedSubreaper::enable().expect("enable and save subreaper state");
-    check_successful_parent_kills_pipe_holding_descendant().await;
+    for mode in ["orphan-pipes", "orphan-chain"] {
+        check_successful_parent_kills_pipe_holding_descendant(mode).await;
+    }
     let (ready, received) = tokio::sync::oneshot::channel();
     let state = Mutex::new((Vec::new(), Some(ready)));
     let output = run(
@@ -283,18 +295,14 @@ async fn check_orphan_exit() {
     wait_until_dead(pid).await;
 }
 
-async fn check_successful_parent_kills_pipe_holding_descendant() {
+async fn check_successful_parent_kills_pipe_holding_descendant(mode: &str) {
     let stdout = Arc::new(Mutex::new(Vec::new()));
     let captured = stdout.clone();
-    let outcome = run(
-        spec("orphan-pipes"),
-        &CancellationToken::new(),
-        |stream, bytes| {
-            if stream == ProcessStream::Stdout {
-                captured.lock().unwrap().extend_from_slice(bytes);
-            }
-        },
-    )
+    let outcome = run(spec(mode), &CancellationToken::new(), |stream, bytes| {
+        if stream == ProcessStream::Stdout {
+            captured.lock().unwrap().extend_from_slice(bytes);
+        }
+    })
     .await;
     assert!(outcome.status.unwrap().success());
     assert!(outcome.cleanup_error.is_none());

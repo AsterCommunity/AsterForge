@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- **Process-tree completion** — Separate direct-child exit from tree cleanup, terminate before waiting on cancellation/deadline, and wait until Unix process groups or Windows descendant trees are empty before returning. Cleanup failures are explicit in `ProcessOutcome`.
+- **Process-tree completion** — Separate direct-child exit from tree cleanup, terminate descendants before waiting on inherited output pipes, and reap children before confirming Unix process groups or Windows Jobs are empty. Windows completion uses the Job's active-process count and closes setup handles on every exit path. Cleanup failures are explicit in `ProcessOutcome`.
 
 ### Changed
 

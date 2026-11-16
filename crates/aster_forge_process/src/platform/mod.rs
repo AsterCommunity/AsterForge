@@ -26,14 +26,17 @@ impl ProcessTree {
         backend::spawn(spec)
     }
 
+    /// Request termination; completion is established separately by `wait_tree`.
     pub(crate) fn start_kill(&mut self) -> io::Result<()> {
         backend::start_kill(&mut *self.child)
     }
 
+    /// Observe only the immediate child, without waiting for inherited pipes.
     pub(crate) async fn wait_direct(&mut self) -> io::Result<ExitStatus> {
         backend::wait_direct(&mut *self.child).await
     }
 
+    /// Reap the immediate child as needed and confirm containment is empty.
     pub(crate) async fn wait_tree(&mut self, direct_exited: bool) -> io::Result<()> {
         backend::wait_tree(&mut *self.child, self.identity, direct_exited).await
     }
