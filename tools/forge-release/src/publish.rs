@@ -101,7 +101,9 @@ pub fn publish_release<R: Registry, P: Publisher>(
             .package(&package.name)
             .context("unknown release package")?;
         for dependency in &local.dependencies {
-            if dependency.kind.as_deref() == Some("dev") || !workspace.is_internal(dependency) {
+            if (dependency.kind.as_deref() == Some("dev") && dependency.req == "*")
+                || !workspace.is_internal(dependency)
+            {
                 continue;
             }
             if selected.contains(dependency.name.as_str()) {

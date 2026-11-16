@@ -591,7 +591,7 @@ async fn concurrent_producers_drain_and_stop_account_for_every_accepted_record()
         expected.sort_unstable();
         assert_eq!(durable, expected);
         assert_eq!(durable.len() as u64, one.snapshot.persisted);
-        assert!(writer.unconfirmed().is_empty());
+        assert_eq!(writer.unconfirmed(), [] as [usize; 0]);
     }
 }
 

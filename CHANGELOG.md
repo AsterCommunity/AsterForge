@@ -6,7 +6,8 @@
 
 - **Release automation** — Detect manually versioned, unpublished crates and
   open a release PR containing format-preserving dependency pin updates and an
-  explicit release plan. Validate affected consumers and normalized archives;
+  explicit release plan. Validate committed lock contents, affected consumers,
+  normalized archives and versioned development dependency ordering;
   publish only after both exact-merge CI workflows pass. Interrupted publication
   can resume without re-uploading existing versions. Downstream package versions
   and security release scope remain maintainer-owned.

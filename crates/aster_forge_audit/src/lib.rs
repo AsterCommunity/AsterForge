@@ -397,7 +397,7 @@ mod tests {
             descriptor.kind,
             aster_forge_runtime::RuntimeComponentKind::Product
         );
-        assert!(descriptor.dependencies.is_empty());
+        assert_eq!(descriptor.dependencies, [] as [&str; 0]);
         assert_eq!(
             descriptor
                 .shutdown

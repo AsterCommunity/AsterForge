@@ -26,8 +26,12 @@ enum Command {
     /// Check internal dependency pins and local Cargo.lock entries.
     Check,
     /// Sync all local dependency pins and refresh Cargo.lock; never change package versions.
-    Sync,
-    /// Print validation impact and normal/build dependency-first publication order.
+    Sync {
+        /// Validate committed lock contents, allowing only existing local version identity edits.
+        #[arg(long)]
+        locked: bool,
+    },
+    /// Print validation impact and dependency-first publication order, including versioned dev dependencies.
     Plan {
         #[arg(long, required = true, num_args = 1..)]
         changed: Vec<String>,
@@ -79,7 +83,7 @@ pub fn run() -> Result<()> {
                 workspace.package_count()
             );
         }
-        Command::Sync => {
+        Command::Sync { locked } => {
             let mut manifests = ManifestWorkspace::load(&root)?;
             let names = manifests
                 .workspace
@@ -89,7 +93,11 @@ pub fn run() -> Result<()> {
                 .collect::<Vec<_>>();
             manifests.update_pins(&names)?;
             manifests.write_manifests()?;
-            refresh_lockfile(&root)?;
+            if locked {
+                crate::lockfile::validate_committed_lock(&root, &manifests.workspace)?;
+            } else {
+                refresh_lockfile(&root)?;
+            }
         }
         Command::Plan {
             changed,
@@ -117,7 +125,12 @@ pub fn run() -> Result<()> {
                 packages
             };
             if names.is_empty() {
-                println!("No unpublished crate versions.");
+                match format {
+                    OutputFormat::Text => println!("No unpublished crate versions."),
+                    OutputFormat::Json => {
+                        println!("{}", serde_json::json!({"pin_updates": [], "plan": null}))
+                    }
+                }
                 return Ok(());
             }
             let result = prepare(&mut manifests, &names, &registry, dry_run)?;

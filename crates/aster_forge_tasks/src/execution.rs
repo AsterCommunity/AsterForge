@@ -945,7 +945,7 @@ mod tests {
         .unwrap();
         assert_eq!(result.canceled, 1);
         assert_eq!(result.succeeded, 0);
-        assert!(store.state().processed_order.is_empty());
+        assert_eq!(store.state().processed_order, [] as [i64; 0]);
         assert_eq!(store.state().canceled, 1);
     }
     #[tokio::test]
@@ -983,7 +983,7 @@ mod tests {
         .unwrap();
         assert_eq!(result.canceled, 1);
         assert_eq!(store.state().released, 0);
-        assert!(store.state().processed_order.is_empty());
+        assert_eq!(store.state().processed_order, [] as [i64; 0]);
     }
 
     #[tokio::test]
@@ -1029,7 +1029,7 @@ mod tests {
         .unwrap();
         assert_eq!(result, crate::TaskDispatchOutcome::default());
         assert_eq!(store.state().canceled, 0);
-        assert!(store.state().transitions.is_empty());
+        assert_eq!(store.state().transitions, [] as [&str; 0]);
     }
 
     #[tokio::test]
@@ -1047,7 +1047,7 @@ mod tests {
         .unwrap();
         assert_eq!(result, crate::TaskDispatchOutcome::default());
         assert_eq!(retry.state().retried, 0);
-        assert!(retry.state().transitions.is_empty());
+        assert_eq!(retry.state().transitions, [] as [&str; 0]);
 
         let failed = TestStore::with_results(vec![Err(TestError::Business("never".to_string()))]);
         failed.state().failed_write = OutcomeWrite::Stale;
@@ -1062,7 +1062,7 @@ mod tests {
         .unwrap();
         assert_eq!(result, crate::TaskDispatchOutcome::default());
         assert_eq!(failed.state().failed, 0);
-        assert!(failed.state().transitions.is_empty());
+        assert_eq!(failed.state().transitions, [] as [&str; 0]);
     }
     #[tokio::test(start_paused = true)]
     async fn heartbeats_renew_a_handler_waiting_longer_than_its_original_lease() {
@@ -1140,7 +1140,7 @@ mod tests {
             worker.await.unwrap().unwrap(),
             crate::TaskDispatchOutcome::default()
         );
-        assert!(store.state().transitions.is_empty());
+        assert_eq!(store.state().transitions, [] as [&str; 0]);
         let touches = store.state().heartbeat_touches;
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(store.state().heartbeat_touches, touches);
@@ -1163,7 +1163,7 @@ mod tests {
             .unwrap_err(),
             expected
         );
-        assert!(store.state().transitions.is_empty());
+        assert_eq!(store.state().transitions, [] as [&str; 0]);
         let touches = store.state().heartbeat_touches;
         tokio::time::sleep(Duration::from_mins(2)).await;
         assert_eq!(store.state().heartbeat_touches, touches);

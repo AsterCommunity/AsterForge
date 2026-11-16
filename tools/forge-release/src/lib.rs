@@ -12,6 +12,7 @@ pub mod archive;
 pub mod checks;
 pub mod cli;
 pub mod graph;
+pub mod lockfile;
 pub mod manifest;
 pub mod model;
 pub mod output;

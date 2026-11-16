@@ -31,6 +31,7 @@ fn real_cargo_builds_normalized_batch_archives_against_local_registry_metadata()
         while !stop.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((mut socket, _)) => {
+                    socket.set_nonblocking(false).unwrap();
                     socket
                         .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                         .unwrap();

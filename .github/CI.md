@@ -50,7 +50,7 @@ Validate changes locally:
 
 ```sh
 python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
-actionlint
+actionlint -ignore 'unexpected key "queue" for "concurrency" section'
 git diff --check
 ```
 
@@ -63,7 +63,10 @@ without bumping downstream package versions; affected consumers still undergo
 normal Rust CI.
 
 Cargo validation jobs use the local sync-forge-dependencies composite action
-before dependency resolution. These edits exist only in the runner checkout.
+before dependency resolution. Its sync --locked mode normalizes only existing
+local package version identities, then validates the committed lock using Cargo
+--locked. Missing third-party entries remain failures. These edits exist only
+in the runner checkout.
 The release bot records the corresponding changes in a separate reviewable PR.
 Forge Release Checks validates the tool on Linux/macOS/Windows and verifies a
 changed release plan against normalized package archives. Publication requires
@@ -83,5 +86,10 @@ Local checks:
 cargo test --locked --manifest-path tools/forge-release/Cargo.toml --all-targets
 cargo clippy --locked --manifest-path tools/forge-release/Cargo.toml --all-targets -- -D warnings
 node --test .github/scripts/forge-release.test.cjs
-actionlint
+actionlint -ignore 'unexpected key "queue" for "concurrency" section'
 ```
+
+Push CI concurrency groups include the commit SHA; only superseded PR runs are
+cancelled. Preparation and publication share a queue with queue: max so pending
+releases are retained. GitHub supports this field; actionlint 1.7.12 does not yet
+recognize it, so the local command exempts only that exact schema diagnostic.

@@ -18,8 +18,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: forge-release-checks-${{ github.ref }}
-  cancel-in-progress: true
+  group: forge-release-checks-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   tool:
     strategy:

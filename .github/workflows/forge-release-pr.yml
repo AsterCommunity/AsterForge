@@ -10,6 +10,7 @@ permissions:
 concurrency:
   group: forge-release
   cancel-in-progress: false
+  queue: max
 jobs:
   prepare:
     if: >-

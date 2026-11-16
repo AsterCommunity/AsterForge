@@ -68,9 +68,16 @@ fn normal_path_wins_over_alternative_dev_path() {
     );
 }
 #[test]
-fn dev_cycles_do_not_prevent_cargo_publication() {
+fn versioned_dev_cycles_reject_publication_but_unversioned_dev_cycles_do_not() {
     let workspace = graph(vec![
         package("a", vec![dependency("z", Some("dev"))]),
+        package("z", vec![dependency("a", None)]),
+    ]);
+    assert!(workspace.plan(&["a".into(), "z".into()], &[]).is_err());
+    let mut unversioned = dependency("z", Some("dev"));
+    unversioned.req = "*".into();
+    let workspace = graph(vec![
+        package("a", vec![unversioned]),
         package("z", vec![dependency("a", None)]),
     ]);
     assert!(workspace.plan(&["a".into(), "z".into()], &[]).is_ok());
@@ -125,4 +132,26 @@ fn duplicate_package_names_and_stale_manifest_are_rejected() {
     assert!(validate_manifest(&workspace, &manifest).is_err());
     manifest.format_version = 2;
     assert!(validate_manifest(&workspace, &manifest).is_err());
+}
+
+#[test]
+fn versioned_dev_dependency_precedes_consumer_even_in_dev_only_impact() {
+    let workspace = graph(vec![
+        package("aconsumer", vec![dependency("zsupport", Some("dev"))]),
+        package("zsupport", vec![]),
+    ]);
+    let plan = workspace
+        .plan(
+            &["zsupport".into()],
+            &["aconsumer".into(), "zsupport".into()],
+        )
+        .unwrap();
+    assert_eq!(plan.dev_only_impact[0].name, "aconsumer");
+    assert_eq!(
+        plan.publish_order
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["zsupport", "aconsumer"]
+    );
 }

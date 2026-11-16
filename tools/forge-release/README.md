@@ -9,7 +9,9 @@ versions.
 
 1. Change a crate's package.version in your normal feature/fix PR. This is release
    intent. Do not bump downstream package versions just because they depend on it.
-2. Normal CI syncs local dependency pins and Cargo.lock in its disposable checkout,
+2. Normal CI syncs local dependency pins in its disposable checkout. Its locked
+   mode permits only existing local package version identities to change and
+   rejects missing third-party lock entries rather than regenerating the lock,
    then tests the changed crates and their transitive consumers. Fix incompatible
    APIs in the owning repositories; bump additional packages when you intend to
    publish their changes too.
@@ -22,7 +24,7 @@ versions.
    merged release PR from this repository's automation branch which changes the
    release plan. A label or a plan file alone does not authorize publication.
 5. The publisher checks the entire explicit batch, verifies normalized package
-   archives, then uploads in normal/build dependency order. Cargo performs its
+   archives, then uploads in dependency order, including versioned dev dependencies. Cargo performs its
    usual per-package build verification and registry visibility wait. The tool
    then re-queries the registry without its preflight cache before reporting
    completion. A failed

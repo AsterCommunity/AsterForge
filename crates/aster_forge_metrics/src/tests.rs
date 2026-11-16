@@ -23,7 +23,7 @@ fn batch_validation_and_macro_registration_are_atomic() {
         MetricDescriptor::histogram_with_buckets("test", "duration", "Duration.", &[], &[-1.0]),
     ] {
         assert!(provider.register_batch(&[good, invalid]).is_err());
-        assert!(provider.descriptors().is_empty());
+        assert_eq!(provider.descriptors(), [] as [MetricDescriptor; 0]);
     }
     let handles = provider.register_batch(&[good]).unwrap();
     assert!(ProductGauge::from_handle(handles[0].clone()).is_err());

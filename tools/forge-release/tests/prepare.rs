@@ -206,3 +206,39 @@ fn malformed_manifest_and_missing_lockfile_are_reported() {
     fs::write(root.join("Cargo.toml"), "[broken").unwrap();
     assert!(ManifestWorkspace::load(root).is_err());
 }
+
+#[test]
+fn empty_auto_prepare_json_is_machine_readable_and_writes_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[workspace]\nmembers=[\"private\"]\nresolver=\"3\"\n",
+    )
+    .unwrap();
+    support::write_member(
+        root.path(),
+        "private",
+        "[package]\nname=\"private\"\nversion=\"1.0.0\"\nedition=\"2024\"\npublish=false\n",
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_forge-release"))
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "prepare",
+            "--auto",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(value["plan"].is_null());
+    assert_eq!(value["pin_updates"], serde_json::json!([]));
+    assert!(!root.path().join("release-plan.json").exists());
+    assert!(!root.path().join("Cargo.lock").exists());
+}

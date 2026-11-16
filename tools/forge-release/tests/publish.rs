@@ -183,3 +183,27 @@ fn upload_success_without_registry_visibility_is_not_reported_as_completed() {
     assert!(error.to_string().contains("not available"));
     assert_eq!(publisher.batches.len(), 1);
 }
+
+#[test]
+fn unpublished_versioned_dev_dependency_is_validated_before_upload() {
+    let workspace = graph(vec![
+        package("consumer", vec![dependency("support", Some("dev"))]),
+        package("support", vec![]),
+    ]);
+    let manifest = ReleaseManifest {
+        format_version: 1,
+        plan: workspace.plan(&["consumer".into()], &[]).unwrap(),
+    };
+    let mut publisher = FakePublisher::default();
+    assert!(
+        publish_release(
+            &workspace,
+            &manifest,
+            &FakeRegistry::default(),
+            &mut publisher,
+            true
+        )
+        .is_err()
+    );
+    assert!(publisher.batches.is_empty());
+}

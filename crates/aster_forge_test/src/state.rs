@@ -199,6 +199,7 @@ impl SharedContainerState {
     /// `PostgreSQL` uses this rolling policy because retaining every isolated database until the
     /// next run can exhaust ephemeral CI disks. Live processes and suite-scoped resources remain
     /// registered, so concurrent tests and reusable templates are not disturbed.
+    #[cfg(feature = "postgres")]
     pub(crate) fn prune_stale_during_current_execution(&mut self) -> Vec<String> {
         let execution_id = current_execution_id();
         self.prune_stale_for_execution(std::process::id(), execution_id.as_deref(), false)

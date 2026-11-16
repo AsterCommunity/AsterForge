@@ -107,7 +107,7 @@ impl Workspace {
                 .iter()
                 .filter(|name| {
                     self.packages[*name].dependencies.iter().all(|dependency| {
-                        dependency.kind.as_deref() == Some("dev")
+                        (dependency.kind.as_deref() == Some("dev") && dependency.req == "*")
                             || !self.is_internal(dependency)
                             || !selected.contains(&dependency.name)
                             || !pending.contains(&dependency.name)

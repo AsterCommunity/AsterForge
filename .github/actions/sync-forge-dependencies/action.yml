@@ -5,4 +5,4 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- sync
+      run: cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- sync --locked

@@ -226,7 +226,7 @@ fn assert_wire(case: Case, calls: &Calls, wire: &Wire) {
                     StatusCode::NO_CONTENT
                 }
             );
-            assert!(wire.body.is_empty());
+            assert_eq!(wire.body, [] as [u8; 0]);
             assert!(rejections.is_empty());
             assert!(errors.is_empty());
             if case.origin == Some("https://allowed.test") {
@@ -256,7 +256,7 @@ fn assert_wire(case: Case, calls: &Calls, wire: &Wire) {
             } else {
                 assert!(rejections.is_empty());
                 assert_eq!(wire.status, StatusCode::FORBIDDEN);
-                assert!(wire.body.is_empty());
+                assert_eq!(wire.body, [] as [u8; 0]);
             }
             for name in grant_headers() {
                 assert!(!wire.headers.contains_key(name));
