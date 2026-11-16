@@ -12,6 +12,8 @@
 
 ### Changed
 
+- **Dependency refresh** — Upgrade compatible workspace dependencies and move the JWT backend to `jsonwebtoken` 12.0.0. The auth adapter now handles the upstream fallible signing-key constructors while preserving the existing token contract and backend isolation.
+
 - **CI selection** — Validate changed crates and their transitive workspace dependents on pushes and PRs, with separate reusable workflows for panic, process, authentication, HTTP/crypto, XML fuzzing and native Cloud Files. Keep a stable aggregate check; run workspace coverage and the complete regression suite weekly or manually. Generated service checks use the current Forge checkout.
 
 - **Workspace dependencies** — Centralize member dependency versions while preserving per-consumer features and default-feature boundaries. Upgrade Actix Web to 4.19.0 / Actix HTTP to 3.21.0 and refresh Rust 1.95-compatible locked dependencies.

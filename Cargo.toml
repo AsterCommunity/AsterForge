@@ -116,7 +116,7 @@ http = "1"
 http-body = "1"
 httpdate = "1"
 ipnet = "2.12.2"
-jsonwebtoken = { version = "11", default-features = false }
+jsonwebtoken = { version = "12", default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 md-5 = "0.11"
 moka = { version = "0.12.16", features = ["future"] }
@@ -127,8 +127,8 @@ proc-macro2 = "1"
 quick-xml = { version = "0.42", default-features = false }
 quote = "1"
 openidconnect = { version = "4.1.0", default-features = false }
-rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-redis = { version = "1.8.1", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+rand = { version = "0.10.4", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+redis = { version = "1.8.2", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std"] }

@@ -58,7 +58,7 @@ fn provider_child() {
             jsonwebtoken::encode(
                 &jsonwebtoken::Header::default(),
                 &serde_json::json!({"sub": "upstream-initialized-first"}),
-                &jsonwebtoken::EncodingKey::from_secret(&[42; 32]),
+                &jsonwebtoken::EncodingKey::from_secret(&[42; 32]).unwrap(),
             )
             .unwrap();
             assert_conflict();

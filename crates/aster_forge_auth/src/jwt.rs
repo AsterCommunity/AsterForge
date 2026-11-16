@@ -359,7 +359,7 @@ impl JwtSigner {
             aud: self.policy.audience.clone(),
         };
         let header = Header::new(self.policy.algorithm.upstream());
-        let key = EncodingKey::from_secret(&self.key.0);
+        let key = EncodingKey::from_secret(&self.key.0).map_err(|_| AuthError::Encoding)?;
         let access_token = encode(&header, &claims, &key).map_err(|_| AuthError::Encoding)?;
         claims.token_type = AuthTokenType::Refresh;
         claims.jti = Some(refresh_jti.clone());
@@ -429,10 +429,11 @@ impl JwtVerifier {
         validation.validate_exp = false;
         validation.validate_nbf = false;
         validation.validate_aud = false;
-        let claims =
-            decode::<TokenClaims>(token, &DecodingKey::from_secret(&self.key.0), &validation)
-                .map_err(|_| AuthError::InvalidToken)?
-                .claims;
+        let decoding_key =
+            DecodingKey::from_secret(&self.key.0).map_err(|_| AuthError::InvalidToken)?;
+        let claims = decode::<TokenClaims>(token, &decoding_key, &validation)
+            .map_err(|_| AuthError::InvalidToken)?
+            .claims;
         if claims.iss != self.policy.issuer {
             return Err(AuthError::IssuerMismatch);
         }

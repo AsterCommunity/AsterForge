@@ -51,7 +51,7 @@ fn signed(value: &Value) -> String {
     encode(
         &Header::new(Algorithm::HS256),
         value,
-        &EncodingKey::from_secret(KEY),
+        &EncodingKey::from_secret(KEY).unwrap(),
     )
     .unwrap()
 }
@@ -182,7 +182,7 @@ fn key_and_algorithm_are_checked_even_for_validly_signed_tokens() {
         let token = encode(
             &Header::new(upstream),
             &claims(),
-            &EncodingKey::from_secret(KEY),
+            &EncodingKey::from_secret(KEY).unwrap(),
         )
         .unwrap();
         let validator = JwtVerifier::new(

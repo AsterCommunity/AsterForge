@@ -19,7 +19,7 @@ documentation changes skip Rust compilation.
 
 | Workflow | Scope |
 | --- | --- |
-| `rust-crate.yml` | Reusable per-crate MSRV check, default/doc tests, no-default/each/all-feature tests and Clippy |
+| `rust-crate.yml` | Reusable per-crate MSRV check, default-feature tests and Clippy; feature matrices stay in dedicated contracts or full validation |
 | `rust-panic.yml` | Panic contract on Linux, macOS and Windows |
 | `rust-process.yml` | Process contract on three OSes, plus nonzero-test Miri gate |
 | `rust-auth.yml` | Exclusive JWT backends, platform tests and isolated consumers |
@@ -38,6 +38,13 @@ Workspace coverage/Codecov reports run in full validation, not on every PR.
 Documentation deployment and scheduled dependency auditing retain their own
 workflows. New workspace members automatically join selection and generic crate
 checks; add a dedicated workflow only for additional platform or feature rules.
+
+The current SQLx 0.9.0 release constrains `libsqlite3-sys` to `<0.38.0`, while
+RustSec RUSTSEC-2026-0459 requires `>=0.39.0`. `cargo upgrade --incompatible`
+only upgrades the direct `jsonwebtoken` requirement and cannot resolve that
+transitive SQLite advisory. The exception is recorded in `.cargo/audit.toml`
+with its removal condition; delete it when SQLx or SeaORM ships a compatible
+release and refresh `Cargo.lock`.
 
 Validate changes locally:
 

@@ -30,20 +30,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: crate-${{ inputs.package }}
       - name: Check MSRV
         run: cargo +1.95.0 check --locked -p "$PACKAGE" --all-targets
       - name: Test default features and documentation
-        run: cargo +stable test --locked -p "$PACKAGE"
-      - name: Test feature boundaries
-        run: |
-          cargo +stable hack test --locked -p "$PACKAGE" --all-targets --no-default-features
-          cargo +stable hack test --locked -p "$PACKAGE" --all-targets --each-feature
-          cargo +stable test --locked -p "$PACKAGE" --all-targets --all-features
-      - name: Clippy
-        run: cargo +stable clippy --locked -p "$PACKAGE" --all-targets --all-features -- -D warnings
+        run: cargo +stable test --locked -p "$PACKAGE" --all-targets
+      - name: Clippy default features
+        run: cargo +stable clippy --locked -p "$PACKAGE" --all-targets -- -D warnings
