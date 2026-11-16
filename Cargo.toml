@@ -73,7 +73,7 @@ aster_forge_events = { path = "crates/aster_forge_events", version = "=0.1.0-alp
 aster_forge_http = { path = "crates/aster_forge_http", version = "=0.1.0-alpha.2" }
 aster_forge_mail = { path = "crates/aster_forge_mail", version = "=0.1.0-alpha.1", default-features = false }
 aster_forge_metrics = { path = "crates/aster_forge_metrics", version = "=0.1.0-alpha.2", default-features = false }
-aster_forge_process = { path = "crates/aster_forge_process", version = "=0.1.0-alpha.2" }
+aster_forge_process = { path = "crates/aster_forge_process", version = "=0.1.0-alpha.3" }
 aster_forge_runtime = { path = "crates/aster_forge_runtime", version = "=0.1.0-alpha.1" }
 aster_forge_tasks = { path = "crates/aster_forge_tasks", version = "=0.1.0-alpha.1", default-features = false }
 aster_forge_test = { path = "crates/aster_forge_test", version = "=0.1.0-alpha.2" }

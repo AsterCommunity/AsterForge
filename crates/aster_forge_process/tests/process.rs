@@ -98,6 +98,10 @@ fn spec(mode: &str) -> ProcessSpec {
     spec
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "This binary exercises the complete process lifecycle contract in one isolated fixture run."
+)]
 async fn check() {
     let token = CancellationToken::new();
     let mut echo = spec("echo");
@@ -105,6 +109,11 @@ async fn check() {
     echo.stdout_limit = 1024 * 1024;
     let output = run(echo, &token, |_, _| {}).await;
     assert!(output.status.unwrap().success());
+    assert!(
+        output.cleanup_error.is_none(),
+        "cleanup failed: {:?}",
+        output.cleanup_error
+    );
     assert_eq!(output.stdout.bytes, vec![0xff; 1024 * 1024]);
     assert!(!output.stdout.truncated);
 
@@ -230,6 +239,12 @@ async fn check_stdin_error_survives_timeout() {
 }
 
 async fn check_orphan_exit() {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: subreaper state is process-local to this isolated test binary.
+        let result = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+        assert_eq!(result, 0, "enable subreaper mode for orphan cleanup test");
+    }
     let (ready, received) = tokio::sync::oneshot::channel();
     let state = Mutex::new((Vec::new(), Some(ready)));
     let output = run(

@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- **Process-tree completion** — Wait through the process-group or Job Object wrapper before returning from cancellation, timeout, and wait cleanup paths, so callers can rely on `run` returning only after owned descendants have been reaped.
+- **Process-tree completion** — Separate direct-child exit from tree cleanup, terminate before waiting on cancellation/deadline, and wait until Unix process groups or Windows descendant trees are empty before returning. Cleanup failures are explicit in `ProcessOutcome`.
 
 ### Changed
 
