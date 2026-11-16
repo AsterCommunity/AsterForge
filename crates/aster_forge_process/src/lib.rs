@@ -1,4 +1,10 @@
-//! Bounded child-process ownership, cancellation, timeout and output capture.
+//! Bounded child-process execution with platform-owned cleanup.
+//!
+//! The runner owns shell-free spawning, bounded input/output, cancellation,
+//! deadlines, direct-child status, and process-tree cleanup. Its platform
+//! backends live in private platform modules. Product adapters retain protocol, retries,
+//! logging, and side-effect policy. A Unix child that leaves its process group
+//! is outside the cleanup guarantee.
 
 #![cfg_attr(
     not(test),
@@ -12,16 +18,18 @@
     )
 )]
 
-use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use std::{
     ffi::{OsStr, OsString},
     io,
     path::PathBuf,
-    process::{ExitStatus, Stdio},
+    process::ExitStatus,
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
+
+mod platform;
+use platform::ProcessTree;
 
 /// Which captured pipe produced a byte chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,40 +129,6 @@ pub struct ProcessOutcome {
     pub cleanup_error: Option<io::Error>,
 }
 
-struct ProcessTree {
-    child: Box<dyn ChildWrapper>,
-    process_id: u32,
-}
-
-impl ProcessTree {
-    fn start_kill(&mut self) -> io::Result<()> {
-        self.child.start_kill()
-    }
-
-    async fn wait_direct(&mut self) -> io::Result<ExitStatus> {
-        // SAFETY: this only observes the native child's status; the wrapper
-        // remains responsible for group/job cleanup below.
-        unsafe { self.child.try_inner_child_mut() }
-            .ok_or_else(|| io::Error::other("process wrapper has no native child"))?
-            .wait()
-            .await
-    }
-
-    async fn wait_tree(&mut self) -> io::Result<()> {
-        #[cfg(unix)]
-        wait_for_empty_process_group(self.process_id).await?;
-        #[cfg(windows)]
-        wait_for_empty_process_tree(self.process_id).await?;
-        Ok(())
-    }
-}
-
-impl Drop for ProcessTree {
-    fn drop(&mut self) {
-        let _ = self.child.start_kill();
-    }
-}
-
 /// Run a child with owned process-tree cleanup, bounded output and cancellation.
 ///
 /// `on_chunk` receives retained bytes only, within the configured output
@@ -180,7 +154,7 @@ pub async fn run(
         };
     }
 
-    let child = match spawn(&spec) {
+    let mut child = match ProcessTree::spawn(&spec) {
         Ok(child) => child,
         Err(error) => {
             return ProcessOutcome {
@@ -193,8 +167,6 @@ pub async fn run(
             };
         }
     };
-    let process_id = child.id().unwrap_or_default();
-    let mut child = ProcessTree { child, process_id };
     let stdout = child.child.stdout().take();
     let stderr = child.child.stderr().take();
     let stdin = child.child.stdin().take();
@@ -204,7 +176,11 @@ pub async fn run(
     let mut stdin_error = None;
     let completion = tokio::time::timeout(spec.timeout, async {
         let (status, (), (), ()) = tokio::join!(
-            async { child.wait_direct().await },
+            async {
+                let status = child.wait_direct().await;
+                let _ = child.start_kill();
+                status
+            },
             async {
                 let result = write_stdin(stdin, write_input).await;
                 stdin_error = result.as_ref().err().map(io::Error::kind);
@@ -236,18 +212,9 @@ pub async fn run(
         },
     };
 
-    let kill_error = child.start_kill().err().filter(|error| {
-        #[cfg(unix)]
-        {
-            error.raw_os_error() != Some(libc::ESRCH)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = error;
-            true
-        }
-    });
-    let cleanup_error = child.wait_tree().await.err().or(kill_error);
+    let direct_exited = matches!(observed, Ok(_) | Err(ProcessFailure::Wait(_)));
+    let kill_error = child.start_kill().err();
+    let cleanup_error = child.wait_tree(direct_exited).await.err().or(kill_error);
     ProcessOutcome {
         status: observed,
         started: true,
@@ -256,114 +223,6 @@ pub async fn run(
         stdin_error,
         cleanup_error,
     }
-}
-
-fn spawn(spec: &ProcessSpec) -> io::Result<Box<dyn ChildWrapper>> {
-    let mut wrapped = CommandWrap::with_new(&spec.program, |command| {
-        command
-            .args(&spec.args)
-            .stdin(if spec.stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if spec.clear_environment {
-            command.env_clear();
-        }
-        command.envs(spec.environment.iter().map(|(key, value)| (key, value)));
-    });
-    wrapped.wrap(KillOnDrop);
-    #[cfg(unix)]
-    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
-    #[cfg(windows)]
-    wrapped.wrap(process_wrap::tokio::JobObject);
-
-    wrapped.spawn()
-}
-
-#[cfg(unix)]
-async fn wait_for_empty_process_group(process_id: u32) -> io::Result<()> {
-    loop {
-        // The process group is created with the direct child's PID as its PGID.
-        // A zero signal observes group membership without introducing another
-        // kill race; the group is empty only once the kernel reports ESRCH.
-        let group_id = i32::try_from(process_id).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "process ID exceeds Unix PID range",
-            )
-        })?;
-        // SAFETY: signal 0 only probes the kernel-owned process group and sends no signal.
-        let result = unsafe { libc::kill(-group_id, 0) };
-        if result == -1 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                return Ok(());
-            }
-            return Err(error);
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-#[cfg(windows)]
-async fn wait_for_empty_process_tree(process_id: u32) -> io::Result<()> {
-    loop {
-        if !windows_process_tree_alive(process_id)? {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-#[cfg(windows)]
-fn windows_process_tree_alive(root: u32) -> io::Result<bool> {
-    use windows::Win32::{
-        Foundation::CloseHandle,
-        System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-            TH32CS_SNAPPROCESS,
-        },
-    };
-
-    let snapshot =
-        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.map_err(io::Error::other)?;
-    let mut entries = Vec::new();
-    let mut entry = PROCESSENTRY32W {
-        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-        ..Default::default()
-    };
-    let first = unsafe { Process32FirstW(snapshot, &mut entry) };
-    if first.is_err() {
-        unsafe { CloseHandle(snapshot) }.ok();
-        return Err(io::Error::last_os_error());
-    }
-    loop {
-        entries.push((entry.th32ProcessID, entry.th32ParentProcessID));
-        if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
-            break;
-        }
-    }
-    unsafe { CloseHandle(snapshot) }.ok();
-    Ok(entries.iter().any(|(pid, _)| {
-        let mut current = *pid;
-        for _ in 0..entries.len() {
-            if current == root {
-                return true;
-            }
-            let Some((_, parent)) = entries.iter().find(|(candidate, _)| *candidate == current)
-            else {
-                return false;
-            };
-            if *parent == current {
-                return false;
-            }
-            current = *parent;
-        }
-        false
-    }))
 }
 
 async fn write_stdin(

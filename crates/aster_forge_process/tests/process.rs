@@ -58,12 +58,31 @@ fn child(mode: &str) {
             std::io::stdout().flush().unwrap();
             std::thread::sleep(Duration::from_secs(30));
         }
+        "tree-pipes" => {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--fixture", "sleep"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap();
+            println!("{}", child.id());
+            std::io::stdout().flush().unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
         "orphan" => {
             let child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--fixture", "sleep"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            println!("{}", child.id());
+            std::io::stdout().flush().unwrap();
+        }
+        "orphan-pipes" => {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--fixture", "sleep"])
+                .stdin(Stdio::null())
                 .spawn()
                 .unwrap();
             println!("{}", child.id());
@@ -240,11 +259,8 @@ async fn check_stdin_error_survives_timeout() {
 
 async fn check_orphan_exit() {
     #[cfg(target_os = "linux")]
-    {
-        // SAFETY: subreaper state is process-local to this isolated test binary.
-        let result = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
-        assert_eq!(result, 0, "enable subreaper mode for orphan cleanup test");
-    }
+    let _subreaper = ScopedSubreaper::enable().expect("enable and save subreaper state");
+    check_successful_parent_kills_pipe_holding_descendant().await;
     let (ready, received) = tokio::sync::oneshot::channel();
     let state = Mutex::new((Vec::new(), Some(ready)));
     let output = run(
@@ -265,6 +281,57 @@ async fn check_orphan_exit() {
         "descendant process survived run completion"
     );
     wait_until_dead(pid).await;
+}
+
+async fn check_successful_parent_kills_pipe_holding_descendant() {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let captured = stdout.clone();
+    let outcome = run(
+        spec("orphan-pipes"),
+        &CancellationToken::new(),
+        |stream, bytes| {
+            if stream == ProcessStream::Stdout {
+                captured.lock().unwrap().extend_from_slice(bytes);
+            }
+        },
+    )
+    .await;
+    assert!(outcome.status.unwrap().success());
+    assert!(outcome.cleanup_error.is_none());
+    let stdout = stdout.lock().unwrap();
+    let pid = std::str::from_utf8(&stdout)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(!process_alive(pid), "descendant holding pipes survived run");
+}
+
+#[cfg(target_os = "linux")]
+struct ScopedSubreaper(i32);
+
+#[cfg(target_os = "linux")]
+impl ScopedSubreaper {
+    fn enable() -> std::io::Result<Self> {
+        let mut previous = 0;
+        // SAFETY: prctl writes one integer to this valid pointer synchronously.
+        if unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut previous, 0, 0, 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: PR_SET_CHILD_SUBREAPER changes only this test process.
+        if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self(previous))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ScopedSubreaper {
+    fn drop(&mut self) {
+        // SAFETY: restore the process-local state captured by `enable`.
+        let _ = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, self.0, 0, 0, 0) };
+    }
 }
 
 async fn check_dropped_future() {
