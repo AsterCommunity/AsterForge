@@ -227,7 +227,7 @@ jobs:
       - name: Run Miri library checks
         # Native process fixtures and platform FFI stay in process-contract;
         # Miri covers the Rust library/test compilation path it supports.
-        run: cargo miri test --locked -p aster_forge_process --lib
+        run: cargo +nightly miri test --locked -p aster_forge_process --lib
 
   auth-backends:
     name: Auth (${{ matrix.os }}, ${{ matrix.backend }}, Rust 1.95.0)
