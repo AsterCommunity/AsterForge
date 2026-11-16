@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_process"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,6 +14,18 @@ publish = true
 process-wrap.workspace = true
 tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
 tokio-util.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 libc.workspace = true

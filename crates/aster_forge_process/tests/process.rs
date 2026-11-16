@@ -58,6 +58,16 @@ fn child(mode: &str) {
             std::io::stdout().flush().unwrap();
             std::thread::sleep(Duration::from_secs(30));
         }
+        "tree-pipes" => {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--fixture", "sleep"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap();
+            println!("{}", child.id());
+            std::io::stdout().flush().unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
         "orphan" => {
             let child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--fixture", "sleep"])
@@ -68,6 +78,25 @@ fn child(mode: &str) {
                 .unwrap();
             println!("{}", child.id());
             std::io::stdout().flush().unwrap();
+        }
+        "orphan-pipes" => {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--fixture", "sleep"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap();
+            println!("{}", child.id());
+            std::io::stdout().flush().unwrap();
+        }
+        "orphan-chain" => {
+            // The middle process prints the leaf PID and exits before this
+            // root does. The surviving leaf still owns both output pipes.
+            let mut middle = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--fixture", "orphan-pipes"])
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap();
+            assert!(middle.wait().unwrap().success());
         }
         "streams" => {
             std::io::stdout()
@@ -98,6 +127,10 @@ fn spec(mode: &str) -> ProcessSpec {
     spec
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "This binary exercises the complete process lifecycle contract in one isolated fixture run."
+)]
 async fn check() {
     let token = CancellationToken::new();
     let mut echo = spec("echo");
@@ -105,6 +138,11 @@ async fn check() {
     echo.stdout_limit = 1024 * 1024;
     let output = run(echo, &token, |_, _| {}).await;
     assert!(output.status.unwrap().success());
+    assert!(
+        output.cleanup_error.is_none(),
+        "cleanup failed: {:?}",
+        output.cleanup_error
+    );
     assert_eq!(output.stdout.bytes, vec![0xff; 1024 * 1024]);
     assert!(!output.stdout.truncated);
 
@@ -230,6 +268,11 @@ async fn check_stdin_error_survives_timeout() {
 }
 
 async fn check_orphan_exit() {
+    #[cfg(target_os = "linux")]
+    let _subreaper = ScopedSubreaper::enable().expect("enable and save subreaper state");
+    for mode in ["orphan-pipes", "orphan-chain"] {
+        check_successful_parent_kills_pipe_holding_descendant(mode).await;
+    }
     let (ready, received) = tokio::sync::oneshot::channel();
     let state = Mutex::new((Vec::new(), Some(ready)));
     let output = run(
@@ -244,7 +287,59 @@ async fn check_orphan_exit() {
     )
     .await;
     assert!(output.status.unwrap().success());
-    wait_until_dead(received.await.unwrap()).await;
+    let pid = received.await.unwrap();
+    assert!(
+        !process_alive(pid),
+        "descendant process survived run completion"
+    );
+    wait_until_dead(pid).await;
+}
+
+async fn check_successful_parent_kills_pipe_holding_descendant(mode: &str) {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let captured = stdout.clone();
+    let outcome = run(spec(mode), &CancellationToken::new(), |stream, bytes| {
+        if stream == ProcessStream::Stdout {
+            captured.lock().unwrap().extend_from_slice(bytes);
+        }
+    })
+    .await;
+    assert!(outcome.status.unwrap().success());
+    assert!(outcome.cleanup_error.is_none());
+    let stdout = stdout.lock().unwrap();
+    let pid = std::str::from_utf8(&stdout)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(!process_alive(pid), "descendant holding pipes survived run");
+}
+
+#[cfg(target_os = "linux")]
+struct ScopedSubreaper(i32);
+
+#[cfg(target_os = "linux")]
+impl ScopedSubreaper {
+    fn enable() -> std::io::Result<Self> {
+        let mut previous = 0;
+        // SAFETY: prctl writes one integer to this valid pointer synchronously.
+        if unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut previous, 0, 0, 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: PR_SET_CHILD_SUBREAPER changes only this test process.
+        if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self(previous))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ScopedSubreaper {
+    fn drop(&mut self) {
+        // SAFETY: restore the process-local state captured by `enable`.
+        let _ = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, self.0, 0, 0, 0) };
+    }
 }
 
 async fn check_dropped_future() {
@@ -304,6 +399,10 @@ async fn check_tree_shutdown(timeout: bool) {
             || matches!(output.status, Err(ProcessFailure::TimedOut) if timeout)
     );
     assert!(output.started);
+    assert!(
+        !process_alive(pid),
+        "descendant process survived run completion"
+    );
     wait_until_dead(pid).await;
 }
 

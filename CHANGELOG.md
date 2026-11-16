@@ -6,6 +6,10 @@
 
 - **Bounded process execution** — Add `aster_forge_process` for direct child execution with bounded pipe capture, optional stdin/environment control, cancellation and deadlines, and owned Unix process-group / Windows Job Object cleanup. Product adapters retain retry, error-mapping, logging, and side-effect policy.
 
+### Fixed
+
+- **Process-tree completion** — Separate direct-child exit from tree cleanup, terminate descendants before waiting on inherited output pipes, and reap children before confirming Unix process groups or Windows Jobs are empty. Windows completion uses the Job's active-process count and closes setup handles on every exit path. Cleanup failures are explicit in `ProcessOutcome`.
+
 ### Changed
 
 - **Workspace dependencies** — Centralize member dependency versions while preserving per-consumer features and default-feature boundaries. Upgrade Actix Web to 4.19.0 / Actix HTTP to 3.21.0 and refresh Rust 1.95-compatible locked dependencies.

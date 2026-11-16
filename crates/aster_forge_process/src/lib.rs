@@ -1,4 +1,10 @@
-//! Bounded child-process ownership, cancellation, timeout and output capture.
+//! Bounded child-process execution with platform-owned cleanup.
+//!
+//! The runner owns shell-free spawning, bounded input/output, cancellation,
+//! deadlines, direct-child status, and process-tree cleanup. Its platform
+//! backends live in private platform modules. Product adapters retain protocol, retries,
+//! logging, and side-effect policy. A Unix child that leaves its process group
+//! is outside the cleanup guarantee.
 
 #![cfg_attr(
     not(test),
@@ -12,16 +18,18 @@
     )
 )]
 
-use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use std::{
     ffi::{OsStr, OsString},
     io,
     path::PathBuf,
-    process::{ExitStatus, Stdio},
+    process::ExitStatus,
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
+
+mod platform;
+use platform::ProcessTree;
 
 /// Which captured pipe produced a byte chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +112,7 @@ pub enum ProcessFailure {
     Wait(io::Error),
 }
 
-/// Result after the immediate child exits and cleanup is attempted for owned descendants.
+/// Result after the immediate child exits and owned process-tree cleanup completes.
 #[derive(Debug)]
 pub struct ProcessOutcome {
     /// Observed process exit status, or the reason no status was observed.
@@ -117,14 +125,8 @@ pub struct ProcessOutcome {
     pub stderr: CapturedOutput,
     /// Failure to write/close the input pipe; input bytes are never included.
     pub stdin_error: Option<io::ErrorKind>,
-}
-
-struct ProcessTree(Box<dyn ChildWrapper>);
-
-impl Drop for ProcessTree {
-    fn drop(&mut self) {
-        let _ = self.0.start_kill();
-    }
+    /// Error while waiting for the owned process group/job to finish cleanup.
+    pub cleanup_error: Option<io::Error>,
 }
 
 /// Run a child with owned process-tree cleanup, bounded output and cancellation.
@@ -148,10 +150,11 @@ pub async fn run(
             stdout: CapturedOutput::default(),
             stderr: CapturedOutput::default(),
             stdin_error: None,
+            cleanup_error: None,
         };
     }
 
-    let child = match spawn(&spec) {
+    let mut child = match ProcessTree::spawn(&spec) {
         Ok(child) => child,
         Err(error) => {
             return ProcessOutcome {
@@ -160,13 +163,13 @@ pub async fn run(
                 stdout: CapturedOutput::default(),
                 stderr: CapturedOutput::default(),
                 stdin_error: None,
+                cleanup_error: None,
             };
         }
     };
-    let mut child = ProcessTree(child);
-    let stdout = child.0.stdout().take();
-    let stderr = child.0.stderr().take();
-    let stdin = child.0.stdin().take();
+    let stdout = child.child.stdout().take();
+    let stderr = child.child.stderr().take();
+    let stdin = child.child.stdin().take();
     let mut out = CapturedOutput::default();
     let mut err = CapturedOutput::default();
     let write_input = spec.stdin;
@@ -174,8 +177,8 @@ pub async fn run(
     let completion = tokio::time::timeout(spec.timeout, async {
         let (status, (), (), ()) = tokio::join!(
             async {
-                let status = child.0.inner_mut().wait().await;
-                let _ = child.0.start_kill();
+                let status = child.wait_direct().await;
+                let _ = child.start_kill();
                 status
             },
             async {
@@ -209,42 +212,17 @@ pub async fn run(
         },
     };
 
-    let _ = child.0.start_kill();
-    if observed.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.0.wait()).await;
-    }
+    let direct_exited = matches!(observed, Ok(_) | Err(ProcessFailure::Wait(_)));
+    let kill_error = child.start_kill().err();
+    let cleanup_error = child.wait_tree(direct_exited).await.err().or(kill_error);
     ProcessOutcome {
         status: observed,
         started: true,
         stdout: out,
         stderr: err,
         stdin_error,
+        cleanup_error,
     }
-}
-
-fn spawn(spec: &ProcessSpec) -> io::Result<Box<dyn ChildWrapper>> {
-    let mut wrapped = CommandWrap::with_new(&spec.program, |command| {
-        command
-            .args(&spec.args)
-            .stdin(if spec.stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if spec.clear_environment {
-            command.env_clear();
-        }
-        command.envs(spec.environment.iter().map(|(key, value)| (key, value)));
-    });
-    wrapped.wrap(KillOnDrop);
-    #[cfg(unix)]
-    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
-    #[cfg(windows)]
-    wrapped.wrap(process_wrap::tokio::JobObject);
-
-    wrapped.spawn()
 }
 
 async fn write_stdin(
