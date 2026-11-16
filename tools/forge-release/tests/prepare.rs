@@ -242,3 +242,24 @@ fn empty_auto_prepare_json_is_machine_readable_and_writes_nothing() {
     assert!(!root.path().join("release-plan.json").exists());
     assert!(!root.path().join("Cargo.lock").exists());
 }
+
+#[test]
+fn cargo_manifest_and_dependency_paths_have_the_same_canonical_identity() {
+    let dir = fixture();
+    let workspace = load_workspace(dir.path()).unwrap();
+    let target = workspace
+        .package("zbase")
+        .unwrap()
+        .manifest_path
+        .parent()
+        .unwrap();
+    let consumer = workspace.package("aconsumer").unwrap();
+    for dependency in &consumer.dependencies {
+        if dependency.name == "zbase" {
+            assert_eq!(dependency.path.as_deref(), Some(target));
+            assert!(workspace.is_internal(dependency));
+        }
+    }
+    let plan = workspace.plan(&["zbase".into()], &[]).unwrap();
+    assert_eq!(plan.runtime_or_build_impact.len(), 2);
+}

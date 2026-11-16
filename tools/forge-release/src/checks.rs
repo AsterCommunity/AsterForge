@@ -57,8 +57,23 @@ pub fn load_workspace(root: &Path) -> Result<Workspace> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let metadata: Metadata =
+    let mut metadata: Metadata =
         serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata output")?;
+    // Cargo may mix verbatim/short Windows paths or symlink aliases between manifests
+    // and dependency directories. Compare filesystem identities in one canonical form.
+    for package in &mut metadata.packages {
+        package.manifest_path = package
+            .manifest_path
+            .canonicalize()
+            .with_context(|| format!("failed to resolve {}", package.manifest_path.display()))?;
+        for dependency in &mut package.dependencies {
+            if let Some(path) = &mut dependency.path {
+                *path = path
+                    .canonicalize()
+                    .with_context(|| format!("failed to resolve dependency {}", dependency.name))?;
+            }
+        }
+    }
     Workspace::from_metadata(metadata).context("failed to build workspace dependency graph")
 }
 
