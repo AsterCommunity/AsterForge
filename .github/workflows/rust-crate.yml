@@ -33,6 +33,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: crate-${{ inputs.package }}
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Check MSRV
         run: cargo +1.95.0 check --locked -p "$PACKAGE" --all-targets
       - name: Test default features and documentation

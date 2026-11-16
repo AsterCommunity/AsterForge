@@ -11,6 +11,9 @@ on:
       - 'rust-toolchain*'
       - '.cargo/**'
       - 'scripts/**'
+      - 'tools/forge-release/**'
+      - 'release-plan.json'
+      - '.github/actions/sync-forge-dependencies/**'
       - '.github/workflows/**'
   pull_request:
     branches: [master, develop]
@@ -22,6 +25,9 @@ on:
       - 'rust-toolchain*'
       - '.cargo/**'
       - 'scripts/**'
+      - 'tools/forge-release/**'
+      - 'release-plan.json'
+      - '.github/actions/sync-forge-dependencies/**'
       - '.github/workflows/**'
 
 concurrency:
@@ -56,6 +62,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test CI change selection
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
       - name: Test workspace dependency selection

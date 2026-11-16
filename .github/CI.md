@@ -53,3 +53,35 @@ python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
 actionlint
 git diff --check
 ```
+
+## Release automation
+
+The standalone tool and workflow contract is documented in
+[tools/forge-release/README.md](../tools/forge-release/README.md). Each manually
+changed, unpublished member version is release intent. Dependency pins sync
+without bumping downstream package versions; affected consumers still undergo
+normal Rust CI.
+
+Cargo validation jobs use the local sync-forge-dependencies composite action
+before dependency resolution. These edits exist only in the runner checkout.
+The release bot records the corresponding changes in a separate reviewable PR.
+Forge Release Checks validates the tool on Linux/macOS/Windows and verifies a
+changed release plan against normalized package archives. Publication requires
+both Rust CI and Forge Release Checks to succeed for the exact merge SHA, plus
+a same-repository, merged automation/forge-release PR that changes the plan.
+
+One-time setup: configure ASTER_PACKAGE_PUBLISHER_APP_ID (Variable or Secret),
+ASTER_PACKAGE_PUBLISHER_PRIVATE_KEY (Secret), and each
+crate's trusted publisher for forge-release.yml with environment crates-io.
+The App needs repository contents and pull requests write permissions; its
+commits trigger ordinary CI. No long-lived crates.io token is required.
+Security releases remain explicitly selected through maintainer version bumps.
+
+Local checks:
+
+```sh
+cargo test --locked --manifest-path tools/forge-release/Cargo.toml --all-targets
+cargo clippy --locked --manifest-path tools/forge-release/Cargo.toml --all-targets -- -D warnings
+node --test .github/scripts/forge-release.test.cjs
+actionlint
+```

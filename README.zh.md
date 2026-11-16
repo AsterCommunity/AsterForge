@@ -120,6 +120,7 @@ crates/                 Rust workspace crates
 docs/                   VitePress 文档站点与 crate 参考页
 developer-docs/         开发者文档的兼容性入口
 scripts/                仓库维护脚本
+tools/                  独立仓库工具，包括 Forge 发布自动化
 templates/              新 Aster 服务的 cargo-generate 模板
 ```
 

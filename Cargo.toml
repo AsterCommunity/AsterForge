@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["tools/forge-release"]
 members = [
     "crates/aster_forge_macros",
     "crates/aster_forge_middleware",

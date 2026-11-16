@@ -1,0 +1,82 @@
+name: Prepare Forge release PR
+on:
+  workflow_run:
+    workflows: [Rust CI]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: forge-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Avoid recursively preparing a merged release PR
+        id: source
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {execSync} = require('node:child_process');
+            const sha = execSync('git rev-parse HEAD', {encoding: 'utf8'}).trim();
+            const release = require('./.github/scripts/forge-release.cjs');
+            const pr = await release.releasePr(github, context.repo, sha);
+            core.setOutput('prepare', pr ? 'false' : 'true');
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.source.outputs.prepare == 'true'
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        if: steps.source.outputs.prepare == 'true'
+        with:
+          workspaces: tools/forge-release
+      - name: Discover manually versioned unpublished crates
+        if: steps.source.outputs.prepare == 'true'
+        id: plan
+        run: |
+          cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- prepare --auto
+          if git diff --quiet -- release-plan.json && ! git ls-files --others --exclude-standard | grep -qx release-plan.json; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Require the release bot App
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          APP_ID: ${{ vars.ASTER_PACKAGE_PUBLISHER_APP_ID || secrets.ASTER_PACKAGE_PUBLISHER_APP_ID }}
+          HAS_PRIVATE_KEY: ${{ secrets.ASTER_PACKAGE_PUBLISHER_PRIVATE_KEY != '' }}
+        run: |
+          test -n "$APP_ID" && test "$HAS_PRIVATE_KEY" = true || { echo 'Grant this repository access to ASTER_PACKAGE_PUBLISHER_APP_ID (Variable or Secret) and ASTER_PACKAGE_PUBLISHER_PRIVATE_KEY (Secret).'; exit 1; }
+      - uses: actions/create-github-app-token@v3
+        if: steps.plan.outputs.changed == 'true'
+        id: app
+        with:
+          app-id: ${{ vars.ASTER_PACKAGE_PUBLISHER_APP_ID || secrets.ASTER_PACKAGE_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.ASTER_PACKAGE_PUBLISHER_PRIVATE_KEY }}
+      - uses: peter-evans/create-pull-request@v8
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: automation/forge-release
+          base: master
+          title: 'chore(release): publish versioned Forge crates'
+          commit-message: 'chore(release): sync dependencies and record explicit release batch'
+          body-path: tools/forge-release/.generated/release-pr.md
+          add-paths: |
+            Cargo.toml
+            Cargo.lock
+            crates/**/Cargo.toml
+            release-plan.json

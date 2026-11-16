@@ -1,0 +1,64 @@
+name: Publish Forge release plan
+on:
+  workflow_run:
+    workflows: [Rust CI, Forge Release Checks]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full merge SHA of a reviewed release PR to resume
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: forge-release
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        id: release
+        env:
+          RELEASE_REVISION: ${{ inputs.revision }}
+        with:
+          script: |
+            await require('./.github/scripts/forge-release.cjs').gate({github, context, core});
+  publish:
+    needs: gate
+    if: needs.gate.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/forge-release
+      - name: Verify the reviewed plan and dry-run its entire Cargo batch
+        run: |
+          cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- validate
+          cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- publish --dry-run
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish the exact reviewed batch
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- publish

@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Release automation** — Detect manually versioned, unpublished crates and
+  open a release PR containing format-preserving dependency pin updates and an
+  explicit release plan. Validate affected consumers and normalized archives;
+  publish only after both exact-merge CI workflows pass. Interrupted publication
+  can resume without re-uploading existing versions. Downstream package versions
+  and security release scope remain maintainer-owned.
+
 - **Bounded process execution** — Add `aster_forge_process` for direct child execution with bounded pipe capture, optional stdin/environment control, cancellation and deadlines, and owned Unix process-group / Windows Job Object cleanup. Product adapters retain retry, error-mapping, logging, and side-effect policy.
 
 ### Fixed
@@ -69,5 +76,5 @@
 - **External auth provider destinations (breaking)** — Dedicated Google, GitHub and QQ drivers use official destinations unconditionally. Use generic OIDC/OAuth2 for custom issuers or compatible services. Provider-option diagnostics omit rejected documents; mail diagnostic fields escape control characters. Scope/domain deduplication, mail fallback parsing and saturated cache reservations avoid repeated full scans while preserving order, fallback and TTL semantics.
 - **HTTP and local state boundaries** — Both HTTP transports combine repeated forwarding fields before trusted-proxy resolution; an active CORS policy disabling credentials removes inherited credential headers. Unix test state uses verified per-user directories, non-truncating no-follow locks and private atomic files. The Linux memory example uses the same state-file mechanics, replaces restored ledgers with private files before mounting, and bounds documents to 16 MiB with 1 MiB upload chunks; it remains a synthetic adapter.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/v0.1.0-alpha.1...HEAD
-[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterForge/releases/tag/v0.1.0-alpha.1
+[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/0030ea4083e8739b176ec0cc0edf2ee1fae5f920...HEAD
+[0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterForge/commit/0030ea4083e8739b176ec0cc0edf2ee1fae5f920

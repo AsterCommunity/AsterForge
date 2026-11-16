@@ -24,6 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: panic-contract
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test real hook and platform file contract
         run: cargo test --locked -p aster_forge_panic --all-targets
       - name: Lint platform-specific panic paths

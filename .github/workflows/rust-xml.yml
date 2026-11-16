@@ -19,5 +19,7 @@ jobs:
         with:
           workspaces: crates/aster_forge_xml/fuzz
           shared-key: xml-fuzz
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Build XML fuzz harness
         run: cargo +nightly build --manifest-path crates/aster_forge_xml/fuzz/Cargo.toml --bins
