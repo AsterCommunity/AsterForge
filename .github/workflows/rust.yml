@@ -2,287 +2,172 @@ name: Rust CI
 
 on:
   push:
-    paths:
-      - '**/*.rs'
-      - 'Cargo.toml'
-      - 'crates/**/Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/aster_forge_xml/fuzz/Cargo.toml'
-      - 'templates/**'
-      - 'scripts/check-http-construction.py'
-      - 'scripts/coverage-summary.mjs'
-      - 'scripts/check-lint-attributes.pl'
-      - 'scripts/test-auth-features.sh'
-      - 'scripts/test-http-crypto-features.py'
-      - 'scripts/fixtures/*-feature-consumer.rs'
-      - '.github/workflows/rust.yml'
     branches: [master]
-  pull_request:
     paths:
-      - '**/*.rs'
-      - 'Cargo.toml'
-      - 'crates/**/Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/aster_forge_xml/fuzz/Cargo.toml'
+      - 'crates/**'
       - 'templates/**'
-      - 'scripts/check-http-construction.py'
-      - 'scripts/coverage-summary.mjs'
-      - 'scripts/check-lint-attributes.pl'
-      - 'scripts/test-auth-features.sh'
-      - 'scripts/test-http-crypto-features.py'
-      - 'scripts/fixtures/*-feature-consumer.rs'
-      - '.github/workflows/rust.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain*'
+      - '.cargo/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  pull_request:
     branches: [master, develop]
+    paths:
+      - 'crates/**'
+      - 'templates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain*'
+      - '.cargo/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: rust-ci-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  msrv:
-    name: MSRV (1.95.0)
+  changes:
+    name: Detect affected crates
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      generic_matrix: ${{ steps.classify.outputs.generic_matrix }}
+      has_generic: ${{ steps.classify.outputs.has_generic }}
+      has_panic: ${{ steps.classify.outputs.has_panic }}
+      has_process: ${{ steps.classify.outputs.has_process }}
+      has_auth: ${{ steps.classify.outputs.has_auth }}
+      has_cloud_files: ${{ steps.classify.outputs.has_cloud_files }}
+      cloud_packages: ${{ steps.classify.outputs.cloud_packages }}
+      has_http_crypto: ${{ steps.classify.outputs.has_http_crypto }}
+      has_rust: ${{ steps.classify.outputs.has_rust }}
+      has_xml: ${{ steps.classify.outputs.has_xml }}
+      has_template: ${{ steps.classify.outputs.has_template }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test CI change selection
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Test workspace dependency selection
+        run: python3 scripts/ci/changed-crates.py --self-test
+      - name: Resolve PR merge base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "PR_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")" >> "$GITHUB_ENV"
+      - name: Classify changed crates and reverse dependencies
+        id: classify
+        env:
+          BASE_SHA: ${{ env.PR_BASE || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci/changed-crates.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Format and workspace policies
+    needs: changes
+    if: needs.changes.outputs.has_rust == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
-      - name: Setup MSRV toolchain
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
-
-      - name: Cache MSRV build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: msrv-1.95.0-v1
-
-      - name: Outbound HTTP construction inventory
-        run: python3 scripts/check-http-construction.py --self-test
-
-      - name: Check workspace on MSRV
-        run: cargo check --locked --workspace --all-targets
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build
-        run: cargo build --verbose
-
-      - name: Install nightly Rust toolchain for fuzzing
-        run: rustup toolchain install nightly --profile minimal
-
-      - name: Build XML fuzz harness
-        run: cargo +nightly build --manifest-path crates/aster_forge_xml/fuzz/Cargo.toml --bins
-
-      - name: Format check
+          components: rustfmt
+      - name: Format
         run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --exclude aster_forge_auth --all-targets --all-features -- -D warnings
-
+      - name: HTTP construction policy
+        run: python3 scripts/check-http-construction.py --self-test
       - name: Lint attribute policy
         run: perl scripts/check-lint-attributes.pl
 
-      - name: Prepare coverage output directory
-        run: mkdir -p coverage/rust
-
-      - name: Setup bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Run tests with coverage
-        # Exporter/profile tests are feature-gated; default features only cover Noop.
-        # Enable metrics capabilities explicitly without combining exclusive auth backends.
-        run: cargo llvm-cov --workspace --features aster_forge_metrics/backend-prometheus,aster_forge_metrics/otlp,aster_forge_metrics/runtime-health,aster_forge_metrics/allocator-metrics,aster_forge_middleware/axum,aster_forge_middleware/metrics,aster_forge_crypto/password,aster_forge_crypto/hmac-sha256,aster_forge_crypto/secret-envelope --no-fail-fast --verbose --lcov --output-path coverage/rust/lcov.info
-
-      - name: Generate HTML coverage report
-        if: success()
-        run: cargo llvm-cov report --html --output-dir coverage/rust/html
-
-      - name: Publish coverage summary
-        if: always() && hashFiles('coverage/rust/lcov.info') != ''
-        run: bun scripts/coverage-summary.mjs "Rust" coverage/rust/lcov.info
-
-      - name: Upload coverage reports to Codecov
-        if: always() && hashFiles('coverage/rust/lcov.info') != ''
-        uses: codecov/codecov-action@v7
-        with:
-          files: coverage/rust/lcov.info
-          flags: rust
-          name: rust-backend
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
-          verbose: true
-
-      - name: Upload coverage artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: rust-coverage
-          if-no-files-found: ignore
-          path: coverage/rust
-
-  feature-matrix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Test workspace feature matrix
-        run: |
-          # Auth requires exactly one backend; its valid and invalid combinations run below.
-          cargo hack test --workspace --exclude aster_forge_auth --all-targets --no-default-features --no-fail-fast
-          cargo hack test --workspace --exclude aster_forge_auth --all-targets --each-feature --no-fail-fast
-          cargo test --workspace --exclude aster_forge_auth --all-targets --all-features --no-fail-fast
+  affected-crates:
+    name: ${{ matrix.package }}
+    needs: changes
+    if: needs.changes.outputs.has_generic == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.changes.outputs.generic_matrix) }}
+    uses: ./.github/workflows/rust-crate.yml
+    with:
+      package: ${{ matrix.package }}
 
   panic-contract:
-    name: Panic contract (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.95.0
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: panic-contract
-      - name: Test real hook and platform file contract
-        run: cargo test --locked -p aster_forge_panic --all-targets
-      - name: Lint platform-specific panic paths
-        run: cargo clippy --locked -p aster_forge_panic --all-targets -- -D warnings
+    name: Panic contract
+    needs: changes
+    if: needs.changes.outputs.has_panic == 'true'
+    uses: ./.github/workflows/rust-panic.yml
 
   process-contract:
-    name: Process contract (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.95.0
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: process-contract
-      - name: Test process lifecycle boundaries
-        run: cargo test --locked -p aster_forge_process --all-targets
-      - name: Lint process lifecycle paths
-        run: cargo clippy --locked -p aster_forge_process --all-targets -- -D warnings
+    name: Process contract
+    needs: changes
+    if: needs.changes.outputs.has_process == 'true'
+    uses: ./.github/workflows/rust-process.yml
 
-  process-miri:
-    name: Miri (aster_forge_process)
+  auth-contract:
+    name: Auth contract
+    needs: changes
+    if: needs.changes.outputs.has_auth == 'true'
+    uses: ./.github/workflows/rust-auth.yml
+
+  http-crypto-contract:
+    name: HTTP and crypto feature isolation
+    needs: changes
+    if: needs.changes.outputs.has_http_crypto == 'true'
+    uses: ./.github/workflows/rust-http-crypto.yml
+
+  cloud-files-contract:
+    name: Cloud Files contract
+    needs: changes
+    if: needs.changes.outputs.has_cloud_files == 'true'
+    uses: ./.github/workflows/cloud-files.yml
+    with:
+      packages: ${{ needs.changes.outputs.cloud_packages }}
+
+  xml-fuzz:
+    name: XML fuzz harness
+    needs: changes
+    if: needs.changes.outputs.has_xml == 'true'
+    uses: ./.github/workflows/rust-xml.yml
+
+  template:
+    name: Service template
+    needs: changes
+    if: needs.changes.outputs.has_template == 'true'
+    uses: ./.github/workflows/template.yml
+
+  ci-gate:
+    name: Required Rust CI
+    if: always()
+    needs:
+      - changes
+      - quality
+      - affected-crates
+      - panic-contract
+      - process-contract
+      - auth-contract
+      - http-crypto-contract
+      - cloud-files-contract
+      - xml-fuzz
+      - template
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
-          components: miri
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: process-miri
-      - name: Run Miri library checks
-        # Native process fixtures and platform FFI stay in process-contract;
-        # Miri executes pipe/preflight logic and non-native wrapper traversal.
-        # A zero-test success must never masquerade as Miri validation.
-        run: |
-          set -o pipefail
-          cargo +nightly miri test --locked -p aster_forge_process --lib | tee "$RUNNER_TEMP/process-miri.log"
-          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/process-miri.log"
-
-  auth-backends:
-    name: Auth (${{ matrix.os }}, ${{ matrix.backend }}, Rust 1.95.0)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        backend: [aws-lc-rs, rust-crypto]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.95.0
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: auth-${{ matrix.backend }}-1.95.0
-      - name: Test backend without optional password support
-        run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }} --all-targets
-      - name: Test backend with password support
-        run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --all-targets
-      - name: Test documentation examples
-        run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --doc
-      - name: Run session example
-        run: cargo run --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }} --example session_flow
-      - name: Clippy
-        run: cargo clippy --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --all-targets -- -D warnings
-      - name: Build API documentation
+          persist-credentials: false
+      - name: Require all applicable checks
         env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }},password --no-deps
-
-  auth-feature-isolation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.95.0
-      - uses: Swatinem/rust-cache@v2
-      - name: Check isolated consumers and invalid backend combinations
-        run: bash scripts/test-auth-features.sh
-
-  http-crypto-feature-isolation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.95.0
-      - uses: Swatinem/rust-cache@v2
-      - name: Check isolated HTTP and crypto feature consumers
-        run: python3 scripts/test-http-crypto-features.py
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: python3 scripts/ci/check-results.py

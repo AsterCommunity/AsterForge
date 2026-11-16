@@ -1,0 +1,19 @@
+name: Rust HTTP and Crypto Contract
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  http-crypto-feature-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check isolated HTTP and crypto feature consumers
+        run: python3 scripts/test-http-crypto-features.py

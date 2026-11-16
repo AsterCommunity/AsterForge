@@ -526,7 +526,7 @@ bash scripts/test-middleware-features.sh
 cargo clippy -p aster_forge_middleware --all-targets --all-features -- -D warnings
 ```
 
-本地脚本覆盖无默认 feature、Actix、Axum、双 transport，以及各自带 metrics 的矩阵，并检查 Axum-only 正常依赖树无 Actix。示例也纳入编译；远端继续使用现有 workspace feature-matrix CI 执行 lib tests，不另建 CI job。
+本地脚本覆盖无默认 feature、Actix、Axum、双 transport，以及各自带 metrics 的矩阵，并检查 Axum-only 正常依赖树无 Actix。示例也纳入编译；远端在 middleware 或其 workspace 依赖变化时运行该 crate 的默认、无默认、each-feature 和 all-features 测试，完整 workspace feature matrix 保留在每周或手动全量验证中。
 
 ## 参考项目
 

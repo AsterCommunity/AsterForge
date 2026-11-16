@@ -1,23 +1,15 @@
 name: Cloud Files CI
 
 on:
-  push:
-    paths:
-      - 'crates/aster_forge_cloud_files/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/cloud-files.yml'
-    branches: [master]
-  pull_request:
-    paths:
-      - 'crates/aster_forge_cloud_files/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/cloud-files.yml'
-    branches: [master, develop]
+  workflow_call:
+    inputs:
+      packages:
+        type: string
+        default: '["aster_forge_cloud_files_core","aster_forge_cloud_files_linux","aster_forge_cloud_files_macos_bridge","aster_forge_cloud_files_windows"]'
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: cloud-files-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -29,6 +21,7 @@ permissions:
 jobs:
   core:
     name: Cloud Files Core
+    if: github.event_name == 'workflow_dispatch' || contains(fromJson(inputs.packages), 'aster_forge_cloud_files_core')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -54,6 +47,7 @@ jobs:
 
   windows:
     name: Windows Cloud Files
+    if: github.event_name == 'workflow_dispatch' || contains(fromJson(inputs.packages), 'aster_forge_cloud_files_windows')
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -79,6 +73,7 @@ jobs:
 
   linux:
     name: Linux Cloud Files
+    if: github.event_name == 'workflow_dispatch' || contains(fromJson(inputs.packages), 'aster_forge_cloud_files_linux')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -104,6 +99,7 @@ jobs:
 
   macos:
     name: macOS Cloud Files
+    if: github.event_name == 'workflow_dispatch' || contains(fromJson(inputs.packages), 'aster_forge_cloud_files_macos_bridge')
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -165,29 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - package: aster_forge_cloud_files_core
-            miri_flags: ''
-            miri_test_args: ''
-          - package: aster_forge_cloud_files_linux
-            # Keep strict provenance enabled while allowing durable filesystem operations through
-            # Miri's isolation boundary. The exhaustive memory-cloud-drive example remains covered
-            # by the Linux test job; under Miri its state-machine scenarios exceed the bounded job
-            # budget by a wide margin and obscure the lower-level memory-model signal.
-            miri_flags: -Zmiri-strict-provenance -Zmiri-disable-isolation
-            miri_test_args: >-
-              --lib
-              --test backend_contract
-              --test create_contract
-              --test engine_contract
-              --test value_contract
-              --test writeback_contract
-          - package: aster_forge_cloud_files_macos_bridge
-            miri_flags: -Zmiri-strict-provenance
-            miri_test_args: ''
-          - package: aster_forge_cloud_files_windows
-            miri_flags: -Zmiri-strict-provenance
-            miri_test_args: ''
+        package: ${{ fromJson(inputs.packages || '["aster_forge_cloud_files_core","aster_forge_cloud_files_linux","aster_forge_cloud_files_macos_bridge","aster_forge_cloud_files_windows"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -208,8 +182,16 @@ jobs:
 
       - name: Run Miri
         env:
-          MIRIFLAGS: ${{ matrix.miri_flags }}
-        run: >-
-          cargo +nightly-2026-04-12 miri test --locked
-          -p ${{ matrix.package }}
-          ${{ matrix.miri_test_args }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          test_args=()
+          export MIRIFLAGS=-Zmiri-strict-provenance
+          if [[ "$PACKAGE" == aster_forge_cloud_files_core ]]; then
+            export MIRIFLAGS=''
+          elif [[ "$PACKAGE" == aster_forge_cloud_files_linux ]]; then
+            # Durable filesystem contracts need isolation disabled. The exhaustive memory
+            # example exceeds the bounded Miri budget and stays in the native Linux job.
+            export MIRIFLAGS='-Zmiri-strict-provenance -Zmiri-disable-isolation'
+            test_args=(--lib --test backend_contract --test create_contract --test engine_contract --test value_contract --test writeback_contract)
+          fi
+          cargo +nightly-2026-04-12 miri test --locked -p "$PACKAGE" "${test_args[@]}"

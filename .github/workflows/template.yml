@@ -1,22 +1,8 @@
 name: Actix Service Template CI
 
 on:
-  push:
-    paths:
-      - 'templates/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/template.yml'
-    branches: [master]
-  pull_request:
-    paths:
-      - 'templates/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/template.yml'
-    branches: [master, develop]
+  workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: template-${{ github.workflow }}-${{ github.ref }}
@@ -63,11 +49,17 @@ jobs:
           mkdir -p "$GENERATED_ROOT"
           cargo generate \
             --path templates/aster-service-actix \
+            --no-workspace \
             --name aster-service-actix-ci \
             --destination "$GENERATED_ROOT" \
             --define package_description="CI-generated Actix service" \
             --define server_port=3000 \
             --vcs none
+
+      - name: Test generated service against this checkout
+        run: |
+          mkdir -p "$GENERATED_PROJECT/.cargo"
+          python3 scripts/local-consumer-patch.py > "$GENERATED_PROJECT/.cargo/config.toml"
 
       - name: Verify generated project shape
         working-directory: ${{ env.GENERATED_PROJECT }}

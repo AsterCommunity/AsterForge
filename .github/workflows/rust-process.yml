@@ -1,0 +1,51 @@
+name: Rust Process Contract
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  process-contract:
+    name: Process contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: process-contract
+      - name: Test process lifecycle boundaries
+        run: cargo test --locked -p aster_forge_process --all-targets
+      - name: Lint process lifecycle paths
+        run: cargo clippy --locked -p aster_forge_process --all-targets -- -D warnings
+
+  process-miri:
+    name: Miri (aster_forge_process)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: process-miri
+      - name: Run Miri library checks
+        # Native process fixtures and platform FFI stay in process-contract.
+        # A zero-test success must never masquerade as Miri validation.
+        run: |
+          set -o pipefail
+          cargo +nightly miri test --locked -p aster_forge_process --lib | tee "$RUNNER_TEMP/process-miri.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/process-miri.log"

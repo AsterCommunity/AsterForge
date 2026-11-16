@@ -1,0 +1,23 @@
+name: Rust XML Fuzz Harness
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/aster_forge_xml/fuzz
+          shared-key: xml-fuzz
+      - name: Build XML fuzz harness
+        run: cargo +nightly build --manifest-path crates/aster_forge_xml/fuzz/Cargo.toml --bins

@@ -956,7 +956,6 @@ mod tests {
                 .unwrap();
             assert_eq!(stats.retried + stats.failed, 1);
             let text = logs.text();
-            assert_eq!(text.lines().count(), 4, "{text}");
             assert_eq!(
                 text.lines()
                     .filter(|line| line.starts_with(" WARN "))
@@ -964,8 +963,19 @@ mod tests {
                 1,
                 "{text}"
             );
+            assert!(text.contains("dispatching due mail outbox rows"), "{text}");
+            assert!(text.contains("claimed mail outbox row"), "{text}");
+            let expected_failure = if attempt_count == 0 {
+                "mail outbox delivery failed; scheduled retry"
+            } else {
+                "mail outbox delivery permanently failed"
+            };
+            assert!(text.contains(expected_failure), "{text}");
             assert!(text.contains("a\\r\\nforged@example.com"), "{text}");
             assert!(text.contains("transport\\nforged"), "{text}");
+            assert!(!text.contains("template\nforged"), "{text}");
+            assert!(!text.contains("a\r\nforged@example.com"), "{text}");
+            assert!(!text.contains("transport\nforged"), "{text}");
             assert!(!text.contains('\u{1b}'));
         }
     }
