@@ -9,7 +9,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, value};
 
-use crate::{checks::load_workspace, model::Workspace};
+use crate::{
+    checks::load_workspace,
+    model::{Metadata, Workspace},
+};
 
 /// One dependency requirement updated for a manually versioned package.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -28,6 +31,7 @@ struct Document {
 
 /// Loaded Cargo graph and the exact manifests eligible for a dependency-only edit.
 pub struct ManifestWorkspace {
+    root: PathBuf,
     documents: Vec<Document>,
     pub workspace: Workspace,
 }
@@ -56,6 +60,7 @@ impl ManifestWorkspace {
             })
             .collect::<Result<_>>()?;
         Ok(Self {
+            root: root.to_path_buf(),
             documents,
             workspace,
         })
@@ -111,7 +116,34 @@ impl ManifestWorkspace {
                 }
             }
         }
+        // A previously unversioned dev edge becomes a publication prerequisite after
+        // syncing. Keep dry-run planning identical to the graph Cargo will read on disk.
+        let mut packages = self
+            .workspace
+            .packages
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for package in &mut packages {
+            for dependency in &mut package.dependencies {
+                if let Some((_, requirement)) =
+                    dependency.path.as_ref().and_then(|path| targets.get(path))
+                {
+                    dependency.req.clone_from(requirement);
+                }
+            }
+        }
+        self.workspace = Workspace::from_metadata(Metadata {
+            workspace_members: packages.iter().map(|package| package.id.clone()).collect(),
+            packages,
+        })?;
         Ok(updates)
+    }
+
+    /// Reload Cargo's actual graph after writes before creating a committed release plan.
+    pub fn reload_workspace(&mut self) -> Result<()> {
+        self.workspace = load_workspace(&self.root)?;
+        Ok(())
     }
 
     /// Check all original contents before writing, and roll back our writes on an IO failure.

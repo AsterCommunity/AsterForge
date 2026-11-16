@@ -263,3 +263,74 @@ fn cargo_manifest_and_dependency_paths_have_the_same_canonical_identity() {
     let plan = workspace.plan(&["zbase".into()], &[]).unwrap();
     assert_eq!(plan.runtime_or_build_impact.len(), 2);
 }
+
+fn unversioned_dev_workspace(cycle: bool) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("Cargo.toml"),"[workspace]\nmembers=[\"aconsumer\",\"zsupport\"]\nresolver=\"3\"\n[workspace.dependencies]\n").unwrap();
+    support::write_member(
+        root,
+        "aconsumer",
+        "[package]\nname=\"aconsumer\"\nversion=\"1.0.0\"\nedition=\"2024\"\n[dev-dependencies]\nzsupport={path=\"../zsupport\"}\n",
+    );
+    let mut text = "[package]\nname=\"zsupport\"\nversion=\"1.0.0\"\nedition=\"2024\"\n".to_owned();
+    if cycle {
+        text.push_str("[dev-dependencies]\naconsumer={path=\"../aconsumer\"}\n");
+    }
+    support::write_member(root, "zsupport", &text);
+    dir
+}
+
+#[test]
+fn prepare_reload_validate_use_post_edit_dev_dependency_order() {
+    let dir = unversioned_dev_workspace(false);
+    let root = dir.path();
+    let mut manifests = ManifestWorkspace::load(root).unwrap();
+    let roots = ["aconsumer".into(), "zsupport".into()];
+    assert_eq!(
+        manifests.workspace.plan(&roots, &[]).unwrap().publish_order[0].name,
+        "aconsumer"
+    );
+    let result = prepare(&mut manifests, &roots, &FakeRegistry::default(), false).unwrap();
+    assert_eq!(result.plan.publish_order[0].name, "zsupport");
+    write_release_manifest(&root.join("release-plan.json"), &result.plan).unwrap();
+    let loaded = load_workspace(root).unwrap();
+    let manifest = forge_release::publish::read_manifest(&root.join("release-plan.json")).unwrap();
+    forge_release::publish::validate_manifest(&loaded, &manifest).unwrap();
+}
+
+#[test]
+fn dry_run_plans_new_dev_edges_without_writing_files() {
+    let dir = unversioned_dev_workspace(false);
+    let root = dir.path();
+    let path = root.join("aconsumer/Cargo.toml");
+    let before = fs::read(&path).unwrap();
+    let result = prepare(
+        &mut ManifestWorkspace::load(root).unwrap(),
+        &["aconsumer".into(), "zsupport".into()],
+        &FakeRegistry::default(),
+        true,
+    )
+    .unwrap();
+    assert_eq!(result.plan.publish_order[0].name, "zsupport");
+    assert_eq!(before, fs::read(path).unwrap());
+    assert!(!root.join("release-plan.json").exists());
+}
+
+#[test]
+fn newly_versioned_dev_cycle_is_rejected_before_writes() {
+    let dir = unversioned_dev_workspace(true);
+    let root = dir.path();
+    let path = root.join("aconsumer/Cargo.toml");
+    let before = fs::read(&path).unwrap();
+    let error = prepare(
+        &mut ManifestWorkspace::load(root).unwrap(),
+        &["aconsumer".into(), "zsupport".into()],
+        &FakeRegistry::default(),
+        false,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("cycle"));
+    assert_eq!(before, fs::read(path).unwrap());
+    assert!(!root.join("release-plan.json").exists());
+}

@@ -58,8 +58,12 @@ pub fn prepare(
         validate_new_version(package, &registry.versions(&package.name)?)?;
     }
     let pin_updates = manifests.update_pins(packages)?;
+    // Check newly-versioned dev edges and cycles before writing any manifest.
+    let mut plan = manifests.workspace.plan(packages, packages)?;
     if !dry_run {
         manifests.write_manifests()?;
+        manifests.reload_workspace()?;
+        plan = manifests.workspace.plan(packages, packages)?;
     }
     Ok(PrepareResult { pin_updates, plan })
 }
