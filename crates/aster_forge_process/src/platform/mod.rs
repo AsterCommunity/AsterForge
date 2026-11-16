@@ -4,6 +4,9 @@ use crate::ProcessSpec;
 use process_wrap::tokio::ChildWrapper;
 use std::{io, process::ExitStatus};
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]

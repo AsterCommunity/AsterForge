@@ -31,6 +31,9 @@ use tokio_util::sync::CancellationToken;
 mod platform;
 use platform::ProcessTree;
 
+#[cfg(test)]
+mod tests;
+
 /// Which captured pipe produced a byte chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStream {

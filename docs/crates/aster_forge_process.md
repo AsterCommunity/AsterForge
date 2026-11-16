@@ -41,3 +41,5 @@ tokio-util = { version = "0.7", features = ["rt"] }
 `cargo test -p aster_forge_process --locked --all-targets` 使用真实子进程覆盖双向管道、精确输出上限、过量输出排空、stdin 断开、环境清理、敏感调试输出、缺失可执行文件、启动前取消/零期限、取消/期限后的后代终止（并断言 `run` 返回时后代已退出）、正常退出清理后代和 future 丢弃清理。
 
 Linux、macOS、Windows CI 都在原生 runner 执行这些边界测试；它们验证模拟子进程与宿主 OS 进程所有权机制。Unix 子进程若主动脱离所属 process group，调用方不得假设本 crate 能终止该 daemon。
+
+`cargo +nightly miri test --locked -p aster_forge_process --lib` 实际执行内存管道、启动前取消/零期限和非原生 wrapper 的 `unsafe` 遍历测试；CI 在通过测试数为零时失败。Miri 不执行真实子进程、Unix 进程控制或 Windows Job Object FFI，不能替代三平台原生契约测试。
