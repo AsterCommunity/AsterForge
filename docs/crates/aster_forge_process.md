@@ -33,6 +33,7 @@ let result = run(spec, &CancellationToken::new(), |_stream, _bytes| {}).await;
 ```toml
 [dependencies]
 aster_forge_process = "=0.1.0-alpha.1"
+tokio-util = { version = "0.7", features = ["rt"] }
 ```
 
 ## 验证

@@ -30,6 +30,12 @@ fn child(mode: &str) {
     match mode {
         "closed" => (),
         "sleep" => std::thread::sleep(Duration::from_secs(30)),
+        #[cfg(unix)]
+        "close-stdin-sleep" => {
+            // SAFETY: this runs only in the isolated fixture subprocess and closes its inherited stdin pipe.
+            unsafe { libc::close(libc::STDIN_FILENO) };
+            std::thread::sleep(Duration::from_secs(30));
+        }
         "env" => {
             assert!(std::env::var_os("PATH").is_none());
             print!(
@@ -84,6 +90,11 @@ fn spec(mode: &str) -> ProcessSpec {
     let mut spec = ProcessSpec::new(std::env::current_exe().unwrap(), Duration::from_secs(5));
     spec.args = vec!["--fixture".into(), mode.into()];
     spec.clear_environment = true;
+    // Preserve instrumented subprocess coverage while keeping generated data under Cargo's ignored target dir.
+    if let Some(profile_file) = std::env::var_os("LLVM_PROFILE_FILE") {
+        spec.environment
+            .push(("LLVM_PROFILE_FILE".into(), profile_file));
+    }
     spec
 }
 
@@ -158,11 +169,7 @@ async fn check() {
     assert!(output.status.unwrap().success());
     assert!(output.stdout.bytes.is_empty());
 
-    let mut closed = spec("closed");
-    closed.stdin = Some(vec![b'i'; 8 * 1024 * 1024]);
-    let output = run(closed, &token, |_, _| {}).await;
-    assert!(output.status.unwrap().success());
-    assert!(output.stdin_error.is_some());
+    check_stdin_boundaries().await;
 
     let mut sensitive = spec("echo");
     sensitive.stdin = Some(b"secret-sentinel".to_vec());
@@ -198,6 +205,28 @@ async fn check() {
     check_tree_shutdown(true).await;
     check_orphan_exit().await;
     check_dropped_future().await;
+}
+
+async fn check_stdin_boundaries() {
+    let mut closed = spec("closed");
+    closed.stdin = Some(vec![b'i'; 8 * 1024 * 1024]);
+    let output = run(closed, &CancellationToken::new(), |_, _| {}).await;
+    assert!(output.status.unwrap().success());
+    assert!(output.stdin_error.is_some());
+
+    #[cfg(unix)]
+    check_stdin_error_survives_timeout().await;
+}
+
+#[cfg(unix)]
+async fn check_stdin_error_survives_timeout() {
+    let mut spec = spec("close-stdin-sleep");
+    spec.stdin = Some(vec![b'i'; 8 * 1024 * 1024]);
+    spec.timeout = Duration::from_secs(2);
+    let output = run(spec, &CancellationToken::new(), |_, _| {}).await;
+    assert!(matches!(output.status, Err(ProcessFailure::TimedOut)));
+    assert!(output.started);
+    assert_eq!(output.stdin_error, Some(std::io::ErrorKind::BrokenPipe));
 }
 
 async fn check_orphan_exit() {

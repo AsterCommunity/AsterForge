@@ -172,13 +172,16 @@ pub async fn run(
     let write_input = spec.stdin;
     let mut stdin_error = None;
     let completion = tokio::time::timeout(spec.timeout, async {
-        let (status, input_result, (), ()) = tokio::join!(
+        let (status, (), (), ()) = tokio::join!(
             async {
                 let status = child.0.inner_mut().wait().await;
                 let _ = child.0.start_kill();
                 status
             },
-            write_stdin(stdin, write_input),
+            async {
+                let result = write_stdin(stdin, write_input).await;
+                stdin_error = result.as_ref().err().map(io::Error::kind);
+            },
             capture(
                 stdout,
                 &mut out,
@@ -194,7 +197,6 @@ pub async fn run(
                 &on_chunk,
             )
         );
-        stdin_error = input_result.err().map(|error| error.kind());
         status
     });
     let observed = tokio::select! {

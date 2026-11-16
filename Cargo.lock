@@ -950,6 +950,7 @@ dependencies = [
 name = "aster_forge_process"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "libc",
  "process-wrap",
  "tokio",
  "tokio-util",
