@@ -121,9 +121,21 @@ pub struct ProcessOutcome {
 
 struct ProcessTree(Box<dyn ChildWrapper>);
 
+impl ProcessTree {
+    fn start_kill(&mut self) -> io::Result<()> {
+        self.0.start_kill()
+    }
+
+    async fn wait(&mut self) -> io::Result<ExitStatus> {
+        // The process-wrap group/job wrappers make this wait cover every owned
+        // descendant, not just the immediate child.
+        self.0.wait().await
+    }
+}
+
 impl Drop for ProcessTree {
     fn drop(&mut self) {
-        let _ = self.0.start_kill();
+        let _ = self.start_kill();
     }
 }
 
@@ -174,8 +186,8 @@ pub async fn run(
     let completion = tokio::time::timeout(spec.timeout, async {
         let (status, (), (), ()) = tokio::join!(
             async {
-                let status = child.0.inner_mut().wait().await;
-                let _ = child.0.start_kill();
+                let status = child.wait().await;
+                let _ = child.start_kill();
                 status
             },
             async {
@@ -209,9 +221,9 @@ pub async fn run(
         },
     };
 
-    let _ = child.0.start_kill();
+    let _ = child.start_kill();
     if observed.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.0.wait()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
     }
     ProcessOutcome {
         status: observed,

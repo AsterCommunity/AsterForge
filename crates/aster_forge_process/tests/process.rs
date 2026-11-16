@@ -244,7 +244,12 @@ async fn check_orphan_exit() {
     )
     .await;
     assert!(output.status.unwrap().success());
-    wait_until_dead(received.await.unwrap()).await;
+    let pid = received.await.unwrap();
+    assert!(
+        !process_alive(pid),
+        "descendant process survived run completion"
+    );
+    wait_until_dead(pid).await;
 }
 
 async fn check_dropped_future() {
@@ -304,6 +309,10 @@ async fn check_tree_shutdown(timeout: bool) {
             || matches!(output.status, Err(ProcessFailure::TimedOut) if timeout)
     );
     assert!(output.started);
+    assert!(
+        !process_alive(pid),
+        "descendant process survived run completion"
+    );
     wait_until_dead(pid).await;
 }
 

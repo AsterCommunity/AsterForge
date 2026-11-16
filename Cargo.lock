@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_process"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "libc",
  "process-wrap",

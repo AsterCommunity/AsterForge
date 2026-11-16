@@ -11,6 +11,8 @@ let outcome = aster_forge_process::run(spec, &cancellation, |_stream, _bytes| {}
 
 Product adapters map `ProcessFailure` into their own error contracts and decide how captured output is presented.
 
+When cancellation or a deadline occurs, `run` waits through the owned process-group or Job Object wrapper before returning. Owned descendants have completed cleanup at return; a daemon that deliberately detaches is outside this guarantee.
+
 ```bash
 cargo test -p aster_forge_process --locked
 ```
