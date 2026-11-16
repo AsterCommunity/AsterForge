@@ -1,0 +1,8 @@
+name: Sync Forge workspace dependencies
+# Version-only changes must reach API compatibility tests instead of failing on a stale pin.
+description: Normalize local dependency pins and Cargo.lock in the runner checkout only
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: cargo run --locked --manifest-path tools/forge-release/Cargo.toml -- sync --locked

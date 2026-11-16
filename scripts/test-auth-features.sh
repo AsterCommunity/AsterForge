@@ -4,6 +4,13 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 consumer=$(mktemp -d)
 trap 'rm -rf "$consumer"' EXIT
+jwt_requirement=$(python3 - "$repo_root/Cargo.toml" <<'PYJWT'
+import sys, tomllib
+with open(sys.argv[1], "rb") as source:
+    declaration = tomllib.load(source)["workspace"]["dependencies"]["jsonwebtoken"]
+print(declaration if isinstance(declaration, str) else declaration["version"])
+PYJWT
+)
 mkdir -p "$consumer/src"
 cp "$repo_root/scripts/fixtures/auth-backend-consumer.rs" "$consumer/src/main.rs"
 cat > "$consumer/Cargo.toml" <<EOF
@@ -18,7 +25,7 @@ rust-crypto = ["aster_forge_auth/rust-crypto"]
 merge = ["jsonwebtoken/aws_lc_rs", "jsonwebtoken/rust_crypto"]
 [dependencies]
 aster_forge_auth = { path = "$repo_root/crates/aster_forge_auth", default-features = false }
-jsonwebtoken = { version = "11", default-features = false }
+jsonwebtoken = { version = "$jwt_requirement", default-features = false }
 EOF
 
 # Reuse artifacts while keeping resolution isolated from workspace feature unification.

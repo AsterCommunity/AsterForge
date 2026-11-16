@@ -39,6 +39,8 @@ jobs:
         with:
           shared-key: cloud-files-core-v1
 
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test Cloud Files Core
         run: cargo test --locked -p aster_forge_cloud_files_core --all-targets
 
@@ -65,6 +67,8 @@ jobs:
         with:
           shared-key: cloud-files-windows-v1
 
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test Windows Cloud Files
         run: cargo test --locked -p aster_forge_cloud_files_windows --all-targets
 
@@ -91,6 +95,8 @@ jobs:
         with:
           shared-key: cloud-files-linux-v1
 
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test Linux Cloud Files
         run: cargo test --locked -p aster_forge_cloud_files_linux --all-targets
 
@@ -117,6 +123,8 @@ jobs:
         with:
           shared-key: cloud-files-macos-v1
 
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test macOS Cloud Files Bridge
         run: cargo test --locked -p aster_forge_cloud_files_macos_bridge --all-targets
 
@@ -180,6 +188,8 @@ jobs:
         with:
           shared-key: cloud-files-miri-${{ matrix.package }}-v1
 
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Run Miri
         env:
           PACKAGE: ${{ matrix.package }}

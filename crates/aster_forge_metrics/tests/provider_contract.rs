@@ -15,7 +15,10 @@ fn duplicate_otel_names_reject_different_kinds_and_units_without_catalog_changes
             provider.register_batch(&[counter, conflicting]).err(),
             Some(MetricError::DuplicateRegistration)
         );
-        assert!(provider.descriptors().is_empty());
+        assert_eq!(
+            provider.descriptors(),
+            [] as [aster_forge_metrics::MetricDescriptor; 0]
+        );
         provider.register_batch(&[counter]).unwrap();
         let fresh = MetricDescriptor::gauge("test", "fresh", "Fresh.", &[]);
         assert_eq!(
@@ -38,7 +41,10 @@ fn integer_label_schema_must_be_unique_and_a_subset_of_declared_keys() {
             provider.register_batch(&[descriptor]).err(),
             Some(MetricError::InvalidDescriptor)
         );
-        assert!(provider.descriptors().is_empty());
+        assert_eq!(
+            provider.descriptors(),
+            [] as [aster_forge_metrics::MetricDescriptor; 0]
+        );
     }
 }
 
@@ -93,7 +99,10 @@ fn reserved_resource_labels_and_translated_attribute_collisions_are_atomic() {
             provider.register_batch(&[good, invalid]).err(),
             Some(MetricError::InvalidDescriptor)
         );
-        assert!(provider.descriptors().is_empty());
+        assert_eq!(
+            provider.descriptors(),
+            [] as [aster_forge_metrics::MetricDescriptor; 0]
+        );
     }
     for name in ["target_info", "target.info"] {
         for unit in ["1", "{target}"] {
@@ -123,7 +132,10 @@ async fn instrument_budget_rejection_preserves_catalog_and_shutdown_blocks_new_s
         provider.register_batch(&[a, b]).err(),
         Some(MetricError::InstrumentLimit)
     );
-    assert!(provider.descriptors().is_empty());
+    assert_eq!(
+        provider.descriptors(),
+        [] as [aster_forge_metrics::MetricDescriptor; 0]
+    );
     provider.register_batch(&[a]).unwrap();
     assert_eq!(
         provider.register_batch(&[b]).err(),

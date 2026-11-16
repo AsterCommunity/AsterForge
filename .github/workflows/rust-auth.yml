@@ -24,6 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: auth-${{ matrix.backend }}-1.95.0
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test backend without optional password support
         run: cargo test --locked -p aster_forge_auth --no-default-features --features ${{ matrix.backend }} --all-targets
       - name: Test backend with password support
@@ -47,5 +49,7 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Check isolated consumers and invalid backend combinations
         run: bash scripts/test-auth-features.sh

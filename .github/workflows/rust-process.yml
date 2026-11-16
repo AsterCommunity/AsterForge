@@ -24,6 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: process-contract
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Test process lifecycle boundaries
         run: cargo test --locked -p aster_forge_process --all-targets
       - name: Lint process lifecycle paths
@@ -42,6 +44,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: process-miri
+      - name: Sync manually versioned local dependencies
+        uses: ./.github/actions/sync-forge-dependencies
       - name: Run Miri library checks
         # Native process fixtures and platform FFI stay in process-contract.
         # A zero-test success must never masquerade as Miri validation.

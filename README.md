@@ -120,6 +120,7 @@ crates/                 Rust workspace crates
 docs/                   VitePress documentation site and crate reference pages
 developer-docs/         Compatibility entry points for developer documentation
 scripts/                Repository maintenance scripts
+tools/                  Standalone repository tools, including the Forge release planner
 templates/              cargo-generate templates for new Aster services
 ```
 
