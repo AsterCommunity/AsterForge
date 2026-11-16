@@ -24,6 +24,7 @@ members = [
     "crates/aster_forge_logging",
     "crates/aster_forge_metrics",
     "crates/aster_forge_panic",
+    "crates/aster_forge_process",
     "crates/aster_forge_runtime",
     "crates/aster_forge_mail",
     "crates/aster_forge_storage_core",
@@ -72,6 +73,7 @@ aster_forge_events = { path = "crates/aster_forge_events", version = "=0.1.0-alp
 aster_forge_http = { path = "crates/aster_forge_http", version = "=0.1.0-alpha.2" }
 aster_forge_mail = { path = "crates/aster_forge_mail", version = "=0.1.0-alpha.1", default-features = false }
 aster_forge_metrics = { path = "crates/aster_forge_metrics", version = "=0.1.0-alpha.2", default-features = false }
+aster_forge_process = { path = "crates/aster_forge_process", version = "=0.1.0-alpha.1" }
 aster_forge_runtime = { path = "crates/aster_forge_runtime", version = "=0.1.0-alpha.1" }
 aster_forge_tasks = { path = "crates/aster_forge_tasks", version = "=0.1.0-alpha.1", default-features = false }
 aster_forge_test = { path = "crates/aster_forge_test", version = "=0.1.0-alpha.2" }
@@ -120,6 +122,7 @@ md-5 = "0.11"
 moka = { version = "0.12.16", features = ["future"] }
 parking_lot = "0.13"
 percent-encoding = "2.3"
+process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 proc-macro2 = "1"
 quick-xml = { version = "0.42", default-features = false }
 quote = "1"

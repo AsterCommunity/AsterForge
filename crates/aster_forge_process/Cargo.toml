@@ -1,0 +1,27 @@
+[package]
+name = "aster_forge_process"
+version = "0.1.0-alpha.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Bounded child-process lifecycle mechanics for Aster services"
+readme = "README.md"
+publish = true
+
+[dependencies]
+process-wrap.workspace = true
+tokio = { workspace = true, features = ["io-util", "process", "sync", "time"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "process"
+path = "tests/process.rs"
+harness = false

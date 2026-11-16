@@ -51,6 +51,7 @@ const cratePages = [
   ["Observability", "/crates/aster_forge_observability"],
   ["Panic", "/crates/aster_forge_panic"],
   ["Runtime", "/crates/aster_forge_runtime"],
+  ["Process", "/crates/aster_forge_process"],
   ["Storage core", "/crates/aster_forge_storage_core"],
   ["Tasks", "/crates/aster_forge_tasks"],
   ["Test", "/crates/aster_forge_test"],
