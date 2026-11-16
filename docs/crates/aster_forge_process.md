@@ -28,7 +28,7 @@ let result = run(spec, &CancellationToken::new(), |_stream, _bytes| {}).await;
 
 `ProcessSpec::new` 默认继承环境，并为每路输出保留最多 64 KiB。`clear_environment` 可清空继承环境，之后显式加入 `environment` 项。零期限和启动前取消不会启动进程。启动后取消或超时会终止所拥有的进程树；丢弃运行中的 future 也会触发清理。
 
-`ProcessOutcome` 区分直接 child 是否启动、退出状态、两路输出截断/读取错误、stdin 写入错误和 `cleanup_error`。直接 child 的退出先单独观察；随后终止拥有的 process group/job，并等 Unix group 或 Windows descendant tree 为空。取消与 deadline 不会在固定等待时间后丢弃清理任务。清理本身失败时写入 `cleanup_error`，调用方必须将其视为执行失败，不得据直接 child 的成功状态释放仍受保护的资源。Unix 子进程若主动脱离所属 group，调用方不得假设本 crate 能终止该 daemon。
+`ProcessOutcome` 区分直接 child 是否启动、退出状态、两路输出截断/读取错误、stdin 写入错误和 `cleanup_error`。直接 child 的退出先单独观察；随后终止拥有的 process group/job，并等 Unix group 或 Windows descendant tree 为空。Unix 清理等待有界；宿主无法回收的 adopted zombie 会通过 `cleanup_error` 报告，而不是让调用永久挂起。清理本身失败时写入 `cleanup_error`，调用方必须将其视为执行失败，不得据直接 child 的成功状态释放仍受保护的资源。Unix 子进程若主动脱离所属 group，调用方不得假设本 crate 能终止该 daemon。
 
 ```toml
 [dependencies]

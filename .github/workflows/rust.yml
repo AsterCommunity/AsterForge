@@ -211,6 +211,24 @@ jobs:
       - name: Lint process lifecycle paths
         run: cargo clippy --locked -p aster_forge_process --all-targets -- -D warnings
 
+  process-miri:
+    name: Miri (aster_forge_process)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: process-miri
+      - name: Run Miri library checks
+        # Native process fixtures and platform FFI stay in process-contract;
+        # Miri covers the Rust library/test compilation path it supports.
+        run: cargo miri test --locked -p aster_forge_process --lib
+
   auth-backends:
     name: Auth (${{ matrix.os }}, ${{ matrix.backend }}, Rust 1.95.0)
     runs-on: ${{ matrix.os }}
