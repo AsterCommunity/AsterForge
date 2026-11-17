@@ -8,9 +8,19 @@
   open a release PR containing format-preserving dependency pin updates and an
   explicit release plan. Validate committed lock contents, affected consumers,
   normalized archives and versioned development dependency ordering;
-  publish only after both exact-merge CI workflows pass. Interrupted publication
+  dispatch publication through a crates.io-supported event only after both
+  exact-merge CI workflows pass, repeating review and CI gates before requesting
+  credentials. Interrupted publication
   can resume without re-uploading existing versions. Downstream package versions
   and security release scope remain maintainer-owned.
+
+## [2026-11-17 batch] - 2026-11-17
+
+Cumulative package changes since the first bulk release. This batch publishes
+17 crate versions; the other 17 retain their already-published versions. Crates
+continue to own their versions independently.
+
+### Added
 
 - **Bounded process execution** — Add `aster_forge_process` for direct child execution with bounded pipe capture, optional stdin/environment control, cancellation and deadlines, and owned Unix process-group / Windows Job Object cleanup. Product adapters retain retry, error-mapping, logging, and side-effect policy.
 
@@ -20,7 +30,7 @@
 
 ### Changed
 
-- **Pending crate versions** — Prepare `0.1.0-alpha.3` for auth, external-auth,
+- **Published crate versions** — Publish `0.1.0-alpha.3` for auth, external-auth,
   middleware, observability, test-support, audit, database and metrics, and
   `0.1.0-alpha.2` for cache, config, events, tasks, utils, WebDAV, runtime, XML and
   mail. The eleven direct updates include JWT 12 error handling, Redis 1.8.2 /
@@ -28,7 +38,7 @@
   test-support cleanup gate. Runtime, XML, mail, metrics, database and audit are
   explicitly republished to align exact internal dependencies and avoid old/new
   utils resolution conflicts; their public APIs are unchanged. Other package
-  versions stay unchanged. These candidates are not yet published.
+  versions stay unchanged. All 17 versions are available on crates.io.
 
 - **Dependency refresh** — Upgrade compatible workspace dependencies and move the JWT backend to `jsonwebtoken` 12.0.0. The auth adapter now handles the upstream fallible signing-key constructors while preserving the existing token contract and backend isolation.
 
@@ -87,5 +97,6 @@
 - **External auth provider destinations (breaking)** — Dedicated Google, GitHub and QQ drivers use official destinations unconditionally. Use generic OIDC/OAuth2 for custom issuers or compatible services. Provider-option diagnostics omit rejected documents; mail diagnostic fields escape control characters. Scope/domain deduplication, mail fallback parsing and saturated cache reservations avoid repeated full scans while preserving order, fallback and TTL semantics.
 - **HTTP and local state boundaries** — Both HTTP transports combine repeated forwarding fields before trusted-proxy resolution; an active CORS policy disabling credentials removes inherited credential headers. Unix test state uses verified per-user directories, non-truncating no-follow locks and private atomic files. The Linux memory example uses the same state-file mechanics, replaces restored ledgers with private files before mounting, and bounds documents to 16 MiB with 1 MiB upload chunks; it remains a synthetic adapter.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/0030ea4083e8739b176ec0cc0edf2ee1fae5f920...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/964540389db08b070b24bcfb24cd353576a07932...HEAD
+[2026-11-17 batch]: https://github.com/AsterCommunity/AsterForge/compare/0030ea4083e8739b176ec0cc0edf2ee1fae5f920...964540389db08b070b24bcfb24cd353576a07932
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterForge/commit/0030ea4083e8739b176ec0cc0edf2ee1fae5f920
