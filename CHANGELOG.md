@@ -20,6 +20,16 @@
 
 ### Changed
 
+- **Pending crate versions** — Prepare `0.1.0-alpha.3` for auth, external-auth,
+  middleware, observability, test-support, audit, database and metrics, and
+  `0.1.0-alpha.2` for cache, config, events, tasks, utils, WebDAV, runtime, XML and
+  mail. The eleven direct updates include JWT 12 error handling, Redis 1.8.2 /
+  rand 0.10.4 / Actix Web 4.19 dependency requirements, and the PostgreSQL-only
+  test-support cleanup gate. Runtime, XML, mail, metrics, database and audit are
+  explicitly republished to align exact internal dependencies and avoid old/new
+  utils resolution conflicts; their public APIs are unchanged. Other package
+  versions stay unchanged. These candidates are not yet published.
+
 - **Dependency refresh** — Upgrade compatible workspace dependencies and move the JWT backend to `jsonwebtoken` 12.0.0. The auth adapter now handles the upstream fallible signing-key constructors while preserving the existing token contract and backend isolation.
 
 - **CI selection** — Validate changed crates and their transitive workspace dependents on pushes and PRs, with separate reusable workflows for panic, process, authentication, HTTP/crypto, XML fuzzing and native Cloud Files. Keep a stable aggregate check; run workspace coverage and the complete regression suite weekly or manually. Generated service checks use the current Forge checkout.

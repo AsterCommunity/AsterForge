@@ -11,9 +11,11 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ## Installation
 
+This checkout targets `0.1.0-alpha.3`. Check crates.io for published availability.
+
 ```toml
 [dependencies]
-aster_forge_db = "=0.1.0-alpha.2"
+aster_forge_db = "=0.1.0-alpha.3"
 ```
 
 ## Features
@@ -25,7 +27,7 @@ Available features: `all`, `audit-log`, `database-container-tests`, `mail-outbox
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_db)
-- [Rust API reference](https://docs.rs/aster_forge_db/0.1.0-alpha.2)
+- [Rust API reference](https://docs.rs/aster_forge_db/0.1.0-alpha.3)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 
