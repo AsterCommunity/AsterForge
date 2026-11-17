@@ -9,15 +9,17 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ## Installation
 
+This checkout targets `0.1.0-alpha.2`. Check crates.io for published availability.
+
 ```toml
 [dependencies]
-aster_forge_xml = "=0.1.0-alpha.1"
+aster_forge_xml = "=0.1.0-alpha.2"
 ```
 
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_xml)
-- [Rust API reference](https://docs.rs/aster_forge_xml/0.1.0-alpha.1)
+- [Rust API reference](https://docs.rs/aster_forge_xml/0.1.0-alpha.2)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 

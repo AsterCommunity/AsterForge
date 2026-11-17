@@ -33,9 +33,11 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ## Installation
 
+This checkout targets `0.1.0-alpha.3`. Check crates.io for published availability.
+
 ```toml
 [dependencies]
-aster_forge_auth = "=0.1.0-alpha.2"
+aster_forge_auth = "=0.1.0-alpha.3"
 ```
 
 ## Features
@@ -47,7 +49,7 @@ Available features: `aws-lc-rs`, `password`, `rust-crypto`. Select features acco
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_auth)
-- [Rust API reference](https://docs.rs/aster_forge_auth/0.1.0-alpha.2)
+- [Rust API reference](https://docs.rs/aster_forge_auth/0.1.0-alpha.3)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 

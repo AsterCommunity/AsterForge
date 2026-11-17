@@ -15,6 +15,8 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ## Installation
 
+This checkout targets `0.1.0-alpha.3`. Check crates.io for published availability.
+
 ```toml
 [dependencies]
 aster_forge_external_auth = { git = "https://github.com/AsterCommunity/AsterForge" }
@@ -26,12 +28,12 @@ Default features: `oidc`, `oauth2`, `rustls-aws-lc-rs`.
 
 Available features: `github`, `google`, `microsoft`, `oauth2`, `oidc`, `openapi`, `qq`, `sea-orm`, `rustls-aws-lc-rs`, `rustls-ring`, `native-tls`. Select features according to the integration documentation.
 
-HTTP encodings are explicit; the crypto dependency selects only SHA-256. To replace TLS, disable defaults and select provider and backend features together. Applications using ring must initialize its provider at startup. These backend controls are planned for `0.1.0-alpha.2`, which is not yet published.
+HTTP encodings are explicit; the crypto dependency selects only SHA-256. To replace TLS, disable defaults and select provider and backend features together. Applications using ring must initialize its provider at startup. These backend controls were introduced in the published `0.1.0-alpha.2`; this candidate retains that feature contract.
 
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_external_auth)
-- [Rust API reference](https://docs.rs/aster_forge_external_auth/0.1.0-alpha.2)
+- [Rust API reference](https://docs.rs/aster_forge_external_auth/0.1.0-alpha.3)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 

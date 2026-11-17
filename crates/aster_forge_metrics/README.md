@@ -13,6 +13,8 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ## Installation
 
+This checkout targets `0.1.0-alpha.3`. Check crates.io for published availability.
+
 ```toml
 [dependencies]
 aster_forge_metrics = { git = "https://github.com/AsterCommunity/AsterForge" }
@@ -24,12 +26,12 @@ Default features: `rustls-aws-lc-rs`, forwarded only when OTLP activates HTTP.
 
 Available features: `allocator-metrics`, `backend-prometheus`, `otlp`, `runtime-health`, `rustls-aws-lc-rs`, `rustls-ring`, `native-tls`. Select features according to the integration documentation.
 
-For a different OTLP TLS backend, disable default features and select it explicitly; ring provider initialization belongs to the product entrypoint. These backend controls are planned for `0.1.0-alpha.2`, which is not yet published.
+For a different OTLP TLS backend, disable default features and select it explicitly; ring provider initialization belongs to the product entrypoint. These backend controls were introduced in the published `0.1.0-alpha.2`; this candidate retains that feature contract.
 
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_metrics)
-- [Rust API reference](https://docs.rs/aster_forge_metrics/0.1.0-alpha.2)
+- [Rust API reference](https://docs.rs/aster_forge_metrics/0.1.0-alpha.3)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 
