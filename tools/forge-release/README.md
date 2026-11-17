@@ -22,7 +22,10 @@ versions.
 4. Review and merge that PR. Both Rust CI and Forge Release Checks must succeed
    for the exact merge SHA. Publication also verifies that this SHA belongs to a
    merged release PR from this repository's automation branch which changes the
-   release plan. A label or a plan file alone does not authorize publication.
+   release plan. CI completion dispatches a separate workflow_dispatch run with
+   that fixed SHA, because crates.io rejects workflow_run OIDC identities. The
+   dispatched run repeats the same review and CI gates. A label or a plan file
+   alone does not authorize publication.
 5. The publisher checks the entire explicit batch, verifies normalized package
    archives, then uploads in dependency order, including versioned dev dependencies. Cargo performs its
    usual per-package build verification and registry visibility wait. The tool
@@ -45,6 +48,8 @@ prove compatibility or force external applications to upgrade.
 - Configure each crate's crates.io Trusted Publisher for this repository, workflow
   forge-release.yml, and GitHub environment crates-io. The workflow exchanges
   GitHub OIDC for a temporary token only after the review and CI gates pass.
+  Enable "Require trusted publishing for all new versions" after configuring
+  the publisher to reject uploads using ordinary API tokens.
 - Require the normal CI gates on master. No workflow auto-merges release PRs.
 
 These settings are external prerequisites; adding workflow files does not set up

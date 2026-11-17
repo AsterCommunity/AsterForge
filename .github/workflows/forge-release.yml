@@ -20,6 +20,10 @@ concurrency:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
     outputs:
       sha: ${{ steps.release.outputs.sha }}
     steps:
@@ -35,7 +39,7 @@ jobs:
             await require('./.github/scripts/forge-release.cjs').gate({github, context, core});
   publish:
     needs: gate
-    if: needs.gate.outputs.sha != ''
+    if: github.event_name == 'workflow_dispatch' && needs.gate.outputs.sha != ''
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: crates-io

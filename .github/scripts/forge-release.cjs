@@ -26,7 +26,10 @@ async function releasePr(github, repo, sha) {
 }
 async function gate({github, context, core}) {
   const repo = context.repo;
-  const run = context.payload.workflow_run;
+  const completion = context.eventName === 'workflow_run';
+  if (!completion && context.eventName !== 'workflow_dispatch') throw new Error('Unsupported release event');
+  const run = completion ? context.payload.workflow_run : null;
+  if (completion && !run) throw new Error('Missing completed workflow payload');
   const sha = run?.head_sha ?? process.env.RELEASE_REVISION;
   if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error('Release retry requires a full commit SHA');
   if (run && (run.head_branch !== 'master' || run.head_repository?.full_name !== `${repo.owner}/${repo.repo}`)) return;
@@ -34,6 +37,15 @@ async function gate({github, context, core}) {
   if (!pr) { core.info('Commit is not a merged release PR; no publication.'); return; }
   const {data} = await github.rest.actions.listWorkflowRunsForRepo({...repo, head_sha: sha, per_page: 100});
   if (!checksPassed(data.workflow_runs, sha)) { core.info('Waiting for both exact-commit CI workflows.'); return; }
+  // crates.io rejects workflow_run OIDC identities. Dispatch the reviewed SHA
+  // instead; the new run repeats these gates before requesting credentials.
+  if (completion) {
+    await github.rest.actions.createWorkflowDispatch({
+      ...repo, workflow_id: 'forge-release.yml', ref: 'master', inputs: {revision: sha},
+    });
+    core.info(`Dispatched publication of reviewed release ${sha}.`);
+    return;
+  }
   core.setOutput('sha', sha);
 }
 module.exports = {branch, trustedReleasePr, checksPassed, releasePr, gate};
