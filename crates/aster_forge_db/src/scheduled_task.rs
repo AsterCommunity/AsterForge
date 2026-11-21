@@ -207,19 +207,19 @@ pub struct Model {
     /// Operator-facing display name.
     pub display_name: String,
     /// Next due timestamp.
-    pub next_run_at: TimeDateTimeWithTimeZone,
+    pub next_run_at: DateTimeUtc,
     /// Runtime owner currently claiming this due run.
     pub claim_owner_id: Option<String>,
     /// Timestamp after which another runtime may reclaim this due run.
-    pub claim_expires_at: Option<TimeDateTimeWithTimeZone>,
+    pub claim_expires_at: Option<DateTimeUtc>,
     /// Timestamp of the last successful claim.
-    pub last_claimed_at: Option<TimeDateTimeWithTimeZone>,
+    pub last_claimed_at: Option<DateTimeUtc>,
     /// Timestamp of the last successful completion.
-    pub last_finished_at: Option<TimeDateTimeWithTimeZone>,
+    pub last_finished_at: Option<DateTimeUtc>,
     /// Row creation timestamp.
-    pub created_at: TimeDateTimeWithTimeZone,
+    pub created_at: DateTimeUtc,
     /// Row update timestamp.
-    pub updated_at: TimeDateTimeWithTimeZone,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -399,7 +399,7 @@ async fn claim_due(
 
     let claim_expires_at = request
         .now
-        .checked_add(time_duration_from_std(request.claim_ttl)?)
+        .checked_add_signed(chrono_duration_from_std(request.claim_ttl)?)
         .ok_or_else(|| DbError::non_retryable("scheduled task claim expiry overflow"))?;
     let claim_available = Condition::any()
         .add(Column::ClaimOwnerId.is_null())
@@ -443,7 +443,7 @@ async fn renew_claim(
     validate_renewal(&renewal)?;
     let claim_expires_at = renewal
         .now
-        .checked_add(time_duration_from_std(renewal.claim_ttl)?)
+        .checked_add_signed(chrono_duration_from_std(renewal.claim_ttl)?)
         .ok_or_else(|| DbError::non_retryable("scheduled task claim expiry overflow"))?;
     // The owner + claim-timestamp predicate matches completion: a firing another
     // runtime reclaimed (new owner or newer last_claimed_at) can never be revived.
@@ -470,7 +470,7 @@ async fn complete_claim(
         .col_expr(Column::ClaimOwnerId, Expr::value(Option::<String>::None))
         .col_expr(
             Column::ClaimExpiresAt,
-            Expr::value(Option::<time::OffsetDateTime>::None),
+            Expr::value(Option::<chrono::DateTime<chrono::Utc>>::None),
         )
         .col_expr(
             Column::LastFinishedAt,
@@ -487,7 +487,7 @@ async fn complete_claim(
     Ok(update.rows_affected == 1)
 }
 
-fn is_claim_fresh(model: &Model, now: time::OffsetDateTime) -> bool {
+fn is_claim_fresh(model: &Model, now: chrono::DateTime<chrono::Utc>) -> bool {
     matches!(
         (&model.claim_owner_id, model.claim_expires_at),
         (Some(_), Some(expires_at)) if expires_at > now
@@ -590,16 +590,16 @@ fn validate_max_len(name: &str, value: &str, max_len: usize) -> crate::Result<()
     Ok(())
 }
 
-fn time_duration_from_std(duration: Duration) -> crate::Result<time::Duration> {
-    time::Duration::try_from(duration)
-        .map_err(|_| DbError::non_retryable("duration is too large for time"))
+fn chrono_duration_from_std(duration: Duration) -> crate::Result<chrono::Duration> {
+    chrono::Duration::from_std(duration)
+        .map_err(|_| DbError::non_retryable("duration is too large for chrono"))
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Schema};
-    use time::{Duration as TimeDuration, OffsetDateTime};
 
     use super::{
         Entity, ScheduledTaskCatalogEntry, ScheduledTaskClaimRenewal, ScheduledTaskClaimRequest,
@@ -647,7 +647,7 @@ mod tests {
         }
     }
 
-    fn entry(first_run_at: OffsetDateTime) -> ScheduledTaskCatalogEntry<'static> {
+    fn entry(first_run_at: chrono::DateTime<Utc>) -> ScheduledTaskCatalogEntry<'static> {
         ScheduledTaskCatalogEntry {
             namespace: "aster_yggdrasil",
             task_name: "audit-cleanup",
@@ -680,7 +680,7 @@ mod tests {
     #[tokio::test]
     async fn scheduled_tasks_builders_execute_on_sqlite() {
         let store = sqlite_store_from_builders().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
 
         let inserted = store
             .ensure_task(entry(now))
@@ -693,7 +693,7 @@ mod tests {
     #[tokio::test]
     async fn ensure_task_rejects_invalid_catalog_values() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
 
         let empty = store
             .ensure_task(ScheduledTaskCatalogEntry {
@@ -717,7 +717,7 @@ mod tests {
     #[tokio::test]
     async fn ensure_task_inserts_and_refreshes_display_name_without_resetting_schedule() {
         let store = sqlite_store().await;
-        let first_run_at = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let first_run_at = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
 
         let inserted = store
             .ensure_task(entry(first_run_at))
@@ -729,7 +729,7 @@ mod tests {
         let refreshed = store
             .ensure_task(ScheduledTaskCatalogEntry {
                 display_name: "Audit cleanup v2",
-                first_run_at: first_run_at + TimeDuration::hours(1),
+                first_run_at: first_run_at + ChronoDuration::hours(1),
                 ..entry(first_run_at)
             })
             .await
@@ -741,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn claim_due_claims_once_until_completion_or_expiry() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -765,7 +765,7 @@ mod tests {
                 namespace: "aster_yggdrasil",
                 task_name: "audit-cleanup",
                 owner_id: "runtime-b",
-                now: now + TimeDuration::seconds(1),
+                now: now + ChronoDuration::seconds(1),
                 claim_ttl: std::time::Duration::from_secs(30),
             })
             .await
@@ -777,7 +777,7 @@ mod tests {
                 namespace: "aster_yggdrasil",
                 task_name: "audit-cleanup",
                 owner_id: "runtime-b",
-                now: now + TimeDuration::seconds(31),
+                now: now + ChronoDuration::seconds(31),
                 claim_ttl: std::time::Duration::from_secs(30),
             })
             .await
@@ -789,7 +789,7 @@ mod tests {
     #[tokio::test]
     async fn claim_due_blocks_duplicate_fresh_claim_from_same_owner() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -813,7 +813,7 @@ mod tests {
                 namespace: "aster_yggdrasil",
                 task_name: "audit-cleanup",
                 owner_id: "runtime-a",
-                now: now + TimeDuration::seconds(1),
+                now: now + ChronoDuration::seconds(1),
                 claim_ttl: std::time::Duration::from_secs(30),
             })
             .await
@@ -824,9 +824,9 @@ mod tests {
     #[tokio::test]
     async fn claim_due_skips_not_due_and_rejects_zero_ttl() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
-            .ensure_task(entry(now + TimeDuration::minutes(5)))
+            .ensure_task(entry(now + ChronoDuration::minutes(5)))
             .await
             .expect("scheduled task should insert");
 
@@ -858,7 +858,7 @@ mod tests {
     #[tokio::test]
     async fn completing_claim_advances_next_run_and_clears_claim() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -874,13 +874,13 @@ mod tests {
             .await
             .expect("claim should succeed")
             .expect("task should be due");
-        let next_run_at = now + TimeDuration::hours(1);
+        let next_run_at = now + ChronoDuration::hours(1);
 
         assert!(
             store
                 .complete_claim(ScheduledTaskCompletion {
                     claim,
-                    finished_at: now + TimeDuration::seconds(5),
+                    finished_at: now + ChronoDuration::seconds(5),
                     next_run_at,
                 })
                 .await
@@ -892,7 +892,7 @@ mod tests {
                 namespace: "aster_yggdrasil",
                 task_name: "audit-cleanup",
                 owner_id: "runtime-a",
-                now: now + TimeDuration::minutes(30),
+                now: now + ChronoDuration::minutes(30),
                 claim_ttl: std::time::Duration::from_secs(30),
             })
             .await
@@ -903,7 +903,7 @@ mod tests {
     #[tokio::test]
     async fn complete_claim_requires_matching_owner_and_claim_timestamp() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -926,21 +926,21 @@ mod tests {
             !store
                 .complete_claim(ScheduledTaskCompletion {
                     claim: wrong_owner,
-                    finished_at: now + TimeDuration::seconds(5),
-                    next_run_at: now + TimeDuration::hours(1),
+                    finished_at: now + ChronoDuration::seconds(5),
+                    next_run_at: now + ChronoDuration::hours(1),
                 })
                 .await
                 .expect("wrong owner completion should query")
         );
 
         let mut wrong_claim_time = claim;
-        wrong_claim_time.claimed_at += TimeDuration::seconds(1);
+        wrong_claim_time.claimed_at += ChronoDuration::seconds(1);
         assert!(
             !store
                 .complete_claim(ScheduledTaskCompletion {
                     claim: wrong_claim_time,
-                    finished_at: now + TimeDuration::seconds(5),
-                    next_run_at: now + TimeDuration::hours(1),
+                    finished_at: now + ChronoDuration::seconds(5),
+                    next_run_at: now + ChronoDuration::hours(1),
                 })
                 .await
                 .expect("wrong claim timestamp completion should query")
@@ -950,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn complete_claim_rejects_next_run_that_does_not_advance_schedule() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -970,7 +970,7 @@ mod tests {
         let error = store
             .complete_claim(ScheduledTaskCompletion {
                 claim,
-                finished_at: now + TimeDuration::seconds(5),
+                finished_at: now + ChronoDuration::seconds(5),
                 next_run_at: now,
             })
             .await
@@ -982,7 +982,7 @@ mod tests {
     #[tokio::test]
     async fn renew_claim_extends_expiry_and_blocks_reclaim_while_fresh() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -1004,7 +1004,7 @@ mod tests {
             store
                 .renew_claim(ScheduledTaskClaimRenewal {
                     claim: &claim,
-                    now: now + TimeDuration::seconds(25),
+                    now: now + ChronoDuration::seconds(25),
                     claim_ttl: std::time::Duration::from_secs(30),
                 })
                 .await
@@ -1017,7 +1017,7 @@ mod tests {
                 namespace: "aster_yggdrasil",
                 task_name: "audit-cleanup",
                 owner_id: "runtime-b",
-                now: now + TimeDuration::seconds(40),
+                now: now + ChronoDuration::seconds(40),
                 claim_ttl: std::time::Duration::from_secs(30),
             })
             .await
@@ -1030,7 +1030,7 @@ mod tests {
                 namespace: "aster_yggdrasil",
                 task_name: "audit-cleanup",
                 owner_id: "runtime-b",
-                now: now + TimeDuration::seconds(56),
+                now: now + ChronoDuration::seconds(56),
                 claim_ttl: std::time::Duration::from_secs(30),
             })
             .await
@@ -1042,7 +1042,7 @@ mod tests {
     #[tokio::test]
     async fn renew_claim_requires_matching_owner_and_claim_timestamp() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -1065,7 +1065,7 @@ mod tests {
             !store
                 .renew_claim(ScheduledTaskClaimRenewal {
                     claim: &wrong_owner,
-                    now: now + TimeDuration::seconds(10),
+                    now: now + ChronoDuration::seconds(10),
                     claim_ttl: std::time::Duration::from_secs(30),
                 })
                 .await
@@ -1073,12 +1073,12 @@ mod tests {
         );
 
         let mut wrong_claim_time = claim.clone();
-        wrong_claim_time.claimed_at += TimeDuration::seconds(1);
+        wrong_claim_time.claimed_at += ChronoDuration::seconds(1);
         assert!(
             !store
                 .renew_claim(ScheduledTaskClaimRenewal {
                     claim: &wrong_claim_time,
-                    now: now + TimeDuration::seconds(10),
+                    now: now + ChronoDuration::seconds(10),
                     claim_ttl: std::time::Duration::from_secs(30),
                 })
                 .await
@@ -1089,7 +1089,7 @@ mod tests {
     #[tokio::test]
     async fn renew_claim_after_expiry_without_contestation_revives_claim() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -1113,7 +1113,7 @@ mod tests {
             store
                 .renew_claim(ScheduledTaskClaimRenewal {
                     claim: &claim,
-                    now: now + TimeDuration::seconds(40),
+                    now: now + ChronoDuration::seconds(40),
                     claim_ttl: std::time::Duration::from_secs(30),
                 })
                 .await
@@ -1124,7 +1124,7 @@ mod tests {
     #[tokio::test]
     async fn renew_claim_rejects_zero_ttl() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         store
             .ensure_task(entry(now))
             .await
@@ -1144,7 +1144,7 @@ mod tests {
         let error = store
             .renew_claim(ScheduledTaskClaimRenewal {
                 claim: &claim,
-                now: now + TimeDuration::seconds(10),
+                now: now + ChronoDuration::seconds(10),
                 claim_ttl: std::time::Duration::ZERO,
             })
             .await

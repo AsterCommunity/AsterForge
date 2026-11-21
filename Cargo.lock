@@ -581,10 +581,10 @@ dependencies = [
 name = "aster_forge_api"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "utoipa",
 ]
@@ -606,10 +606,9 @@ dependencies = [
  "aster_forge_mail",
  "aster_forge_runtime",
  "aster_forge_test",
+ "chrono",
  "sea-orm",
- "time",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -638,7 +637,6 @@ dependencies = [
  "async-trait",
  "bloomfilter",
  "criterion",
- "dashmap",
  "futures",
  "moka",
  "parking_lot 0.13.0",
@@ -748,12 +746,12 @@ dependencies = [
  "aster_forge_test",
  "aster_forge_utils",
  "async-trait",
+ "chrono",
  "futures",
  "sea-orm",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tracing",
  "url",
@@ -933,7 +931,6 @@ dependencies = [
  "axum",
  "tokio",
  "tower",
- "tracing",
 ]
 
 [[package]]
@@ -963,11 +960,11 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_utils",
  "async-trait",
+ "chrono",
  "futures",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tokio-util",
  "tracing",
@@ -991,12 +988,12 @@ dependencies = [
  "aster_forge_test",
  "aster_forge_utils",
  "async-trait",
+ "chrono",
  "futures",
  "rand 0.10.4",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1013,7 +1010,6 @@ dependencies = [
  "aster_forge_utils",
  "fs2",
  "redis",
- "reqwest",
  "rustix",
  "sea-orm",
  "serde",
@@ -1063,12 +1059,12 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "chrono",
  "futures",
  "headers",
  "http 1.5.0",
  "percent-encoding",
  "thiserror 2.0.21",
- "time",
 ]
 
 [[package]]

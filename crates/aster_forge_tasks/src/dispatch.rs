@@ -4,8 +4,8 @@ use std::future::Future;
 use std::time::Duration;
 use tracing::Instrument;
 
+use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
-use time::OffsetDateTime;
 
 use crate::{TaskCoreError, TaskLease, TaskRecord, task_lease_expires_at};
 
@@ -62,20 +62,23 @@ pub trait ClaimableTaskRecord<Kind>: TaskRecord<Kind> {
 pub struct TaskClaimRequest<Kind: 'static, Lane> {
     pub lane: TaskLaneConfig<Kind, Lane>,
     pub max_claim: usize,
-    pub now: OffsetDateTime,
-    pub stale_before: OffsetDateTime,
-    pub lease_expires_at: OffsetDateTime,
+    pub now: DateTime<Utc>,
+    pub stale_before: DateTime<Utc>,
+    pub lease_expires_at: DateTime<Utc>,
     processing_stale_secs: i64,
 }
 
 impl<Kind: Copy, Lane: Copy> TaskClaimRequest<Kind, Lane> {
     /// Refreshes timing after waiting for an authoritative quota lock.
     #[must_use]
-    pub fn at(mut self, now: OffsetDateTime) -> Self {
+    pub fn at(mut self, now: DateTime<Utc>) -> Self {
         self.now = now;
         self.stale_before = now
-            .checked_sub(time::Duration::seconds(self.processing_stale_secs.max(1)))
-            .unwrap_or(time::PrimitiveDateTime::MIN.assume_utc());
+            .checked_sub_signed(
+                chrono::Duration::try_seconds(self.processing_stale_secs.max(1))
+                    .unwrap_or(chrono::Duration::MAX),
+            )
+            .unwrap_or(DateTime::<Utc>::MIN_UTC);
         self.lease_expires_at = task_lease_expires_at(now, self.processing_stale_secs);
         self
     }
@@ -146,7 +149,7 @@ where
             tracing::trace!(reason = "local_capacity", "lane claim skipped");
             return Ok(Vec::new());
         }
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
         let request = TaskClaimRequest {
             lane: lane_config,
             max_claim,
@@ -1000,7 +1003,7 @@ mod tests {
 
     #[test]
     fn request_timing_saturates_and_token_overflow_is_checked() {
-        let now = time::OffsetDateTime::now_utc();
+        let now = chrono::Utc::now();
         let request = super::TaskClaimRequest {
             lane: TaskLaneConfig {
                 lane: TestLane::Default,
@@ -1017,11 +1020,11 @@ mod tests {
         .at(now);
         assert_eq!(
             request.stale_before,
-            time::PrimitiveDateTime::MIN.assume_utc()
+            chrono::DateTime::<chrono::Utc>::MIN_UTC
         );
         assert_eq!(
             request.lease_expires_at,
-            time::PrimitiveDateTime::MAX.assume_utc()
+            chrono::DateTime::<chrono::Utc>::MAX_UTC
         );
         assert!(
             super::task_claim_candidates(&[TestTask {

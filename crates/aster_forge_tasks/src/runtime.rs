@@ -11,9 +11,9 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use rand::RngExt;
-use time::OffsetDateTime;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -336,10 +336,8 @@ pub async fn run_periodic_task<
     TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
     TaskFut: Future<Output = Outcome> + Send,
     PanicFn: Fn(String) -> Outcome + Send + Sync + 'static,
-    RecordFn: Fn(State, Name, OffsetDateTime, OffsetDateTime, Outcome) -> RecordFut
-        + Send
-        + Sync
-        + 'static,
+    RecordFn:
+        Fn(State, Name, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut + Send + Sync + 'static,
     RecordFut: Future<Output = ()> + Send,
     Outcome: Send + 'static,
 {
@@ -420,14 +418,12 @@ pub async fn run_recorded_task_iteration<
     TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
     TaskFut: Future<Output = Outcome> + Send,
     PanicFn: Fn(String) -> Outcome + Send + Sync + 'static,
-    RecordFn: Fn(State, Name, OffsetDateTime, OffsetDateTime, Outcome) -> RecordFut
-        + Send
-        + Sync
-        + 'static,
+    RecordFn:
+        Fn(State, Name, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut + Send + Sync + 'static,
     RecordFut: Future<Output = ()> + Send,
     Outcome: Send + 'static,
 {
-    let started_at = OffsetDateTime::now_utc();
+    let started_at = Utc::now();
     let outcome = match AssertUnwindSafe(task_fn(state.clone()))
         .catch_unwind()
         .await
@@ -439,7 +435,7 @@ pub async fn run_recorded_task_iteration<
             panic_outcome(panic_message)
         }
     };
-    let finished_at = OffsetDateTime::now_utc();
+    let finished_at = Utc::now();
 
     record_outcome(state, name, started_at, finished_at, outcome).await;
 }
@@ -585,7 +581,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use time::OffsetDateTime;
+    use chrono::{DateTime, Utc};
     use tokio::sync::{Notify, oneshot};
     use tokio_util::sync::CancellationToken;
 
@@ -744,8 +740,8 @@ mod tests {
             &self,
             _lease_id: &str,
             _owner_id: &str,
-            _now: OffsetDateTime,
-            _expires_at: OffsetDateTime,
+            _now: DateTime<Utc>,
+            _expires_at: DateTime<Utc>,
         ) -> Result<bool, Self::Error> {
             Ok(true)
         }
@@ -835,7 +831,7 @@ mod tests {
             &TestOutcome::Failed,
             &{
                 let recorded = recorded.clone();
-                move |(), name, started_at: OffsetDateTime, finished_at, outcome| {
+                move |(), name, started_at: DateTime<Utc>, finished_at, outcome| {
                     let recorded = recorded.clone();
                     async move {
                         assert_eq!(name, TestTaskName::Cleanup);

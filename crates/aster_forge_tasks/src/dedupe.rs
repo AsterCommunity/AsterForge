@@ -7,7 +7,7 @@
 //! windows. Product repositories should persist this key in a nullable unique
 //! column and return the existing row when a duplicate insert races.
 
-use time::OffsetDateTime;
+use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::{Result, TaskCoreError};
 
@@ -60,23 +60,17 @@ impl TaskDedupeKey {
 pub fn scheduled_task_dedupe_key(
     namespace: &str,
     task_name: &str,
-    scheduled_at: OffsetDateTime,
+    scheduled_at: DateTime<Utc>,
 ) -> Result<TaskDedupeKey> {
     TaskDedupeKey::new(format!(
         "schedule:{namespace}:{task_name}:{}",
-        scheduled_at
-            .to_offset(time::UtcOffset::UTC)
-            .format(time::macros::format_description!(
-                "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
-            ))
-            .map_err(|_| TaskCoreError::invalid_value(
-                "scheduled task timestamp is not representable"
-            ))?
+        scheduled_at.to_rfc3339_opts(SecondsFormat::Secs, true)
     ))
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
 
     use super::{TASK_DEDUPE_KEY_MAX_LEN, TaskDedupeKey, scheduled_task_dedupe_key};
 
@@ -95,29 +89,13 @@ mod tests {
         let key = scheduled_task_dedupe_key(
             "aster_yggdrasil",
             "task-cleanup",
-            time::macros::datetime!(2026-06-26 01:02:03 UTC),
+            Utc.with_ymd_and_hms(2026, 6, 26, 1, 2, 3).unwrap(),
         )
         .unwrap();
 
         assert_eq!(
             key.as_str(),
             "schedule:aster_yggdrasil:task-cleanup:2026-06-26T01:02:03Z"
-        );
-    }
-
-    #[test]
-    fn schedule_dedupe_normalizes_offsets_and_discards_subseconds() {
-        let utc = time::macros::datetime!(2026-06-26 01:02:03.999999999 UTC);
-        let offset = utc.to_offset(time::macros::offset!(+08:00));
-        assert_eq!(
-            scheduled_task_dedupe_key("app", "job", utc).unwrap(),
-            scheduled_task_dedupe_key("app", "job", offset).unwrap()
-        );
-        assert_eq!(
-            scheduled_task_dedupe_key("app", "job", utc)
-                .unwrap()
-                .as_str(),
-            "schedule:app:job:2026-06-26T01:02:03Z"
         );
     }
 }

@@ -165,7 +165,7 @@ store
         details: details.map(|value| value.to_string()),
         ip_address: ctx.ip_address.clone(),
         user_agent: ctx.user_agent.clone(),
-        created_at: time::OffsetDateTime::now_utc(),
+        created_at: chrono::Utc::now(),
     })
     .await?;
 ```

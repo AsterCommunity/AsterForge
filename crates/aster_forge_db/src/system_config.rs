@@ -12,6 +12,7 @@
 //! validate logical values first, then perform any product-owned secret encoding. Write and audit
 //! in one transaction; update snapshots and publish reload hints only after successful commit.
 
+use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
     Alias, ColumnDef, Index, IndexCreateStatement, Table, TableCreateStatement, TableDropStatement,
@@ -21,7 +22,6 @@ use sea_orm::{
     DbBackend, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TryInsertResult,
 };
-use time::OffsetDateTime;
 
 use crate::DbError;
 use aster_forge_config::{
@@ -253,7 +253,7 @@ pub struct Model {
     /// Product description for admin UIs.
     pub description: String,
     /// Last update timestamp.
-    pub updated_at: TimeDateTimeWithTimeZone,
+    pub updated_at: DateTimeUtc,
     /// Optional actor user id.
     pub updated_by: Option<i64>,
 }
@@ -307,7 +307,7 @@ pub struct PresentedSystemConfig {
     /// Product description for admin UIs.
     pub description: String,
     /// Last update timestamp.
-    pub updated_at: TimeDateTimeWithTimeZone,
+    pub updated_at: DateTimeUtc,
     /// Optional actor user id.
     pub updated_by: Option<i64>,
 }
@@ -821,7 +821,7 @@ pub async fn upsert_prevalidated<C: ConnectionTrait>(
     registry: &'static ConfigRegistry,
     request: SystemConfigUpsert<'_>,
 ) -> crate::Result<Model> {
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     let definition = registry.get(request.key);
     let is_custom_key = definition.is_none();
     let active = definition.map_or_else(
@@ -904,7 +904,7 @@ pub async fn ensure_system_value_if_missing<C: ConnectionTrait>(
     let def = registry
         .get(key)
         .ok_or_else(|| DbError::non_retryable(format!("config key '{key}' not found")))?;
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     insert_do_nothing(
         build_system_active_model(def, value.to_string(), now, None),
         db,
@@ -965,7 +965,7 @@ pub async fn ensure_defaults<C: ConnectionTrait>(
         .default_seed_records()
         .map_err(DbError::non_retryable)?
     {
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
         let key = seed.key.clone();
         let inserted = insert_do_nothing(
             build_system_active_model_from_seed(seed, now, None),
@@ -1028,7 +1028,7 @@ async fn insert_do_nothing<C: ConnectionTrait>(
 fn build_system_active_model(
     def: &ConfigDefinition,
     value: String,
-    now: OffsetDateTime,
+    now: DateTime<Utc>,
     updated_by: Option<i64>,
 ) -> ActiveModel {
     ActiveModel {
@@ -1050,7 +1050,7 @@ fn build_system_active_model(
 
 fn build_system_active_model_from_seed(
     seed: ConfigSeedRecord,
-    now: OffsetDateTime,
+    now: DateTime<Utc>,
     updated_by: Option<i64>,
 ) -> ActiveModel {
     ActiveModel {
@@ -1074,7 +1074,7 @@ fn build_custom_active_model(
     key: &str,
     value: String,
     visibility: ConfigVisibility,
-    now: OffsetDateTime,
+    now: DateTime<Utc>,
     updated_by: Option<i64>,
 ) -> ActiveModel {
     ActiveModel {
@@ -1105,12 +1105,12 @@ mod tests {
         ConfigDefinition, ConfigRegistry, ConfigSource, ConfigValue, ConfigValueType,
         ConfigVisibility, config_value_audit_string,
     };
+    use chrono::Utc;
     use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend, EntityTrait,
         PaginatorTrait, QueryFilter, Set,
     };
-    use time::OffsetDateTime;
 
     const PRIMARY_KEY: &str = "primary_key";
     const ARRAY_KEY: &str = "array_key";
@@ -1262,7 +1262,7 @@ mod tests {
     #[tokio::test]
     async fn system_config_unique_index_rejects_duplicate_keys() {
         let db = sqlite_db_from_builders().await;
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
 
         Entity::insert(super::build_system_active_model(
             &PRIMARY,
@@ -1598,7 +1598,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.value, "direct");
-        assert!(stored.updated_at <= OffsetDateTime::now_utc());
+        assert!(stored.updated_at <= Utc::now());
     }
 
     #[tokio::test]
@@ -1620,7 +1620,7 @@ mod tests {
             &PRIMARY_KEY.to_ascii_uppercase(),
             "operator value".into(),
             ConfigVisibility::Public,
-            OffsetDateTime::now_utc(),
+            Utc::now(),
             Some(42),
         );
         alias.category = Set("custom category".into());

@@ -229,9 +229,3 @@ SDK 验证脚本从 lib schema 测试导出真实 OpenAPI，使用固定的 `ope
 
 - AsterDrive：文件、文件夹、分享、任务列表等 cursor 分页。
 - AsterYggdrasil：管理员任务和用户列表等较轻 API。
-
-## time 类型迁移
-
-本次 alpha 的时间类型使用 `time::OffsetDateTime`：将原 `DateTime<Utc>` 参数、返回值和产品 trait 实现一起迁移；取当前时间使用 `OffsetDateTime::now_utc()`。持续时间使用 `time::Duration`，std Duration 通过 `try_from` 转换。数据库实体使用 SeaORM 的 `TimeDateTimeWithTimeZone`；现有 SQL 列类型保持不变，产品历史 migration 仍由产品管理。
-
-序列化时间字段继续使用 RFC3339 字符串（含偏移/子秒）与 null，字段不改成 time 默认元组；产品自行声明的 DTO 应显式使用 `#[serde(with = "time::serde::rfc3339")]`，Option 使用 `time::serde::rfc3339::option`。OpenAPI 按 date-time/string 生成。time 默认日期范围是 -9999 至 9999 年，租约与调度的极限值处理按可表示范围做 checked/saturating 运算。任务持久化 dedupe key 继续 UTC 秒格式，时间偏移不生成另一份 key。

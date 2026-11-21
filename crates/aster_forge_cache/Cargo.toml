@@ -22,7 +22,6 @@ aster_forge_runtime = { workspace = true, optional = true }
 aster_forge_utils = { workspace = true, optional = true }
 async-trait.workspace = true
 bloomfilter = { workspace = true, optional = true }
-dashmap.workspace = true
 moka.workspace = true
 parking_lot = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }

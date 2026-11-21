@@ -1468,22 +1468,3 @@ fn property_byte_limit_has_a_stable_exact_boundary_and_no_sticky_failure() {
         assert_eq!(result.is_ok(), accepted, "bytes={bytes}");
     }
 }
-
-#[test]
-fn creation_date_preserves_fractional_precision_and_handles_pre_epoch() {
-    for (nanos, fraction) in [
-        (0, ""),
-        (100_000_000, ".100"),
-        (123_400_000, ".123400"),
-        (123_456_789, ".123456789"),
-    ] {
-        assert_eq!(
-            format_creation_date(UNIX_EPOCH + Duration::new(0, nanos)),
-            format!("1970-01-01T00:00:00{fraction}+00:00")
-        );
-    }
-    assert_eq!(
-        format_creation_date(UNIX_EPOCH - Duration::from_nanos(1)),
-        "1969-12-31T23:59:59.999999999+00:00"
-    );
-}

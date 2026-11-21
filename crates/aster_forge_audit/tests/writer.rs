@@ -4,10 +4,10 @@
 use aster_forge_audit::*;
 use aster_forge_db::{AuditLogCreate, audit_log};
 use aster_forge_runtime::*;
+use chrono::Utc;
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait};
 use std::sync::Arc;
 use std::time::Duration;
-use time::OffsetDateTime;
 use tokio::time::Instant;
 
 fn request(id: i64) -> AuditLogCreate {
@@ -20,7 +20,7 @@ fn request(id: i64) -> AuditLogCreate {
         details: None,
         ip_address: None,
         user_agent: None,
-        created_at: OffsetDateTime::now_utc(),
+        created_at: Utc::now(),
     }
 }
 fn deadline() -> Instant {

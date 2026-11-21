@@ -22,31 +22,7 @@ use aster_forge_utils::url::parse_absolute_url;
 /// Formats a DAV `creationdate` value as RFC 3339 UTC text.
 #[must_use]
 pub fn format_creation_date(time: SystemTime) -> String {
-    let nanos = match time.duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => i128::try_from(duration.as_nanos()),
-        Err(error) => i128::try_from(error.duration().as_nanos()).map(|nanos| -nanos),
-    };
-    nanos
-        .ok()
-        .and_then(|nanos| time::OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
-        .and_then(|timestamp| {
-            let format = match timestamp.nanosecond() {
-                0 => time::macros::format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second]+00:00"
-                ),
-                nanos if nanos % 1_000_000 == 0 => time::macros::format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]+00:00"
-                ),
-                nanos if nanos % 1_000 == 0 => time::macros::format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]+00:00"
-                ),
-                _ => time::macros::format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]+00:00"
-                ),
-            };
-            timestamp.format(format).ok()
-        })
-        .unwrap_or_else(|| "<timestamp unavailable>".into())
+    chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339()
 }
 
 /// Metadata values fetched once for all standard content and validator properties.

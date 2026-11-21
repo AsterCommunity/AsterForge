@@ -16,20 +16,18 @@
 
 ### Changed
 
-- **Maintained time APIs (breaking)** — Replace Forge's direct `chrono` usage
-  with workspace-owned `time::OffsetDateTime` throughout API cursors, task and
-  runtime leases, schedules, shared database entities, WebDAV and panic reports.
-  Migrate product trait implementations and timestamp fields together. API/step
-  timestamps remain RFC3339 strings/null; SQL column shapes stay unchanged,
-  scheduled dedupe keys retain UTC-second identity, and panic timestamps retain
-  UTC milliseconds. Out-of-range panic clocks return an unavailable marker.
-  The generated service's build timestamp also uses `time`. Chrono remains a
-  transitive dependency of published OIDC and SeaORM migration dependencies;
-  this does not resolve RUSTSEC-2026-0543 for the complete workspace lockfile.
+- **Panic timestamp dependency** — Generate the default UTC millisecond panic
+  timestamp with workspace-owned `time`; out-of-range system clocks report an
+  unavailable marker without panicking inside the hook. Public APIs, task/runtime
+  timestamps, database entities and encodings, WebDAV and the service template
+  retain chrono. Track the broader migration in #75 and explicitly accept the
+  unmaintained advisory RUSTSEC-2026-0543 until direct/upstream adoption is ready.
 - **Dependency refresh** — Run `cargo upgrade --incompatible allow --pinned allow`
   and `cargo update`, including Actix Web 4.20, fuser 0.19, SQLx 0.9.1 and
   libsqlite3-sys 0.40. Linux FUSE accepts the new callback parameters and rejects
   ownership/privilege requests the fixed mount policy cannot represent.
+  Remove unused dependency declarations and enable optional logging/HTTP
+  dependencies only through their owning features.
 - **Affected package versions** — Increment each of the 31 affected publishable
   crates by one alpha release and synchronize exact workspace dependency pins.
   Macros, API-doc macros and validation retain their versions. Versions record
@@ -46,8 +44,9 @@
   bare-newline/chunk-boundary dot-stuffing regression tests.
 - **Audit exceptions** — Remove the resolved libsqlite3-sys and crypto-bigint
   exceptions after dependency updates. Retain the scoped RSA, h2, paste and
-  testcontainers tar exceptions with current dependency evidence; no new
-  chrono exception is added.
+  testcontainers tar exceptions with current dependency evidence, and record a
+  scoped chrono maintenance exception linked to #75; this is accepted risk,
+  not remediation.
 
 ### Fixed
 

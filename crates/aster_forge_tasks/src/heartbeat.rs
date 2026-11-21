@@ -4,7 +4,7 @@
 //! loop: interval scheduling, cooperative stop handling, stale-worker detection, and transient
 //! storage-error handling.
 
-use time::OffsetDateTime;
+use chrono::{DateTime, Utc};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -40,8 +40,8 @@ pub trait TaskHeartbeatStore: Send + Sync {
     async fn touch_task_heartbeat(
         &self,
         lease: TaskLease,
-        now: OffsetDateTime,
-        lease_expires_at: OffsetDateTime,
+        now: DateTime<Utc>,
+        lease_expires_at: DateTime<Utc>,
     ) -> std::result::Result<TaskHeartbeatOutcome, Self::Error>;
 }
 
@@ -54,7 +54,7 @@ pub async fn run_task_heartbeat_loop<Store, LeaseExpiresFn>(
     lease_expires_at: LeaseExpiresFn,
 ) where
     Store: TaskHeartbeatStore,
-    LeaseExpiresFn: Fn(OffsetDateTime) -> OffsetDateTime + Send + Sync,
+    LeaseExpiresFn: Fn(DateTime<Utc>) -> DateTime<Utc> + Send + Sync,
 {
     let mut heartbeat = tokio::time::interval(interval);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -64,7 +64,7 @@ pub async fn run_task_heartbeat_loop<Store, LeaseExpiresFn>(
         tokio::select! {
             () = stop_token.cancelled() => return,
             _ = heartbeat.tick() => {
-                let now = OffsetDateTime::now_utc();
+                let now = Utc::now();
                 let result = tokio::select! {
                     () = stop_token.cancelled() => return,
                     result = store.touch_task_heartbeat(
@@ -92,7 +92,7 @@ pub fn spawn_task_heartbeat_with_interval<Store, LeaseExpiresFn>(
 ) -> JoinHandle<()>
 where
     Store: TaskHeartbeatStore + 'static,
-    LeaseExpiresFn: Fn(OffsetDateTime) -> OffsetDateTime + Send + Sync + 'static,
+    LeaseExpiresFn: Fn(DateTime<Utc>) -> DateTime<Utc> + Send + Sync + 'static,
 {
     tokio::spawn(
         async move {
@@ -162,7 +162,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use time::OffsetDateTime;
+    use chrono::{DateTime, Utc};
     use tokio_util::sync::CancellationToken;
 
     use super::{
@@ -183,8 +183,8 @@ mod tests {
         async fn touch_task_heartbeat(
             &self,
             _lease: TaskLease,
-            _now: OffsetDateTime,
-            _lease_expires_at: OffsetDateTime,
+            _now: DateTime<Utc>,
+            _lease_expires_at: DateTime<Utc>,
         ) -> std::result::Result<TaskHeartbeatOutcome, Self::Error> {
             self.touches.fetch_add(1, Ordering::SeqCst);
             Ok(self.should_match.load(Ordering::SeqCst).into())

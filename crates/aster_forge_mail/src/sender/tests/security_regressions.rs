@@ -4,15 +4,20 @@ use crate::{
     sender::{build_lettre_message, mailbox},
 };
 use lettre::transport::smtp::{
-    client::{AsyncSmtpConnection, TlsParameters},
+    client::{AsyncSmtpConnection, AsyncTokioStream, TlsParameters},
     extension::{ClientId, ServerInfo},
     response::Response,
 };
 use std::{
-    io::{BufRead as _, BufReader, Read as _, Write as _},
+    io::{self, BufRead as _, BufReader, Write as _},
     net::{TcpListener, TcpStream},
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
     time::Duration,
 };
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 #[test]
 fn whitespace_only_ehlo_lines_do_not_panic() {
@@ -82,7 +87,7 @@ fn message_headers_and_envelope_do_not_redirect_quoted_addresses() {
     assert!(headers.contains("Subject: subject"));
 }
 
-fn handshake(listener: TcpListener, extensions: &[u8]) -> BufReader<TcpStream> {
+fn handshake(listener: &TcpListener, extensions: &[u8]) -> BufReader<TcpStream> {
     let (stream, _) = listener.accept().unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -133,50 +138,85 @@ async fn oversized_reply_is_rejected_before_the_peer_closes_or_send_times_out() 
     assert!(format!("{error:?}").contains("SMTP response too large"));
 }
 
+#[derive(Debug)]
+struct ScriptedSmtp {
+    response: usize,
+    transcript: Arc<Mutex<Vec<u8>>>,
+}
+
+impl AsyncRead for ScriptedSmtp {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let responses: &[&[u8]] = &[
+            b"220 localhost\r\n",
+            b"250-localhost\r\n250 STARTTLS\r\n",
+            b"220 Ready to start TLS\r\n250 injected reply\r\n",
+        ];
+        if let Some(response) = responses.get(self.response) {
+            // The attack response and its injected line are deliberately returned by
+            // one read, independent of TCP segmentation or thread scheduling.
+            assert!(buffer.remaining() >= response.len());
+            buffer.put_slice(response);
+            self.response += 1;
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for ScriptedSmtp {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.transcript.lock().unwrap().extend_from_slice(bytes);
+        Poll::Ready(Ok(bytes.len()))
+    }
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncTokioStream for ScriptedSmtp {
+    fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+        Ok(([127, 0, 0, 1], 25).into())
+    }
+}
+
 #[tokio::test]
 async fn starttls_rejects_extra_plaintext_response_before_any_tls_handshake() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let peer = std::thread::spawn(move || {
-        let mut stream = handshake(listener, b"250-localhost\r\n250 STARTTLS\r\n");
-        let mut command = String::new();
-        stream.read_line(&mut command).unwrap();
-        assert_eq!(command, "STARTTLS\r\n");
-        stream
-            .get_mut()
-            .write_all(b"220 Ready to start TLS\r\n250 injected reply\r\n")
+    let transcript = Arc::new(Mutex::new(Vec::new()));
+    let stream = ScriptedSmtp {
+        response: 0,
+        transcript: transcript.clone(),
+    };
+    let mut connection =
+        AsyncSmtpConnection::connect_with_transport(Box::new(stream), &ClientId::default())
+            .await
             .unwrap();
-        let mut extra = Vec::new();
-        stream.read_to_end(&mut extra).unwrap();
-        assert_eq!(
-            extra,
-            Vec::<u8>::new(),
-            "no command or TLS handshake may follow a forged plaintext reply"
-        );
-    });
-    let mut connection = AsyncSmtpConnection::connect_tokio1(
-        address,
-        Some(Duration::from_secs(3)),
-        &ClientId::default(),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        connection.starttls(
+    let result = connection
+        .starttls(
             TlsParameters::new("localhost".into()).unwrap(),
             &ClientId::default(),
-        ),
-    )
-    .await
-    .unwrap();
+        )
+        .await;
     assert!(
         format!("{:?}", result.unwrap_err()).contains("unexpected data after the STARTTLS reply")
     );
-    drop(connection);
-    peer.join().unwrap();
+    let sent = transcript.lock().unwrap();
+    assert!(sent.starts_with(b"EHLO "));
+    let first_end = sent.windows(2).position(|bytes| bytes == b"\r\n").unwrap() + 2;
+    assert_eq!(
+        &sent[first_end..],
+        b"STARTTLS\r\n",
+        "no plaintext command or TLS handshake may follow the injected response"
+    );
 }
 
 #[tokio::test]
@@ -184,7 +224,7 @@ async fn raw_data_dot_stuffing_covers_bare_cr_lf_crlf_and_chunk_boundaries() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let peer = std::thread::spawn(move || {
-        let mut stream = handshake(listener, b"250 localhost\r\n");
+        let mut stream = handshake(&listener, b"250 localhost\r\n");
         let mut bytes = Vec::new();
         loop {
             let mut line = Vec::new();

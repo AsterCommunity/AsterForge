@@ -22,7 +22,7 @@ aster_forge_utils = { workspace = true }
 aster_forge_xml = { workspace = true }
 async-trait.workspace = true
 bytes.workspace = true
-time.workspace = true
+chrono = { workspace = true, features = ["clock"] }
 futures.workspace = true
 headers.workspace = true
 http.workspace = true

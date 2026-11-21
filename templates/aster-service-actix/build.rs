@@ -69,9 +69,7 @@ fn configure_build_time() -> io::Result<()> {
     let value = match env::var(BUILD_TIME_ENV) {
         Ok(value) => value,
         Err(env::VarError::NotPresent) => {
-            time::OffsetDateTime::now_utc()
-                .format(time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z"))
-                .unwrap_or_else(|_| "unknown".into())
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
         }
         Err(env::VarError::NotUnicode(_)) => {
             return Err(io::Error::other(format!(

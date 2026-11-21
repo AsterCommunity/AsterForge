@@ -40,7 +40,7 @@ task processing lease -> 哪个 worker 正在执行某一条任务
 task dedupe key       -> 同一个计划触发点只能创建一条任务
 ```
 
-典型 singleton group 包括 background task dispatcher、mail outbox dispatch、system health refresh，以及 session、token、audit、task artifact cleanup 等周期维护任务。每个实例都可以启动 supervisor，但只有拿到 lease 的实例会启动 worker group；其他实例 standby 并按间隔重试。TTL 过大导致过期时间超出 `time::OffsetDateTime` 可表示范围时饱和到 `time::PrimitiveDateTime::MAX.assume_utc()`（等价于永不过期），不会因日期加法溢出 panic。
+典型 singleton group 包括 background task dispatcher、mail outbox dispatch、system health refresh，以及 session、token、audit、task artifact cleanup 等周期维护任务。每个实例都可以启动 supervisor，但只有拿到 lease 的实例会启动 worker group；其他实例 standby 并按间隔重试。TTL 过大导致过期时间超出 `DateTime` 可表示范围时饱和到 `DateTime::<Utc>::MAX_UTC`（等价于永不过期），不会因 chrono 加法溢出 panic。
 
 ```rust
 let lease_config = aster_forge_runtime::RuntimeLeaseConfig::new(
@@ -938,9 +938,3 @@ coordinator.phase("database", Some(Duration::from_secs(5)), move || {
 ## Producer 校验拒绝
 
 `RecordError::Invalid { item, error }` 表达 typed producer 在进入共享缓冲状态前的拒绝。它保留原记录及可追溯的错误源；通用 `ManagedBatchWriter` 不定义产品字段校验，也不会自行产生此变体。原有 `NotRunning`、`Full`、`DirectFailed` 和失败保留语义不变。
-
-## time 类型迁移
-
-本次 alpha 的时间类型使用 `time::OffsetDateTime`：将原 `DateTime<Utc>` 参数、返回值和产品 trait 实现一起迁移；取当前时间使用 `OffsetDateTime::now_utc()`。持续时间使用 `time::Duration`，std Duration 通过 `try_from` 转换。数据库实体使用 SeaORM 的 `TimeDateTimeWithTimeZone`；现有 SQL 列类型保持不变，产品历史 migration 仍由产品管理。
-
-序列化时间字段继续使用 RFC3339 字符串（含偏移/子秒）与 null，字段不改成 time 默认元组；产品自行声明的 DTO 应显式使用 `#[serde(with = "time::serde::rfc3339")]`，Option 使用 `time::serde::rfc3339::option`。OpenAPI 按 date-time/string 生成。time 默认日期范围是 -9999 至 9999 年，租约与调度的极限值处理按可表示范围做 checked/saturating 运算。任务持久化 dedupe key 继续 UTC 秒格式，时间偏移不生成另一份 key。

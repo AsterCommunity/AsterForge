@@ -15,7 +15,7 @@ default = []
 openapi = ["dep:utoipa"]
 
 [dependencies]
-time.workspace = true
+chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 utoipa = { workspace = true, optional = true }

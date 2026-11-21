@@ -287,7 +287,7 @@ claim 的 consumer/lane/sequence 可与真实 caller/transaction ID、begin/call
 `claim(TaskClaimRequest) -> Vec<(preclaim_snapshot, new_lease)>`：
 
 1. 在同一事务内锁共享额度行，重新读权威额度，按有效 processing lease 计数。
-2. 等锁后用 `request.at(time::OffsetDateTime::now_utc())` 刷新时间，限制为本地空槽与剩余额度的较小值。
+2. 等锁后用 `request.at(Utc::now())` 刷新时间，限制为本地空槽与剩余额度的较小值。
 3. 选择候选并加行锁（支持时 `SKIP LOCKED`），CAS 更新 token、状态和 lease。
 4. 返回认领前快照及 token+1 的 lease；事务外不得先选候选或先数额度。
 
@@ -571,9 +571,3 @@ cargo test --config /tmp/forge-local.toml --lib
 命令在下游仓库执行。遇到共享 sccache 服务导致本地 target 权限错误时，可临时加
 `--config 'build.rustc-wrapper=""'`。本地 patch 只验证当前源码，不能作为已发布 Git revision 的证据；
 发布后统一更新下游 revision，并在去掉 patch 后重新生成/验证 Cargo.lock。
-
-## time 类型迁移
-
-本次 alpha 的时间类型使用 `time::OffsetDateTime`：将原 `DateTime<Utc>` 参数、返回值和产品 trait 实现一起迁移；取当前时间使用 `OffsetDateTime::now_utc()`。持续时间使用 `time::Duration`，std Duration 通过 `try_from` 转换。数据库实体使用 SeaORM 的 `TimeDateTimeWithTimeZone`；现有 SQL 列类型保持不变，产品历史 migration 仍由产品管理。
-
-序列化时间字段继续使用 RFC3339 字符串（含偏移/子秒）与 null，字段不改成 time 默认元组；产品自行声明的 DTO 应显式使用 `#[serde(with = "time::serde::rfc3339")]`，Option 使用 `time::serde::rfc3339::option`。OpenAPI 按 date-time/string 生成。time 默认日期范围是 -9999 至 9999 年，租约与调度的极限值处理按可表示范围做 checked/saturating 运算。任务持久化 dedupe key 继续 UTC 秒格式，时间偏移不生成另一份 key。

@@ -14,7 +14,7 @@ publish = true
 default = []
 containers = ["dep:fs2", "dep:serde", "dep:serde_json", "dep:testcontainers", "dep:tokio"]
 process = []
-smtp = ["dep:aster_forge_http", "containers", "dep:reqwest"]
+smtp = ["dep:aster_forge_http", "aster_forge_http/json", "containers"]
 redis = ["containers", "dep:redis"]
 postgres = ["containers", "dep:sea-orm"]
 mysql = ["containers", "dep:sea-orm"]
@@ -28,7 +28,6 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 testcontainers = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-reqwest = { workspace = true, features = ["json"], optional = true }
 redis = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, features = ["fmt"], optional = true }

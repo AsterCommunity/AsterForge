@@ -31,4 +31,12 @@ ignore = [
     # 待 testcontainers 发布迁移 tar-codec 等受维护实现的版本后升级并删除本项。
     "RUSTSEC-2026-0440",
 
+    # chrono 0.4.45 unmaintained (RUSTSEC-2026-0543)
+    # 公共时间 API、数据库编码及 OIDC/SeaORM 等上游仍使用 chrono；
+    # 本轮按维护者决定撤出跨 crate 迁移，单独跟踪旧数据/排序与消费者兼容：
+    # https://github.com/AsterCommunity/AsterForge/issues/75
+    # 这里只接受该条停维护告警，不豁免 chrono 的其他安全公告，也不表示已修复。
+    # 待 #75 完成，并确认受审计依赖图的直接及上游 chrono 路径均已移除后删除。
+    "RUSTSEC-2026-0543",
+
 ]

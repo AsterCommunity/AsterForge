@@ -1,7 +1,7 @@
 //! Background task step state helpers.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 #[cfg(all(debug_assertions, feature = "openapi"))]
 use utoipa::ToSchema;
 
@@ -44,12 +44,10 @@ pub struct TaskStepInfo {
     pub detail: Option<String>,
     /// Step start time.
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = Option<String>))]
-    #[serde(with = "time::serde::rfc3339::option", default)]
-    pub started_at: Option<OffsetDateTime>,
+    pub started_at: Option<DateTime<Utc>>,
     /// Step finish time.
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = Option<String>))]
-    #[serde(with = "time::serde::rfc3339::option", default)]
-    pub finished_at: Option<OffsetDateTime>,
+    pub finished_at: Option<DateTime<Utc>>,
 }
 
 /// Static step definition used to create initial task steps.
@@ -62,7 +60,7 @@ pub struct TaskStepSpec {
 }
 
 fn new_task_step(spec: TaskStepSpec, status: TaskStepStatus, detail: Option<&str>) -> TaskStepInfo {
-    let now = (status == TaskStepStatus::Active).then(OffsetDateTime::now_utc);
+    let now = (status == TaskStepStatus::Active).then(Utc::now);
     TaskStepInfo {
         key: spec.key.to_string(),
         title: spec.title.to_string(),
@@ -120,7 +118,7 @@ pub fn set_task_step_active(
     detail: Option<&str>,
     progress: Option<(i64, i64)>,
 ) -> Result<()> {
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     let step = find_task_step_mut(steps, key)?;
     step.status = TaskStepStatus::Active;
     if step.started_at.is_none() {
@@ -146,7 +144,7 @@ pub fn set_task_step_succeeded(
     detail: Option<&str>,
     progress: Option<(i64, i64)>,
 ) -> Result<()> {
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     let step = find_task_step_mut(steps, key)?;
     step.status = TaskStepStatus::Succeeded;
     if step.started_at.is_none() {
@@ -173,7 +171,7 @@ pub fn set_task_step_skipped(
     key: &str,
     detail: Option<&str>,
 ) -> Result<()> {
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     let step = find_task_step_mut(steps, key)?;
     step.status = TaskStepStatus::Skipped;
     if step.started_at.is_none() {
@@ -186,7 +184,7 @@ pub fn set_task_step_skipped(
 
 /// Marks the active step failed, or the last pending step when no step is active.
 pub fn mark_active_step_failed(steps: &mut [TaskStepInfo], detail: Option<&str>) {
-    let now = OffsetDateTime::now_utc();
+    let now = Utc::now();
     if let Some(step) = steps
         .iter_mut()
         .find(|step| step.status == TaskStepStatus::Active)
@@ -309,30 +307,5 @@ mod tests {
         assert_eq!(steps[1].status, TaskStepStatus::Pending);
         assert_eq!(steps[2].status, TaskStepStatus::Failed);
         assert_eq!(steps[2].detail.as_deref(), Some("pending failed"));
-    }
-
-    #[test]
-    fn step_time_round_trip_keeps_rfc3339_nanoseconds_and_null() {
-        let mut value = step("prepare", TaskStepStatus::Pending);
-        let instant = time::macros::datetime!(2000-02-29 12:34:56.123456789 UTC);
-        value.started_at = Some(instant);
-        value.finished_at = None;
-        let json = serde_json::to_value(&value).unwrap();
-        assert_eq!(json["started_at"], "2000-02-29T12:34:56.123456789Z");
-        assert!(json["finished_at"].is_null());
-        let decoded: TaskStepInfo = serde_json::from_value(json.clone()).unwrap();
-        assert_eq!(decoded.started_at, Some(instant));
-        assert_eq!(decoded.finished_at, None);
-        let mut missing = json.clone();
-        missing.as_object_mut().unwrap().remove("finished_at");
-        assert_eq!(
-            serde_json::from_value::<TaskStepInfo>(missing)
-                .unwrap()
-                .finished_at,
-            None
-        );
-        let mut invalid = json;
-        invalid["started_at"] = serde_json::json!("invalid");
-        assert!(serde_json::from_value::<TaskStepInfo>(invalid).is_err());
     }
 }

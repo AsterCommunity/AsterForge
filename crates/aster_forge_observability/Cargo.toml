@@ -13,14 +13,13 @@ publish = true
 [features]
 default = ["actix"]
 actix = ["dep:actix-web"]
-prometheus = ["aster_forge_metrics/backend-prometheus"]
+prometheus = ["dep:aster_forge_metrics", "aster_forge_metrics/backend-prometheus"]
 axum = ["dep:axum"]
 
 [dependencies]
 actix-web = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-aster_forge_metrics = { workspace = true }
-tracing.workspace = true
+aster_forge_metrics = { workspace = true, optional = true }
 
 [lints]
 workspace = true

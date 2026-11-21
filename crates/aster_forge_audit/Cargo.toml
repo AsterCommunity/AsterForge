@@ -22,12 +22,11 @@ aster_forge_mail = { workspace = true, optional = true }
 aster_forge_runtime = { workspace = true }
 sea-orm = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time"] }
-tracing.workspace = true
 
 [dev-dependencies]
 aster_forge_test = { workspace = true, features = ["postgres"] }
 uuid.workspace = true
-time.workspace = true
+chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

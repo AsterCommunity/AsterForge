@@ -8,6 +8,7 @@
 
 use std::future::Future;
 
+use chrono::{DateTime, Duration, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
     Alias, ColumnDef, Index, IndexCreateStatement, Table, TableCreateStatement, TableDropStatement,
@@ -17,7 +18,6 @@ use sea_orm::{
     DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     sea_query::Expr,
 };
-use time::{Duration, OffsetDateTime};
 
 use crate::DbError;
 use aster_forge_mail::{
@@ -245,17 +245,17 @@ pub struct Model {
     /// Delivery attempt count.
     pub attempt_count: i32,
     /// Next delivery attempt timestamp.
-    pub next_attempt_at: TimeDateTimeWithTimeZone,
+    pub next_attempt_at: DateTimeUtc,
     /// Processing claim timestamp.
-    pub processing_started_at: Option<TimeDateTimeWithTimeZone>,
+    pub processing_started_at: Option<DateTimeUtc>,
     /// Sent timestamp.
-    pub sent_at: Option<TimeDateTimeWithTimeZone>,
+    pub sent_at: Option<DateTimeUtc>,
     /// Last delivery error.
     pub last_error: Option<String>,
     /// Row creation timestamp.
-    pub created_at: TimeDateTimeWithTimeZone,
+    pub created_at: DateTimeUtc,
     /// Row update timestamp.
-    pub updated_at: TimeDateTimeWithTimeZone,
+    pub updated_at: DateTimeUtc,
 }
 
 impl MailOutboxDispatchRow for Model {
@@ -297,9 +297,9 @@ pub struct MailOutboxCreate {
     /// Stored template payload JSON.
     pub payload_json: StoredMailPayload,
     /// Initial next attempt timestamp.
-    pub next_attempt_at: OffsetDateTime,
+    pub next_attempt_at: DateTime<Utc>,
     /// Row creation/update timestamp.
-    pub now: OffsetDateTime,
+    pub now: DateTime<Utc>,
 }
 
 /// SeaORM-backed mail outbox store.
@@ -331,8 +331,8 @@ impl MailOutboxDbStore {
     /// Returns an error when the database operation fails.
     pub async fn list_claimable(
         &self,
-        now: OffsetDateTime,
-        stale_before: OffsetDateTime,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
         limit: u64,
     ) -> crate::Result<Vec<Model>> {
         list_claimable(&self.db, now, stale_before, limit).await
@@ -346,8 +346,8 @@ impl MailOutboxDbStore {
     pub async fn try_claim(
         &self,
         id: i64,
-        now: OffsetDateTime,
-        stale_before: OffsetDateTime,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
     ) -> crate::Result<bool> {
         try_claim(&self.db, id, now, stale_before).await
     }
@@ -357,7 +357,7 @@ impl MailOutboxDbStore {
     /// # Errors
     ///
     /// Returns an error when the database operation fails.
-    pub async fn mark_sent(&self, id: i64, sent_at: OffsetDateTime) -> crate::Result<bool> {
+    pub async fn mark_sent(&self, id: i64, sent_at: DateTime<Utc>) -> crate::Result<bool> {
         mark_sent(&self.db, id, sent_at).await
     }
 
@@ -370,7 +370,7 @@ impl MailOutboxDbStore {
         &self,
         id: i64,
         attempt_count: i32,
-        next_attempt_at: OffsetDateTime,
+        next_attempt_at: DateTime<Utc>,
         last_error: &str,
     ) -> crate::Result<bool> {
         mark_retry(&self.db, id, attempt_count, next_attempt_at, last_error).await
@@ -385,7 +385,7 @@ impl MailOutboxDbStore {
         &self,
         id: i64,
         attempt_count: i32,
-        failed_at: OffsetDateTime,
+        failed_at: DateTime<Utc>,
         last_error: &str,
     ) -> crate::Result<bool> {
         mark_failed(&self.db, id, attempt_count, failed_at, last_error).await
@@ -428,31 +428,27 @@ impl MailOutboxDbStore {
         aster_forge_mail::dispatch_mail_outbox(
             config,
             |batch_size, stale_secs| async move {
-                let now = OffsetDateTime::now_utc();
+                let now = Utc::now();
                 let stale_before = now - Duration::seconds(stale_secs);
                 self.list_claimable(now, stale_before, batch_size)
                     .await
                     .map_err(E::from)
             },
             |id| async move {
-                let now = OffsetDateTime::now_utc();
+                let now = Utc::now();
                 let stale_before = now - Duration::seconds(config.processing_stale_secs);
                 self.try_claim(id, now, stale_before).await.map_err(E::from)
             },
             deliver,
-            |id, _attempt| async move {
-                self.mark_sent(id, OffsetDateTime::now_utc())
-                    .await
-                    .map_err(E::from)
-            },
+            |id, _attempt| async move { self.mark_sent(id, Utc::now()).await.map_err(E::from) },
             |id, attempt_count, retry_delay_secs, error_message| async move {
-                let retry_at = OffsetDateTime::now_utc() + Duration::seconds(retry_delay_secs);
+                let retry_at = Utc::now() + Duration::seconds(retry_delay_secs);
                 self.mark_retry(id, attempt_count, retry_at, &error_message)
                     .await
                     .map_err(E::from)
             },
             |id, attempt_count, error_message| async move {
-                self.mark_failed(id, attempt_count, OffsetDateTime::now_utc(), &error_message)
+                self.mark_failed(id, attempt_count, Utc::now(), &error_message)
                     .await
                     .map_err(E::from)
             },
@@ -495,8 +491,8 @@ where
 
 async fn list_claimable<C>(
     db: &C,
-    now: OffsetDateTime,
-    stale_before: OffsetDateTime,
+    now: DateTime<Utc>,
+    stale_before: DateTime<Utc>,
     limit: u64,
 ) -> crate::Result<Vec<Model>>
 where
@@ -514,8 +510,8 @@ where
 async fn try_claim<C>(
     db: &C,
     id: i64,
-    now: OffsetDateTime,
-    stale_before: OffsetDateTime,
+    now: DateTime<Utc>,
+    stale_before: DateTime<Utc>,
 ) -> crate::Result<bool>
 where
     C: ConnectionTrait,
@@ -535,7 +531,7 @@ where
     Ok(result.rows_affected == 1)
 }
 
-async fn mark_sent<C>(db: &C, id: i64, sent_at: OffsetDateTime) -> crate::Result<bool>
+async fn mark_sent<C>(db: &C, id: i64, sent_at: DateTime<Utc>) -> crate::Result<bool>
 where
     C: ConnectionTrait,
 {
@@ -547,7 +543,7 @@ where
         .col_expr(Column::SentAt, Expr::value(Some(sent_at)))
         .col_expr(
             Column::ProcessingStartedAt,
-            Expr::value(Option::<OffsetDateTime>::None),
+            Expr::value(Option::<DateTime<Utc>>::None),
         )
         .col_expr(Column::LastError, Expr::value(Option::<String>::None))
         .col_expr(
@@ -567,7 +563,7 @@ async fn mark_retry<C>(
     db: &C,
     id: i64,
     attempt_count: i32,
-    next_attempt_at: OffsetDateTime,
+    next_attempt_at: DateTime<Utc>,
     last_error: &str,
 ) -> crate::Result<bool>
 where
@@ -582,10 +578,10 @@ where
         .col_expr(Column::NextAttemptAt, Expr::value(next_attempt_at))
         .col_expr(
             Column::ProcessingStartedAt,
-            Expr::value(Option::<OffsetDateTime>::None),
+            Expr::value(Option::<DateTime<Utc>>::None),
         )
         .col_expr(Column::LastError, Expr::value(Some(last_error)))
-        .col_expr(Column::UpdatedAt, Expr::value(OffsetDateTime::now_utc()))
+        .col_expr(Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(Column::Id.eq(id))
         .filter(Column::Status.eq(MailOutboxStatus::Processing))
         .exec(db)
@@ -598,7 +594,7 @@ async fn mark_failed<C>(
     db: &C,
     id: i64,
     attempt_count: i32,
-    failed_at: OffsetDateTime,
+    failed_at: DateTime<Utc>,
     last_error: &str,
 ) -> crate::Result<bool>
 where
@@ -613,7 +609,7 @@ where
         .col_expr(Column::NextAttemptAt, Expr::value(failed_at))
         .col_expr(
             Column::ProcessingStartedAt,
-            Expr::value(Option::<OffsetDateTime>::None),
+            Expr::value(Option::<DateTime<Utc>>::None),
         )
         .col_expr(Column::LastError, Expr::value(Some(last_error)))
         .col_expr(
@@ -640,7 +636,7 @@ where
         .map_err(DbError::from)
 }
 
-fn claimable_condition(now: OffsetDateTime, stale_before: OffsetDateTime) -> Condition {
+fn claimable_condition(now: DateTime<Utc>, stale_before: DateTime<Utc>) -> Condition {
     Condition::any()
         .add(
             Condition::all()
@@ -693,13 +689,13 @@ fn validate_max_len(name: &str, value: &str, max_len: usize) -> crate::Result<()
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, EntityTrait};
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
-    use time::{Duration as TimeDuration, OffsetDateTime};
 
     use super::{
         Entity, MailOutboxCreate, MailOutboxDbStore, create_mail_outbox_due_index,
@@ -742,7 +738,7 @@ mod tests {
         }
     }
 
-    fn create_request(now: OffsetDateTime) -> MailOutboxCreate {
+    fn create_request(now: chrono::DateTime<Utc>) -> MailOutboxCreate {
         MailOutboxCreate {
             template_code: MailTemplateCode::LoginEmailCode,
             to_address: "operator@example.com".to_string(),
@@ -774,7 +770,7 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_creates_and_counts_active_rows() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
 
         let row = store
             .create(create_request(now))
@@ -789,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_rejects_invalid_create_values() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
 
         let error = store
             .create(MailOutboxCreate {
@@ -804,21 +800,21 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_claims_due_rows_once() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         let row = store
             .create(create_request(now))
             .await
             .expect("mail outbox row should insert");
 
         let claimable = store
-            .list_claimable(now, now - TimeDuration::minutes(5), 10)
+            .list_claimable(now, now - ChronoDuration::minutes(5), 10)
             .await
             .expect("claimable rows should query");
         assert_eq!(claimable.len(), 1);
 
         assert!(
             store
-                .try_claim(row.id, now, now - TimeDuration::minutes(5))
+                .try_claim(row.id, now, now - ChronoDuration::minutes(5))
                 .await
                 .expect("claim should query")
         );
@@ -826,8 +822,8 @@ mod tests {
             !store
                 .try_claim(
                     row.id,
-                    now + TimeDuration::seconds(1),
-                    now - TimeDuration::minutes(5)
+                    now + ChronoDuration::seconds(1),
+                    now - ChronoDuration::minutes(5)
                 )
                 .await
                 .expect("fresh duplicate claim should query")
@@ -837,22 +833,22 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_reclaims_stale_processing_rows() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         let row = store
             .create(create_request(now))
             .await
             .expect("mail outbox row should insert");
         assert!(
             store
-                .try_claim(row.id, now, now - TimeDuration::minutes(5))
+                .try_claim(row.id, now, now - ChronoDuration::minutes(5))
                 .await
                 .expect("claim should query")
         );
 
         let reclaimed = store
             .list_claimable(
-                now + TimeDuration::minutes(10),
-                now + TimeDuration::minutes(1),
+                now + ChronoDuration::minutes(10),
+                now + ChronoDuration::minutes(1),
                 10,
             )
             .await
@@ -863,21 +859,21 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_marks_sent_and_clears_payload() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         let row = store
             .create(create_request(now))
             .await
             .expect("mail outbox row should insert");
         assert!(
             store
-                .try_claim(row.id, now, now - TimeDuration::minutes(5))
+                .try_claim(row.id, now, now - ChronoDuration::minutes(5))
                 .await
                 .expect("claim should query")
         );
 
         assert!(
             store
-                .mark_sent(row.id, now + TimeDuration::seconds(2))
+                .mark_sent(row.id, now + ChronoDuration::seconds(2))
                 .await
                 .expect("mark sent should query")
         );
@@ -898,26 +894,26 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_marks_retry_and_failed_only_from_processing() {
         let store = sqlite_store().await;
-        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
+        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
         let row = store
             .create(create_request(now))
             .await
             .expect("mail outbox row should insert");
         assert!(
             !store
-                .mark_retry(row.id, 1, now + TimeDuration::seconds(5), "smtp down")
+                .mark_retry(row.id, 1, now + ChronoDuration::seconds(5), "smtp down")
                 .await
                 .expect("retry without processing should query")
         );
         assert!(
             store
-                .try_claim(row.id, now, now - TimeDuration::minutes(5))
+                .try_claim(row.id, now, now - ChronoDuration::minutes(5))
                 .await
                 .expect("claim should query")
         );
         assert!(
             store
-                .mark_retry(row.id, 1, now + TimeDuration::seconds(5), "smtp down")
+                .mark_retry(row.id, 1, now + ChronoDuration::seconds(5), "smtp down")
                 .await
                 .expect("retry should query")
         );
@@ -933,13 +929,13 @@ mod tests {
 
         assert!(
             store
-                .try_claim(row.id, now + TimeDuration::seconds(6), now)
+                .try_claim(row.id, now + ChronoDuration::seconds(6), now)
                 .await
                 .expect("retry claim should query")
         );
         assert!(
             store
-                .mark_failed(row.id, 2, now + TimeDuration::seconds(7), "permanent")
+                .mark_failed(row.id, 2, now + ChronoDuration::seconds(7), "permanent")
                 .await
                 .expect("failed should query")
         );
@@ -959,9 +955,9 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_dispatch_due_marks_sent_and_reports_context() {
         let store = sqlite_store().await;
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
         let row = store
-            .create(create_request(now - TimeDuration::seconds(5)))
+            .create(create_request(now - ChronoDuration::seconds(5)))
             .await
             .expect("mail outbox row should insert");
         let config = MailOutboxDispatchConfig::new(
@@ -1028,9 +1024,9 @@ mod tests {
     #[tokio::test]
     async fn mail_outbox_store_dispatch_due_retries_delivery_errors() {
         let store = sqlite_store().await;
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
         let row = store
-            .create(create_request(now - TimeDuration::seconds(5)))
+            .create(create_request(now - ChronoDuration::seconds(5)))
             .await
             .expect("mail outbox row should insert");
         let config = MailOutboxDispatchConfig::new(

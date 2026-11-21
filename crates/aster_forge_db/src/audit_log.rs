@@ -7,6 +7,7 @@
 //! module keeps the common `SeaORM` table contract, index builders, and simple
 //! write/count/delete helpers in one place.
 
+use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{
     Alias, ColumnDef, Index, IndexCreateStatement, Table, TableCreateStatement, TableDropStatement,
@@ -16,7 +17,6 @@ use sea_orm::{
     EntityTrait, ExprTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     sea_query::Expr,
 };
-use time::OffsetDateTime;
 
 /// Audit log table name.
 pub const AUDIT_LOGS_TABLE: &str = "audit_logs";
@@ -325,7 +325,7 @@ pub struct Model {
     /// Optional user-agent.
     pub user_agent: Option<String>,
     /// Row creation timestamp.
-    pub created_at: TimeDateTimeWithTimeZone,
+    pub created_at: DateTimeUtc,
 }
 
 /// Audit log relations.
@@ -354,7 +354,7 @@ pub struct AuditLogCreate {
     /// Optional user-agent.
     pub user_agent: Option<String>,
     /// Row creation timestamp.
-    pub created_at: OffsetDateTime,
+    pub created_at: DateTime<Utc>,
 }
 
 /// Product-neutral cursor query for audit logs sorted by `(created_at, id)` descending.
@@ -369,13 +369,13 @@ pub struct AuditLogQuery<'a> {
     /// Optional entity id filter.
     pub entity_id: Option<i64>,
     /// Optional inclusive lower created-at bound.
-    pub after: Option<OffsetDateTime>,
+    pub after: Option<DateTime<Utc>>,
     /// Optional inclusive upper created-at bound.
-    pub before: Option<OffsetDateTime>,
+    pub before: Option<DateTime<Utc>>,
     /// Requested page size. Clamped to `1..=200`.
     pub limit: u64,
     /// Cursor from the previous page, encoded as `(created_at, id)`.
-    pub cursor: Option<(OffsetDateTime, i64)>,
+    pub cursor: Option<(DateTime<Utc>, i64)>,
 }
 
 /// Result of an audit log cursor query.
@@ -487,8 +487,8 @@ impl AuditLogDbStore {
     /// Returns an error when the database operation fails.
     pub async fn count_created_between(
         &self,
-        start: OffsetDateTime,
-        end: OffsetDateTime,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> crate::Result<u64> {
         count_audit_logs_created_between(&self.db, start, end).await
     }
@@ -500,8 +500,8 @@ impl AuditLogDbStore {
     /// Returns an error when the database operation fails.
     pub async fn count_created_between_with_actions(
         &self,
-        start: OffsetDateTime,
-        end: OffsetDateTime,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
         actions: &[&str],
     ) -> crate::Result<u64> {
         count_audit_logs_created_between_with_actions(&self.db, start, end, actions).await
@@ -512,7 +512,7 @@ impl AuditLogDbStore {
     /// # Errors
     ///
     /// Returns an error when the database operation fails.
-    pub async fn delete_before(&self, before: OffsetDateTime) -> crate::Result<u64> {
+    pub async fn delete_before(&self, before: DateTime<Utc>) -> crate::Result<u64> {
         delete_audit_logs_before(&self.db, before).await
     }
 
@@ -535,8 +535,8 @@ impl AuditLogDbStore {
     /// Returns an error when the database operation fails.
     pub async fn count_distinct_users_created_between_with_actions(
         &self,
-        start: OffsetDateTime,
-        end: OffsetDateTime,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
         actions: &[&str],
     ) -> crate::Result<u64> {
         count_distinct_audit_log_users_created_between_with_actions(&self.db, start, end, actions)
@@ -608,8 +608,8 @@ where
 /// Returns an error when the database operation fails.
 pub async fn count_audit_logs_created_between<C>(
     db: &C,
-    start: OffsetDateTime,
-    end: OffsetDateTime,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
 ) -> crate::Result<u64>
 where
     C: ConnectionTrait,
@@ -629,8 +629,8 @@ where
 /// Returns an error when the database operation fails.
 pub async fn count_audit_logs_created_between_with_actions<C>(
     db: &C,
-    start: OffsetDateTime,
-    end: OffsetDateTime,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
     actions: &[&str],
 ) -> crate::Result<u64>
 where
@@ -655,8 +655,8 @@ where
 /// Returns an error when the database operation fails.
 pub async fn count_distinct_audit_log_users_created_between_with_actions<C>(
     db: &C,
-    start: OffsetDateTime,
-    end: OffsetDateTime,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
     actions: &[&str],
 ) -> crate::Result<u64>
 where
@@ -749,7 +749,7 @@ where
 /// # Errors
 ///
 /// Returns an error when the database operation fails.
-pub async fn delete_audit_logs_before<C>(db: &C, before: OffsetDateTime) -> crate::Result<u64>
+pub async fn delete_audit_logs_before<C>(db: &C, before: DateTime<Utc>) -> crate::Result<u64>
 where
     C: ConnectionTrait,
 {
@@ -823,9 +823,9 @@ fn validate_max_len(name: &str, value: &str, max_len: usize) -> crate::Result<()
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration, Utc};
     use sea_orm::sea_query::SqliteQueryBuilder;
     use sea_orm::{ConnectionTrait, DbBackend, EntityTrait, Set};
-    use time::{Duration, OffsetDateTime};
 
     use super::{
         AUDIT_LOG_ACTION_CREATED_USER_INDEX, AUDIT_LOG_CREATED_ID_INDEX,
@@ -858,7 +858,7 @@ mod tests {
         AuditLogDbStore::new(db)
     }
 
-    fn create_request(created_at: OffsetDateTime, action: &str) -> AuditLogCreate {
+    fn create_request(created_at: chrono::DateTime<Utc>, action: &str) -> AuditLogCreate {
         AuditLogCreate {
             user_id: 42,
             action: action.to_string(),
@@ -882,7 +882,7 @@ mod tests {
             .expect("audit logs table builder should execute");
 
         let duplicate_row = || {
-            let mut model = create_request(OffsetDateTime::now_utc(), "audit.test")
+            let mut model = create_request(Utc::now(), "audit.test")
                 .into_active_model()
                 .expect("create request should convert into an active model");
             model.id = Set(1);
@@ -939,7 +939,7 @@ mod tests {
     #[tokio::test]
     async fn audit_log_store_creates_counts_and_deletes_rows() {
         let store = sqlite_store().await;
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
 
         let created = store
             .create(create_request(now, "server_shutdown"))
@@ -974,7 +974,7 @@ mod tests {
     #[tokio::test]
     async fn audit_log_store_filters_cursor_pages_and_counts_distinct_users() {
         let store = sqlite_store().await;
-        let base = OffsetDateTime::now_utc();
+        let base = Utc::now();
 
         store
             .create_many_requests(vec![
@@ -1059,7 +1059,7 @@ mod tests {
         let error = store
             .create(AuditLogCreate {
                 action: String::new(),
-                ..create_request(OffsetDateTime::now_utc(), "server_shutdown")
+                ..create_request(Utc::now(), "server_shutdown")
             })
             .await
             .expect_err("empty action should be rejected");
@@ -1074,7 +1074,7 @@ mod tests {
             .await
             .expect("empty batch should be accepted");
 
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
         store
             .create_many(vec![
                 ActiveModel {
@@ -1116,7 +1116,7 @@ mod tests {
     #[tokio::test]
     async fn audit_log_create_many_requests_validates_and_inserts_batch() {
         let store = sqlite_store().await;
-        let now = OffsetDateTime::now_utc();
+        let now = Utc::now();
 
         store
             .create_many_requests(vec![

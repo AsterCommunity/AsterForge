@@ -12,7 +12,7 @@ use aster_forge_tasks::{
     TaskRetryUpdate, default_task_retry_delay_secs, process_claimed_task, task_lease_expires_at,
 };
 use aster_forge_test::logs::CapturedLogs;
-use time::OffsetDateTime;
+use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -71,8 +71,8 @@ impl TaskHeartbeatStore for Store {
     async fn touch_task_heartbeat(
         &self,
         _: TaskLease,
-        _: OffsetDateTime,
-        _: OffsetDateTime,
+        _: DateTime<Utc>,
+        _: DateTime<Utc>,
     ) -> Result<TaskHeartbeatOutcome> {
         Ok(TaskHeartbeatOutcome::Renewed)
     }
