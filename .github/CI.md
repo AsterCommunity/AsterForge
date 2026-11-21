@@ -39,12 +39,11 @@ Documentation deployment and scheduled dependency auditing retain their own
 workflows. New workspace members automatically join selection and generic crate
 checks; add a dedicated workflow only for additional platform or feature rules.
 
-The current SQLx 0.9.0 release constrains `libsqlite3-sys` to `<0.38.0`, while
-RustSec RUSTSEC-2026-0459 requires `>=0.39.0`. `cargo upgrade --incompatible`
-only upgrades the direct `jsonwebtoken` requirement and cannot resolve that
-transitive SQLite advisory. The exception is recorded in `.cargo/audit.toml`
-with its removal condition; delete it when SQLx or SeaORM ships a compatible
-release and refresh `Cargo.lock`.
+SQLx 0.9.1 resolves libsqlite3-sys 0.40.0, so the old SQLite advisory
+exception has been removed. `.cargo/audit.toml` records the remaining upstream
+exceptions and removal conditions. Public APIs and database timestamp encoding
+continue to use chrono; RUSTSEC-2026-0543 is temporarily accepted through a
+scoped exception tracked in #75, not marked remediated.
 
 Validate changes locally:
 

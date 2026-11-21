@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_panic"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ readme = "README.md"
 publish = true
 
 [dependencies]
-chrono = { workspace = true, features = ["clock"] }
+time.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_audit"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -22,7 +22,6 @@ aster_forge_mail = { workspace = true, optional = true }
 aster_forge_runtime = { workspace = true }
 sea-orm = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time"] }
-tracing.workspace = true
 
 [dev-dependencies]
 aster_forge_test = { workspace = true, features = ["postgres"] }

@@ -209,7 +209,7 @@ fn isolated_output_policies() {
         } else if mode == "unavailable" {
             assert!(path.is_dir());
         } else if mode == "host" {
-            assert!(std::fs::read_to_string(path).unwrap().is_empty());
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "");
         } else {
             let report = std::fs::read_to_string(path).unwrap();
             assert!(report.contains("Backtrace:"));

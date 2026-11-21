@@ -205,7 +205,7 @@ async fn check() {
 
     let output = run(spec("echo"), &token, |_, _| {}).await;
     assert!(output.status.unwrap().success());
-    assert!(output.stdout.bytes.is_empty());
+    assert_eq!(output.stdout.bytes, Vec::<u8>::new());
 
     check_stdin_boundaries().await;
 

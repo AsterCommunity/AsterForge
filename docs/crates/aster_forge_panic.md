@@ -13,7 +13,7 @@
 aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge" }
 ```
 
-没有 feature flag。Linux 文件策略依赖 rustix，时间使用 chrono；JSON 序列化由产品选择。
+没有 feature flag。Linux 文件策略依赖 rustix，时间使用 workspace 定义的 `time`；JSON 序列化由产品选择。
 
 ## 最小接入
 
@@ -33,7 +33,7 @@ let outcome = install_panic_hook(
 
 ## 时间、私有 writer 与隐私
 
-默认时间固定为 UTC RFC3339 毫秒（`Z`），可通过 `.with_timestamp(fn() -> String)` 注入产品策略或固定测试时间。
+默认时间固定为 UTC RFC3339 毫秒（`Z`），毫秒以下精度截断；系统时钟超出 `time` 可表示范围时返回 `<timestamp unavailable>`，避免在 hook 内再次 panic，可通过 `.with_timestamp(fn() -> String)` 注入产品策略或固定测试时间。
 
 完整报告含 payload、源码路径和 backtrace，**可能含敏感信息**。仅 `ReportWriter` 接收报告；通过 `.with_report_writer(Arc<dyn ReportWriter>)` 接入产品私有文件、过滤/脱敏和持久化策略。writer 返回的错误不会进入公开输出。
 

@@ -535,12 +535,9 @@ mod tests {
                         registry.descriptor("task_consumers").unwrap().tasks[0].task_name,
                         "dispatch"
                     );
-                    assert!(
-                        registry
-                            .descriptor("local_maintenance")
-                            .unwrap()
-                            .tasks
-                            .is_empty()
+                    assert_eq!(
+                        registry.descriptor("local_maintenance").unwrap().tasks,
+                        Vec::<aster_forge_runtime::RuntimeTaskDescriptor>::new()
                     );
                     checked.store(true, std::sync::atomic::Ordering::SeqCst);
                 },

@@ -217,7 +217,25 @@ pub fn install_panic_hook(config: PanicHookConfig) -> InstallOutcome {
 
 /// Produces the default public UTC timestamp with a fixed precision.
 fn utc_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    let now = std::time::SystemTime::now();
+    let nanos = match now.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => i128::try_from(duration.as_nanos()),
+        Err(error) => i128::try_from(error.duration().as_nanos()).map(|nanos| -nanos),
+    };
+    nanos.map_or_else(|_| "<timestamp unavailable>".into(), format_timestamp)
+}
+
+fn format_timestamp(nanos: i128) -> String {
+    time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .ok()
+        .and_then(|timestamp| {
+            timestamp
+                .format(time::macros::format_description!(
+                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+                ))
+                .ok()
+        })
+        .unwrap_or_else(|| "<timestamp unavailable>".into())
 }
 /// Renders private source context, including panics without a source location.
 fn format_location(location: Option<(&str, u32, u32)>) -> String {
@@ -304,7 +322,7 @@ fn render_crash_report(context: &PanicContext, backtrace: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::{format_location, format_timestamp, panic_payload_message, utc_timestamp};
     #[test]
     fn payload_location_and_time() {
         assert_eq!(panic_payload_message(&42_u32), "<non-string panic payload>");
@@ -313,6 +331,40 @@ mod tests {
         assert_eq!(format_location(None), "<unknown>");
         let timestamp = utc_timestamp();
         assert!(timestamp.ends_with('Z'));
-        chrono::DateTime::parse_from_rfc3339(&timestamp).unwrap();
+        assert_eq!(timestamp.len(), 24);
+        assert_eq!(&timestamp[19..20], ".");
+    }
+
+    #[test]
+    fn utc_timestamp_preserves_milliseconds_and_calendar_boundaries() {
+        for (seconds, nanos, expected) in [
+            (0, 0, "1970-01-01T00:00:00.000Z"),
+            (0, 1, "1970-01-01T00:00:00.000Z"),
+            (0, 999_999_999, "1970-01-01T00:00:00.999Z"),
+            (1, 1_000_000, "1970-01-01T00:00:01.001Z"),
+            (86_399, 999_999_999, "1970-01-01T23:59:59.999Z"),
+            (86_400, 0, "1970-01-02T00:00:00.000Z"),
+            (951_782_400, 123_456_789, "2000-02-29T00:00:00.123Z"),
+            (4_102_444_799_i64, 999_999_999, "2099-12-31T23:59:59.999Z"),
+        ] {
+            assert_eq!(
+                format_timestamp(i128::from(seconds) * 1_000_000_000 + i128::from(nanos)),
+                expected
+            );
+        }
+        assert_eq!(format_timestamp(-1), "1969-12-31T23:59:59.999Z");
+        assert_eq!(format_timestamp(-1_001_000_000), "1969-12-31T23:59:58.999Z");
+    }
+
+    #[test]
+    fn out_of_range_system_time_does_not_panic_inside_the_hook() {
+        for nanos in [
+            i128::MIN,
+            -400_000_000_000_000_000_000,
+            400_000_000_000_000_000_000,
+            i128::MAX,
+        ] {
+            assert_eq!(format_timestamp(nanos), "<timestamp unavailable>");
+        }
     }
 }

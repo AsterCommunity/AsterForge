@@ -547,14 +547,11 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            store
+        assert_eq!(store
                 .recoverable_content_uploads_page(&scope, None, RECOVERY_BATCH_LIMIT)
                 .await
                 .unwrap()
-                .items()
-                .is_empty()
-        );
+                .items(), &[]);
         fs::remove_file(directory).unwrap();
     }
 
@@ -749,14 +746,11 @@ mod tests {
         .unwrap();
         let error = store.create_file(&request).await.unwrap_err();
         assert_eq!(error.kind(), LinuxNamespaceMutationStoreErrorKind::Fenced);
-        assert!(
-            store
+        assert_eq!(store
                 .recoverable_mutations_page(&scope, None, RECOVERY_BATCH_LIMIT)
                 .await
                 .unwrap()
-                .items()
-                .is_empty()
-        );
+                .items(), &[]);
     }
     #[test]
     fn durable_state_does_not_follow_predictable_temporary_links_and_is_private() {

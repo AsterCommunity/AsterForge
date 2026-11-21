@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_middleware"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,14 +26,13 @@ subtle.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-tower.workspace = true
 http.workspace = true
-http-body.workspace = true
+http-body = { workspace = true, optional = true }
 
 [features]
 default = ["actix"]
 actix = ["dep:actix-governor", "dep:actix-web"]
-axum = ["dep:axum", "dep:cookie"]
+axum = ["dep:axum", "dep:cookie", "dep:http-body"]
 metrics = ["dep:aster_forge_metrics"]
 
 [dev-dependencies]

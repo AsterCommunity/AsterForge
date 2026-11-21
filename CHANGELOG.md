@@ -14,6 +14,46 @@
   can resume without re-uploading existing versions. Downstream package versions
   and security release scope remain maintainer-owned.
 
+### Changed
+
+- **Panic timestamp dependency** — Generate the default UTC millisecond panic
+  timestamp with workspace-owned `time`; out-of-range system clocks report an
+  unavailable marker without panicking inside the hook. Public APIs, task/runtime
+  timestamps, database entities and encodings, WebDAV and the service template
+  retain chrono. Track the broader migration in #75 and explicitly accept the
+  unmaintained advisory RUSTSEC-2026-0543 until direct/upstream adoption is ready.
+- **Dependency refresh** — Run `cargo upgrade --incompatible allow --pinned allow`
+  and `cargo update`, including Actix Web 4.20, fuser 0.19, SQLx 0.9.1 and
+  libsqlite3-sys 0.40. Linux FUSE accepts the new callback parameters and rejects
+  ownership/privilege requests the fixed mount policy cannot represent.
+  Remove unused dependency declarations and enable optional logging/HTTP
+  dependencies only through their owning features.
+- **Affected package versions** — Increment each of the 31 affected publishable
+  crates by one alpha release and synchronize exact workspace dependency pins.
+  Macros, API-doc macros and validation retain their versions. Versions record
+  release intent; publication remains a separate reviewed step.
+- **Daily security audit** — Run at 09:17 UTC every day instead of every Monday;
+  manual dispatch remains available.
+
+### Security
+
+- **SMTP dependency fixes** — Require lettre >=0.11.24 to address
+  RUSTSEC-2026-0560 through RUSTSEC-2026-0565 (STARTTLS response injection,
+  dot-stuffing, whitespace EHLO panic, quoted-recipient routing, display-name
+  panic and unbounded SMTP reply buffering). Add message/recipient, EHLO, bounded-response, STARTTLS-injection and
+  bare-newline/chunk-boundary dot-stuffing regression tests.
+- **Audit exceptions** — Remove the resolved libsqlite3-sys and crypto-bigint
+  exceptions after dependency updates. Retain the scoped RSA, h2, paste and
+  testcontainers tar exceptions with current dependency evidence, and record a
+  scoped chrono maintenance exception linked to #75; this is accepted risk,
+  not remediation.
+
+### Fixed
+
+- **Concurrent private lock creation on macOS** — Retry one transient ENOENT
+  from descriptor-relative O_CREAT|O_NOFOLLOW before applying the same file
+  identity/ownership checks, preventing false container-lock failures.
+
 ## [2026-11-17 batch] - 2026-11-17
 
 Cumulative package changes since the first bulk release. This batch publishes
