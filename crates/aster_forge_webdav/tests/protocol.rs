@@ -1,3 +1,5 @@
+//! Contract tests for protocol methods: request headers, preconditions, and method dispatch tables.
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;

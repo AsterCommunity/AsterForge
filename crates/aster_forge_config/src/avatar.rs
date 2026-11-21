@@ -19,7 +19,7 @@ pub const DEFAULT_GRAVATAR_BASE_URL: &str = "https://www.gravatar.com/avatar";
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the Gravatar base URL is empty, malformed, or unsupported.
+/// Returns [`ConfigCoreError`] when the Gravatar base URL is empty, malformed, or unsupported.
 pub fn normalize_gravatar_base_url_config_value(value: &str) -> Result<String> {
     normalize_http_base_url(
         value,

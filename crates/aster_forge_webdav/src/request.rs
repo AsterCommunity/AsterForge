@@ -13,38 +13,71 @@ use crate::protocol::{
 /// `WebDAV` method recognized by the protocol layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavMethod {
+    /// `OPTIONS` capability and method discovery.
     Options,
+    /// `PROPFIND` property retrieval.
     Propfind,
+    /// `PROPPATCH` property update.
     Proppatch,
+    /// `GET` representation download.
     Get,
+    /// `HEAD` representation metadata without a body.
     Head,
+    /// `PUT` representation upload.
     Put,
+    /// `PATCH` (RFC 5789) partial representation update.
     Patch,
+    /// `MKCOL` collection creation.
     Mkcol,
+    /// `DELETE` resource removal.
     Delete,
+    /// `COPY` resource duplication.
     Copy,
+    /// `MOVE` resource relocation.
     Move,
+    /// `LOCK` lock creation or refresh.
     Lock,
+    /// `UNLOCK` lock removal.
     Unlock,
+    /// `ACL` (RFC 3744) access-control list update.
     Acl,
+    /// `REPORT` structured report execution.
     Report,
+    /// `VERSION-CONTROL` (RFC 3253) version-controlled resource creation.
     VersionControl,
+    /// `CHECKOUT` (RFC 3253) working-resource creation.
     Checkout,
+    /// `CHECKIN` (RFC 3253) version check-in.
     Checkin,
+    /// `UNCHECKOUT` (RFC 3253) working-resource cancellation.
     Uncheckout,
+    /// `MKWORKSPACE` (RFC 3253) workspace creation.
     Mkworkspace,
+    /// `UPDATE` (RFC 3253) version-target update.
     Update,
+    /// `LABEL` (RFC 3253) version label management.
     Label,
+    /// `MERGE` (RFC 3253) version merge.
     Merge,
+    /// `BASELINE-CONTROL` (RFC 3253) baseline-controlled collection creation.
     BaselineControl,
+    /// `MKACTIVITY` (RFC 3253) activity creation.
     Mkactivity,
+    /// `SEARCH` (RFC 5323) DASL search execution.
     Search,
+    /// `ORDERPATCH` (RFC 3648) collection member ordering.
     Orderpatch,
+    /// `MKREDIRECTREF` (RFC 4437) redirect reference creation.
     Mkredirectref,
+    /// `UPDATEREDIRECTREF` (RFC 4437) redirect reference update.
     Updateredirectref,
+    /// `BIND` (RFC 5842) additional binding creation.
     Bind,
+    /// `UNBIND` (RFC 5842) binding removal.
     Unbind,
+    /// `REBIND` (RFC 5842) binding relocation.
     Rebind,
+    /// `POST` extension method accepted for custom product handlers.
     Post,
 }
 
@@ -54,9 +87,15 @@ pub enum DavBodyPolicy {
     /// Reject the first non-empty body chunk.
     Empty,
     /// Collect an XML body up to the supplied byte limit.
-    BoundedXml { maximum: usize },
+    BoundedXml {
+        /// Maximum accepted body size in bytes.
+        maximum: usize,
+    },
     /// Collect an opaque body up to the patch format's byte limit.
-    Bounded { maximum: usize },
+    Bounded {
+        /// Maximum accepted body size in bytes.
+        maximum: usize,
+    },
     /// Leave the body as a stream for the product storage adapter.
     Stream,
     /// Preserve the existing method behavior without consuming the body.
@@ -101,6 +140,7 @@ impl DavMethod {
         Self::Rebind,
     ];
 
+    /// Returns the stable bit index used by [`DavMethodSet`], matching [`DavMethod::ALL`] order.
     #[must_use]
     pub const fn index(self) -> u32 {
         match self {
@@ -140,6 +180,7 @@ impl DavMethod {
         }
     }
 
+    /// Returns the canonical uppercase method token.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -272,11 +313,13 @@ impl DavMethod {
 pub struct DavMethodSet(u64);
 
 impl DavMethodSet {
+    /// Creates the empty method set.
     #[must_use]
     pub const fn empty() -> Self {
         Self(0)
     }
 
+    /// Creates a set containing exactly the supplied methods.
     #[must_use]
     pub const fn from_methods(methods: &[DavMethod]) -> Self {
         let mut set = Self::empty();
@@ -288,36 +331,43 @@ impl DavMethodSet {
         set
     }
 
+    /// Returns the set with `method` added.
     #[must_use]
     pub const fn with(self, method: DavMethod) -> Self {
         Self(self.0 | (1u64 << method.index()))
     }
 
+    /// Returns the set with `method` removed.
     #[must_use]
     pub const fn without(self, method: DavMethod) -> Self {
         Self(self.0 & !(1u64 << method.index()))
     }
 
+    /// Returns the set containing methods present in either input set.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
+    /// Returns whether `method` is a member of the set.
     #[must_use]
     pub const fn contains(self, method: DavMethod) -> bool {
         self.0 & (1u64 << method.index()) != 0
     }
 
+    /// Returns whether every member of this set is also present in `other`.
     #[must_use]
     pub const fn is_subset_of(self, other: Self) -> bool {
         self.0 & !other.0 == 0
     }
 
+    /// Returns whether the set contains no methods.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
+    /// Returns an iterator over members in canonical protocol order.
     #[must_use]
     pub const fn iter(self) -> DavMethodSetIter {
         DavMethodSetIter {
@@ -326,6 +376,7 @@ impl DavMethodSet {
         }
     }
 
+    /// Renders the members as a canonical `Allow` header value.
     #[must_use]
     pub fn render(self) -> String {
         let mut rendered = String::new();
@@ -364,27 +415,39 @@ impl Iterator for DavMethodSetIter {
 /// Request origin needed for same-origin tagged URI and destination validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavRequestOrigin {
+    /// Request scheme, resolved from the URI or forwarded headers.
     pub scheme: String,
+    /// Request authority used for absolute URI and `Destination` comparison.
     pub host: String,
 }
 
 /// Parsed request target shared by known and unknown method handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavRequestTarget<'a> {
+    /// Mount-relative `WebDAV` path decoded from the request URI.
     pub target: DavPath,
+    /// Origin used for same-origin validation of absolute targets and destinations.
     pub origin: DavRequestOrigin,
+    /// Mount prefix the target was stripped of, for rebuilding external hrefs.
     pub mount_path: &'a str,
 }
 
 /// Parsed, body-independent `WebDAV` request data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavRequestHead {
+    /// Recognized method driving dispatch and body policy selection.
     pub method: DavMethod,
+    /// Mount-relative request path.
     pub target: DavPath,
+    /// Origin used for same-origin validation.
     pub origin: DavRequestOrigin,
+    /// Parsed `Depth` header, when the method contract accepts one.
     pub depth: Option<Depth>,
+    /// Parsed `Overwrite` header as a boolean, when the method contract accepts one.
     pub overwrite: Option<bool>,
+    /// Parsed `Destination` header, when the method contract accepts one.
     pub destination: Option<Destination>,
+    /// Parsed `If` header with tags and state tokens, when present.
     pub if_header: Option<IfHeader>,
 }
 

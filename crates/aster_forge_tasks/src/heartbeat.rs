@@ -15,8 +15,12 @@ use crate::{TaskCoreError, TaskLease, TaskLeaseGuard};
 /// Result of an authoritative lease renewal/control check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskHeartbeatOutcome {
+    /// The conditional renewal matched; the lease stays valid in storage.
     Renewed,
+    /// The conditional update did not match, so another worker owns the task and this
+    /// worker must stop before writing any result.
     Lost,
+    /// Storage reports a cancellation request; the worker stops without writing final success.
     CancellationRequested,
 }
 

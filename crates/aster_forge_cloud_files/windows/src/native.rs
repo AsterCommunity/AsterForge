@@ -62,20 +62,29 @@ pub struct WindowsPlaceholderCreateOutcome {
 /// Native CFAPI pin state exposed without leaking windows-rs types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowsPinState {
+    /// Pin state is left unspecified for the placeholder.
     Unspecified,
+    /// Content is pinned to keep it available on the local disk.
     Pinned,
+    /// Content is unpinned and may be dehydrated to free local space.
     Unpinned,
+    /// Content is excluded and must not be hydrated locally.
     Excluded,
+    /// The placeholder inherits the pin state of its parent directory.
     Inherit,
 }
 
 /// Recursive behavior for a pin-state operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WindowsPinRecursion {
+    /// Apply the pin state to the placeholder itself only.
     #[default]
     None,
+    /// Apply the pin state to the placeholder and all its descendants.
     Descendants,
+    /// Apply the pin state to the descendants only, not the placeholder itself.
     DescendantsOnly,
+    /// Recurse over descendants and stop at the first failure.
     DescendantsStopOnError,
 }
 

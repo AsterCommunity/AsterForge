@@ -229,13 +229,18 @@ pub enum DbError {
     /// A database operation error with a driver-native classification.
     #[error("database operation error: {message}")]
     DatabaseOperationClassified {
+        /// Driver-reported failure message.
         message: String,
+        /// Driver-native classification used for retry decisions.
         kind: DatabaseErrorKind,
     },
     /// The commit response was lost after the transaction may have been committed.
     #[error("database commit outcome unknown: {message}")]
     CommitOutcomeUnknown {
+        /// Failure message from the lost commit exchange.
         message: String,
+        /// Driver-native classification when one was observed; `None` means the outcome is
+        /// entirely unknown.
         kind: Option<DatabaseErrorKind>,
     },
     /// Retry loop exhausted without a final operation error.

@@ -1,3 +1,5 @@
+//! Contract tests for shared infrastructure metrics: HTTP outcomes, database attributes, shared
+//! events, readiness pools, and diagnostic health reporting over the Prometheus exporter.
 #![cfg(feature = "backend-prometheus")]
 use aster_forge_metrics::*;
 use std::time::Duration;

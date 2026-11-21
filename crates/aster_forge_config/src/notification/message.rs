@@ -54,7 +54,8 @@ impl ConfigReloadMessage {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the reload message cannot be serialized.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when the reload message cannot be
+    /// serialized.
     pub fn encode(&self) -> Result<String> {
         serde_json::to_string(self).map_err(Into::into)
     }
@@ -63,7 +64,8 @@ impl ConfigReloadMessage {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the transport payload is malformed or fails message validation.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when the transport payload is malformed
+    /// or fails message validation.
     pub fn decode(payload: &str) -> Result<Self> {
         serde_json::from_str(payload).map_err(Into::into)
     }
@@ -148,7 +150,8 @@ impl ConfigReloadWorkerConfig {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the transport payload is malformed or fails message validation.
+/// Returns [`ConfigCoreError`](crate::ConfigCoreError) when the transport payload is malformed or
+/// fails message validation.
 pub fn decode_config_reload_transport_payload(payload: &str) -> Result<ConfigChangeEvent> {
     ConfigReloadMessage::decode(payload).map(ConfigChangeEvent::Reload)
 }
@@ -157,7 +160,8 @@ pub fn decode_config_reload_transport_payload(payload: &str) -> Result<ConfigCha
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when notification decoding or the selected reload callback fails.
+/// Returns [`ConfigCoreError`](crate::ConfigCoreError) when notification decoding or the selected
+/// reload callback fails.
 pub async fn handle_config_reload_notification<F, Fut>(
     config: &ConfigReloadWorkerConfig,
     message: ConfigReloadMessage,

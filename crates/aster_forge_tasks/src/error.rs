@@ -37,7 +37,12 @@ pub enum TaskCoreError {
     #[error(
         "background task cancellation requested for task #{task_id} with token {processing_token}"
     )]
-    CancellationRequested { task_id: i64, processing_token: i64 },
+    CancellationRequested {
+        /// Persisted task identifier.
+        task_id: i64,
+        /// Processing token owned by the current worker.
+        processing_token: i64,
+    },
     /// The current worker observed shutdown and should release its processing lease.
     #[error(
         "background task worker shutdown requested for task #{task_id} with token {processing_token}"

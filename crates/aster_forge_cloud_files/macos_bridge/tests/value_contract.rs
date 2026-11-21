@@ -1,3 +1,5 @@
+//! macOS item and directory version boundary contracts.
+
 use aster_forge_cloud_files_core::{ContentRevision, MetadataRevision};
 use aster_forge_cloud_files_macos_bridge::{
     FILE_PROVIDER_ITEM_VERSION_COMPONENT_MAX_BYTES, MacosBridgeError, MacosFileProviderItemVersion,

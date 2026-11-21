@@ -1,3 +1,5 @@
+//! Windows connection snapshot and session generation contracts.
+
 use std::{
     ffi::OsString,
     path::PathBuf,

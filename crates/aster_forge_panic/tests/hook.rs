@@ -1,3 +1,5 @@
+//! Panic-hook contracts: install outcomes, output policies, diagnostic sinks, report
+//! writing, and resilience to closed or broken stderr streams.
 use aster_forge_panic::{
     DiagnosticSink, InstallOutcome, PanicHookConfig, PanicOutput, PublicDiagnostic, ReportWriter,
     install_panic_hook,

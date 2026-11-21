@@ -1,3 +1,5 @@
+//! Contract tests for `WebDAV` XML parsing: `PROPFIND` bodies and bounded XML document handling.
+
 use std::io::{self, Cursor, Read};
 
 use aster_forge_webdav::{

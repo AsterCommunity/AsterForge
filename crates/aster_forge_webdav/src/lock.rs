@@ -18,14 +18,22 @@ use crate::{
 /// Backend operation selected from a LOCK request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavLockPlan {
+    /// Create a new lock from a LOCK request without a submitted lock token.
     Acquire {
+        /// Client-supplied `DAV:owner` XML, preserved verbatim.
         owner: Option<DavXmlElement>,
+        /// Negotiated lock lifetime after clamping the `Timeout` header.
         timeout: Duration,
+        /// Whether a shared lock was requested instead of an exclusive one.
         shared: bool,
+        /// Whether the lock covers the complete collection subtree.
         deep: bool,
     },
+    /// Refresh an existing lock submitted through an `If` header token.
     Refresh {
+        /// Lock token identifying the refreshed lock.
         token: String,
+        /// Renewed lock lifetime after clamping the `Timeout` header.
         timeout: Duration,
     },
 }
@@ -33,8 +41,10 @@ pub enum DavLockPlan {
 /// Failure while parsing and selecting a LOCK operation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavLockPlanError {
+    /// A LOCK header was malformed or a precondition failed.
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
+    /// The LOCK request body XML was invalid.
     #[error(transparent)]
     Xml(#[from] DavXmlError),
 }
@@ -47,7 +57,10 @@ pub enum DavLockEnforcementError {
     Backend(#[from] DavBackendError),
     /// A conflicting lock did not have a matching submitted token.
     #[error("a conflicting lock token was not submitted for `{path:?}`")]
-    Conflict { path: DavPath },
+    Conflict {
+        /// Lock root of the conflicting lock.
+        path: DavPath,
+    },
 }
 
 /// Rejects an operation when a conflicting lock token was not submitted for its lock root.

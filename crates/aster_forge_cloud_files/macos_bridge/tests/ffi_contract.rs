@@ -1,3 +1,5 @@
+//! macOS bridge `FFI` buffer ownership, identifier round-trip, and rejection contracts.
+
 use std::ptr;
 
 use aster_forge_cloud_files_macos_bridge::{

@@ -1,3 +1,6 @@
+//! Contract tests for the `actix` integration layer:
+//! request body extraction and streaming response writing.
+
 #![cfg(feature = "actix")]
 
 use std::pin::Pin;

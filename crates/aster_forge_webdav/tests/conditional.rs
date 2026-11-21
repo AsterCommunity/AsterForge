@@ -1,3 +1,6 @@
+//! Contract tests for conditional requests:
+//! `If`, `If-Match`, `If-None-Match`, and state-resolver interactions.
+
 use std::time::{Duration, UNIX_EPOCH};
 
 use aster_forge_webdav::{

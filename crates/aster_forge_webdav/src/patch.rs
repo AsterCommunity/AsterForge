@@ -16,8 +16,11 @@ use crate::{
 /// Selected patch format and transport policy after capability and precondition validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavPatchPlan {
+    /// Declared patch document format selected by the request's Content-Type.
     pub format: &'static DavPatchFormat,
+    /// Bounded body policy the transport must enforce while collecting the patch document.
     pub body_policy: DavBodyPolicy,
+    /// Whether the patched resource has a stored representation before this request.
     pub resource_existed: bool,
     /// Product must apply this versioning action atomically with the patch.
     pub versioning: crate::DavVersioningMethodPlan,
@@ -26,18 +29,25 @@ pub struct DavPatchPlan {
 /// Failure while selecting and validating an RFC 5789 PATCH request.
 #[derive(Debug, thiserror::Error)]
 pub enum DavPatchPlanError {
+    /// The resource is version-controlled and its versioning precondition rejected the patch.
     #[error(transparent)]
     Versioning(#[from] crate::DavVersioningPrecondition),
+    /// The resource exists but PATCH is not among its declared capabilities.
     #[error("PATCH is not allowed for this resource")]
     MethodNotAllowed,
+    /// The request Content-Type matched no patch format declared for the resource.
     #[error("PATCH Content-Type is not supported for this resource")]
     UnsupportedMediaType,
+    /// The resource contract demands a strong `If-Match` entity-tag that the request lacks.
     #[error("PATCH requires If-Match with a strong entity-tag")]
     PreconditionRequired,
+    /// The request head violated a protocol contract while parsing PATCH inputs.
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
+    /// An evaluated `If` or entity-tag conditional failed for the patched resource.
     #[error("PATCH request precondition failed")]
     PreconditionFailed(DavConditionalPlan),
+    /// The patch representation metadata, such as position markers, was structurally invalid.
     #[error("invalid PATCH representation metadata")]
     InvalidRepresentation,
 }

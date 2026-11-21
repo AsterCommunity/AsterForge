@@ -1,3 +1,5 @@
+//! Synthetic backend pagination, cursor scoping, and malformed-cursor rejection contracts.
+
 mod support;
 
 use std::collections::HashSet;

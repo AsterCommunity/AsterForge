@@ -1,5 +1,8 @@
 //! Injectable Axum exposition; authentication and paths belong to the product.
 
+/// Builds an Axum router that exposes the provider's Prometheus snapshot at `/metrics` with
+/// `no-store` cache headers. Export failures map to `503`; authentication and mount path belong
+/// to the product.
 #[cfg(feature = "prometheus")]
 pub fn prometheus_router(provider: aster_forge_metrics::MetricsProvider) -> axum::Router {
     axum::Router::new()

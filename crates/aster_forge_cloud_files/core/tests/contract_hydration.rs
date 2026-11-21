@@ -1,3 +1,5 @@
+//! Placeholder hydration request and generation boundary contracts for cloud files services.
+
 mod support;
 
 use std::sync::{

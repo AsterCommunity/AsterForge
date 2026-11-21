@@ -1,3 +1,5 @@
+//! Secret-envelope contract tests: public encrypt/decrypt round trips, context and
+//! master-key binding, and cross-version fixture compatibility.
 #![cfg(feature = "secret-envelope")]
 
 use aster_forge_crypto::{CryptoError, decrypt_secret, encrypt_secret};

@@ -1,3 +1,5 @@
+//! Contract tests for `PROPPATCH` plans: property update snapshots and capability gating.
+
 use aster_forge_webdav::{
     DavBodyPolicy, DavCapabilityDeclaration, DavCapabilitySnapshot, DavConditionalResource,
     DavMethod, DavMethodSet, DavPatchBodyPolicy, DavPatchCapability, DavPatchFormat,

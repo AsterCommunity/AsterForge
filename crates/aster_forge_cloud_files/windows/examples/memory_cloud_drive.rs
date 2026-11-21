@@ -1,3 +1,5 @@
+//! In-memory Windows `CFAPI` cloud drive example wiring the connection and placeholder store.
+
 #[cfg(not(windows))]
 fn main() {
     eprintln!("memory_cloud_drive runs only on Windows 10 version 1709 or newer");

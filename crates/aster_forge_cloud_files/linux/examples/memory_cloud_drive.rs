@@ -1,3 +1,5 @@
+//! In-memory Linux `FUSE` cloud drive example wiring the namespace, content, and writeback engines.
+
 #[cfg(target_os = "linux")]
 mod linux_example {
     include!("memory_cloud_drive/common.rs");

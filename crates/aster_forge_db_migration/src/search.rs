@@ -6,11 +6,17 @@ use sea_orm_migration::sea_query::{
 
 /// `SQLite` FTS5 virtual table and synchronization-trigger names used by one migration.
 pub struct SqliteFtsConfig<'a> {
+    /// Name of the `SQLite` FTS5 virtual table to create.
     pub virtual_table: &'a str,
+    /// Content table whose rows the FTS index mirrors.
     pub source_table: &'a str,
+    /// Source columns mirrored into the virtual table.
     pub columns: &'a [&'a str],
+    /// Name of the insert-synchronization trigger.
     pub insert_trigger: &'a str,
+    /// Name of the delete-synchronization trigger.
     pub delete_trigger: &'a str,
+    /// Name of the update-synchronization trigger.
     pub update_trigger: &'a str,
 }
 

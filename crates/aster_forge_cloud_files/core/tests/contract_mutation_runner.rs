@@ -1,3 +1,5 @@
+//! Mutation runner generation, idempotency, and metadata revision boundary contracts.
+
 mod support;
 
 use std::{

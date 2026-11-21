@@ -16,7 +16,7 @@ repository await 边界检查同一个 token。
 aster_forge_webdav = { git = "https://github.com/AsterCommunity/AsterForge", features = ["actix"] }
 ```
 
-默认 feature 只包含 transport-neutral 协议内核。Actix 产品启用 `actix`，使用 `aster_forge_webdav::actix` 完成请求和响应类型转换。
+默认 feature 只包含 transport-neutral 协议内核。Actix 产品启用 `actix`，使用 `aster_forge_webdav::actix` 完成请求和响应类型转换；Axum 产品启用 `axum`，使用 `aster_forge_webdav::axum` 提供同一 transport contract：`request_head`/`request_target` 解析请求头和 mount-relative 目标，`prepare_request_body` 按方法的 `DavBodyPolicy` 收集有界请求体并返回 `DavPreparedBody`（`None`/`Xml`/`Bytes`），`into_response` 把 `DavResponse` 写回 Axum，`protocol_error_response` 输出协议错误响应。两个 adapter 只做类型转换和 body 边界执行，不持有产品路由、认证、workspace scope 或存储语义。
 
 ## 能力声明与响应快照
 
@@ -238,6 +238,16 @@ let plan = aster_forge_webdav::plan_patch_request(&snapshot, &headers, resource)
 let prepared = aster_forge_webdav::actix::prepare_request_body(
     plan.body_policy,
     &mut payload,
+)
+.await?;
+```
+
+Axum adapter 的对应入口接收整个 `Request` 并按同一 policy 消费 body；policy 为 `Empty` 时非空 body 返回 `DavBodyError::BodyNotAllowed`，超限返回 `DavBodyError::BodyTooLarge`：
+
+```rust
+let prepared = aster_forge_webdav::axum::prepare_request_body(
+    plan.body_policy,
+    request,
 )
 .await?;
 ```

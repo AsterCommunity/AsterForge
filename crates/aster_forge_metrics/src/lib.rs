@@ -185,6 +185,10 @@ pub trait MetricsRecorder: DbMetricsRecorder + Send + Sync {
         None
     }
 
+    /// Records one system health report under a static `scope` label.
+    ///
+    /// Implementations translate shared facts from the report (component statuses, observation
+    /// durations, process signals); they must not invent product readiness or alerting policy.
     #[cfg(feature = "runtime-health")]
     fn record_health(
         &self,

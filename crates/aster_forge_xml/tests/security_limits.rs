@@ -1,3 +1,4 @@
+//! Safety-limit contract tests: finite bounds, DTD rejection, and malformed input.
 use aster_forge_xml::{
     BorrowedDocument, XmlSafetyPolicy, XmlStreamEvent, XmlStreamReader, XmlStreamWriter,
     validate_xml_input,

@@ -1,3 +1,4 @@
+//! Compatibility contract tests against the `roxmltree` reference parser.
 use std::collections::BTreeMap;
 
 use aster_forge_xml::{BorrowedDocument, ElementRef};

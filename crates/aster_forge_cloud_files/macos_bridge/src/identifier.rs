@@ -41,7 +41,12 @@ pub enum MacosFileProviderSystemContainer {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum MacosFileProviderIdentifier {
     /// One exact scoped product item.
-    Item { encoded: String, key: CloudItemKey },
+    Item {
+        /// Exact encoded identifier string handed to and received from File Provider.
+        encoded: String,
+        /// Stable scoped item key this identifier resolves to.
+        key: CloudItemKey,
+    },
     /// A File Provider system container.
     System(MacosFileProviderSystemContainer),
 }

@@ -1,3 +1,6 @@
+//! Contract tests for capability declarations, snapshots, and extension evaluation
+//! across protocol plans.
+
 use std::marker::PhantomData;
 
 use aster_forge_webdav::{

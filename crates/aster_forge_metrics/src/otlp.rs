@@ -25,10 +25,15 @@ use std::{
 pub struct OtlpMetricsConfig {
     /// Full signal endpoint, e.g. `https://collector.example/v1/metrics`.
     pub endpoint: String,
+    /// Static HTTP headers attached to every export request (at most 16, never logged).
     pub headers: BTreeMap<String, String>,
+    /// Per-request deadline; must be positive, at most one minute, and not exceed `interval`.
     pub timeout: Duration,
+    /// Push cadence; between one second and one hour.
     pub interval: Duration,
+    /// Upper bound for one encoded export request body (at most 64 MiB).
     pub max_request_bytes: usize,
+    /// Upper bound accepted for one export response body (at most 1 MiB).
     pub max_response_bytes: usize,
 }
 
@@ -96,13 +101,18 @@ struct Diagnostics {
     last_success_unix_seconds: AtomicU64,
 }
 
+/// Point-in-time copy of the OTLP push counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OtlpExportSnapshot {
+    /// Completed export attempts since provider startup.
     pub successes: u64,
+    /// Failed export attempts since provider startup.
     pub failures: u64,
+    /// Unix timestamp (seconds) of the last successful export; zero before the first success.
     pub last_success_unix_seconds: u64,
 }
 impl OtlpExportDiagnostics {
+    /// Loads the current export counters without blocking the push loop.
     #[must_use]
     pub fn snapshot(&self) -> OtlpExportSnapshot {
         OtlpExportSnapshot {

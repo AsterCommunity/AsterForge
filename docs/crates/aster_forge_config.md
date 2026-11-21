@@ -32,6 +32,7 @@ aster_forge_config = { git = "https://github.com/AsterCommunity/AsterForge" }
 可选 feature：
 
 - `openapi`：在 debug + openapi 构建下为公共 API 类型派生 `utoipa::ToSchema`。
+- `sea-orm`：为 `ConfigValueType` 等配置值类型派生 SeaORM active enum（`DeriveActiveEnum`，含 `string_value` 列映射），产品用 SeaORM 实体持久化配置值时直接复用 Forge 类型；它不引入产品实体，也不改变运行时配置行为。
 - `redis-pubsub`：启用 `RedisConfigChangeNotifier`，并通过 `aster_forge_events` 复用 Redis transport 和可重连 subscription supervisor；它只用于跨进程 reload 通知，不表示配置值存储在 Redis。
 
 ```toml

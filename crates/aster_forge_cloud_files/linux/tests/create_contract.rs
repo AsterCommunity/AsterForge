@@ -1,3 +1,5 @@
+//! Linux create-path contract coverage across store, namespace, and error boundaries.
+
 use std::{
     collections::{HashMap, HashSet},
     sync::{

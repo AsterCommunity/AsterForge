@@ -1,3 +1,4 @@
+//! End-to-end parse, traversal, and round-trip contract tests.
 use std::io::{self, Cursor, Write};
 
 use aster_forge_xml::{

@@ -1,3 +1,5 @@
+//! Cache eviction and recovery boundary contracts across ranges, revisions, and operation leases.
+
 mod support;
 
 use aster_forge_cloud_files_core::{

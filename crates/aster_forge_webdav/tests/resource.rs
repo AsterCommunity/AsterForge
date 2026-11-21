@@ -1,3 +1,5 @@
+//! Contract tests for resource identity, descendant rules, and path boundaries.
+
 use aster_forge_webdav::{
     DavCopyMoveMethod, DavMutationFailure, DavMutationPlanError, DavPath, DavResourceKind,
     DavResponseBody, Depth, collection_created_response, delete_success_response,

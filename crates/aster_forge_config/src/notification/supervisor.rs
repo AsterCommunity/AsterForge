@@ -129,7 +129,7 @@ fn default_config_reload_reconnect_policy() -> ConfigReloadReconnectPolicy {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+/// Returns [`ConfigCoreError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_worker<N, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -155,7 +155,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+/// Returns [`ConfigCoreError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_worker_with_observer<N, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -203,7 +203,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+/// Returns [`ConfigCoreError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_supervisor<N, R, RFut, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,
@@ -228,7 +228,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+/// Returns [`ConfigCoreError`] when publishing, subscription, reconciliation, or reload handling fails.
 pub async fn run_config_reload_supervisor_with_observers<N, R, RFut, F, Fut>(
     notifier: Arc<N>,
     config: ConfigReloadWorkerConfig,

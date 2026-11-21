@@ -1,3 +1,5 @@
+//! Upload intent and revision snapshot boundary contracts for cloud files services.
+
 use aster_forge_cloud_files_core::{
     CloudContentMetadata, CloudFilesCoreError, CloudItem, CloudItemId, CloudItemKey,
     CloudNamespaceId, CloudRootId, CloudScope, ContentCacheKey, ContentLeaseId, ContentRevision,

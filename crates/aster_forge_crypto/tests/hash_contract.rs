@@ -1,3 +1,5 @@
+//! Password-hashing and HMAC-SHA256 contract tests: policy validation, work-factor
+//! enforcement, verification limits, and hash stability.
 #![cfg(all(feature = "password", feature = "hmac-sha256"))]
 
 use aster_forge_crypto::{

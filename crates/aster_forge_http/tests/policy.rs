@@ -1,3 +1,5 @@
+//! Contract tests for client policy: proxy and pinned-DNS precedence, idle-read timers,
+//! TLS trust roots and hostname validation, and blocking-factory identity selection.
 mod support;
 
 use aster_forge_http::HttpClient;

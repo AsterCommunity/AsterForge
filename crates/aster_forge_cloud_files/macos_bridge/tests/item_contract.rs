@@ -1,3 +1,5 @@
+//! macOS File Provider item conversion, metadata mapping, and redaction contracts.
+
 use aster_forge_cloud_files_core::{
     CloudContentMetadata, CloudItem, CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId,
     CloudScope, ContentRevision, MetadataRevision,

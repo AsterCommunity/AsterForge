@@ -1,3 +1,5 @@
+//! Contract tests for directory traversal: page limits, enumeration ordering, and cursor behavior.
+
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Mutex;

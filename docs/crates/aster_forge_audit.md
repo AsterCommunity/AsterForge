@@ -27,7 +27,8 @@ aster_forge_audit = { git = "https://github.com/AsterCommunity/AsterForge", feat
 
 默认 feature 只提供 lifecycle component。需要 Forge 数据库缓冲 writer 时启用
 `db-writer`；该 feature 会启用 `aster_forge_db/audit-log`，产品不需要再复制
-`AuditWriter`。
+`AuditWriter`。另有测试专用 feature `database-container-tests`，它只启用 `db-writer`
+并供 Forge 自己的 testcontainer 集成测试使用，产品仓库不需要启用。
 
 默认不依赖 `aster_forge_mail`。如果产品有 mail outbox，并且希望 shutdown audit 在
 outbox drain 之后执行，显式启用 `mail-outbox-dependency`。启用后调用点不需要变化，

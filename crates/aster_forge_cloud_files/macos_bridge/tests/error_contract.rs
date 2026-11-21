@@ -1,3 +1,5 @@
+//! macOS bridge error classification and stable `FFI` code discriminant contracts.
+
 use aster_forge_cloud_files_core::{CloudBackendError, CloudBackendErrorKind, SessionState};
 use aster_forge_cloud_files_macos_bridge::{MacosBridgeError, MacosErrorCode, backend_error_code};
 

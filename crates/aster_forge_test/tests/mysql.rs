@@ -1,3 +1,5 @@
+//! `MySQL` test container contracts: reusable startup, database provisioning, and
+//! connection-cache tuning against a real server.
 #![cfg(feature = "mysql")]
 
 use aster_forge_test::{

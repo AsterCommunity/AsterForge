@@ -20,5 +20,5 @@ aster_forge_runtime::AsterRuntime::builder()
 The Chinese crate pages are the complete reference for now:
 
 - [Integration principles](/guide/integration-principles)
-- [Reference projects](/guide/reference-projects)
+- [Reference projects](/en/guide/reference-projects)
 - [Crate docs](/crates/aster_forge_middleware)

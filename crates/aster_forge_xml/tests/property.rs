@@ -1,3 +1,4 @@
+//! Property-based document tree tests backed by proptest generators.
 use std::collections::BTreeMap;
 
 use aster_forge_xml::{

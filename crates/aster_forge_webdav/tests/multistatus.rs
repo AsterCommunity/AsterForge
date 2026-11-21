@@ -1,3 +1,5 @@
+//! Contract tests for `207 Multistatus` document parsing and serialization.
+
 use std::io::{self, Write};
 use std::task::Poll;
 

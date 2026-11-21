@@ -1,3 +1,5 @@
+//! Scope-bound item identity, key validation, and rename stability contracts for cloud files services.
+
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 

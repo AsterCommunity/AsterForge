@@ -16,14 +16,20 @@ const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
 /// Finite output limits and document options for [`XmlStreamWriter`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XmlWriteOptions {
+    /// Maximum total output size in bytes.
     pub max_output_bytes: usize,
+    /// Maximum element nesting depth.
     pub max_depth: usize,
+    /// Maximum number of attributes on one element.
     pub max_attributes_per_element: usize,
+    /// Maximum namespace declarations simultaneously in scope.
     pub max_namespace_bindings: usize,
+    /// Whether a complete document starts with an XML declaration.
     pub write_document_declaration: bool,
 }
 
 impl XmlWriteOptions {
+    /// Creates the default bounded options.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -35,30 +41,35 @@ impl XmlWriteOptions {
         }
     }
 
+    /// Overrides the maximum total output size in bytes.
     #[must_use]
     pub const fn max_output_bytes(mut self, value: usize) -> Self {
         self.max_output_bytes = value;
         self
     }
 
+    /// Overrides the maximum element nesting depth.
     #[must_use]
     pub const fn max_depth(mut self, value: usize) -> Self {
         self.max_depth = value;
         self
     }
 
+    /// Overrides the maximum attribute count per element.
     #[must_use]
     pub const fn max_attributes_per_element(mut self, value: usize) -> Self {
         self.max_attributes_per_element = value;
         self
     }
 
+    /// Overrides the maximum namespace declarations simultaneously in scope.
     #[must_use]
     pub const fn max_namespace_bindings(mut self, value: usize) -> Self {
         self.max_namespace_bindings = value;
         self
     }
 
+    /// Controls whether a complete document starts with an XML declaration.
     #[must_use]
     pub const fn write_document_declaration(mut self, value: bool) -> Self {
         self.write_document_declaration = value;
@@ -87,11 +98,14 @@ impl Default for XmlWriteOptions {
 /// One attribute passed to a streaming element write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XmlWriteAttribute<'a> {
+    /// The attribute's qualified name as written to the output.
     pub name: &'a str,
+    /// The attribute value; it is escaped when written.
     pub value: &'a str,
 }
 
 impl<'a> XmlWriteAttribute<'a> {
+    /// Creates an attribute from a qualified name and raw value.
     #[must_use]
     pub const fn new(name: &'a str, value: &'a str) -> Self {
         Self { name, value }
@@ -373,10 +387,12 @@ impl<W: Write> XmlStreamWriter<W> {
         self.write_raw(subtree.document().root().raw_xml())
     }
 
+    /// Returns the number of bytes written to the output sink so far.
     pub fn written_bytes(&self) -> usize {
         self.writer.get_ref().written
     }
 
+    /// Returns a shared reference to the output sink.
     pub fn get_ref(&self) -> &W {
         &self.writer.get_ref().inner
     }

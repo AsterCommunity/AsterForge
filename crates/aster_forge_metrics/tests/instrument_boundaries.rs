@@ -1,3 +1,5 @@
+//! Boundary tests for typed instruments: noop rejection, kind conversions, label validation,
+//! series budgets, and shared-series recording behavior.
 use aster_forge_metrics::*;
 use std::time::Duration;
 

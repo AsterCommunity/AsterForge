@@ -280,6 +280,7 @@ impl MailOutboxDispatchRow for Model {
     }
 }
 
+/// `SeaORM` relation marker; the entity defines no relations.
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 

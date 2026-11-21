@@ -1,3 +1,5 @@
+//! Linux engine contract coverage for inode scoping, name boundaries, and revision-bound reads.
+
 mod support;
 
 use std::{collections::HashSet, sync::Arc, time::Duration};

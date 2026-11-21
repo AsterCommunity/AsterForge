@@ -60,7 +60,9 @@ impl ScopeId {
 /// A byte range in the original XML source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceSpan {
+    /// Byte offset of the first byte of the spanned region.
     pub start: u64,
+    /// Byte offset one past the last byte of the spanned region.
     pub end: u64,
 }
 
@@ -275,14 +277,17 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
         })
     }
 
+    /// Returns the complete retained source buffer backing this document.
     pub fn source(&self) -> &[u8] {
         self.source.as_ref()
     }
 
+    /// Consumes the document and returns the retained source buffer.
     pub fn into_source(self) -> S {
         self.source
     }
 
+    /// Returns a borrowed view of the document's single root element.
     pub fn root(&self) -> ElementRef<'_, S> {
         ElementRef {
             document: self,
@@ -290,6 +295,7 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
         }
     }
 
+    /// Returns a borrowed view of the node with `id`, or `None` when the id is out of range.
     pub fn node(&self, id: NodeId) -> Option<NodeRef<'_, S>> {
         let node = self.nodes.get(id.index())?;
         Some(match &node.kind {
@@ -306,10 +312,16 @@ impl<S: AsRef<[u8]>> XmlDocument<S> {
         })
     }
 
+    /// Returns the total number of nodes stored in the arena.
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
+    /// Returns the number of values that could not be borrowed from the source and were
+    /// pooled instead.
+    ///
+    /// Decoded entities, trimmed text, and other normalized values allocate here; all other
+    /// values reference the retained source bytes.
     pub fn allocated_value_count(&self) -> usize {
         self.owned_values.len()
     }
@@ -424,11 +436,13 @@ impl ValidatedXml {
         Ok(Self(Arc::new(document)))
     }
 
+    /// Returns the validated source bytes exactly as provided.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.source()
     }
 
+    /// Returns the validated owned document for traversal.
     #[must_use]
     pub fn document(&self) -> &OwnedDocument {
         &self.0
@@ -450,11 +464,13 @@ impl<S> Clone for ElementRef<'_, S> {
 }
 
 impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
+    /// Returns the stable arena identifier of this element.
     #[must_use]
     pub fn id(self) -> NodeId {
         self.id
     }
 
+    /// Returns the parent element, or `None` for the document root.
     #[must_use]
     pub fn parent(self) -> Option<ElementRef<'document, S>> {
         self.document.nodes[self.id.index()]
@@ -466,6 +482,8 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
     }
 
     #[must_use]
+    /// Returns the element's qualified tag name exactly as written in the source, including
+    /// any namespace prefix (for example `D:propstat`).
     pub fn qualified_name(self) -> &'document str {
         let Some(data) = self.document.element_data(self.id) else {
             return "";
@@ -473,16 +491,20 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         self.document.value(data.qualified_name)
     }
 
+    /// Returns the namespace prefix written on the tag name, if any.
     #[must_use]
     pub fn prefix(self) -> Option<&'document str> {
         split_qualified_name(self.qualified_name()).0
     }
 
+    /// Returns the local part of the tag name without any namespace prefix.
     #[must_use]
     pub fn name(self) -> &'document str {
         split_qualified_name(self.qualified_name()).1
     }
 
+    /// Resolves the element's namespace URI from the in-scope namespace declarations, or
+    /// `None` when the element is unprefixed and no default namespace is in scope.
     #[must_use]
     pub fn namespace(self) -> Option<&'document str> {
         let data = self.document.element_data(self.id)?;
@@ -490,6 +512,8 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
             .resolve_namespace(data.namespace_scope, self.prefix().unwrap_or(""))
     }
 
+    /// Returns the exact source bytes spanned by this element, including both tags and all
+    /// content between them.
     #[must_use]
     pub fn raw_xml(self) -> &'document [u8] {
         let Some(data) = self.document.element_data(self.id) else {
@@ -532,6 +556,7 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         count
     }
 
+    /// Returns an iterator over this element's written attributes in source order.
     #[must_use]
     pub fn attributes(self) -> Attributes<'document, S> {
         let range = self
@@ -546,18 +571,23 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         }
     }
 
+    /// Returns the value of the first attribute whose qualified name equals
+    /// `qualified_name`.
     pub fn attribute(self, qualified_name: &str) -> Option<&'document str> {
         self.attributes()
             .find(|attribute| attribute.qualified_name() == qualified_name)
             .map(AttributeRef::value)
     }
 
+    /// Returns the value of the first attribute whose local name is `name` and whose
+    /// resolved namespace equals `namespace`; pass `None` to match unprefixed attributes.
     pub fn attribute_ns(self, name: &str, namespace: Option<&str>) -> Option<&'document str> {
         self.attributes()
             .find(|attribute| attribute.name() == name && attribute.namespace() == namespace)
             .map(AttributeRef::value)
     }
 
+    /// Returns an iterator over this element's direct child nodes in document order.
     #[must_use]
     pub fn children(self) -> Children<'document, S> {
         Children {
@@ -566,6 +596,7 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         }
     }
 
+    /// Returns an iterator over this element's direct child elements in document order.
     #[must_use]
     pub fn child_elements(self) -> ChildElements<'document, S> {
         ChildElements {
@@ -573,22 +604,28 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
         }
     }
 
+    /// Returns the first direct child element whose local tag name equals `name`.
     #[must_use]
     pub fn get_child(self, name: &str) -> Option<ElementRef<'document, S>> {
         self.child_elements().find(|element| element.name() == name)
     }
 
+    /// Returns the first direct child element whose local tag name is `name` and whose
+    /// resolved namespace is `namespace`.
     #[must_use]
     pub fn get_child_ns(self, name: &str, namespace: &str) -> Option<ElementRef<'document, S>> {
         self.child_elements()
             .find(|element| element.name() == name && element.namespace() == Some(namespace))
     }
 
+    /// Returns an iterator over descendant elements in depth-first document order.
     #[must_use]
     pub fn descendants(self) -> DescendantElements<'document, S> {
         DescendantElements { stack: vec![self] }
     }
 
+    /// Concatenates this element's direct text and CDATA children, or `None` when the
+    /// element has no text content.
     #[must_use]
     pub fn text(self) -> Option<Cow<'document, str>> {
         let mut values = self.children().filter_map(|node| match node {
@@ -611,10 +648,15 @@ impl<'document, S: AsRef<[u8]>> ElementRef<'document, S> {
 
 /// A borrowed XML node view.
 pub enum NodeRef<'document, S> {
+    /// A child element node.
     Element(ElementRef<'document, S>),
+    /// Character data resolved from a text node.
     Text(&'document str),
+    /// Literal character data from a CDATA section.
     CData(&'document str),
+    /// A comment's verbatim content.
     Comment(&'document str),
+    /// A processing instruction with its target and optional content.
     ProcessingInstruction(ProcessingInstructionRef<'document>),
 }
 
@@ -626,12 +668,16 @@ impl<S> Clone for NodeRef<'_, S> {
     }
 }
 
+/// A borrowed processing instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessingInstructionRef<'a> {
+    /// The `<?target ...?>` target name.
     pub target: &'a str,
+    /// The instruction payload, or `None` when no non-empty content follows the target.
     pub content: Option<&'a str>,
 }
 
+/// Iterator over an element's direct child nodes in document order.
 pub struct Children<'document, S> {
     document: &'document XmlDocument<S>,
     next: Option<NodeId>,
@@ -647,6 +693,7 @@ impl<'document, S: AsRef<[u8]>> Iterator for Children<'document, S> {
     }
 }
 
+/// Iterator over an element's direct child elements in document order.
 pub struct ChildElements<'document, S> {
     children: Children<'document, S>,
 }
@@ -662,6 +709,7 @@ impl<'document, S: AsRef<[u8]>> Iterator for ChildElements<'document, S> {
     }
 }
 
+/// Iterator over descendant elements in depth-first document order.
 pub struct DescendantElements<'document, S> {
     stack: Vec<ElementRef<'document, S>>,
 }
@@ -678,6 +726,7 @@ impl<'document, S: AsRef<[u8]>> Iterator for DescendantElements<'document, S> {
     }
 }
 
+/// Iterator over an element's written attributes in source order.
 pub struct Attributes<'document, S> {
     element: ElementRef<'document, S>,
     next: u32,
@@ -700,6 +749,7 @@ impl<'document, S: AsRef<[u8]>> Iterator for Attributes<'document, S> {
     }
 }
 
+/// A borrowed view of one attribute belonging to an element.
 pub struct AttributeRef<'document, S> {
     element: ElementRef<'document, S>,
     index: u32,
@@ -730,22 +780,27 @@ impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
         self.element.document
     }
 
+    /// Returns the attribute's qualified name exactly as written in the source.
     #[must_use]
     pub fn qualified_name(self) -> &'document str {
         self.data()
             .map_or("", |data| self.document().value(data.qualified_name))
     }
 
+    /// Returns the namespace prefix written on the attribute name, if any.
     #[must_use]
     pub fn prefix(self) -> Option<&'document str> {
         split_qualified_name(self.qualified_name()).0
     }
 
+    /// Returns the local part of the attribute name without any namespace prefix.
     #[must_use]
     pub fn name(self) -> &'document str {
         split_qualified_name(self.qualified_name()).1
     }
 
+    /// Resolves the attribute's namespace URI from the owning element's in-scope
+    /// declarations, or `None` when the attribute is unprefixed.
     #[must_use]
     pub fn namespace(self) -> Option<&'document str> {
         let prefix = self.prefix()?;
@@ -756,6 +811,8 @@ impl<'document, S: AsRef<[u8]>> AttributeRef<'document, S> {
         self.document().resolve_namespace(scope, prefix)
     }
 
+    /// Returns the attribute value after XML attribute-value normalization and entity
+    /// decoding.
     #[must_use]
     pub fn value(self) -> &'document str {
         self.data()

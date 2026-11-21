@@ -1,3 +1,6 @@
+//! Contract tests for the `DeltaV` extension:
+//! version-control reports, baselines, and version-tree behavior.
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};

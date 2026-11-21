@@ -1,3 +1,5 @@
+//! macOS bridge engine contract coverage for item and enumeration reads.
+
 use std::{num::NonZeroU64, sync::Arc};
 
 use aster_forge_cloud_files_core::{

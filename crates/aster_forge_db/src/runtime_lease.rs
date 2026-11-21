@@ -131,6 +131,7 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
 }
 
+/// `SeaORM` relation marker; the entity defines no relations.
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 

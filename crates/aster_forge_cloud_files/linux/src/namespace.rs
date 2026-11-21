@@ -420,26 +420,31 @@ impl LinuxCreateDirectoryRequest {
         })
     }
 
+    /// Returns the durable parent item key.
     #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
+    /// Returns the validated directory name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the requested directory permission mode.
     #[must_use]
     pub const fn mode(&self) -> u32 {
         self.mode
     }
 
+    /// Returns the caller process file-creation umask.
     #[must_use]
     pub const fn umask(&self) -> u32 {
         self.umask
     }
 
+    /// Returns the mount session generation that issued this request.
     #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
@@ -500,51 +505,61 @@ impl LinuxRenameRequest {
         })
     }
 
+    /// Returns the stable key of the moved item.
     #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    /// Returns the inode generation the kernel holds for this item.
     #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
+    /// Returns the node kind of the moved item.
     #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
 
+    /// Returns the durable source parent item key.
     #[must_use]
     pub const fn old_parent_key(&self) -> &CloudItemKey {
         &self.old_parent_key
     }
 
+    /// Returns the validated source name.
     #[must_use]
     pub fn old_name(&self) -> &str {
         &self.old_name
     }
 
+    /// Returns the durable destination parent item key.
     #[must_use]
     pub const fn new_parent_key(&self) -> &CloudItemKey {
         &self.new_parent_key
     }
 
+    /// Returns the validated destination name.
     #[must_use]
     pub fn new_name(&self) -> &str {
         &self.new_name
     }
 
+    /// Returns the existing destination resolved before the rename, if any.
     #[must_use]
     pub const fn destination(&self) -> Option<&LinuxRenameDestination> {
         self.destination.as_ref()
     }
 
+    /// Returns whether the rename must fail instead of replacing an existing destination.
     #[must_use]
     pub const fn no_replace(&self) -> bool {
         self.no_replace
     }
 
+    /// Returns the mount session generation that issued this request.
     #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation
@@ -560,6 +575,7 @@ pub struct LinuxRenameDestination {
 }
 
 impl LinuxRenameDestination {
+    /// Creates destination facts from the resolved item identity.
     #[must_use]
     pub const fn new(
         key: CloudItemKey,
@@ -573,16 +589,19 @@ impl LinuxRenameDestination {
         }
     }
 
+    /// Returns the stable key of the replaced destination item.
     #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    /// Returns the inode generation the kernel holds for the destination.
     #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
+    /// Returns the node kind of the replaced destination item.
     #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
@@ -598,6 +617,7 @@ pub struct LinuxRenameAcceptance {
 }
 
 impl LinuxRenameAcceptance {
+    /// Creates an acceptance from the moved item, its source tombstone, and any replaced item.
     #[must_use]
     pub const fn new(
         item: LinuxNamespaceItem,
@@ -611,21 +631,25 @@ impl LinuxRenameAcceptance {
         }
     }
 
+    /// Returns the durable state of the moved item.
     #[must_use]
     pub const fn item(&self) -> &LinuxNamespaceItem {
         &self.item
     }
 
+    /// Returns the tombstone recorded for the source location.
     #[must_use]
     pub const fn source(&self) -> &LinuxNamespaceTombstone {
         &self.source
     }
 
+    /// Returns the tombstone of the replaced destination, if one existed.
     #[must_use]
     pub const fn replaced(&self) -> Option<&LinuxNamespaceTombstone> {
         self.replaced.as_ref()
     }
 
+    /// Consumes the acceptance and returns the item, source tombstone, and replaced tombstone.
     #[must_use]
     pub fn into_parts(
         self,
@@ -674,31 +698,37 @@ impl LinuxRemoveRequest {
         })
     }
 
+    /// Returns the stable key of the removed item.
     #[must_use]
     pub const fn key(&self) -> &CloudItemKey {
         &self.key
     }
 
+    /// Returns the inode generation the kernel holds for this item.
     #[must_use]
     pub const fn inode_generation(&self) -> LinuxInodeGeneration {
         self.inode_generation
     }
 
+    /// Returns the durable parent item key.
     #[must_use]
     pub const fn parent_key(&self) -> &CloudItemKey {
         &self.parent_key
     }
 
+    /// Returns the validated remote name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the node kind of the removed item.
     #[must_use]
     pub const fn kind(&self) -> LinuxNodeKind {
         self.kind
     }
 
+    /// Returns the mount session generation that issued this request.
     #[must_use]
     pub const fn session_generation(&self) -> SessionGeneration {
         self.session_generation

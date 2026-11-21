@@ -1,3 +1,5 @@
+//! Contract tests for request guards and default hooks: terminal events, repeated completion,
+//! dropped guards, hook delegation, and the finite HTTP method vocabulary.
 use aster_forge_metrics::*;
 use std::sync::{Arc, Mutex};
 

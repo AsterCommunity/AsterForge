@@ -234,7 +234,7 @@ impl ConfigValue {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the stored string does not match the declared value type.
+    /// Returns [`ConfigCoreError`] when the stored string does not match the declared value type.
     pub fn from_storage(value_type: impl Into<ConfigValueType>, value: String) -> Result<Self> {
         let value_type = value_type.into();
         if !value_type.is_string_list() {
@@ -293,7 +293,7 @@ impl ConfigValue {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the typed value does not match the requested storage type.
+    /// Returns [`ConfigCoreError`] when the typed value does not match the requested storage type.
     pub fn to_storage_for_type(&self, value_type: impl Into<ConfigValueType>) -> Result<String> {
         let value_type = value_type.into();
         match (value_type, self) {
@@ -393,7 +393,7 @@ pub fn config_value_audit_string(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the stored value violates its declared type contract.
+/// Returns [`ConfigCoreError`] when the stored value violates its declared type contract.
 pub fn validate_storage_value(value_type: ConfigValueType, value: &str) -> Result<()> {
     let trimmed = value.trim();
     match value_type {
@@ -430,7 +430,7 @@ pub fn validate_storage_value(value_type: ConfigValueType, value: &str) -> Resul
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the stored string array is malformed JSON.
+/// Returns [`ConfigCoreError`] when the stored string array is malformed JSON.
 pub fn parse_string_array_config_value(value: &str, key: &str) -> Result<Vec<String>> {
     serde_json::from_str::<Vec<String>>(value.trim()).map_err(|error| {
         ConfigCoreError::invalid_value(format!("{key} must be a JSON array of strings: {error}"))
@@ -446,7 +446,7 @@ pub fn parse_string_array_config_value(value: &str, key: &str) -> Result<Vec<Str
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when selection count or a selected value is invalid.
+/// Returns [`ConfigCoreError`] when selection count or a selected value is invalid.
 pub fn parse_single_string_enum_selection<T>(
     value: &str,
     key: &str,
@@ -483,7 +483,7 @@ pub fn parse_single_string_enum_selection<T>(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the enum set is malformed, duplicated, or unknown.
+/// Returns [`ConfigCoreError`] when the enum set is malformed, duplicated, or unknown.
 pub fn parse_string_enum_set_selection<T>(
     value: &str,
     key: &str,
@@ -521,7 +521,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the selected enum set cannot be normalized.
+/// Returns [`ConfigCoreError`] when the selected enum set cannot be normalized.
 pub fn normalize_string_enum_set_selection<T>(
     value: &str,
     key: &str,

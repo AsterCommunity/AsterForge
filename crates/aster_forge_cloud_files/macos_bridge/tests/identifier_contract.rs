@@ -1,3 +1,5 @@
+//! macOS File Provider identifier encoding, decoding, and rejection contracts.
+
 use aster_forge_cloud_files_core::{
     CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope,
 };

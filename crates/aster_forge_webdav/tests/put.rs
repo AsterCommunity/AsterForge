@@ -1,3 +1,5 @@
+//! Contract tests for `PUT` plans: content handling, preconditions, and capability snapshots.
+
 use aster_forge_webdav::{
     DavCapabilityDeclaration, DavCapabilitySnapshot, DavExtensionPackage, DavExtensionSet,
     DavMethod, DavMethodSet, DavPartialPutCapability, DavPath, DavPrivateUpdateRangeCapability,

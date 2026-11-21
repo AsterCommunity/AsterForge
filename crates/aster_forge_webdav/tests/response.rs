@@ -1,3 +1,5 @@
+//! Contract tests for response representation: entity tags, timestamps, and header emission.
+
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};

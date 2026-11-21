@@ -1,3 +1,5 @@
+//! Item value metadata and revision boundary validation contracts for cloud files services.
+
 use std::time::Duration;
 
 use aster_forge_cloud_files_core::{

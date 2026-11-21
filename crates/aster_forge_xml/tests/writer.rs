@@ -1,3 +1,4 @@
+//! Streaming writer contract tests: escaping, namespaces, limits, and lifecycle.
 use std::io::{self, Write};
 
 use aster_forge_xml::{

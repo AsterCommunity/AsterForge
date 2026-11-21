@@ -17,10 +17,15 @@ use tokio::sync::Semaphore;
 /// Limits apply to each instance and cannot be overridden by SDK environment variables.
 #[derive(Clone, Debug)]
 pub struct MetricsLimits {
+    /// Maximum number of instruments one instance may register.
     pub max_instruments: usize,
+    /// Maximum distinct label combinations retained per instrument.
     pub max_series_per_instrument: usize,
+    /// Maximum byte length of one label value.
     pub max_label_bytes: usize,
+    /// Maximum total series across all instruments of one instance.
     pub max_total_series: usize,
+    /// Maximum encoded size of one exposition (Prometheus gather) response.
     pub max_exposition_bytes: usize,
 }
 
@@ -39,13 +44,17 @@ impl Default for MetricsLimits {
 /// Bounded deployment identity, separate from instrument labels and product IDs.
 #[derive(Clone, Debug, Default)]
 pub struct MetricsResource {
+    /// Logical service identity; must be non-empty.
     pub service_name: String,
+    /// Service build version; empty omits the attribute.
     pub service_version: String,
+    /// Deployment environment name; empty omits the attribute.
     pub environment: String,
     /// Product-defined node mode, independent of process role; empty omits the attribute.
     pub node_mode: String,
     /// Process responsibility within the service, independent of node mode.
     pub role: String,
+    /// Unique identity of this process instance; empty omits the attribute.
     pub instance_id: String,
 }
 
@@ -62,6 +71,7 @@ pub struct MetricsProviderBuilder {
 }
 
 impl MetricsProviderBuilder {
+    /// Overrides the default per-instance cardinality and exposition limits.
     #[must_use]
     pub fn with_limits(mut self, limits: MetricsLimits) -> Self {
         self.limits = limits;
@@ -237,6 +247,7 @@ pub struct MetricsProvider {
 }
 
 impl MetricsProvider {
+    /// Starts a builder with default limits and no exporter attached.
     #[must_use]
     pub fn builder() -> MetricsProviderBuilder {
         MetricsProviderBuilder {
@@ -251,6 +262,7 @@ impl MetricsProvider {
         }
     }
 
+    /// Returns whether recording and export are active; always false after shutdown.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.inner.enabled && !self.inner.closed.load(Ordering::Acquire)
@@ -330,6 +342,7 @@ impl MetricsProvider {
         self.inner.collection_failures.load(Ordering::Relaxed)
     }
 
+    /// Snapshots the catalog of descriptors registered on this instance.
     #[must_use]
     pub fn descriptors(&self) -> Vec<MetricDescriptor> {
         self.inner.descriptors.lock().values().copied().collect()
@@ -405,6 +418,7 @@ impl MetricsProvider {
             .map_err(|_| MetricError::Shutdown)?
     }
 
+    /// Returns the shutdown outcome once a shutdown has completed; `None` before that.
     #[must_use]
     pub fn shutdown_result(&self) -> Option<MetricResult<()>> {
         *self.inner.shutdown_result.lock()

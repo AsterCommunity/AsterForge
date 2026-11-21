@@ -1,3 +1,6 @@
+//! Migration-lock coordination contracts against real `MySQL` and Postgres containers:
+//! same-namespace serialization, release on callback error, timeout behavior, and
+//! idempotent index helpers.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;

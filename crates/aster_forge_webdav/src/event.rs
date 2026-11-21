@@ -8,51 +8,87 @@ use crate::{DavBackendErrorKind, DavPath, DavRequestHead};
 /// Protocol operations exposed to event observers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavOperation {
+    /// `OPTIONS`.
     Options,
+    /// `PROPFIND`.
     Propfind,
+    /// `PROPPATCH`.
     Proppatch,
+    /// `GET`.
     Get,
+    /// `HEAD`.
     Head,
+    /// `POST`.
     Post,
+    /// `PUT`.
     Put,
+    /// `PATCH`.
     Patch,
+    /// `MKCOL`.
     Mkcol,
+    /// `DELETE`.
     Delete,
+    /// `COPY`.
     Copy,
+    /// `MOVE`.
     Move,
+    /// `LOCK`.
     Lock,
+    /// `UNLOCK`.
     Unlock,
+    /// `ACL`.
     Acl,
+    /// `REPORT`.
     Report,
+    /// `VERSION-CONTROL`.
     VersionControl,
+    /// `CHECKOUT`.
     Checkout,
+    /// `CHECKIN`.
     Checkin,
+    /// `UNCHECKOUT`.
     Uncheckout,
+    /// `MKWORKSPACE`.
     Mkworkspace,
+    /// `UPDATE`.
     Update,
+    /// `LABEL`.
     Label,
+    /// `MERGE`.
     Merge,
+    /// `BASELINE-CONTROL`.
     BaselineControl,
+    /// `MKACTIVITY`.
     Mkactivity,
+    /// `SEARCH`.
     Search,
+    /// `ORDERPATCH`.
     Orderpatch,
+    /// `MKREDIRECTREF`.
     Mkredirectref,
+    /// `UPDATEREDIRECTREF`.
     Updateredirectref,
+    /// `BIND`.
     Bind,
+    /// `UNBIND`.
     Unbind,
+    /// `REBIND`.
     Rebind,
 }
 
 /// Protocol result exposed to observers without credentials, bodies, or lock tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavEventOutcome {
+    /// Operation completed with an informational, success, or redirection status.
     Succeeded {
         /// HTTP/WebDAV response status without leaking a transport crate version.
         status: u16,
     },
+    /// Operation completed with a client or server error status.
     Failed {
         /// HTTP/WebDAV response status without leaking a transport crate version.
         status: u16,
+        /// Stable backend classification behind the failure, when one was recorded.
         backend_error: Option<DavBackendErrorKind>,
     },
 }
@@ -60,20 +96,35 @@ pub enum DavEventOutcome {
 /// Product-neutral class for a protocol-side failure observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavProtocolFailureClass {
+    /// Request line, headers, or body failed protocol grammar.
     Request,
+    /// A typed precondition such as `If`, `ETag`, or lock state rejected the mutation.
     Precondition,
+    /// Capability snapshot did not advertise the method or feature.
     Capability,
+    /// Product backend classification surfaced as the failure.
     Backend,
+    /// Canonical response composition failed after planning succeeded.
     Response,
+    /// Transport-level failure such as a client disconnect or deadline.
     Transport,
 }
 
 /// Outcome of a response stream after the operation has been planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavStreamOutcome {
+    /// Response stream drained to completion.
     Completed,
-    Cancelled { response_started: bool },
-    Failed { response_started: bool },
+    /// Stream was cancelled before or while draining.
+    Cancelled {
+        /// Whether response bytes had already started reaching the client.
+        response_started: bool,
+    },
+    /// Stream terminated with an error before or while draining.
+    Failed {
+        /// Whether response bytes had already started reaching the client.
+        response_started: bool,
+    },
 }
 
 /// Low-frequency scalar observations attached to a completed operation.
@@ -82,14 +133,23 @@ pub enum DavStreamOutcome {
 /// intentionally contains no request body, credential, lock token, object key, or label string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavOperationObservations {
+    /// Request payload bytes accepted, excluding protocol framing.
     pub bytes_received: Option<u64>,
+    /// Response payload bytes produced, excluding protocol framing.
     pub bytes_sent: Option<u64>,
+    /// Number of byte ranges the request asked for.
     pub requested_ranges: Option<u64>,
+    /// Number of byte ranges the response actually served.
     pub served_ranges: Option<u64>,
+    /// Number of distinct backend resources the operation touched.
     pub resources: Option<u64>,
+    /// Number of representation streams the adapter opened.
     pub backend_open_count: Option<u64>,
+    /// Number of backend port calls issued by the protocol layer.
     pub backend_call_count: Option<u64>,
+    /// Protocol-side failure class, when the operation failed before completion.
     pub protocol_failure: Option<DavProtocolFailureClass>,
+    /// Outcome of the response stream, when the operation produced one.
     pub stream: Option<DavStreamOutcome>,
 }
 
@@ -125,12 +185,19 @@ impl DavEventOutcome {
 /// One completed `WebDAV` operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavEvent {
+    /// Correlation identifier propagated from the transport, when one was supplied.
     pub request_id: Option<String>,
+    /// Protocol operation that completed.
     pub operation: DavOperation,
+    /// Target path of the operation.
     pub source: DavPath,
+    /// Destination path for two-resource operations such as `COPY` and `MOVE`.
     pub destination: Option<DavPath>,
+    /// Terminal protocol result of the operation.
     pub outcome: DavEventOutcome,
+    /// Wall time from request entry to completed response composition.
     pub elapsed: Duration,
+    /// Optional low-frequency scalars collected while the operation ran.
     pub observations: DavOperationObservations,
 }
 

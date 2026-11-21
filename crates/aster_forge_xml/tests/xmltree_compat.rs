@@ -1,3 +1,4 @@
+//! Compatibility contract tests against the `xmltree` reference parser.
 use aster_forge_xml::{BorrowedDocument, ElementRef, NodeRef};
 use quick_xml::Reader;
 use quick_xml::events::Event;

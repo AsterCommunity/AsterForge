@@ -15,25 +15,35 @@ use crate::{
 /// Recursive mutation selected by the request method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavMutationOperation {
+    /// Recursive `COPY` of the source tree onto the destination.
     Copy,
+    /// Recursive `MOVE`; a completed transfer is followed by source removal.
     Move,
+    /// Recursive `DELETE` of the target tree.
     Delete,
 }
 
 /// Product mutation performed by one authoritative commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavMutationStepKind {
+    /// Create or overwrite the destination file from the source file.
     CopyFile,
+    /// Transfer the file and remove the source in one commit.
     MoveFile,
+    /// Create the destination collection before its children are transferred.
     PrepareCollection,
+    /// Remove one file resource.
     DeleteFile,
+    /// Remove the collection itself after its children are gone.
     DeleteCollection,
 }
 
 /// Role of the resource modified by a mutation step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavMutationTargetRole {
+    /// Resource on the source side of the operation.
     Source,
+    /// Resource on the destination side of the operation.
     Destination,
 }
 
@@ -43,14 +53,20 @@ pub enum DavMutationTargetRole {
 /// cleanup or destination-lock rebinding, and derived lock-state synchronization in one commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavMutationCommand {
+    /// Recursive operation this step belongs to.
     pub operation: DavMutationOperation,
+    /// Product mutation the commit must perform.
     pub step: DavMutationStepKind,
+    /// Which side of the operation the step's resource belongs to.
     pub role: DavMutationTargetRole,
+    /// Source path the step reads from or removes.
     pub source: DavPath,
+    /// Destination path for transfer steps; `None` for deletions.
     pub destination: Option<DavPath>,
 }
 
 impl DavMutationCommand {
+    /// Returns the path the step's status should be reported against.
     #[must_use]
     pub fn affected_path(&self) -> &DavPath {
         self.destination.as_ref().unwrap_or(&self.source)
@@ -60,17 +76,24 @@ impl DavMutationCommand {
 /// Typed failure returned by the authoritative product mutation port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavMutationStepError {
+    /// A rooted lock covers the resource and its token was not submitted.
     Locked {
+        /// Path the failure status is reported against.
         affected_path: DavPath,
+        /// Lock root that must appear in the submitted-token error condition.
         lock_root: DavPath,
     },
+    /// The commit failed with a concrete resource status.
     Status {
+        /// Path the failure status is reported against.
         affected_path: DavPath,
+        /// HTTP status describing the resource-level failure.
         status: u16,
     },
 }
 
 impl DavMutationStepError {
+    /// Creates a lock failure referencing the blocking lock root.
     #[must_use]
     pub fn locked(affected_path: DavPath, lock_root: DavPath) -> Self {
         Self::Locked {
@@ -79,6 +102,7 @@ impl DavMutationStepError {
         }
     }
 
+    /// Creates a status failure for one affected resource.
     #[must_use]
     pub fn status(affected_path: DavPath, status: u16) -> Self {
         Self::Status {
@@ -87,6 +111,7 @@ impl DavMutationStepError {
         }
     }
 
+    /// Creates an unclassified internal-server failure for one affected resource.
     #[must_use]
     pub fn backend(affected_path: DavPath) -> Self {
         Self::status(affected_path, StatusCode::INTERNAL_SERVER_ERROR.as_u16())
@@ -130,6 +155,11 @@ impl DavMutationStepError {
 /// Forge deliberately does not expose a transaction type. The implementation owns its writer
 /// transaction and returns only after commit succeeds.
 pub trait DavMutationPort: Send + Sync {
+    /// Executes one authoritative mutation step as a single commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed resource-level failure when the commit cannot be performed.
     fn execute(
         &self,
         command: DavMutationCommand,
@@ -139,13 +169,18 @@ pub trait DavMutationPort: Send + Sync {
 /// Hard limits for one recursive mutation execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavMutationExecutorLimits {
+    /// Traversal budget shared by the whole execution.
     pub traversal: DavTraversalLimits,
+    /// Bounds applied to each backend directory-page read.
     pub directory_pages: DavDirectoryPageLimits,
+    /// Entries requested per page read.
     pub directory_page_entries: usize,
+    /// Upper bound on children buffered for one collection.
     pub maximum_directory_entries: usize,
 }
 
 impl DavMutationExecutorLimits {
+    /// Creates limits with all four independent bounds supplied explicitly.
     #[must_use]
     pub const fn new(
         traversal: DavTraversalLimits,
@@ -165,35 +200,52 @@ impl DavMutationExecutorLimits {
 /// Input for one recursive mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavMutationRequest {
+    /// Recursive operation to execute.
     pub operation: DavMutationOperation,
+    /// Request target on the source side.
     pub source: DavPath,
+    /// Protocol-visible kind of the source resource.
     pub source_kind: DavResourceKind,
+    /// Destination path for `COPY` and `MOVE`; `None` for `DELETE`.
     pub destination: Option<DavPath>,
+    /// Protocol-visible kind of the existing destination resource, when known.
     pub destination_kind: Option<DavResourceKind>,
+    /// Whether the destination resource already exists before execution.
     pub destination_existed: bool,
+    /// Whether collection children are recursed; `false` performs shallow transfers.
     pub recurse_collections: bool,
 }
 
 /// Terminal reason when bounded execution stops before draining its work queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavMutationStop {
+    /// Cancellation checkpoint fired before the queue drained.
     Cancelled,
+    /// A storage, limit, or budget bound made further progress impossible.
     InsufficientStorage,
+    /// An unclassified backend failure stopped the execution.
     Backend,
 }
 
 /// Complete or partial result of recursive mutation execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavMutationOutcome {
+    /// Recursive operation that was executed.
     pub operation: DavMutationOperation,
+    /// Path the top-level status is reported against.
     pub request_target: DavPath,
+    /// Whether the destination existed before execution.
     pub destination_existed: bool,
+    /// Per-resource failures recorded while eligible siblings continued.
     pub failures: Vec<DavMutationFailure>,
+    /// Terminal reason when execution stopped before draining its work queue.
     pub stop: Option<DavMutationStop>,
+    /// Traversal progress observed by the budget.
     pub progress: crate::DavTraversalProgress,
 }
 
 impl DavMutationOutcome {
+    /// Reports whether every step committed and no stop condition was reached.
     #[must_use]
     pub fn is_complete_success(&self) -> bool {
         self.failures.is_empty() && self.stop.is_none()
@@ -1146,8 +1198,10 @@ fn direct_failure_response(
 /// Failure while composing the final recursive mutation response.
 #[derive(Debug, thiserror::Error)]
 pub enum DavMutationComposeError {
+    /// Failure Multi-Status exceeded its composition limits.
     #[error("failed to compose mutation Multi-Status response")]
     MultiStatus(#[from] DavMultiStatusError),
+    /// DAV error body encoding failed.
     #[error("failed to compose mutation DAV error response")]
     Xml(#[from] DavXmlError),
 }

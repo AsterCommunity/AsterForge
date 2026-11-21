@@ -5,19 +5,28 @@ use std::time::{Duration, Instant};
 /// Completion of the request exchange through response headers, not body EOF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HttpOutcome {
+    /// The exchange reached response headers.
     Response,
+    /// A deadline elapsed before response headers arrived.
     Timeout,
+    /// The connection or proxy handshake failed before the request was sent.
     Connect,
+    /// A non-timeout transport error occurred mid-exchange.
     Transport,
+    /// The caller cancelled or dropped the request before completion.
     Cancelled,
 }
 
 /// Deliberately excludes URL, headers, credentials and response bodies.
 #[derive(Clone, Debug)]
 pub struct HttpObservation {
+    /// Request method of the exchange.
     pub method: reqwest::Method,
+    /// Response status code when response headers were reached.
     pub status: Option<u16>,
+    /// Terminal classification of the exchange.
     pub outcome: HttpOutcome,
+    /// Wall-clock time from dispatch to the terminal event.
     pub duration: Duration,
 }
 

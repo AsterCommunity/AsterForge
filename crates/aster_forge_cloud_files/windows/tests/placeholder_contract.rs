@@ -1,3 +1,5 @@
+//! Windows placeholder metadata `CFAPI` shape and size-limit contracts.
+
 use aster_forge_cloud_files_core::{
     CloudContentMetadata, CloudItem, CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId,
     CloudScope, ContentRevision, MetadataRevision,

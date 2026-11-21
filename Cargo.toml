@@ -52,6 +52,7 @@ authors = [
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

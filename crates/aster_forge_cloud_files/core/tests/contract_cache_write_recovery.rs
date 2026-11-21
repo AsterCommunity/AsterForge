@@ -1,3 +1,5 @@
+//! Content cache write, range read, and recovery boundary contracts for cloud files services.
+
 mod support;
 
 use aster_forge_cloud_files_core::{

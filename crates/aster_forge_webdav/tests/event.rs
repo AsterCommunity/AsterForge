@@ -1,3 +1,6 @@
+//! Contract tests for observable operation events:
+//! outcome classification across HTTP status boundaries.
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 

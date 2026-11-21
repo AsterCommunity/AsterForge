@@ -1,3 +1,5 @@
+//! Cursor commit, persisted batch, and crash replay boundary contracts for change tracking.
+
 mod support;
 
 use aster_forge_cloud_files_core::{

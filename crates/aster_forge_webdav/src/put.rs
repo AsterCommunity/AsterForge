@@ -21,19 +21,27 @@ use crate::{
 /// Resolved state of the PUT request target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavPutResourceState<'a> {
+    /// The target does not exist yet; PUT must create it.
     Missing,
+    /// The target is an existing file with the validators reported by the backend.
     File {
+        /// Current strong or weak entity-tag of the representation, if any.
         etag: Option<&'a str>,
+        /// Last modification time of the representation, if the backend tracks it.
         last_modified: Option<SystemTime>,
     },
+    /// The target is a collection, which PUT must never replace.
     Collection,
 }
 
 /// Byte range selected for a private-agreement partial PUT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavPartialPutPlan {
+    /// Start offset of the range relative to the beginning of the representation.
     pub offset: u64,
+    /// Number of content bytes the request body contributes at `offset`.
     pub length: u64,
+    /// Total representation length after this write, when the client declares it.
     pub complete_length: Option<u64>,
 }
 
@@ -45,36 +53,52 @@ pub enum DavPutWritePlan {
     /// Replace one byte range relative to the current selected representation.
     Partial(DavPartialPutPlan),
     /// Execute the explicitly enabled private header contract in the product adapter.
-    PrivateUpdateRange { value: HeaderValue },
+    PrivateUpdateRange {
+        /// Raw private header value the product adapter must interpret.
+        value: HeaderValue,
+    },
 }
 
 /// Product-side open/write settings selected from capabilities and HTTP preconditions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavPutPlan {
+    /// Whether the target had a stored representation before this request.
     pub resource_existed: bool,
+    /// Whether the backend should create the target when it is absent.
     pub create: bool,
+    /// Whether the contract requires the target to be absent, failing if it exists.
     pub create_new: bool,
+    /// Content-Length declared by the request, used only as a size hint.
     pub content_length_hint: Option<u64>,
+    /// Write operation the product adapter must execute.
     pub write: DavPutWritePlan,
 }
 
 /// Failure while planning a PUT request.
 #[derive(Debug, thiserror::Error)]
 pub enum DavPutPlanError {
+    /// PUT is not declared for the resource kind.
     #[error("PUT is not allowed for this resource")]
     MethodNotAllowed,
+    /// The request head violated a protocol contract while parsing PUT inputs.
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
+    /// An evaluated `If` or entity-tag conditional failed for the target.
     #[error("PUT request precondition failed")]
     PreconditionFailed(DavConditionalPlan),
+    /// Content-Length or range metadata was structurally invalid.
     #[error("invalid PUT representation metadata")]
     InvalidRepresentation,
+    /// A partial or range write lacks the required strong `If-Match` entity-tag.
     #[error("partial PUT requires If-Match with a strong entity-tag")]
     PreconditionRequired,
+    /// A partial write targeted a representation that does not exist.
     #[error("partial PUT requires an existing representation")]
     PartialTargetMissing,
+    /// PUT attempted to replace a collection instead of a file.
     #[error("PUT cannot replace a collection")]
     CollectionTarget,
+    /// The target is version-controlled and its versioning precondition rejected the write.
     #[error(transparent)]
     Versioning(#[from] DavVersioningPrecondition),
 }

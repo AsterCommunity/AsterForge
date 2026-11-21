@@ -1,3 +1,5 @@
+//! Contract tests for consumer diagnostics: spawned claims keep runner identity, wakeup
+//! triggering, and timing, and store errors classify into safe, bounded status fields.
 #![cfg(feature = "runtime")]
 
 use std::sync::Arc;

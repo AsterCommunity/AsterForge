@@ -1,3 +1,5 @@
+//! Linux inode, generation, and identity value boundary contracts.
+
 use std::time::Duration;
 
 use aster_forge_cloud_files_core::{

@@ -1,3 +1,5 @@
+//! Versioned wire-profile contract tests: cumulative snapshots, translated names, attribute
+//! collision rejection, and request-guard boundaries on the Prometheus exporter.
 #![cfg(feature = "backend-prometheus")]
 use aster_forge_metrics::*;
 use std::time::Duration;

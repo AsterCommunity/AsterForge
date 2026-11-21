@@ -1,3 +1,4 @@
+//! Controlled before/after CPU workloads for the stream reader and writer.
 use aster_forge_xml::XmlStreamWriter;
 #[test]
 #[ignore = "controlled before/after CPU measurement"]

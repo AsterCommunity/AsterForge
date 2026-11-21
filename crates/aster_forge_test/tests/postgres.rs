@@ -1,3 +1,5 @@
+//! Postgres test container contracts: reusable startup, database provisioning, and
+//! isolation between suites against a real server.
 #![cfg(feature = "postgres")]
 
 use aster_forge_test::{postgres::PostgresTestContainer, suite::TestContainerSuite};

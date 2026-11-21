@@ -138,7 +138,12 @@ pub enum RecordAdmission {
 #[derive(Debug)]
 pub enum RecordError<T, E> {
     /// A typed producer rejected a record before admitting it into shared state.
-    Invalid { item: T, error: E },
+    Invalid {
+        /// The rejected record.
+        item: T,
+        /// Rejection reason produced by the producer.
+        error: E,
+    },
     /// Admission is closed or startup has not completed.
     NotRunning(T),
     /// The configured queue/direct-lane bound was reached.

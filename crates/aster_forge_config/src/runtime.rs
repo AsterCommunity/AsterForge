@@ -439,7 +439,7 @@ impl AsyncRuntimeConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when the backing store cannot load the latest runtime snapshot.
+    /// Returns [`ConfigCoreError`] when the backing store cannot load the latest runtime snapshot.
     pub async fn reload<S>(&self, store: &S) -> Result<Vec<RuntimeConfigChange>>
     where
         S: AsyncConfigStore + ?Sized,
@@ -631,7 +631,7 @@ pub fn parse_finite_f32(value: &str) -> Option<f32> {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_positive_u64_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_positive_u64(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be a positive integer"))
@@ -643,7 +643,7 @@ pub fn normalize_positive_u64_config_value(key: &str, value: &str) -> Result<Str
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_non_negative_u64_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_non_negative_u64(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be a non-negative integer"))
@@ -655,7 +655,7 @@ pub fn normalize_non_negative_u64_config_value(key: &str, value: &str) -> Result
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_bounded_u64_config_value(
     key: &str,
     value: &str,
@@ -675,7 +675,7 @@ pub fn normalize_bounded_u64_config_value(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_bool_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_bool_like_value(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be 'true' or 'false'"))
@@ -687,7 +687,7 @@ pub fn normalize_bool_config_value(key: &str, value: &str) -> Result<String> {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_strict_bool_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_strict_bool_value(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be 'true' or 'false'"))
@@ -699,7 +699,7 @@ pub fn normalize_strict_bool_config_value(key: &str, value: &str) -> Result<Stri
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_positive_u32_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_positive_u32(value).ok_or_else(|| {
         ConfigCoreError::invalid_value(format!("{key} must be a positive integer"))
@@ -711,7 +711,7 @@ pub fn normalize_positive_u32_config_value(key: &str, value: &str) -> Result<Str
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_bounded_u8_config_value(
     key: &str,
     value: &str,
@@ -728,7 +728,7 @@ pub fn normalize_bounded_u8_config_value(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the value is malformed, out of range, or not finite as required.
+/// Returns [`ConfigCoreError`] when the value is malformed, out of range, or not finite as required.
 pub fn normalize_finite_f32_config_value(key: &str, value: &str) -> Result<String> {
     let parsed = parse_finite_f32(value)
         .ok_or_else(|| ConfigCoreError::invalid_value(format!("{key} must be a finite number")))?;

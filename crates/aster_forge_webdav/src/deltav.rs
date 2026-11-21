@@ -24,7 +24,9 @@ const DAV_NAMESPACE: &str = "DAV:";
 /// Independent hard limits for REPORT grammar, traversal, and response composition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavReportLimits {
+    /// Maximum accepted REPORT request body size in bytes.
     pub maximum_input_bytes: usize,
+    /// Maximum nesting depth accepted in the request XML.
     pub maximum_xml_depth: usize,
     /// Maximum nested `DAV:property` levels in the request selection AST, counted from one.
     pub maximum_selection_depth: usize,
@@ -36,6 +38,7 @@ pub struct DavReportLimits {
     pub maximum_expanded_resources: usize,
     /// Maximum backend property lookups performed during expansion.
     pub maximum_expanded_properties: usize,
+    /// Multi-Status composition limits applied to the canonical report response.
     pub multistatus: DavMultiStatusLimits,
 }
 
@@ -70,7 +73,9 @@ impl Default for DavReportLimits {
 /// One nested RFC 3253 `DAV:property` selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavExpandPropertySelection {
+    /// Property selected at this level of the expansion tree.
     pub property: DavRequestedProperty,
+    /// Nested selections expanded against each href this property resolves to.
     pub nested: Vec<Self>,
 }
 
@@ -86,6 +91,7 @@ pub struct DavVersionTreeRequest {
 /// Parsed `DAV:expand-property` request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavExpandPropertyRequest {
+    /// Top-level `DAV:property` selections driving the expansion.
     pub properties: Vec<DavExpandPropertySelection>,
     /// REPORT defaults to Depth 0 when the header is absent.
     pub depth: Depth,
@@ -94,16 +100,21 @@ pub struct DavExpandPropertyRequest {
 /// Transport-neutral REPORT request selected through one capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavReportRequest {
+    /// Parsed `DAV:version-tree` report.
     VersionTree(DavVersionTreeRequest),
+    /// Parsed `DAV:expand-property` report.
     ExpandProperty(DavExpandPropertyRequest),
     /// A report owned by another advertised RFC package.
     Other {
+        /// Canonical report type carried by the request.
         report: DavReportType,
+        /// Request `Depth`, defaulting to zero when the header is absent.
         depth: Depth,
     },
 }
 
 impl DavReportRequest {
+    /// Returns the canonical REPORT type selected by this request.
     #[must_use]
     pub const fn report_type(&self) -> DavReportType {
         match self {
@@ -113,6 +124,7 @@ impl DavReportRequest {
         }
     }
 
+    /// Returns the request `Depth`; REPORT defaults to zero when the header is absent.
     #[must_use]
     pub const fn depth(&self) -> Depth {
         match self {
@@ -132,22 +144,33 @@ pub(crate) enum DavParsedReport {
 /// Failure while parsing and selecting a REPORT through a capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavReportPlanError {
+    /// Configured limits are zero or otherwise unusable.
     #[error("invalid REPORT limits")]
     InvalidLimits,
+    /// Request body failed the bounded XML grammar.
     #[error(transparent)]
     Xml(#[from] DavXmlError),
+    /// Report root element is not a known `DAV:` report type.
     #[error("unknown WebDAV REPORT type {name:?} in namespace {namespace:?}")]
     UnknownType {
+        /// Namespace of the rejected report root.
         namespace: Option<String>,
+        /// Local name of the rejected report root.
         name: String,
     },
+    /// Report type is known but not advertised by the target snapshot.
     #[error("WebDAV REPORT type is not supported by this resource: {report:?}")]
-    NotAvailable { report: DavReportType },
+    NotAvailable {
+        /// Report type rejected by the capability snapshot.
+        report: DavReportType,
+    },
 }
 
 /// Product-owned mapping for REPORT selection errors that are not XML syntax failures.
 pub trait DavReportErrorResponsePolicy {
+    /// Composes the response for a REPORT whose root type is unknown.
     fn unknown_type(&self, namespace: Option<&str>, name: &str) -> DavResponse;
+    /// Composes the response for a REPORT type the resource does not advertise.
     fn not_available(&self, report: DavReportType) -> DavResponse;
 }
 
@@ -241,21 +264,26 @@ pub fn report_plan_error_response<P: DavReportErrorResponsePolicy>(
 /// VERSION-CONTROL operation selected from target facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavVersionControlAction {
+    /// Put the previously unversioned target under version control.
     PutUnderVersionControl,
+    /// Target is already version-controlled; the request is a no-op success.
     AlreadyControlled,
 }
 
 /// Transport-neutral VERSION-CONTROL plan passed to a product transaction port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavVersionControlPlan {
+    /// VERSION-CONTROL action selected from the target's versioning state.
     pub action: DavVersionControlAction,
 }
 
 /// VERSION-CONTROL planning failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavVersionControlPlanError {
+    /// Target state or capability snapshot forbids VERSION-CONTROL.
     #[error("VERSION-CONTROL is not allowed for this target")]
     MethodNotAllowed,
+    /// Request body failed the bounded XML grammar.
     #[error(transparent)]
     Xml(#[from] DavXmlError),
 }
@@ -289,6 +317,11 @@ pub struct DavVersionControlResult {
 /// Product-owned atomic VERSION-CONTROL transaction boundary.
 #[async_trait]
 pub trait DavVersionControlPort: Send + Sync {
+    /// Executes the planned VERSION-CONTROL action as one atomic product transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the product-neutral backend classification on transaction failure.
     async fn version_control(
         &self,
         plan: DavVersionControlPlan,
@@ -350,28 +383,41 @@ pub fn version_control_plan_error_response(
 /// RFC 3253 method action selected before a product mutation transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavVersioningMethodPlan {
+    /// Method only reads target state and needs no versioning transaction.
     ReadOnly,
+    /// Method mutates the working resource directly under current versioning state.
     DirectMutation,
+    /// Method first checks the target out, leaving it checked out.
     AutoCheckout,
+    /// Method checks the target out and checks it back in around the mutation.
     AutoCheckoutCheckin,
+    /// Method's successful UNLOCK triggers an automatic check-in.
     AutoCheckinOnUnlock,
+    /// Method deletes an immutable version and policy allows it.
     DeleteVersion,
+    /// Method is VERSION-CONTROL and applies the selected action.
     VersionControl(DavVersionControlAction),
 }
 
 /// Typed RFC 3253 precondition selected by core method planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavVersioningPrecondition {
+    /// Capability snapshot does not allow the method on this target.
     #[error("method is not allowed by the capability snapshot")]
     MethodNotAllowed,
+    /// Checked-in content requires checkout or an auto-version mode.
     #[error("checked-in content requires checkout or auto-version")]
     CannotModifyVersionControlledContent,
+    /// Checked-in dead properties require checkout or an auto-version mode.
     #[error("checked-in dead properties require checkout or auto-version")]
     CannotModifyVersionControlledProperty,
+    /// Immutable version content or dead properties cannot be modified.
     #[error("immutable version content or dead properties cannot be modified")]
     CannotModifyVersion,
+    /// Immutable versions cannot be renamed.
     #[error("immutable versions cannot be renamed")]
     CannotRenameVersion,
+    /// Server policy rejects deleting an immutable version.
     #[error("server policy rejects deleting an immutable version")]
     NoVersionDelete,
 }
@@ -487,11 +533,14 @@ pub fn versioning_precondition_response(
 /// One product-resolved property for an immutable version resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavVersionProperty {
+    /// Requested property this outcome belongs to.
     pub property: DavRequestedProperty,
+    /// Resolved outcome used to group canonical propstats.
     pub result: DavVersionPropertyResult,
 }
 
 impl DavVersionProperty {
+    /// Creates a resolved property carrying one XML element value.
     #[must_use]
     pub fn value(property: DavRequestedProperty, value: DavXmlElement) -> Self {
         Self {
@@ -500,12 +549,14 @@ impl DavVersionProperty {
         }
     }
 
+    /// Creates a resolved property carrying one text-cdata value.
     #[must_use]
     pub fn text(property: DavRequestedProperty, value: impl Into<String>) -> Self {
         let element = dav_property_text_element(&property, value);
         Self::value(property, element)
     }
 
+    /// Creates a resolved property carrying one or more `DAV:href` children.
     #[must_use]
     pub fn hrefs(property: DavRequestedProperty, hrefs: impl IntoIterator<Item = String>) -> Self {
         let mut element = property_element(&property);
@@ -517,6 +568,7 @@ impl DavVersionProperty {
         Self::value(property, element)
     }
 
+    /// Creates a not-found outcome for a property the version does not define.
     #[must_use]
     pub fn missing(property: DavRequestedProperty) -> Self {
         Self {
@@ -525,6 +577,7 @@ impl DavVersionProperty {
         }
     }
 
+    /// Creates a backend-failure outcome reported as a per-property status.
     #[must_use]
     pub fn backend_error(property: DavRequestedProperty, kind: DavBackendErrorKind) -> Self {
         Self {
@@ -537,15 +590,20 @@ impl DavVersionProperty {
 /// Product property outcome grouped into canonical property-level propstats.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavVersionPropertyResult {
+    /// Property resolved to an XML element value.
     Value(DavXmlElement),
+    /// Version does not define this property.
     Missing,
+    /// Backend classification surfaced as the per-property status.
     BackendError(DavBackendErrorKind),
 }
 
 /// One version resource supplied by the product history adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavVersionReportItem {
+    /// URI of the version resource within the history.
     pub href: String,
+    /// Property outcomes resolved by the product history adapter.
     pub properties: Vec<DavVersionProperty>,
 }
 
@@ -592,13 +650,20 @@ pub fn version_tree_response_with_limits(
 /// Value returned by an expand-property backend port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DavExpandPropertyValue {
+    /// Property resolved to a complete XML element value.
     Element(DavXmlElement),
+    /// Property resolved to a list of target hrefs.
     Hrefs(Vec<String>),
 }
 
 /// Product port for resolving one property without exposing persistence entities to Forge.
 #[async_trait]
 pub trait DavExpandPropertyProvider: Send + Sync {
+    /// Resolves one property of one resource; `None` reports the property as absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns the product-neutral backend classification on lookup failure.
     async fn property(
         &self,
         href: &str,
@@ -609,20 +674,31 @@ pub trait DavExpandPropertyProvider: Send + Sync {
 /// Bounded expand-property execution failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavExpandPropertyError {
+    /// Configured limits are zero or otherwise unusable.
     #[error("invalid expand-property limits")]
     InvalidLimits,
+    /// Cancellation checkpoint fired before execution completed.
     #[error("expand-property execution was cancelled")]
     Cancelled,
+    /// Expansion revisited a resource already on the active path.
     #[error("expand-property cycle detected at {href}")]
-    Cycle { href: String },
+    Cycle {
+        /// URI where the expansion cycle closed.
+        href: String,
+    },
+    /// Nested expansion exceeded the configured depth limit.
     #[error("expand-property depth limit exceeded")]
     DepthLimitExceeded,
+    /// Expansion visited more resources than configured.
     #[error("expand-property resource limit exceeded")]
     ResourceLimitExceeded,
+    /// Expansion resolved more properties than configured.
     #[error("expand-property property limit exceeded")]
     PropertyLimitExceeded,
+    /// Backend lookup failed during expansion.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
+    /// Canonical Multi-Status composition exceeded its limits.
     #[error(transparent)]
     MultiStatus(#[from] DavMultiStatusError),
 }

@@ -13,7 +13,7 @@
 
 本次不迁移 chrono 公共 API。`DateTime<Utc>` 参数/返回值、SeaORM 实体、SQLite 文本时间编码、任务去重 key、租约与调度时间运算均保持已有形式；产品不需要替换 DTO 或 trait 时间类型。完整 chrono 迁移由 [Issue #75](https://github.com/AsterCommunity/AsterForge/issues/75) 单独跟踪，需验证旧数据、混合精度排序、范围查询、cursor 等值匹配以及各消费端，不能仅凭新库 round-trip 通过决定兼容。
 
-panic crate 的时间函数没有暴露 chrono 类型；其内部改用 time，同时保留 UTC 毫秒格式和不可表示时钟的失败处理。没有新增 jiff 直接依赖。`missing_docs` lint 留待单独文档任务，不在本轮启用；unsafe lint 保持原配置。
+panic crate 的时间函数没有暴露 chrono 类型；其内部改用 time，同时保留 UTC 毫秒格式和不可表示时钟的失败处理。没有新增 jiff 直接依赖。`missing_docs` lint 已在后续文档补全任务中启用：`[workspace.lints.rust]` 设为 warn，全部公共 API rustdoc 补全并通过 default 与 `--all-features` 两套 feature 面及 linux/windows 交叉 target 检查；unsafe lint 保持原配置。
 
 ## 独立版本递增
 

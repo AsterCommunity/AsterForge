@@ -22,14 +22,21 @@ const DEFAULT_MAX_EVENTS: usize = 1_000_000;
 /// Finite resource and declaration limits applied to untrusted XML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XmlSafetyPolicy {
+    /// Maximum accepted total input size in bytes.
     pub max_input_bytes: usize,
+    /// Maximum element nesting depth.
     pub max_depth: usize,
+    /// Maximum total number of elements in one document.
     pub max_elements: usize,
+    /// Maximum number of attributes, including namespace declarations, on one element.
     pub max_attributes_per_element: usize,
+    /// Maximum cumulative decoded text size in bytes per document.
     pub max_text_bytes: usize,
+    /// Maximum number of parser events per document.
     pub max_events: usize,
     /// Maximum namespace declarations simultaneously in scope.
     pub max_namespace_bindings: usize,
+    /// Whether a document type declaration is rejected outright.
     pub reject_doctype: bool,
 }
 
@@ -74,65 +81,77 @@ impl Default for XmlSafetyPolicy {
 /// Tree parsing behavior. Safety limits remain finite by default.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParseOptions {
+    /// Finite resource and declaration limits applied while scanning.
     pub safety: XmlSafetyPolicy,
     /// Drops whitespace-only text nodes and trims retained text nodes.
     pub trim_whitespace: bool,
 }
 
 impl ParseOptions {
+    /// Creates the default bounded options.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Replaces the safety policy wholesale.
     #[must_use]
     pub fn safety_policy(mut self, policy: XmlSafetyPolicy) -> Self {
         self.safety = policy;
         self
     }
 
+    /// Overrides the maximum element nesting depth.
     #[must_use]
     pub fn max_depth(mut self, value: usize) -> Self {
         self.safety.max_depth = value;
         self
     }
 
+    /// Overrides the maximum total element count.
     #[must_use]
     pub fn max_elements(mut self, value: usize) -> Self {
         self.safety.max_elements = value;
         self
     }
 
+    /// Overrides the maximum accepted input size in bytes.
     #[must_use]
     pub fn max_size(mut self, value: usize) -> Self {
         self.safety.max_input_bytes = value;
         self
     }
 
+    /// Overrides the maximum attribute count per element.
     #[must_use]
     pub fn max_attributes_per_element(mut self, value: usize) -> Self {
         self.safety.max_attributes_per_element = value;
         self
     }
 
+    /// Overrides the maximum cumulative text size in bytes.
     #[must_use]
     pub fn max_text_bytes(mut self, value: usize) -> Self {
         self.safety.max_text_bytes = value;
         self
     }
 
+    /// Overrides the maximum parser event count.
     #[must_use]
     pub fn max_events(mut self, value: usize) -> Self {
         self.safety.max_events = value;
         self
     }
 
+    /// Controls whether document type declarations are accepted; they stay rejected by
+    /// default.
     #[must_use]
     pub fn allow_dtd(mut self, allow: bool) -> Self {
         self.safety.reject_doctype = !allow;
         self
     }
 
+    /// Controls trimming of whitespace-only text nodes.
     #[must_use]
     pub fn trim_whitespace(mut self, trim: bool) -> Self {
         self.trim_whitespace = trim;

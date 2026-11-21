@@ -510,9 +510,10 @@ bash scripts/test-auth-features.sh
 - scheduled task catalog 和 runtime lease 走 Forge。
 - 产品侧 facade 都有明确边界职责，不存在只转发函数名的空壳。
 - clippy 以 `-D warnings` 通过。
+- workspace `missing_docs` 警告清零（`[workspace.lints.rust]` 已启用 `missing_docs = "warn"`，新增公共 API 必须带 rustdoc）。
 
 做到这些，新项目才算真正接上 Forge，而不是把 Forge 当成零散工具箱。 
 
-观测接入的已交付能力、消费者固定版本与未来 traces 边界见[消费者证据索引](./reference-projects.md#观测消费者证据索引)。初始化本地 logging 不代表已组合 OTel layer。
+观测组件提供实例级 metrics 记录、Prometheus/OTLP 双导出和生命周期管理；初始化本地 logging 不代表已组合 OTel layer，traces/logs 集成仍是未来工作。
 
 HTTP / crypto 的 alpha.1 后续 feature 拆分：产品显式为 `aster_forge_http` 选择 `json`、`form`、`query`、`multipart`、`stream`、`blocking`、`http2`、`charset`、`system-proxy` 和所需 TLS 后端；`aster_forge_crypto` 显式选择 `password`、`sha256`、`hmac-sha256`、`secret-envelope`。默认 HTTP 无 TLS、crypto 无算法；不能靠同一 workspace 中其他成员的 feature 合并补齐。参见 [HTTP feature/TLS 合同](../crates/aster_forge_http.md#cargo-features-与-tls-后端) 和 [crypto 接入](../crates/aster_forge_crypto.md#cargo-接入)。

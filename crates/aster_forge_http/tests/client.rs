@@ -1,3 +1,5 @@
+//! Contract tests for the shared HTTP client: outcome observers, redirect refusal, pool
+//! reuse across clones, deadlines, streamed bodies, and distinct failure boundaries.
 mod support;
 
 use aster_forge_http::{HttpClient, HttpObservation, HttpObserver, HttpOutcome};

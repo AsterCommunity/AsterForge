@@ -30,10 +30,13 @@ use crate::{
 /// Failure while enforcing a request body policy in the transport adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavBodyError {
+    /// The request body stream failed before completion.
     #[error("failed to read WebDAV request body")]
     ReadFailed,
+    /// The body exceeded the limit configured by the body policy.
     #[error("WebDAV request body is too large")]
     BodyTooLarge,
+    /// The selected method contract does not accept a request body.
     #[error("WebDAV method does not accept a request body")]
     BodyNotAllowed,
 }
@@ -44,7 +47,10 @@ pub enum DavDownloadBody {
     /// The response has no body because it is a HEAD, 304, or 416 response.
     Empty,
     /// Stream the complete representation with its planned output length.
-    Full { expected_length: u64 },
+    Full {
+        /// Exact `Content-Length` the transport must emit for the representation.
+        expected_length: u64,
+    },
     /// Stream only the selected representation range.
     Range(HttpByteRange),
     /// Stream the selected ranges with RFC 9110 `multipart/byteranges` framing.
@@ -54,6 +60,7 @@ pub enum DavDownloadBody {
 /// Hard bounds applied before any multi-range backend stream is opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavMultiRangeLimits {
+    /// Maximum serialized size accepted for the raw `Range` header before parsing.
     pub maximum_header_bytes: usize,
     /// Maximum raw range specs accepted before coalescing allocates its result.
     ///
@@ -61,12 +68,17 @@ pub struct DavMultiRangeLimits {
     /// choose this bound explicitly; raising it can significantly increase per-request work and
     /// there is no implicit fallback limit.
     pub maximum_raw_ranges: usize,
+    /// Maximum number of backend ranges kept after coalescing.
     pub maximum_segments: usize,
+    /// Maximum total representation bytes the selected ranges may cover.
     pub maximum_aggregate_bytes: u64,
+    /// Maximum backend range-open operations one multipart response may issue.
     pub maximum_backend_opens: usize,
 }
 
 impl DavMultiRangeLimits {
+    /// Creates limits from product-configured values.
+    ///
     #[must_use]
     pub const fn new(
         maximum_header_bytes: usize,
@@ -97,13 +109,17 @@ pub enum DavRangeLimitBehavior {
 /// Explicit policy that enables bounded multi-range response planning for one resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavMultiRangePolicy {
+    /// Hard bounds enforced before any backend stream is opened.
     pub limits: DavMultiRangeLimits,
     /// Merge overlap, adjacency, and gaps no larger than this number of representation bytes.
     pub coalesce_gap_bytes: u64,
+    /// Response policy applied when a valid request exceeds a configured limit.
     pub limit_behavior: DavRangeLimitBehavior,
 }
 
 impl DavMultiRangePolicy {
+    /// Creates a multi-range policy from product-configured limits and behavior.
+    ///
     #[must_use]
     pub const fn new(
         limits: DavMultiRangeLimits,
@@ -127,6 +143,7 @@ pub struct DavMultipartSegmentPlan {
 }
 
 impl DavMultipartSegmentPlan {
+    /// Returns the backend range served by this segment.
     #[must_use]
     pub const fn range(&self) -> HttpByteRange {
         self.range
@@ -172,31 +189,42 @@ impl DavMultipartDownloadPlan {
 
 /// A complete response shell plus the storage read selected by the protocol layer.
 pub struct DavDownloadPlan {
+    /// Transport-neutral response shell with status and headers ready to emit.
     pub response: DavResponse,
+    /// Storage read the product adapter must execute to satisfy the response.
     pub body: DavDownloadBody,
 }
 
 /// Failure while building a product-neutral download response plan.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavDownloadPlanError {
+    /// The request head violated a protocol contract while parsing download inputs.
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
+    /// Representation metadata, such as content length, was structurally invalid.
     #[error("invalid WebDAV download representation metadata")]
     InvalidRepresentation,
 }
 
 /// `WebDAV` response body before transport adaptation.
 pub enum DavResponseBody {
+    /// No body, as produced for HEAD, 304, and other bodyless responses.
     Empty,
+    /// A fully buffered body.
     Bytes(Bytes),
+    /// A streaming representation body owned by the product adapter.
     Stream(DavContentStream),
+    /// An incremental `207 Multi-Status` XML body.
     MultiStatus(DavMultiStatusStream),
 }
 
 /// Status, headers, and body produced by the protocol layer.
 pub struct DavResponse {
+    /// HTTP status the transport must emit unchanged.
     pub status: StatusCode,
+    /// Headers the transport must emit in order, including content type and caching.
     pub headers: HeaderMap,
+    /// Body form selected for this response.
     pub body: DavResponseBody,
 }
 

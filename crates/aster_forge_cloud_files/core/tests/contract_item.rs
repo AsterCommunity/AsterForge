@@ -1,3 +1,5 @@
+//! Item metadata, content, and root-directory boundary contracts for cloud files services.
+
 use aster_forge_cloud_files_core::{
     CloudContentMetadata, CloudFilesCoreError, CloudItem, CloudItemId, CloudItemKey, CloudItemKind,
     CloudNamespaceId, CloudRootId, CloudScope, ContentRevision, MetadataRevision,

@@ -1,3 +1,6 @@
+//! Redis-backed configuration synchronization contract tests: reload delivery over
+//! reserved-password connections, failed subscription recovery, and reconciliation after
+//! Redis reconnects, against a real Redis container.
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 

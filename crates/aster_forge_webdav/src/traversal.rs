@@ -15,6 +15,7 @@ use bytes::Bytes;
 
 /// Cancellation checkpoint controlled by the product or transport adapter.
 pub trait DavCancellation: Send + Sync {
+    /// Reports whether the owning transport or product has requested cancellation.
     fn is_cancelled(&self) -> bool;
 }
 
@@ -28,15 +29,18 @@ pub struct DavCancellationToken {
 }
 
 impl DavCancellationToken {
+    /// Creates a token in the not-cancelled state.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Requests cancellation; every later checkpoint observes it.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
 
+    /// Reports whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
@@ -62,7 +66,9 @@ impl DavCancellation for DavNeverCancelled {
 /// Maximum directory entries accepted from one product page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavDirectoryPageLimits {
+    /// Maximum entries accepted from one product page.
     pub maximum_entries: usize,
+    /// Maximum page requests performed for one enumeration.
     pub maximum_pages: usize,
 }
 
@@ -90,18 +96,25 @@ impl DavDirectoryPageLimits {
 /// Invalid product page classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavDirectoryPageValidationError {
+    /// Configured page entry bound is zero.
     #[error("directory page size limit must be non-zero")]
     InvalidLimit,
+    /// Page carries more entries than the request allowed.
     #[error("directory page exceeds the requested entry limit")]
     TooManyEntries,
+    /// Page returned no entries but still claims a continuation cursor.
     #[error("empty directory page cannot carry a continuation cursor")]
     EmptyContinuation,
+    /// Continuation cursor repeats a cursor already observed.
     #[error("directory continuation cursor did not advance")]
     CursorLoop,
+    /// Page contains an entry whose stable key is empty.
     #[error("directory page contains an empty stable key")]
     EmptyStableKey,
+    /// Page contains an entry key equal to one already returned.
     #[error("directory page contains a duplicate entry key")]
     DuplicateEntry,
+    /// Page entries do not continue the stable ascending order.
     #[error("directory page entries are not in stable ascending order")]
     OutOfOrderEntry,
 }
@@ -186,6 +199,7 @@ pub struct DavDirectoryPageState<C: Eq + Hash> {
 }
 
 impl<C: Eq + Hash> DavDirectoryPageState<C> {
+    /// Creates empty paging state for one enumeration.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -198,16 +212,19 @@ impl<C: Eq + Hash> DavDirectoryPageState<C> {
         }
     }
 
+    /// Returns the continuation cursor for the next backend request, if any.
     #[must_use]
     pub fn cursor(&self) -> Option<&C> {
         self.current_cursor.as_ref()
     }
 
+    /// Reports whether the enumeration reached its last page.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
         self.finished
     }
 
+    /// Returns how many validated pages this state has read.
     #[must_use]
     pub const fn pages_read(&self) -> usize {
         self.pages_read
@@ -223,21 +240,28 @@ impl<C: Eq + Hash> Default for DavDirectoryPageState<C> {
 /// Validated entries returned by one bounded page request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavValidatedDirectoryPage<E> {
+    /// Entries that passed bounds, ordering, and key validation.
     pub entries: Vec<E>,
+    /// Whether a continuation cursor remains for the next request.
     pub has_more: bool,
 }
 
 /// Failure while requesting the next bounded directory page.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavDirectoryReadError {
+    /// Requested entries or configured page limits are zero.
     #[error("directory page size limit must be non-zero")]
     InvalidLimit,
+    /// Cancellation checkpoint fired before the page was requested.
     #[error("directory enumeration was cancelled")]
     Cancelled,
+    /// The enumeration already consumed its configured page budget.
     #[error("directory page limit exceeded")]
     PageLimitExceeded,
+    /// Backend enumeration call failed.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
+    /// Product page violated the validation contract.
     #[error(transparent)]
     InvalidPage(#[from] DavDirectoryPageValidationError),
 }
@@ -320,13 +344,18 @@ where
 /// Hard limits for recursive resource traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavTraversalLimits {
+    /// Upper bound on resources one traversal may visit.
     pub maximum_visited_resources: usize,
+    /// Upper bound on work items reserved in the traversal queue at once.
     pub maximum_queued_work_items: usize,
+    /// Upper bound on recorded per-resource failures before the traversal stops.
     pub maximum_failures: usize,
+    /// Upper bound on recursion depth; `None` means unlimited up to overflow guards.
     pub maximum_depth: Option<usize>,
 }
 
 impl DavTraversalLimits {
+    /// Creates traversal limits with all four bounds supplied explicitly.
     #[must_use]
     pub const fn new(
         maximum_visited_resources: usize,
@@ -346,25 +375,35 @@ impl DavTraversalLimits {
 /// Current recursive traversal accounting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DavTraversalProgress {
+    /// Resources visited so far.
     pub visited_resources: usize,
+    /// Work items currently reserved in the queue.
     pub queued_work_items: usize,
+    /// Per-resource failures recorded so far.
     pub failures: usize,
+    /// Mutation commits that succeeded so far.
     pub completed_mutations: usize,
 }
 
 /// Typed recursive traversal stop reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavTraversalErrorKind {
+    /// A required traversal limit is zero.
     #[error("invalid recursive traversal limits")]
     InvalidLimits,
+    /// Cancellation checkpoint observed a cancellation request.
     #[error("recursive traversal was cancelled")]
     Cancelled,
+    /// Visited more resources than the limit allows.
     #[error("recursive traversal visited-resource limit exceeded")]
     VisitedResourceLimitExceeded,
+    /// Reserved more queued work than the limit allows.
     #[error("recursive traversal work-queue limit exceeded")]
     QueuedWorkLimitExceeded,
+    /// Recorded more failures than the limit allows.
     #[error("recursive traversal failure limit exceeded")]
     FailureLimitExceeded,
+    /// Descended deeper than the configured maximum depth.
     #[error("recursive traversal depth limit exceeded")]
     DepthLimitExceeded,
 }
@@ -373,11 +412,14 @@ pub enum DavTraversalErrorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("{kind}")]
 pub struct DavTraversalError {
+    /// Typed stop reason.
     pub kind: DavTraversalErrorKind,
+    /// Accounting snapshot captured when the failure was raised.
     pub progress: DavTraversalProgress,
 }
 
 impl DavTraversalError {
+    /// Reports whether at least one mutation committed before the failure.
     #[must_use]
     pub const fn partial_execution(self) -> bool {
         self.progress.completed_mutations != 0
@@ -412,6 +454,7 @@ impl DavTraversalBudget {
         })
     }
 
+    /// Returns the accounting snapshot observed so far.
     #[must_use]
     pub const fn progress(self) -> DavTraversalProgress {
         self.progress
@@ -464,6 +507,7 @@ impl DavTraversalBudget {
         Ok(())
     }
 
+    /// Releases one reserved work item after it has been dequeued.
     pub fn complete_work(&mut self) {
         self.progress.queued_work_items = self.progress.queued_work_items.saturating_sub(1);
     }
@@ -479,6 +523,7 @@ impl DavTraversalBudget {
         Ok(())
     }
 
+    /// Records one successful mutation commit for partial-execution accounting.
     pub fn record_completed_mutation(&mut self) {
         self.progress.completed_mutations = self.progress.completed_mutations.saturating_add(1);
     }

@@ -59,7 +59,9 @@ pub trait TaskConsumer: Clone + Send + Sync + 'static {
 /// Two-stage shutdown budget. Running work drains before cooperative cancellation is requested.
 #[derive(Debug, Clone, Copy)]
 pub struct TaskConsumerConfig {
+    /// Time budget for in-flight work to finish before cancellation is requested.
     pub drain_timeout: Duration,
+    /// Time budget for cooperative cancellation to complete after the drain phase.
     pub cancellation_timeout: Duration,
 }
 
@@ -115,6 +117,8 @@ impl TaskRuntimeStatus {
         self.0.claim_failed.store(!available, Ordering::Release);
     }
 
+    /// Reports whether the runner is ready to claim work: running, initialized, not draining,
+    /// and without an observed claim failure.
     #[must_use]
     pub fn ready(&self) -> bool {
         self.0.running.load(Ordering::Acquire)
@@ -123,6 +127,7 @@ impl TaskRuntimeStatus {
             && !self.0.claim_failed.load(Ordering::Acquire)
     }
 
+    /// Returns the number of tasks currently executing in this runner.
     #[must_use]
     pub fn active(&self) -> usize {
         self.0.active.load(Ordering::Acquire)
@@ -140,12 +145,19 @@ impl Drop for RunningGuard {
 /// Final statistics. Unknown claim outcomes and abandoned handlers retain their durable leases.
 #[derive(Debug, Default)]
 pub struct TaskConsumerReport {
+    /// Outcome counters for dispatch, execution, and release.
     pub stats: DispatchStats,
+    /// Handler executions that returned an error.
     pub execution_errors: usize,
+    /// Claim attempts that failed against storage.
     pub claim_errors: usize,
+    /// Unstarted-claim releases that failed against storage.
     pub release_errors: usize,
+    /// Handlers still executing when shutdown ended; their durable leases are retained.
     pub abandoned: usize,
+    /// Claim operations still in flight when shutdown ended.
     pub abandoned_claims: usize,
+    /// Unstarted-claim release operations still in flight when shutdown ended.
     pub abandoned_releases: usize,
 }
 

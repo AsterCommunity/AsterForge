@@ -1,3 +1,5 @@
+//! macOS bridge session generation, draining, and lease-completion contracts.
+
 use aster_forge_cloud_files_core::{SessionGeneration, SessionState};
 use aster_forge_cloud_files_macos_bridge::{MacosBridgeError, MacosExtensionSession};
 

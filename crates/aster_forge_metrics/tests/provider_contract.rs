@@ -1,3 +1,5 @@
+//! Provider contract tests: atomic duplicate registration, label schemas, profile validation,
+//! instrument budgets, shutdown behavior, and resource merging.
 use aster_forge_metrics::*;
 use std::time::Duration;
 

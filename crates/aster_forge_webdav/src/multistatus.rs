@@ -27,13 +27,19 @@ const DEFAULT_CHUNK_BYTES: usize = 16 * 1024;
 /// Product-configured resource limits for a Multi-Status response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavMultiStatusLimits {
+    /// Maximum total XML output bytes for the whole document.
     pub maximum_output_bytes: usize,
+    /// Maximum number of `<D:response>` items in the document.
     pub maximum_items: usize,
+    /// Maximum number of properties across all `<D:propstat>` blocks of one item.
     pub maximum_properties_per_item: usize,
+    /// Target size of each buffered body chunk handed to the transport.
     pub chunk_bytes: usize,
 }
 
 impl DavMultiStatusLimits {
+    /// Creates limits from product-configured values; all values must be non-zero.
+    ///
     #[must_use]
     pub const fn new(
         maximum_output_bytes: usize,
@@ -79,30 +85,42 @@ impl Default for DavMultiStatusLimits {
 /// Progress retained when bounded response generation stops.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DavMultiStatusProgress {
+    /// Whether at least one body chunk was handed to the transport already.
     pub response_started: bool,
+    /// Number of `<D:response>` items fully serialized before the stop.
     pub emitted_items: usize,
+    /// Number of XML bytes written to the sink before the stop.
     pub emitted_bytes: usize,
 }
 
 /// Stable Multi-Status failure classification.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavMultiStatusErrorKind {
+    /// A configured limit was zero, which can never produce a valid document.
     #[error("invalid Multi-Status resource limits")]
     InvalidLimits,
+    /// The document reached the configured `<D:response>` item limit.
     #[error("Multi-Status item limit exceeded")]
     ItemLimitExceeded,
+    /// One item carried more properties than the configured per-item limit.
     #[error("Multi-Status property limit exceeded")]
     PropertyLimitExceeded,
+    /// An item violated the `href` plus status-or-propstat structural contract.
     #[error("invalid Multi-Status response item")]
     InvalidItem,
+    /// The cumulative XML output exceeded the configured byte limit.
     #[error("Multi-Status output byte limit exceeded")]
     OutputLimitExceeded,
+    /// The product-owned item source reported cancellation.
     #[error("Multi-Status source was cancelled")]
     Cancelled,
+    /// The product-owned item source failed with a backend error.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
+    /// The composed XML was rejected by the bounded XML writer.
     #[error("Multi-Status XML is malformed")]
     Xml,
+    /// The underlying output sink returned an I/O error.
     #[error("Multi-Status output sink failed")]
     Write,
 }
@@ -111,7 +129,9 @@ pub enum DavMultiStatusErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{kind}")]
 pub struct DavMultiStatusError {
+    /// Stable failure classification for product-side mapping and logging.
     pub kind: DavMultiStatusErrorKind,
+    /// Output progress reached before the failure, for accurate partial-response handling.
     pub progress: DavMultiStatusProgress,
 }
 
@@ -124,8 +144,10 @@ impl DavMultiStatusError {
 /// Failure produced by the product-owned item source before XML composition.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavMultiStatusSourceError {
+    /// The source's backend work failed; the response stops at the failure boundary.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
+    /// Product-side work was cancelled; the response stops without a completed document.
     #[error("Multi-Status source was cancelled")]
     Cancelled,
 }
@@ -143,6 +165,7 @@ pub struct DavMultiStatusWriter<W: Write> {
 }
 
 impl<W: Write> DavMultiStatusWriter<W> {
+    /// Creates a writer over `inner`, opening the `<D:multistatus>` element.
     ///
     /// # Errors
     ///
@@ -166,6 +189,7 @@ impl<W: Write> DavMultiStatusWriter<W> {
         })
     }
 
+    /// Serializes one response item into the document.
     ///
     /// # Errors
     ///
@@ -203,6 +227,7 @@ impl<W: Write> DavMultiStatusWriter<W> {
         &mut self.writer.get_mut().inner
     }
 
+    /// Closes the `<D:multistatus>` element, finishes the XML writer, and returns the sink.
     ///
     /// # Errors
     ///

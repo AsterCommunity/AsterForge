@@ -6,27 +6,49 @@ use crate::request::{DavMethod, DavMethodSet};
 /// Closed set of RFC extension packages understood by the protocol engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DavExtensionPackage {
+    /// RFC 3744 access control.
     AccessControl,
+    /// RFC 3253 section 3 version-control.
     VersionControl,
+    /// RFC 3253 section 4 checkout-in-place.
     CheckoutInPlace,
+    /// RFC 3253 section 5 version-history.
     VersionHistory,
+    /// RFC 3253 section 6 workspace.
     Workspace,
+    /// RFC 3253 section 7 update.
     Update,
+    /// RFC 3253 section 8 label.
     Label,
+    /// RFC 3253 section 9 working-resource.
     WorkingResource,
+    /// RFC 3253 section 11 merge.
     Merge,
+    /// RFC 3253 section 12 baseline.
     Baseline,
+    /// RFC 3253 section 13 activity.
     Activity,
+    /// RFC 3253 section 14 version-controlled-collection.
     VersionControlledCollection,
+    /// RFC 5323 DASL SEARCH.
     Search,
+    /// RFC 4331 quota.
     Quota,
+    /// RFC 6578 collection synchronization.
     CollectionSync,
+    /// RFC 5689 extended MKCOL.
     ExtendedMkcol,
+    /// RFC 5397 current principal discovery.
     CurrentPrincipal,
+    /// RFC 3648 ordered collections.
     OrderedCollections,
+    /// RFC 4437 redirect references.
     RedirectReferences,
+    /// RFC 5842 bindings.
     Bindings,
+    /// RFC 5995 POST-based member creation.
     AddMember,
+    /// RFC 8144 Prefer handling.
     Prefer,
 }
 
@@ -96,11 +118,13 @@ impl DavExtensionPackage {
 pub struct DavExtensionSet(u32);
 
 impl DavExtensionSet {
+    /// Creates the empty package set.
     #[must_use]
     pub const fn empty() -> Self {
         Self(0)
     }
 
+    /// Creates a set containing the given packages in any order.
     #[must_use]
     pub const fn from_packages(packages: &[DavExtensionPackage]) -> Self {
         let mut set = Self::empty();
@@ -112,36 +136,43 @@ impl DavExtensionSet {
         set
     }
 
+    /// Returns the set with one package added.
     #[must_use]
     pub const fn with(self, package: DavExtensionPackage) -> Self {
         Self(self.0 | (1u32 << package.index()))
     }
 
+    /// Returns the union of both sets.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
+    /// Returns whether a package is present.
     #[must_use]
     pub const fn contains(self, package: DavExtensionPackage) -> bool {
         self.0 & (1u32 << package.index()) != 0
     }
 
+    /// Returns whether every package in `required` is present.
     #[must_use]
     pub const fn contains_all(self, required: Self) -> bool {
         required.0 & !self.0 == 0
     }
 
+    /// Returns whether this set contains no package outside `maximum`.
     #[must_use]
     pub const fn is_subset_of(self, maximum: Self) -> bool {
         maximum.contains_all(self)
     }
 
+    /// Returns whether no package is present.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
+    /// Iterates packages in canonical order.
     #[must_use]
     pub const fn iter(self) -> DavExtensionSetIter {
         DavExtensionSetIter {
@@ -178,6 +209,7 @@ impl Iterator for DavExtensionSetIter {
 pub struct DavResourceStateSet(u16);
 
 impl DavResourceStateSet {
+    /// Creates a set containing the given resource states in any order.
     #[must_use]
     pub const fn from_states(states: &[DavResourceState]) -> Self {
         let mut bits = 0u16;
@@ -189,11 +221,13 @@ impl DavResourceStateSet {
         Self(bits)
     }
 
+    /// Returns whether a resource state is present.
     #[must_use]
     pub const fn contains(self, state: DavResourceState) -> bool {
         self.0 & (1u16 << resource_index(state)) != 0
     }
 
+    /// Returns the union of both sets.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -215,15 +249,20 @@ const fn resource_index(state: DavResourceState) -> u32 {
 /// Body contract contributed by one extension method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavExtensionBodyKind {
+    /// The method consumes a bounded XML request body.
     Xml,
+    /// The method consumes an unbounded streamed request body.
     Stream,
 }
 
 /// One target-aware method contribution from an RFC package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavExtensionMethod {
+    /// HTTP method contributed by the package.
     pub method: DavMethod,
+    /// Resource states to which the contribution applies.
     pub resources: DavResourceStateSet,
+    /// Request body contract for the contribution.
     pub body: DavExtensionBodyKind,
 }
 
@@ -238,7 +277,10 @@ macro_rules! protocol_enum {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[repr(u8)]
         pub enum $name {
-            $($variant),+
+            $(
+                #[doc = concat!("`", $local_name, "` in the `DAV:` namespace.")]
+                $variant
+            ),+
         }
 
         impl $name {
@@ -361,25 +403,32 @@ protocol_enum! {
 pub struct DavPreferenceSet(u8);
 
 impl DavPreferenceSet {
+    /// The `return=minimal` preference.
     pub const RETURN_MINIMAL: Self = Self(1);
+    /// The `return=representation` preference.
     pub const RETURN_REPRESENTATION: Self = Self(1 << 1);
+    /// The `depth-noroot` preference.
     pub const DEPTH_NO_ROOT: Self = Self(1 << 2);
 
+    /// Creates the empty preference set.
     #[must_use]
     pub const fn empty() -> Self {
         Self(0)
     }
 
+    /// Creates the set of all RFC 8144 preferences the engine understands.
     #[must_use]
     pub const fn all() -> Self {
         Self(Self::RETURN_MINIMAL.0 | Self::RETURN_REPRESENTATION.0 | Self::DEPTH_NO_ROOT.0)
     }
 
+    /// Returns the union of both preference sets.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
+    /// Returns whether every preference in `preference` is present.
     #[must_use]
     pub const fn contains(self, preference: Self) -> bool {
         self.0 & preference.0 == preference.0
@@ -389,14 +438,23 @@ impl DavPreferenceSet {
 /// Static RFC metadata used by capability, dispatch, property and REPORT discovery.
 #[derive(Debug, Clone, Copy)]
 pub struct DavExtensionDescriptor {
+    /// Extension package described by this descriptor.
     pub package: DavExtensionPackage,
+    /// Source specification label, such as `RFC 3253 section 4`.
     pub rfc: &'static str,
+    /// `DAV` header token advertised for the package, when its RFC defines one.
     pub dav_token: Option<&'static str>,
+    /// Packages that must be enabled before this one.
     pub prerequisites: DavExtensionSet,
+    /// Resource states to which the package applies.
     pub resources: DavResourceStateSet,
+    /// Methods contributed for enabled resources.
     pub methods: &'static [DavExtensionMethod],
+    /// Live properties contributed by the package.
     pub live_properties: &'static [DavLiveProperty],
+    /// REPORT types contributed by the package.
     pub reports: &'static [DavReportType],
+    /// RFC 8144 preference behaviors the package exposes.
     pub preferences: DavPreferenceSet,
 }
 

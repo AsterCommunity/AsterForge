@@ -1,3 +1,5 @@
+//! Mutation apply, reconcile, and idempotent retry boundary contracts for cloud files services.
+
 mod support;
 
 use std::collections::{HashMap, HashSet};

@@ -60,10 +60,15 @@ pub trait ClaimableTaskRecord<Kind>: TaskRecord<Kind> {
 /// same transaction; database adapters may use `FOR UPDATE SKIP LOCKED`.
 #[derive(Debug, Clone, Copy)]
 pub struct TaskClaimRequest<Kind: 'static, Lane> {
+    /// Lane configuration whose quota decides how many rows this lane may claim.
     pub lane: TaskLaneConfig<Kind, Lane>,
+    /// Upper bound on tasks claimed in this single atomic acquisition.
     pub max_claim: usize,
+    /// Instant used for all token and expiry arithmetic.
     pub now: DateTime<Utc>,
+    /// Tasks whose persisted heartbeat predates this instant are eligible for reclaim.
     pub stale_before: DateTime<Utc>,
+    /// Expiry assigned to newly claimed leases; consumers must renew before it elapses.
     pub lease_expires_at: DateTime<Utc>,
     processing_stale_secs: i64,
 }
@@ -88,6 +93,7 @@ impl<Kind: Copy, Lane: Copy> TaskClaimRequest<Kind, Lane> {
 /// shared quota authority; Forge owns request timing, token arithmetic and result validation.
 #[async_trait::async_trait]
 pub trait TaskClaimStore<Task, Kind: 'static, Lane>: Sync {
+    /// Product error type returned by claim operations.
     type Error: From<TaskCoreError> + Send;
     /// Selects and claims at most `request.max_claim` rows atomically. Returns each pre-claim
     /// snapshot with its newly assigned lease. Shared limits must be rechecked inside this unit.

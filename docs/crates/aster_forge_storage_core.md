@@ -1,10 +1,10 @@
 # aster_forge_storage_core
 
-`aster_forge_storage_core` 提供 **local / S3-style object storage** 使用的窄基础工具：安全 object key 处理和 S3-compatible 配置规范化。
+`aster_forge_storage_core` 提供 **local / S3-style object storage** 使用的窄基础工具：安全 object key 处理和 S3 配置规范化。
 
 这里的 `storage_core` 指对象存储适配器下方的 primitive，不是产品的通用存储业务核心。它不定义存储 driver trait，也不持有 credential、policy、bucket 绑定或业务文件实体。
 
-产品仓库即使存在名为 `storage` 的模块，也不应该因此整体接入这个 crate。只有 local filesystem / S3-compatible adapter 的 key 或连接字段契约与这里完全一致时，才应逐调用点复用对应 helper。
+产品仓库即使存在名为 `storage` 的模块，也不应该因此整体接入这个 crate。只有 local filesystem / S3 adapter 的 key 或连接字段契约与这里完全一致时，才应逐调用点复用对应 helper。
 
 ## 适用场景
 
@@ -12,7 +12,7 @@
 - 拼接和剥离 key prefix。
 - 校验 key 不逃逸存储根。
 - 把安全相对 key 映射到 local filesystem object root。
-- 规范化 S3-compatible endpoint 与 bucket。
+- 规范化 S3 endpoint 与 bucket。
 - 统一 COS、MinIO、R2、AWS S3 等接入前的配置解析。
 
 不适合放在这里的内容：
@@ -71,14 +71,14 @@ local / S3-style adapter 做具体对象操作时优先用更明确的 helper：
 - `NormalizedS3Config`
 - `S3ConfigError`
 
-这个 helper 处理 S3-compatible 服务的基础连接字段：
+这个 helper 处理 S3 服务的基础连接字段：
 
 - endpoint 为空时允许使用 provider 默认端点，但 bucket 仍然必填。
 - endpoint 必须是 `http://` 或 `https://`，并且必须包含 host。
 - endpoint 会去掉尾部 `/`，并拒绝 query string / fragment。
 - bucket 会 trim，空值返回 `S3ConfigError::MissingBucket`。
 
-S3-compatible adapter 仍然负责：
+S3 adapter 仍然负责：
 
 - access key / secret key 来源。
 - region 默认值。

@@ -58,21 +58,25 @@ impl HttpByteRange {
         })
     }
 
+    /// Returns the inclusive zero-based byte offset where the resolved range begins.
     #[must_use]
     pub const fn start(self) -> u64 {
         self.start
     }
 
+    /// Returns the inclusive zero-based byte offset where the resolved range ends.
     #[must_use]
     pub const fn end(self) -> u64 {
         self.end
     }
 
+    /// Returns the number of bytes covered by the resolved range.
     #[must_use]
     pub const fn length(self) -> u64 {
         self.length
     }
 
+    /// Returns the representation size the range was resolved against.
     #[must_use]
     pub const fn total_size(self) -> u64 {
         self.total_size
@@ -88,20 +92,28 @@ impl HttpByteRange {
 /// Stable failure categories for byte-range requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum HttpRangeError {
+    /// The `Range` header did not use the supported `bytes` unit.
     #[error("range header must use the bytes unit")]
     UnsupportedUnit,
+    /// The header carried more than one range specifier.
     #[error("multiple range requests are not supported")]
     MultipleRangesUnsupported,
+    /// The header exceeded the configured byte-length limit before parsing.
     #[error("range header exceeds the configured byte length")]
     HeaderTooLong,
+    /// The header contained more range specifiers than the configured limit.
     #[error("range request exceeds the configured number of range specs")]
     TooManyRanges,
+    /// The header syntax does not match the `bytes` range grammar.
     #[error("range header is malformed")]
     Malformed,
+    /// A range bound is not a valid unsigned integer.
     #[error("range bound must be a valid unsigned integer")]
     InvalidNumber,
+    /// The representation has zero bytes, so no range can be satisfiable.
     #[error("range cannot be requested for an empty representation")]
     EmptyRepresentation,
+    /// The requested bounds select no bytes in the current representation.
     #[error("range is not satisfiable for the current representation")]
     Unsatisfiable,
 }

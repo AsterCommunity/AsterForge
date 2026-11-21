@@ -69,16 +69,28 @@ pub struct IfStateList {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IfStateCondition {
     /// A lock state token condition.
-    Token { value: String, negated: bool },
+    Token {
+        /// Submitted lock token value.
+        value: String,
+        /// Whether the condition is negated with `Not`.
+        negated: bool,
+    },
     /// An entity-tag condition.
-    Etag { value: String, negated: bool },
+    Etag {
+        /// Submitted entity-tag value.
+        value: String,
+        /// Whether the condition is negated with `Not`.
+        negated: bool,
+    },
 }
 
 /// Failure while resolving and evaluating a `WebDAV` `If` request precondition.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavIfEvaluationError {
+    /// The `If` header was malformed or no submitted state list matched.
     #[error(transparent)]
     Protocol(#[from] DavProtocolError),
+    /// Resource state lookup failed.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
 }
@@ -86,7 +98,9 @@ pub enum DavIfEvaluationError {
 /// Stable protocol error classification for transport adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavProtocolErrorKind {
+    /// Malformed header or body grammar; maps to `400 Bad Request`.
     BadRequest,
+    /// A failed precondition; maps to `412 Precondition Failed`.
     PreconditionFailed,
 }
 

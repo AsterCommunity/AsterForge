@@ -1,3 +1,5 @@
+//! Content storage read boundaries across ranges, revisions, generations, and operation leases.
+
 mod support;
 
 use aster_forge_cloud_files_core::{

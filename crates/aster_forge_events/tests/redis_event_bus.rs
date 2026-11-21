@@ -1,3 +1,5 @@
+//! Redis event bus contract tests: publish/subscribe delivery over reserved-password
+//! connections, reconnect policy state transitions, and container-backed integration.
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 

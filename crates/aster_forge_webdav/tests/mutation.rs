@@ -1,3 +1,6 @@
+//! Contract tests for mutation planning:
+//! copy, move, delete, and backend-failure recovery semantics.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::SystemTime;

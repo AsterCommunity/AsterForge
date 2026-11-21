@@ -1,3 +1,5 @@
+//! Windows connection API threading, sender generation, and handle ownership contracts.
+
 #![cfg(windows)]
 
 use std::{path::Path, sync::mpsc::SyncSender};

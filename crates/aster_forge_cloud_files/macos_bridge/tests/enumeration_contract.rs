@@ -1,3 +1,5 @@
+//! macOS enumerator pagination, scope containment, and failure-state contracts.
+
 use aster_forge_cloud_files_core::{
     CloudContentMetadata, CloudItem, CloudItemId, CloudItemKey, CloudItemPage, CloudNamespaceId,
     CloudRootId, CloudScope, ContentRevision, MetadataRevision, PageCursor,

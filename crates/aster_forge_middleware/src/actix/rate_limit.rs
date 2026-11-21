@@ -45,6 +45,9 @@ pub use crate::shared::rate_limit::{
 type RejectionResponseFactory =
     dyn Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static;
 
+/// Prepared state for the trusted-proxy-aware extractor: trusted proxy ranges and the optional
+/// custom rejection response factory. See the module documentation for key derivation and
+/// fallback rules.
 #[derive(Clone)]
 pub struct TrustedProxyIpKeyExtractor {
     trusted: Vec<IpNet>,

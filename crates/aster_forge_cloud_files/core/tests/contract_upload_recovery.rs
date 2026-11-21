@@ -1,3 +1,5 @@
+//! Upload recovery boundary contracts across revisions, generations, and idempotency keys.
+
 mod support;
 
 use aster_forge_cloud_files_core::{

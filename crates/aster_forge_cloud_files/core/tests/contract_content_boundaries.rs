@@ -1,3 +1,5 @@
+//! Content read request, range, revision, and snapshot boundary contracts for cloud files services.
+
 use aster_forge_cloud_files_core::{
     ByteRange, CloudFilesCoreError, CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId,
     CloudScope, ContentCacheKey, ContentCacheWriteExtent, ContentCacheWriteIntent,

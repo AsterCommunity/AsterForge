@@ -148,7 +148,7 @@ HTTP `route` 必须是路由模板；DB 只记录 backend/kind/status/elapsed，
 
 同一 OTel MeterProvider 为 Prometheus 与 OTLP 分别维护 reader aggregation。OTLP 使用 cumulative temporality 与 descriptor buckets；重启会有新的 start timestamp。失败在下一周期重发累计快照，没有业务重试队列；scrape 不触发 push。只有 collector 成功确认才更新本地成功时间，不代表下游平台已经持久化。
 
-`provider.otlp_diagnostics()` 提供本地成功/失败累计值与最后成功时间，不依赖故障 exporter 自报。infrastructure updater 同步到 `telemetry_export_successes`、`telemetry_export_failures`、`telemetry_export_last_success_timestamp_seconds{exporter="otlp"}`。endpoint、headers 和远端错误响应不出现在 Debug、错误或这些 labels 中。
+`provider.otlp_diagnostics()` 提供本地成功/失败累计值与最后成功时间（`OtlpExportSnapshot` 的 `successes`、`failures`、`last_success_unix_seconds` 字段），不依赖故障 exporter 自报。infrastructure updater 把同一份快照同步到 Prometheus 序列 `aster_telemetry_exports_total{exporter="otlp"}`、`aster_telemetry_export_failures_total{exporter="otlp"}`、`aster_telemetry_export_last_success_seconds{exporter="otlp"}`。endpoint、headers 和远端错误响应不出现在 Debug、错误或这些 labels 中。
 
 ### OTLP 完整配置示例
 
@@ -267,7 +267,7 @@ convenience API 跳过失败观测并累计 provider 本地失败数，采样为
 | 全局 `export_metrics` | 注入 provider 的 exposition resource |
 | 全局 health report | 注入的 recorder `record_health` |
 
-旧全局实现直接删除，不保留平行 registry 或双写。AsterDrive 已合并实例级消费迁移；准确 consumer/provider revision、历史验证范围和未核验的发行状态见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)。其他外部产品需要按本表升级，不能将 Forge 库内通过当作已经接入所有消费者。
+旧全局实现直接删除，不保留平行 registry 或双写。AsterDrive 已合并实例级消费迁移；其他外部产品需要按本表升级，不能将 Forge 库内通过当作已经接入所有消费者。
 
 ## 验证入口
 
@@ -283,7 +283,6 @@ cargo run --release -p aster_forge_metrics --features backend-prometheus --examp
 
 参考消费者为 AsterDrive `crates/aster_drive_metrics` 和 bundled Actix template；产品 upload、quota、blob cleanup 和 remote 语义不进入 Forge。
 
-当前消费版本与后续 traces 的边界统一见[消费者证据索引](../guide/reference-projects.md#观测消费者证据索引)。
 
 ## v1 API 与能力边界
 

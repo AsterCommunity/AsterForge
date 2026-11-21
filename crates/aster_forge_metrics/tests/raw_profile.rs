@@ -1,3 +1,5 @@
+//! Raw exposition tests asserting the exported Prometheus payload matches the reviewed wire
+//! contract and explicit resource identity.
 #![cfg(feature = "backend-prometheus")]
 use aster_forge_metrics::*;
 use std::fmt::Write;

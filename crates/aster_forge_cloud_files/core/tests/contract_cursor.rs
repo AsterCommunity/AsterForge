@@ -1,3 +1,5 @@
+//! Cursor type separation and opaque token preservation contracts for pagination and change tracking.
+
 use std::any::TypeId;
 
 use aster_forge_cloud_files_core::{ChangeCursor, DirectoryCookie, PageCursor};

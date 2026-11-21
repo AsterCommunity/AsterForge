@@ -1,3 +1,4 @@
+//! Document tree contract tests: arena structure, namespaces, spans, and lookup.
 use std::sync::Arc;
 
 use aster_forge_xml::{

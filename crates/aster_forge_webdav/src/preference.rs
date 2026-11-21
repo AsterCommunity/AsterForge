@@ -8,8 +8,11 @@ use crate::{DavCapabilitySnapshot, DavExtensionPackage, DavMethod, DavPreference
 /// Applicable RFC 8144 preferences for one request.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DavPreferencePlan {
+    /// `return=minimal` was requested and is applicable to this method.
     pub return_minimal: bool,
+    /// `return=representation` was requested and is applicable to this method.
     pub return_representation: bool,
+    /// `depth-noroot` was requested and is applicable to this method and depth.
     pub depth_no_root: bool,
 }
 

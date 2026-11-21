@@ -1,3 +1,5 @@
+//! Redis test container contracts: reusable startup and readiness after an explicit stop
+//! reuses the same endpoint.
 #![cfg(feature = "redis")]
 
 use aster_forge_test::{redis::RedisTestContainer, suite::TestContainerSuite};

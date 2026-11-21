@@ -13,28 +13,37 @@ use crate::{
 /// COPY or MOVE operation selected by the request method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavCopyMoveMethod {
+    /// Duplicate the source under the destination; the source remains intact.
     Copy,
+    /// Relocate the source to the destination and remove the original.
     Move,
 }
 
 /// Resource-shape decisions needed by the Drive mutation adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavCopyMovePlan {
+    /// The source is a collection, so the operation covers its complete subtree.
     pub recursive_collection: bool,
+    /// The destination exists as a collection and requires recursive overwrite handling.
     pub destination_deep: bool,
 }
 
 /// Protocol failure selected after source/destination metadata is known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavMutationPlanError {
+    /// A `Depth` or `Overwrite` header is malformed for this mutation.
     #[error("invalid mutation Depth")]
     BadRequest,
+    /// The target does not support this mutation.
     #[error("resource mutation is not supported for this target")]
     MethodNotAllowed,
+    /// Source or destination relations conflict, such as moving a parent into its own subtree.
     #[error("resource mutation conflicts with the current hierarchy")]
     Conflict,
+    /// The requested source/destination relation is forbidden.
     #[error("forbidden mutation path relation")]
     Forbidden,
+    /// The destination exists while `Overwrite: F` was requested.
     #[error("destination exists while Overwrite is disabled")]
     PreconditionFailed,
 }

@@ -13,18 +13,26 @@ use crate::{
     DavResponseBody, protocol::DavProtocolError,
 };
 
+/// Request body prepared according to the selected `WebDAV` method contract.
 pub enum DavPreparedBody {
+    /// The method contract requires no request body; nothing was read.
     None,
+    /// XML bytes collected and validated under the method's body policy.
     Xml(Vec<u8>),
+    /// Opaque bytes collected under a bounded body policy.
     Bytes(Vec<u8>),
 }
 
+/// Errors raised while collecting an Axum request body for a `WebDAV` method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavBodyError {
+    /// The request body stream failed before completion.
     #[error("failed to read WebDAV request body")]
     ReadFailed,
+    /// The body exceeded the limit configured by the body policy.
     #[error("WebDAV request body is too large")]
     BodyTooLarge,
+    /// The selected method contract does not accept a request body.
     #[error("WebDAV method does not accept a request body")]
     BodyNotAllowed,
 }
@@ -82,6 +90,8 @@ pub fn request_target<'a>(
     DavRequestHead::parse_target(&uri, mount_path, &origin)
 }
 
+/// Converts a transport-neutral `WebDAV` response into an Axum response, streaming
+/// bytes and multistatus bodies through the Axum body writer.
 pub fn into_response(response: DavResponse) -> Response {
     let mut builder = Response::builder().status(response.status);
     for (name, value) in &response.headers {

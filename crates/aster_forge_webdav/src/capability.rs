@@ -17,12 +17,19 @@ use crate::{DavBackendError, DavPath};
 /// Resource state visible to the capability planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DavResourceState {
+    /// No resource exists at the target path.
     Unmapped,
+    /// An ordinary non-collection resource.
     File,
+    /// A collection that can contain child resources.
     Collection,
+    /// The root of another `WebDAV` mount reached through a parent collection.
     MountRoot,
+    /// An RFC 3744 principal resource.
     Principal,
+    /// An RFC 4437 redirect reference whose representation lives elsewhere.
     RedirectReference,
+    /// An RFC 5995 add-member endpoint that only receives new members.
     AddMemberEndpoint,
 }
 
@@ -61,7 +68,9 @@ pub enum DavAutoVersion {
 /// RFC 3253 facts projected by the product capability provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct DavVersioningCapabilities {
+    /// RFC 3253 state of the request target.
     pub state: DavVersioningState,
+    /// Automatic versioning side effects selected for checked-in resources.
     pub auto_version: DavAutoVersion,
     /// Whether the current target is protected by an active DAV write lock.
     pub write_locked: bool,
@@ -74,11 +83,14 @@ pub struct DavVersioningCapabilities {
 /// Request target supplied to a capability provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilityTarget {
+    /// Mount-relative canonical path of the request target.
     pub path: DavPath,
+    /// Whether the target is the mount root rather than a resource below it.
     pub is_mount_root: bool,
 }
 
 impl DavCapabilityTarget {
+    /// Creates a target from its canonical path and mount-root flag.
     #[must_use]
     pub fn new(path: DavPath, is_mount_root: bool) -> Self {
         Self {
@@ -91,35 +103,44 @@ impl DavCapabilityTarget {
 /// Request context that can affect a product's capability projection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DavCapabilityContext {
+    /// Authenticated principal name, when the product has resolved one.
     pub principal: Option<String>,
 }
 
 /// Locking compliance advertised for a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavLockingCapability {
+    /// No locking compliance class is advertised for this resource.
     Disabled,
+    /// RFC 4918 class 2 write locking is advertised.
     Class2,
 }
 
 /// Optional non-standard compatibility signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavCompatibilityCapabilities {
+    /// Whether the non-standard `MS-Author-Via` header may be advertised.
     pub ms_author_via: bool,
 }
 
 /// Conditional request policy required before a partial write can execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavWritePrecondition {
+    /// No conditional request is enforced before the write.
     Optional,
+    /// The write requires a strong `If-Match` entity-tag precondition.
     RequireStrongIfMatch,
 }
 
 /// RFC 9110 partial PUT support negotiated by private agreement with the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DavPartialPutCapability {
+    /// Byte-range partial PUT is not accepted.
     #[default]
     Disabled,
+    /// RFC 9110 byte-range partial PUT using `Content-Range`.
     ContentRangeBytes {
+        /// Precondition policy enforced before a range is applied.
         precondition: DavWritePrecondition,
     },
 }
@@ -127,7 +148,12 @@ pub enum DavPartialPutCapability {
 /// Body handling selected by one RFC 5789 patch document format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DavPatchBodyPolicy {
-    Bounded { maximum: usize },
+    /// Buffer the patch document up to a static byte maximum before parsing.
+    Bounded {
+        /// Maximum accepted patch document size in bytes.
+        maximum: usize,
+    },
+    /// Stream the patch document to its parser without buffering a complete body.
     Stream,
 }
 
@@ -136,24 +162,31 @@ pub enum DavPatchBodyPolicy {
 pub struct DavPatchFormat {
     /// Complete media type. Parameters participate in exact matching and duplicate detection.
     pub media_type: &'static str,
+    /// Body handling applied when a request selects this format.
     pub body_policy: DavPatchBodyPolicy,
+    /// Precondition policy enforced before the patch is applied.
     pub precondition: DavWritePrecondition,
 }
 
 /// RFC 5789 PATCH capability for one resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DavPatchCapability {
+    /// RFC 5789 PATCH is not supported for this resource.
     #[default]
     Disabled,
+    /// PATCH is supported with the listed static document formats.
     Formats(&'static [DavPatchFormat]),
 }
 
 /// Explicitly named private range-update compatibility surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DavPrivateUpdateRangeCapability {
+    /// Private range updates are not accepted.
     #[default]
     Disabled,
+    /// Non-standard `X-Update-Range` range updates.
     XUpdateRange {
+        /// Precondition policy enforced before a range is applied.
         precondition: DavWritePrecondition,
     },
 }
@@ -161,14 +194,18 @@ pub enum DavPrivateUpdateRangeCapability {
 /// Mutation capabilities deliberately separate from ordinary replacement PUT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavWriteCapabilities {
+    /// Negotiated byte-range partial PUT policy.
     pub partial_put: DavPartialPutCapability,
+    /// Negotiated RFC 5789 PATCH document formats.
     pub patch: DavPatchCapability,
+    /// Negotiated private range-update surface.
     pub private_update_range: DavPrivateUpdateRangeCapability,
 }
 
 /// RFC 4918 compliance classes represented by a runtime declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DavComplianceClasses {
+    /// RFC 4918 class 1 is advertised for this resource.
     pub class1: bool,
     /// RFC 4918 class 3 requires class 1 and does not imply class 2 locking.
     pub class3: bool,
@@ -236,7 +273,9 @@ pub trait DavClass3Support: DavClass1Support {}
 pub trait DavAccessControlSupport: DavClass1Support {}
 /// Product implementation provides RFC 3253 version-control.
 pub trait DavVersionControlSupport: DavClass1Support {}
+/// Product implementation provides the RFC 3253 checkout-in-place package.
 pub trait DavCheckoutInPlaceSupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 version-history package.
 pub trait DavVersionHistorySupport: DavVersionControlSupport {}
 /// Complete workspace support includes checkout-in-place and version-history at compile time.
 ///
@@ -248,26 +287,46 @@ pub trait DavVersionHistorySupport: DavVersionControlSupport {}
 /// impl DavWorkspaceSupport for IncompleteWorkspace {}
 /// ```
 pub trait DavWorkspaceSupport: DavCheckoutInPlaceSupport + DavVersionHistorySupport {}
+/// Product implementation provides the RFC 3253 update package.
 pub trait DavUpdateSupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 label package.
 pub trait DavLabelSupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 working-resource package.
 pub trait DavWorkingResourceSupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 merge package.
 pub trait DavMergeSupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 baseline package.
 pub trait DavBaselineSupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 activity package.
 pub trait DavActivitySupport: DavVersionControlSupport {}
+/// Product implementation provides the RFC 3253 version-controlled-collection package.
 pub trait DavVersionControlledCollectionSupport: DavVersionControlSupport {}
+/// Product implementation provides RFC 5323 DASL SEARCH.
 pub trait DavSearchSupport: DavClass1Support {}
+/// Product implementation provides RFC 4331 quota.
 pub trait DavQuotaSupport: DavClass1Support {}
+/// Product implementation provides RFC 6578 collection synchronization.
 pub trait DavCollectionSyncSupport: DavClass1Support {}
+/// Product implementation provides RFC 5689 extended MKCOL.
 pub trait DavExtendedMkcolSupport: DavClass1Support {}
+/// Product implementation provides RFC 5397 current-principal discovery.
 pub trait DavCurrentPrincipalSupport: DavClass1Support {}
+/// Product implementation provides RFC 3648 ordered collections.
 pub trait DavOrderedCollectionsSupport: DavClass1Support {}
+/// Product implementation provides RFC 4437 redirect references.
 pub trait DavRedirectReferencesSupport: DavClass1Support {}
+/// Product implementation provides RFC 5842 bindings.
 pub trait DavBindingsSupport: DavClass1Support {}
+/// Product implementation provides RFC 5995 POST-based member creation.
 pub trait DavAddMemberSupport: DavClass1Support {}
+/// Product implementation provides RFC 8144 Prefer handling.
 pub trait DavPreferSupport: DavClass1Support {}
 
+/// Product implementation provides RFC 9110 byte-range partial PUT.
 pub trait DavPartialPutSupport: Send + Sync {}
+/// Product implementation provides RFC 5789 PATCH document handling.
 pub trait DavPatchSupport: Send + Sync {}
+/// Product implementation provides the private `X-Update-Range` compatibility surface.
 pub trait DavPrivateUpdateRangeSupport: Send + Sync {}
 
 mod sealed {
@@ -278,17 +337,27 @@ mod sealed {
 
 /// Static maximum capability profile selected by a product provider.
 pub trait DavCapabilityProfile<Provider: ?Sized>: sealed::Sealed {
+    /// Whether the profile may advertise RFC 4918 compliance class 1.
     const CLASS1: bool;
+    /// Whether the profile may advertise RFC 4918 class 2 write locking.
     const CLASS2: bool;
+    /// Whether the profile may advertise RFC 4918 class 3 revised semantics.
     const CLASS3: bool;
+    /// RFC extension packages the profile may advertise.
     const EXTENSIONS: DavExtensionSet;
+    /// Whether the profile may advertise byte-range partial PUT.
     const PARTIAL_PUT: bool;
+    /// Whether the profile may advertise RFC 5789 PATCH.
     const PATCH: bool;
+    /// Whether the profile may advertise the private `X-Update-Range` surface.
     const PRIVATE_UPDATE_RANGE: bool;
 }
 
+/// Static profile advertising no DAV compliance classes.
 pub struct DavNonDavProfile;
+/// Static profile advertising RFC 4918 class 1 only.
 pub struct DavClass1Profile;
+/// Static profile advertising RFC 4918 classes `1, 2`.
 pub struct DavClass2Profile;
 /// RFC 4918 classes `1, 3`, without class 2 locking.
 pub struct DavClass3Profile;
@@ -356,11 +425,19 @@ impl<Base: sealed::Sealed, Extension> sealed::Sealed for DavWithExtension<Base, 
 
 /// Sealed link between a package marker and its product implementation trait.
 pub trait DavExtensionMarker<Provider: ?Sized>: sealed::ExtensionSealed {
+    /// Packages added on top of the base profile when `Provider` implements the linked support trait.
     const PACKAGES: DavExtensionSet;
 }
 
 macro_rules! extension_marker {
     ($marker:ident, $support:path, $package:ident $(, $required:ident)*) => {
+        #[doc = concat!(
+            "Sealed package marker for `",
+            stringify!($package),
+            "`, active when `Provider` implements ",
+            stringify!($support),
+            "."
+        )]
         pub struct $marker;
         impl sealed::ExtensionSealed for $marker {}
         impl<Provider: $support + ?Sized> DavExtensionMarker<Provider> for $marker {
@@ -544,8 +621,11 @@ macro_rules! dav_capability_profile {
     };
 }
 
+/// Profile wrapper that adds RFC 9110 byte-range partial PUT on top of `Base`.
 pub struct DavWithPartialPut<Base>(PhantomData<fn() -> Base>);
+/// Profile wrapper that adds RFC 5789 PATCH on top of `Base`.
 pub struct DavWithPatch<Base>(PhantomData<fn() -> Base>);
+/// Profile wrapper that adds the private `X-Update-Range` surface on top of `Base`.
 pub struct DavWithPrivateUpdateRange<Base>(PhantomData<fn() -> Base>);
 
 impl<Provider: ?Sized, Base: sealed::Class1Profile<Provider>> sealed::Class1Profile<Provider>
@@ -596,19 +676,28 @@ write_profile!(
 /// Product-owned facts projected for one target and request context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DavCapabilityDeclaration {
+    /// Resource state of the request target.
     pub resource: DavResourceState,
+    /// RFC 3253 facts projected for the request target.
     pub versioning: DavVersioningCapabilities,
     /// Methods allowed for this principal and target. Package implementation methods are derived.
     pub methods: DavMethodSet,
+    /// Locking compliance advertised for the target.
     pub locking: DavLockingCapability,
+    /// RFC extension packages enabled for the target.
     pub extensions: DavExtensionSet,
+    /// RFC 5323 SEARCH grammar discovery facts.
     pub search: DavSearchCapabilities,
+    /// Optional non-standard compatibility signals.
     pub compatibility: DavCompatibilityCapabilities,
+    /// Mutation capabilities beyond ordinary replacement PUT.
     pub writes: DavWriteCapabilities,
+    /// RFC 4918 compliance classes advertised for the target.
     pub compliance: DavComplianceClasses,
 }
 
 impl DavCapabilityDeclaration {
+    /// Creates a minimal declaration without locking, extensions, versioning, or write features.
     #[must_use]
     pub const fn new(resource: DavResourceState, methods: DavMethodSet) -> Self {
         Self {
@@ -643,117 +732,184 @@ impl DavCapabilityDeclaration {
 /// Failure raised when a product declaration violates the protocol model.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavCapabilityPlanError {
+    /// The declaration omits OPTIONS, which every `WebDAV` target must advertise.
     #[error("OPTIONS must be advertised for every WebDAV target")]
     OptionsMissing,
+    /// HEAD is advertised without GET.
     #[error("HEAD requires GET in a WebDAV capability declaration")]
     HeadWithoutGet,
+    /// Class 2 locking is advertised without class 1.
     #[error("DAV locking compliance class 2 requires class 1")]
     Class2WithoutClass1,
+    /// Class 2 locking is advertised without LOCK and UNLOCK methods.
     #[error("DAV compliance class 2 requires LOCK and UNLOCK methods")]
     Class2WithoutLockMethods,
+    /// LOCK or UNLOCK is advertised without class 2 locking.
     #[error("LOCK and UNLOCK require DAV compliance class 2")]
     LockMethodsWithoutClass2,
+    /// Class 3 is advertised without class 1.
     #[error("DAV compliance class 3 requires class 1")]
     Class3WithoutClass1,
+    /// An RFC extension package is advertised without class 1.
     #[error("RFC extension {package:?} requires class 1")]
-    ExtensionWithoutClass1 { package: DavExtensionPackage },
+    ExtensionWithoutClass1 {
+        /// Package that requires class 1.
+        package: DavExtensionPackage,
+    },
+    /// An extension package is advertised without its prerequisite package.
     #[error("RFC extension {package:?} requires {required:?}")]
     ExtensionMissingPrerequisite {
+        /// Package whose prerequisite is missing.
         package: DavExtensionPackage,
+        /// Missing prerequisite package.
         required: DavExtensionPackage,
     },
+    /// An extension package is advertised for a resource kind it does not apply to.
     #[error("RFC extension {package:?} does not apply to {resource:?}")]
     ExtensionNotApplicable {
+        /// Package that does not apply to the target.
         package: DavExtensionPackage,
+        /// Resource kind the package does not apply to.
         resource: DavResourceState,
     },
+    /// The version-control package is advertised without explicit target versioning facts.
     #[error("the RFC 3253 version-control package requires explicit target versioning facts")]
     VersionControlWithoutTarget,
+    /// Target versioning facts are supplied without the version-control package.
     #[error("versioning target facts require the RFC 3253 version-control package")]
     VersioningTargetWithoutPackage,
+    /// Automatic versioning is declared for a target that is not checked in or checked out.
     #[error("automatic versioning is only valid for a checked-in or checked-out resource")]
     AutoVersionNotApplicable,
+    /// A write-locked versioning target is declared without class 2 locking.
     #[error("a write-locked versioning target requires DAV locking compliance class 2")]
     WriteLockWithoutClass2,
+    /// An automatic checkout lock is declared for a target that is not a write-locked checkout.
     #[error("an automatic checkout lock is only valid for a write-locked checked-out resource")]
     AutoCheckoutLockNotApplicable,
+    /// The selected auto-version mode can never produce the declared automatic checkout lock.
     #[error(
         "an automatic checkout lock requires an auto-version mode that can leave a locked resource checked out"
     )]
     AutoCheckoutLockWithoutApplicableMode,
+    /// Version DELETE policy is declared for a target that is not an immutable version resource.
     #[error("version DELETE policy is only applicable to immutable version resources")]
     VersionDeletePolicyNotApplicable,
+    /// VERSION-CONTROL is advertised for a target that is neither versionable nor version-controlled.
     #[error("VERSION-CONTROL is only applicable to versionable or version-controlled resources")]
     VersionControlMethodNotApplicable,
+    /// A method is advertised whose RFC extension package is not.
     #[error("method {method:?} requires an applicable RFC extension package")]
-    ExtensionMethodWithoutPackage { method: DavMethod },
+    ExtensionMethodWithoutPackage {
+        /// Method missing its applicable extension package.
+        method: DavMethod,
+    },
+    /// SEARCH is advertised without the mandatory DAV:basicsearch grammar.
     #[error("SEARCH requires at least DAV:basicsearch")]
     SearchWithoutBasicSearch,
+    /// SEARCH grammars are declared without the SEARCH extension package.
     #[error("SEARCH grammars require the SEARCH extension package")]
     SearchGrammarsWithoutPackage,
+    /// A SEARCH grammar's coded URL is not a valid absolute URI.
     #[error("SEARCH grammar {index} has invalid coded URL {coded_url:?}")]
     InvalidSearchGrammarCodedUrl {
+        /// Position of the invalid grammar in declaration order.
         index: usize,
+        /// Rejected coded URL value.
         coded_url: &'static str,
     },
+    /// A SEARCH grammar's XML local name is not a valid XML local name.
     #[error("SEARCH grammar {index} has invalid XML local name {xml_local_name:?}")]
     InvalidSearchGrammarXmlLocalName {
+        /// Position of the invalid grammar in declaration order.
         index: usize,
+        /// Rejected XML local name.
         xml_local_name: &'static str,
     },
+    /// A SEARCH grammar's XML namespace is not a valid namespace name.
     #[error("SEARCH grammar {index} has invalid XML namespace {xml_namespace:?}")]
     InvalidSearchGrammarXmlNamespace {
+        /// Position of the invalid grammar in declaration order.
         index: usize,
+        /// Rejected XML namespace value.
         xml_namespace: &'static str,
     },
+    /// Two SEARCH grammars describe the same XML element.
     #[error("SEARCH grammar {index} duplicates grammar {previous_index}")]
     DuplicateSearchGrammar {
+        /// Position of the duplicate grammar in declaration order.
         index: usize,
+        /// Position of the first grammar describing the same element.
         previous_index: usize,
+        /// Duplicated coded URL value.
         coded_url: &'static str,
+        /// Duplicated XML namespace value.
         xml_namespace: &'static str,
+        /// Duplicated XML local name.
         xml_local_name: &'static str,
     },
+    /// Partial PUT is advertised without the PUT method.
     #[error("partial PUT requires the PUT method")]
     PartialPutWithoutPut,
+    /// PATCH is advertised without any declared document format.
     #[error("PATCH requires at least one declared patch document format")]
     PatchWithoutFormats,
+    /// Patch document formats are declared without the PATCH method.
     #[error("declared patch document formats require the PATCH method")]
     PatchFormatsWithoutMethod,
+    /// A patch document media type is not a valid media type.
     #[error("a patch document media type is invalid")]
     InvalidPatchMediaType,
+    /// Two patch document formats share a media type.
     #[error("patch document media types must be unique")]
     DuplicatePatchMediaType,
+    /// Private range-update support is advertised without the PUT method.
     #[error("private X-Update-Range support requires the PUT method")]
     PrivateUpdateRangeWithoutPut,
+    /// Runtime class 1 advertising exceeds the provider's static profile.
     #[error("runtime class 1 capability exceeds the provider's static profile")]
     Class1ExceedsProfile,
+    /// Runtime class 2 advertising exceeds the provider's static profile.
     #[error("runtime class 2 capability exceeds the provider's static profile")]
     Class2ExceedsProfile,
+    /// Runtime class 3 advertising exceeds the provider's static profile.
     #[error("runtime class 3 capability exceeds the provider's static profile")]
     Class3ExceedsProfile,
+    /// Runtime extension advertising exceeds the provider's static profile.
     #[error("runtime extension {package:?} exceeds the provider's static profile")]
-    ExtensionExceedsProfile { package: DavExtensionPackage },
+    ExtensionExceedsProfile {
+        /// Package advertised beyond the static profile.
+        package: DavExtensionPackage,
+    },
+    /// Runtime partial PUT advertising exceeds the provider's static profile.
     #[error("runtime partial PUT capability exceeds the provider's static profile")]
     PartialPutExceedsProfile,
+    /// Runtime PATCH advertising exceeds the provider's static profile.
     #[error("runtime PATCH capability exceeds the provider's static profile")]
     PatchExceedsProfile,
+    /// Runtime private range-update advertising exceeds the provider's static profile.
     #[error("runtime private update-range capability exceeds the provider's static profile")]
     PrivateUpdateRangeExceedsProfile,
+    /// A capability value cannot be rendered into its HTTP header representation.
     #[error("capability header representation is invalid")]
     InvalidHeaderRepresentation,
 }
 
+/// Failure raised while evaluating a product capability declaration.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavCapabilityEvaluationError {
+    /// The product capability provider failed.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
+    /// The declaration violated the protocol model during planning.
     #[error(transparent)]
     Plan(#[from] DavCapabilityPlanError),
 }
 
+/// Failure raised when the capability snapshot gates a method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DavMethodGateError {
+    /// The snapshot does not dispatch the requested method for this resource.
     #[error("WebDAV method is not allowed for this resource")]
     MethodNotAllowed,
 }
@@ -775,26 +931,31 @@ pub struct DavCapabilitySnapshot {
 }
 
 impl DavCapabilitySnapshot {
+    /// Returns the validated declaration the snapshot was planned from.
     #[must_use]
     pub fn declaration(&self) -> &DavCapabilityDeclaration {
         &self.declaration
     }
 
+    /// Returns the methods allowed for this principal and target.
     #[must_use]
     pub const fn methods(&self) -> DavMethodSet {
         self.declaration.methods
     }
 
+    /// Returns the methods the provider's static profile implements.
     #[must_use]
     pub const fn supported_methods(&self) -> DavMethodSet {
         self.supported_methods
     }
 
+    /// Returns whether the method is allowed for this principal and target.
     #[must_use]
     pub const fn allows(&self, method: DavMethod) -> bool {
         self.methods().contains(method)
     }
 
+    /// Returns whether the method is implemented by the provider's static profile.
     #[must_use]
     pub const fn supports(&self, method: DavMethod) -> bool {
         self.supported_methods.contains(method)
@@ -806,51 +967,61 @@ impl DavCapabilitySnapshot {
         self.dispatch_methods.contains(method)
     }
 
+    /// Returns the RFC extension packages advertised for this target.
     #[must_use]
     pub const fn extensions(&self) -> DavExtensionSet {
         self.declaration.extensions
     }
 
+    /// Returns whether an RFC extension package is advertised.
     #[must_use]
     pub const fn supports_extension(&self, package: DavExtensionPackage) -> bool {
         self.extensions().contains(package)
     }
 
+    /// Returns whether a live property is advertised for this target.
     #[must_use]
     pub const fn supports_live_property(&self, property: DavLiveProperty) -> bool {
         self.live_properties.contains(property)
     }
 
+    /// Returns whether a REPORT type is advertised for this target.
     #[must_use]
     pub const fn supports_report(&self, report: DavReportType) -> bool {
         self.reports.contains(report)
     }
 
+    /// Returns the RFC 8144 preferences understood for this target.
     #[must_use]
     pub const fn preferences(&self) -> DavPreferenceSet {
         self.preferences
     }
 
+    /// Returns the rendered `Allow` header value for discovery responses.
     #[must_use]
     pub fn allow_header(&self) -> &HeaderValue {
         &self.allow
     }
 
+    /// Returns the rendered `DAV` header value, when any compliance class is advertised.
     #[must_use]
     pub fn dav_header(&self) -> Option<&HeaderValue> {
         self.dav.as_ref()
     }
 
+    /// Returns the rendered `DASL` header value, when SEARCH grammars are declared.
     #[must_use]
     pub fn dasl_header(&self) -> Option<&HeaderValue> {
         self.dasl.as_ref()
     }
 
+    /// Returns the rendered `Accept-Patch` header value, when patch formats are declared.
     #[must_use]
     pub fn accept_patch_header(&self) -> Option<&HeaderValue> {
         self.accept_patch.as_ref()
     }
 
+    /// Returns the mutation capabilities negotiated for this target.
     #[must_use]
     pub const fn writes(&self) -> DavWriteCapabilities {
         self.declaration.writes
@@ -863,6 +1034,7 @@ impl DavCapabilitySnapshot {
         }
     }
 
+    /// Returns whether `MS-Author-Via` may be advertised for compatibility.
     #[must_use]
     pub const fn has_ms_author_via(&self) -> bool {
         self.ms_author_via
@@ -1014,9 +1186,19 @@ const fn unmapped_dispatch_methods(resource: DavResourceState) -> DavMethodSet {
     async_fn_in_trait,
     reason = "The provider is generic and intentionally preserves native async futures."
 )]
+/// Product-side source of resource-aware capability facts.
+///
+/// The associated profile is the compile-time advertising maximum; runtime declarations that
+/// exceed it are rejected before planning.
 pub trait DavCapabilityProvider: Send + Sync {
+    /// Static maximum capability profile this provider may advertise.
     type Profile: DavCapabilityProfile<Self>;
 
+    /// Projects the product's capability declaration for one target and request context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavBackendError`] when the provider cannot resolve facts for the target.
     async fn capabilities(
         &self,
         target: &DavCapabilityTarget,

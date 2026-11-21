@@ -272,6 +272,8 @@ fn metric_u64(value: u64) -> f64 {
     value as f64
 }
 
+/// Shared-schema recorder for infrastructure signals: database queries, allocator stats and
+/// (with `runtime-health`) component health, plus a process uptime gauge.
 #[derive(Clone)]
 pub struct InfrastructureMetricsRecorder {
     provider: MetricsProvider,
@@ -289,6 +291,7 @@ impl InfrastructureMetricsRecorder {
             started_at: Instant::now(),
         })
     }
+    /// Exposes the underlying provider for endpoint injection and lifecycle management.
     #[must_use]
     pub fn provider(&self) -> &MetricsProvider {
         &self.provider

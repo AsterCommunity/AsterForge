@@ -1,3 +1,5 @@
+//! Opaque metadata and content revision token semantics contracts for cloud files services.
+
 use std::any::TypeId;
 
 use aster_forge_cloud_files_core::{

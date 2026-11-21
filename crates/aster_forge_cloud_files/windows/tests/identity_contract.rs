@@ -1,3 +1,5 @@
+//! Windows `CFAPI` identity round-trip, size-limit, and envelope rejection contracts.
+
 use aster_forge_cloud_files_core::{
     CloudFilesCoreError, CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope,
 };

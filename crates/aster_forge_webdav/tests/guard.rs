@@ -1,3 +1,5 @@
+//! Contract tests for lock guards and `If` header state evaluation against lock tokens.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};

@@ -103,7 +103,8 @@ impl ConfigSyncRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when publishing, subscription,
+    /// reconciliation, or reload handling fails.
     pub async fn publish_reload(
         &self,
         keys: impl IntoIterator<Item = impl Into<String>>,
@@ -132,7 +133,8 @@ impl ConfigSyncRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when publishing, subscription,
+    /// reconciliation, or reload handling fails.
     pub async fn run_reload_subscription<F, Fut>(
         &self,
         shutdown: CancellationToken,
@@ -153,7 +155,8 @@ impl ConfigSyncRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when publishing, subscription,
+    /// reconciliation, or reload handling fails.
     pub async fn run_reload_subscription_with_observer<F, Fut>(
         &self,
         shutdown: CancellationToken,
@@ -188,7 +191,8 @@ impl ConfigSyncRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when publishing, subscription,
+    /// reconciliation, or reload handling fails.
     pub async fn run_reload_subscription_with_reconcile<R, RFut, F, Fut>(
         &self,
         shutdown: CancellationToken,
@@ -213,7 +217,8 @@ impl ConfigSyncRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError`] when publishing, subscription, reconciliation, or reload handling fails.
+    /// Returns [`ConfigCoreError`](crate::ConfigCoreError) when publishing, subscription,
+    /// reconciliation, or reload handling fails.
     pub async fn run_reload_subscription_with_reconcile_and_observers<R, RFut, F, Fut>(
         &self,
         shutdown: CancellationToken,

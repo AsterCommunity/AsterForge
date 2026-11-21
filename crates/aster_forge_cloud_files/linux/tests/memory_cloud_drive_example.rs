@@ -1,3 +1,5 @@
+//! Runs the memory cloud drive example fixture as a product-worker integration test on Linux.
+
 #![cfg(target_os = "linux")]
 #![expect(
     dead_code,

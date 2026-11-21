@@ -1,3 +1,4 @@
+//! Streaming reader contract tests: events, namespaces, capture, and limits.
 use std::fmt::Write as _;
 use std::io::{BufReader, Cursor};
 

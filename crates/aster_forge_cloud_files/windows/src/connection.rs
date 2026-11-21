@@ -1431,14 +1431,17 @@ pub struct WindowsCallbackQueueMetrics {
 }
 
 impl WindowsCallbackQueueMetrics {
+    /// Returns callbacks accepted into bounded ingress during this generation.
     #[must_use]
     pub const fn accepted_callbacks(self) -> u64 {
         self.accepted_callbacks
     }
+    /// Returns hydration fetch requests queued for async completion.
     #[must_use]
     pub const fn queued_fetch_data(self) -> u64 {
         self.queued_fetch_data
     }
+    /// Returns native cancellation observations queued for reconciliation.
     #[must_use]
     pub const fn queued_cancel_observations(self) -> u64 {
         self.queued_cancel_observations
@@ -1453,10 +1456,12 @@ impl WindowsCallbackQueueMetrics {
     pub const fn queued_observations(self) -> u64 {
         self.queued_observations
     }
+    /// Returns hydration fetch requests rejected because the queue was full.
     #[must_use]
     pub const fn fetch_queue_full(self) -> u64 {
         self.fetch_queue_full
     }
+    /// Returns cancellation observations dropped because the queue was full.
     #[must_use]
     pub const fn cancel_observation_queue_full(self) -> u64 {
         self.cancel_observation_queue_full
@@ -1471,18 +1476,22 @@ impl WindowsCallbackQueueMetrics {
     pub const fn observation_queue_full(self) -> u64 {
         self.observation_queue_full
     }
+    /// Returns callbacks dropped because the ingress receiver disconnected.
     #[must_use]
     pub const fn receiver_disconnected(self) -> u64 {
         self.receiver_disconnected
     }
+    /// Returns requests rejected because the connection generation was closing.
     #[must_use]
     pub const fn closing_rejections(self) -> u64 {
         self.closing_rejections
     }
+    /// Returns requests rejected because their callback snapshot was stale or invalid.
     #[must_use]
     pub const fn invalid_snapshot_rejections(self) -> u64 {
         self.invalid_snapshot_rejections
     }
+    /// Returns callbacks failed because ingress or dispatch panicked.
     #[must_use]
     pub const fn panic_failures(self) -> u64 {
         self.panic_failures

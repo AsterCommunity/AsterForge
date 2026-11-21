@@ -1,3 +1,5 @@
+//! Store error kinds and session change-checkpoint boundary transition contracts.
+
 mod support;
 
 use aster_forge_cloud_files_core::{

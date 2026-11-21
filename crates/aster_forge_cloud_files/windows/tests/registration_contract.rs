@@ -1,3 +1,5 @@
+//! Windows provider registration and hydration state contracts.
+
 use aster_forge_cloud_files_core::{
     CloudFilesCoreError, CloudItemId, CloudItemKey, CloudNamespaceId, CloudRootId, CloudScope,
 };

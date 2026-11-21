@@ -1,3 +1,5 @@
+//! Contract tests for `WebDAV` XML response writing: property payloads and escaping boundaries.
+
 use std::time::Duration;
 
 use aster_forge_webdav::{

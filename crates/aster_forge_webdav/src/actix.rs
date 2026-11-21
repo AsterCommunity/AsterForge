@@ -17,8 +17,11 @@ use crate::{
 
 /// Request body prepared according to the selected `WebDAV` method contract.
 pub enum DavPreparedBody {
+    /// The method contract requires no request body; nothing was read.
     None,
+    /// XML bytes collected and validated under the method's body policy.
     Xml(Vec<u8>),
+    /// Opaque bytes collected under a bounded body policy.
     Bytes(Vec<u8>),
 }
 

@@ -1,3 +1,5 @@
+//! Contract tests for lock preflight headers and `Lock` request parsing.
+
 use std::time::Duration;
 
 use aster_forge_webdav::{

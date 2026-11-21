@@ -153,7 +153,7 @@ pub fn default_config_sync_topic(namespace: &str) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the sync backend, endpoint, topic, credentials, or runtime id is invalid.
+/// Returns [`ConfigCoreError`] when the sync backend, endpoint, topic, credentials, or runtime id is invalid.
 pub fn build_config_sync_runtime(
     config: &ConfigSyncConfig,
     namespace: &str,
@@ -172,7 +172,7 @@ pub fn build_config_sync_runtime(
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the sync backend, endpoint, topic, credentials, or runtime id is invalid.
+/// Returns [`ConfigCoreError`] when the sync backend, endpoint, topic, credentials, or runtime id is invalid.
 pub fn build_config_sync_runtime_with_runtime_id(
     config: &ConfigSyncConfig,
     namespace: &str,

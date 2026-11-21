@@ -1,3 +1,5 @@
+//! Mutation request and snapshot boundary contracts for cloud files services.
+
 use std::time::{Duration, SystemTime};
 
 use aster_forge_cloud_files_core::{

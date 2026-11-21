@@ -1,3 +1,6 @@
+//! Contract tests for property models:
+//! dead and live property lookup, filtering, and backend interaction.
+
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

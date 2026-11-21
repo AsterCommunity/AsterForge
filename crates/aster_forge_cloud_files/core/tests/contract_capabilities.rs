@@ -1,3 +1,5 @@
+//! Capability intersection, alignment overflow, and optional-operation contracts for cloud files backends.
+
 use std::num::NonZeroUsize;
 
 use aster_forge_cloud_files_core::{

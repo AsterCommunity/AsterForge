@@ -1,3 +1,6 @@
+//! Contract tests for backend ports:
+//! filesystem error mapping to protocol backend categories and write-handle behavior.
+
 use std::sync::{Arc, Mutex};
 
 use aster_forge_webdav::{

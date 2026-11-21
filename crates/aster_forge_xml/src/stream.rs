@@ -24,21 +24,26 @@ pub struct StreamName<'a> {
 }
 
 impl<'a> StreamName<'a> {
+    /// Returns the qualified name exactly as written, including any prefix.
     #[must_use]
     pub fn qualified(self) -> &'a str {
         self.qualified
     }
 
+    /// Returns the local name without any namespace prefix.
     #[must_use]
     pub fn local(self) -> &'a str {
         self.local
     }
 
+    /// Returns the resolved namespace URI, or `None` when the name is unprefixed and no
+    /// default namespace applies.
     #[must_use]
     pub fn namespace(self) -> Option<&'a str> {
         self.namespace
     }
 
+    /// Reports whether the local name and namespace both match the given values.
     #[must_use]
     pub fn matches(self, local: &str, namespace: Option<&str>) -> bool {
         self.local == local && self.namespace == namespace
@@ -67,6 +72,7 @@ impl StreamStart<'_> {
         }
     }
 
+    /// Returns an iterator over the element's written attributes in source order.
     #[must_use]
     pub fn attributes(&self) -> StreamAttributes<'_> {
         StreamAttributes {
@@ -237,6 +243,7 @@ pub struct StreamText<'a> {
 }
 
 impl StreamText<'_> {
+    /// Returns the decoded, unescaped text content.
     #[must_use]
     pub fn value(&self) -> &str {
         &self.value
@@ -249,6 +256,7 @@ pub struct StreamCData<'a> {
 }
 
 impl StreamCData<'_> {
+    /// Returns the CDATA content verbatim.
     #[must_use]
     pub fn value(&self) -> &str {
         &self.value
@@ -261,6 +269,7 @@ pub struct StreamComment<'a> {
 }
 
 impl StreamComment<'_> {
+    /// Returns the comment content verbatim.
     #[must_use]
     pub fn value(&self) -> &str {
         &self.value
@@ -294,15 +303,25 @@ impl StreamProcessingInstruction<'_> {
 
 /// One bounded streaming XML event.
 pub enum XmlStreamEvent<'a> {
+    /// A container element opening tag.
     Start(StreamStart<'a>),
+    /// A self-closing element tag.
     Empty(StreamStart<'a>),
+    /// A closing element tag.
     End(StreamEnd<'a>),
+    /// Decoded character data.
     Text(StreamText<'a>),
+    /// Literal CDATA content.
     CData(StreamCData<'a>),
+    /// A comment's verbatim content.
     Comment(StreamComment<'a>),
+    /// A processing instruction.
     ProcessingInstruction(StreamProcessingInstruction<'a>),
+    /// The XML declaration.
     Declaration,
+    /// A document type declaration.
     DocType,
+    /// The end of the input.
     Eof,
 }
 
@@ -634,6 +653,7 @@ impl<R: BufRead> XmlStreamReader<R> {
         ValidatedXml::with_policy(bytes, policy)
     }
 
+    /// Consumes the reader and returns the underlying bounded input.
     pub fn into_inner(self) -> R {
         self.reader.into_inner().into_inner()
     }

@@ -1,3 +1,5 @@
+//! Object-safety, revision-bound reads, and size-agreement contracts for cloud files backend ports.
+
 mod support;
 
 use std::time::Duration;

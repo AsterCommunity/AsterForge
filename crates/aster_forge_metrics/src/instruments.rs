@@ -21,38 +21,56 @@ use std::{
 /// Stable, deliberately redacted errors: never contain labels or exporter credentials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MetricError {
+    /// Provider construction parameters are invalid (limits, profile references, or exporter
+    /// settings).
     #[error("invalid metrics configuration")]
     InvalidConfiguration,
+    /// Metric descriptor fails validation (name, unit, buckets, or label schema).
     #[error("invalid metric descriptor")]
     InvalidDescriptor,
+    /// A different schema is already registered under this metric name.
     #[error("duplicate metric registration")]
     DuplicateRegistration,
+    /// The provider reached its configured instrument limit.
     #[error("metric instrument limit reached")]
     InstrumentLimit,
+    /// The per-instrument or provider-wide series budget is exhausted.
     #[error("metric series limit reached")]
     SeriesLimit,
+    /// Label values do not match the descriptor schema (count, byte size, or integer parse).
     #[error("invalid metric labels")]
     InvalidLabels,
+    /// The operation does not match the instrument kind of the handle or series.
     #[error("wrong metric kind")]
     WrongKind,
+    /// The observation is non-finite, negative where forbidden, or overflows the cumulative
+    /// counter.
     #[error("invalid metric value or counter overflow")]
     InvalidValue,
+    /// The meter provider or exporter failed to initialize.
     #[error("metrics initialization failed")]
     Initialization,
+    /// No exporter is attached for the requested operation.
     #[error("metrics exporter is unavailable")]
     Unavailable,
+    /// Another export or shutdown operation is already in flight.
     #[error("metrics operation is busy")]
     Busy,
+    /// The export or shutdown did not complete within its deadline.
     #[error("metrics operation timed out")]
     Timeout,
+    /// The exporter failed to collect, encode, or deliver metric data.
     #[error("metrics export failed")]
     Export,
+    /// The provider or handle was already shut down.
     #[error("metrics provider is closed")]
     Closed,
+    /// The exporter failed to shut down cleanly.
     #[error("metrics shutdown failed")]
     Shutdown,
 }
 
+/// Result alias for metric operations; failures are typed [`MetricError`].
 pub type MetricResult<T> = std::result::Result<T, MetricError>;
 
 /// Borrow the caller's labels for cache lookup; allocate only for new series.
@@ -100,6 +118,10 @@ struct HandleInner {
     failures: Arc<AtomicU64>,
 }
 
+/// Cloneable handle to one registered instrument.
+///
+/// Clones share series state, limits, and the provider lifecycle; kind-checked wrappers such as
+/// [`ProductCounter`] expose the recording API on top of it.
 #[derive(Clone)]
 pub struct MetricHandle {
     inner: Arc<HandleInner>,
@@ -193,6 +215,7 @@ impl MetricHandle {
         }
     }
 
+    /// Returns the instrument kind registered for this handle.
     #[must_use]
     pub fn kind(&self) -> MetricKind {
         self.inner.descriptor.kind
@@ -271,14 +294,17 @@ impl MetricHandle {
     }
 }
 
+/// Typed monotonic counter recording unsigned cumulative additions.
 #[derive(Clone)]
 pub struct ProductCounter {
     handle: MetricHandle,
 }
+/// Typed gauge recording absolute values or signed deltas as `f64`.
 #[derive(Clone)]
 pub struct ProductGauge {
     handle: MetricHandle,
 }
+/// Typed histogram recording non-negative `f64` observations into the descriptor buckets.
 #[derive(Clone)]
 pub struct ProductHistogram {
     handle: MetricHandle,
@@ -305,19 +331,24 @@ typed!(ProductUpDownCounter, UpDownCounter);
 typed!(ProductSnapshotCounter, ObservableCounter);
 typed!(ProductSnapshotUpDownCounter, ObservableUpDownCounter);
 
+/// Typed up-down counter recording signed `i64` deltas.
 #[derive(Clone)]
 pub struct ProductUpDownCounter {
     handle: MetricHandle,
 }
+/// Observable monotonic snapshot whose cumulative value must never decrease.
 #[derive(Clone)]
 pub struct ProductSnapshotCounter {
     handle: MetricHandle,
 }
+/// Observable up-down snapshot whose value may decrease between observations.
 #[derive(Clone)]
 pub struct ProductSnapshotUpDownCounter {
     handle: MetricHandle,
 }
 impl ProductUpDownCounter {
+    /// Records one delta without returning validation failures; rejected observations are counted
+    /// as provider failures instead.
     pub fn add(&self, labels: &[&str], value: i64) {
         self.handle.diagnose(self.try_add(labels, value));
     }
@@ -336,6 +367,8 @@ impl ProductUpDownCounter {
 macro_rules! snapshot {
     ($ty:ident, $monotonic:expr) => {
         impl $ty {
+            /// Publishes one snapshot without returning validation failures; rejected
+            /// observations are counted as provider failures instead.
             pub fn set(&self, labels: &[&str], value: f64) {
                 self.handle.diagnose(self.try_set(labels, value));
             }
@@ -364,6 +397,8 @@ snapshot!(ProductSnapshotCounter, true);
 snapshot!(ProductSnapshotUpDownCounter, false);
 
 impl ProductCounter {
+    /// Records one addition without returning validation failures; rejected observations are
+    /// counted as provider failures instead.
     pub fn inc(&self, labels: &[&str], value: u64) {
         self.handle.diagnose(self.try_inc(labels, value));
     }
@@ -390,9 +425,13 @@ impl ProductCounter {
 }
 
 impl ProductGauge {
+    /// Sets one absolute value without returning validation failures; rejected observations are
+    /// counted as provider failures instead.
     pub fn set(&self, labels: &[&str], value: f64) {
         self.handle.diagnose(self.try_set(labels, value));
     }
+    /// Records one delta without returning validation failures; rejected observations are
+    /// counted as provider failures instead.
     pub fn add(&self, labels: &[&str], value: f64) {
         self.handle.diagnose(self.try_add(labels, value));
     }
@@ -432,6 +471,8 @@ impl ProductGauge {
 }
 
 impl ProductHistogram {
+    /// Records one observation without returning validation failures; rejected observations are
+    /// counted as provider failures instead.
     pub fn observe(&self, labels: &[&str], value: f64) {
         self.handle.diagnose(self.try_observe(labels, value));
     }

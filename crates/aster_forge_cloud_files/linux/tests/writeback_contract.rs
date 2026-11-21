@@ -1,3 +1,5 @@
+//! Linux writeback contract coverage across locks, content reads, and item state.
+
 use std::{
     collections::HashMap,
     sync::{

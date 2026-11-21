@@ -1,3 +1,5 @@
+//! Contract tests for DAV preference parsing: `Brief`, `Return`, and apply-to snapshot behavior.
+
 use aster_forge_webdav::{
     DavCapabilityDeclaration, DavExtensionPackage, DavExtensionSet, DavLockingCapability,
     DavMethod, DavMethodSet, DavPreferenceSet, DavResourceState, Depth, plan_capabilities,

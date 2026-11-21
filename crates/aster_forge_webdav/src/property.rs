@@ -28,19 +28,26 @@ pub fn format_creation_date(time: SystemTime) -> String {
 /// Metadata values fetched once for all standard content and validator properties.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DavLivePropertyMetadata<'a> {
+    /// `DAV:creationdate` value.
     pub creation_date: Option<SystemTime>,
+    /// `DAV:displayname` value.
     pub display_name: Option<&'a str>,
+    /// `DAV:getcontentlanguage` value.
     pub content_language: Option<&'a str>,
+    /// `DAV:getcontentlength` value in bytes.
     pub content_length: Option<u64>,
+    /// `DAV:getcontenttype` value.
     pub content_type: Option<&'a str>,
     /// A complete entity-tag value suitable for `DAV:getetag`.
     pub etag: Option<&'a str>,
+    /// `DAV:getlastmodified` value.
     pub last_modified: Option<SystemTime>,
 }
 
 /// One RFC 4331 scope snapshot reused for both quota properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DavQuotaSnapshot {
+    /// Bytes currently consumed inside the quota root.
     pub used_bytes: u64,
     /// `None` represents an infinite limit and omits `quota-available-bytes` from `propname`.
     pub available_bytes: Option<u64>,
@@ -62,26 +69,37 @@ pub enum DavCurrentPrincipal<'a> {
     reason = "Each flag independently selects one protocol value group for a single batch fetch."
 )]
 pub struct DavLivePropertyRequirements {
+    /// Standard RFC 4918 content and validator metadata is selected.
     pub metadata: bool,
+    /// Lock discovery values are selected.
     pub locks: bool,
+    /// Dead properties are selected.
     pub dead_properties: bool,
+    /// RFC 4331 quota values are selected.
     pub quota: bool,
+    /// RFC 5397 current-principal values are selected.
     pub current_principal: bool,
+    /// RFC 6578 sync-token values are selected.
     pub sync_token: bool,
+    /// RFC 5995 add-member values are selected.
     pub add_member: bool,
+    /// Complex extension live-property XML values are selected.
     pub extension_values: bool,
 }
 
 /// Product-owned batch snapshot consumed by the property composer.
 pub trait DavLivePropertyValueSnapshot: Send {
+    /// Returns standard content and validator metadata; the default contributes none.
     fn metadata(&self) -> DavLivePropertyMetadata<'_> {
         DavLivePropertyMetadata::default()
     }
 
+    /// Returns locks rendered into `DAV:lockdiscovery`; the default contributes none.
     fn active_locks(&self) -> &[DavLockXml] {
         &[]
     }
 
+    /// Returns product-persisted dead properties; the default contributes none.
     fn dead_properties(&self) -> &[DavProp] {
         &[]
     }
@@ -95,14 +113,17 @@ pub trait DavLivePropertyValueSnapshot: Send {
         None
     }
 
+    /// Returns the RFC 5397 current principal; the default reports none.
     fn current_principal(&self) -> Option<DavCurrentPrincipal<'_>> {
         None
     }
 
+    /// Returns the RFC 6578 sync token; the default reports none.
     fn sync_token(&self) -> Option<&str> {
         None
     }
 
+    /// Returns the RFC 5995 add-member href; the default reports none.
     fn add_member_href(&self) -> Option<&str> {
         None
     }
@@ -119,8 +140,14 @@ pub trait DavLivePropertyValueSnapshot: Send {
     reason = "The provider is generic and intentionally preserves native async futures."
 )]
 pub trait DavLivePropertyProvider: Send + Sync {
+    /// Product snapshot type carrying the batched values for one resource.
     type Values: DavLivePropertyValueSnapshot;
 
+    /// Fetches all value groups named by `requirements` for one resource in one batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DavBackendError`] when the product lookup fails.
     async fn live_property_values(
         &self,
         path: &DavPath,
@@ -133,6 +160,7 @@ pub trait DavLivePropertyProvider: Send + Sync {
 pub struct DavPropertyMaterializationLimits {
     /// Retained string and node payload budget, checked before materializing the next value.
     pub maximum_bytes: usize,
+    /// Maximum number of properties retained per response item.
     pub maximum_properties: usize,
 }
 
@@ -148,19 +176,30 @@ impl Default for DavPropertyMaterializationLimits {
 /// Failure while rendering authoritative product values as `WebDAV` live properties.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavLivePropertyError {
+    /// Property materialization exceeded the configured byte or item-count limit.
     #[error("WebDAV property materialization exceeds the configured limit")]
     LimitExceeded,
+    /// A product value is not a valid representation of the live property.
     #[error("invalid representation for WebDAV live property {property:?}")]
-    InvalidRepresentation { property: DavLiveProperty },
+    InvalidRepresentation {
+        /// Live property whose value representation was rejected.
+        property: DavLiveProperty,
+    },
+    /// An advertised live property has no product value for this resource.
     #[error("required WebDAV live property value is missing: {property:?}")]
-    MissingRequiredValue { property: DavLiveProperty },
+    MissingRequiredValue {
+        /// Live property whose value is missing.
+        property: DavLiveProperty,
+    },
 }
 
 /// Failure across the product batch port and property representation boundary.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DavLivePropertyEvaluationError {
+    /// The product batch provider failed.
     #[error(transparent)]
     Backend(#[from] DavBackendError),
+    /// Live-property rendering failed after values were fetched.
     #[error(transparent)]
     Property(#[from] DavLivePropertyError),
 }

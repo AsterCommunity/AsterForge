@@ -1,3 +1,5 @@
+//! Change application, tombstone identity, cursor invalidation, and idempotency contracts for change feeds.
+
 mod support;
 
 use std::collections::HashMap;

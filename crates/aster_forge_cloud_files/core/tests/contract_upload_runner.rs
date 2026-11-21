@@ -1,3 +1,5 @@
+//! Upload runner generation, cache key, and intent snapshot boundary contracts.
+
 mod support;
 
 use std::{collections::VecDeque, sync::Mutex};
