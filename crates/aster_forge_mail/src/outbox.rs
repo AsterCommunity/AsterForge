@@ -923,64 +923,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn historical_rows_cannot_inject_retry_or_permanent_failure_log_records() {
-        for attempt_count in [0, 2] {
-            let logs = aster_forge_test::logs::CapturedLogs::default();
-            let stats = logs
-                .capture_future(dispatch_mail_outbox(
-                    &MailOutboxDispatchConfig::new(
-                        20,
-                        60,
-                        1,
-                        MailOutboxRetryPolicy::new(3, DEFAULT_ERROR_MAX_LEN),
-                    ),
-                    move |_, _| async move {
-                        Ok::<_, String>(vec![NonCloneDispatchRow {
-                            id: 7,
-                            attempt_count,
-                            template_code: "template\nforged".to_string(),
-                            to_address: "a\r\nforged@example.com".to_string(),
-                            to_name: None,
-                            payload_json: String::new(),
-                        }])
-                    },
-                    |_| async { Ok::<_, String>(true) },
-                    |_| async { Err::<String, _>("transport\nforged\u{1b}[31m".to_string()) },
-                    |_, _| async { Ok::<_, String>(true) },
-                    |_, _, _, _| async { Ok::<_, String>(true) },
-                    |_, _, _| async { Ok::<_, String>(true) },
-                    |_, _, _| async {},
-                    |_, _, _| async {},
-                ))
-                .await
-                .unwrap();
-            assert_eq!(stats.retried + stats.failed, 1);
-            let text = logs.text();
-            assert_eq!(
-                text.lines()
-                    .filter(|line| line.starts_with(" WARN "))
-                    .count(),
-                1,
-                "{text}"
-            );
-            assert!(text.contains("dispatching due mail outbox rows"), "{text}");
-            assert!(text.contains("claimed mail outbox row"), "{text}");
-            let expected_failure = if attempt_count == 0 {
-                "mail outbox delivery failed; scheduled retry"
-            } else {
-                "mail outbox delivery permanently failed"
-            };
-            assert!(text.contains(expected_failure), "{text}");
-            assert!(text.contains("a\\r\\nforged@example.com"), "{text}");
-            assert!(text.contains("transport\\nforged"), "{text}");
-            assert!(!text.contains("template\nforged"), "{text}");
-            assert!(!text.contains("a\r\nforged@example.com"), "{text}");
-            assert!(!text.contains("transport\nforged"), "{text}");
-            assert!(!text.contains('\u{1b}'));
-        }
-    }
-
-    #[tokio::test]
     async fn retry_mark_sent_retries_until_success() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_for_closure = attempts.clone();

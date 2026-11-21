@@ -512,3 +512,5 @@ Forge 测试覆盖：
 ## 文本 fallback 与诊断边界
 
 HTML fallback 对忽略标签维护位置索引，不匹配的关闭标签不会反复扫描整个打开标签栈；错误嵌套仍按最近匹配项恢复。SMTP 诊断中的收件人和主题采用转义格式，换行或控制字符不能伪造新的文本日志记录。它不改变邮件正文、实际收件人或 SMTP 接受语义。
+
+Outbox 的严格文本日志回归位于独立 integration binary `tests/outbox_logging.rs`：通过公开 dispatch API 验证 retry/permanent failure 两条路径、完整事件序列、每条 warning 的记录边界及 CR/LF/ESC 转义。与同一 lib 中其他局部 subscriber 的创建/销毁隔离，不降低日志断言或改写生产日志。
