@@ -8,7 +8,8 @@
   open a release PR containing format-preserving dependency pin updates and an
   explicit release plan. Validate committed lock contents, affected consumers,
   normalized archives and versioned development dependency ordering;
-  dispatch publication through a crates.io-supported event only after both
+  archive verification compiles each normalized package without relying on
+  unarchived sibling test fixtures. Dispatch publication through a crates.io-supported event only after both
   exact-merge CI workflows pass, repeating review and CI gates before requesting
   credentials. Interrupted publication
   can resume without re-uploading existing versions. Downstream package versions

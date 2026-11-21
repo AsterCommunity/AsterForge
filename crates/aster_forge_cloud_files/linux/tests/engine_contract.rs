@@ -1,4 +1,3 @@
-#[path = "../../core/tests/support/mod.rs"]
 mod support;
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -262,6 +261,11 @@ async fn paged_directory_snapshot_and_revision_bound_range_read_work() {
         .directory_snapshot(LINUX_ROOT_INODE, root_directory)
         .expect("root snapshot should be valid");
     assert_eq!(root_snapshot.parent(), LINUX_ROOT_INODE);
+    assert_eq!(
+        root_snapshot.entries().len(),
+        3,
+        "all root pages must be collected"
+    );
     assert!(matches!(
         engine.directory_snapshot(docs.attributes().inode(), root_directory),
         Err(LinuxCloudFilesError::StaleHandle)

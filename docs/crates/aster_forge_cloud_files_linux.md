@@ -324,3 +324,5 @@ memory example 的可选 state 目录通过 `StateDirectory` 验证，读取拒�
 ## fuser 0.19 边界
 
 原生回调接收新的 `Owner` 与 `kill_suid_gid` 参数。当前 mount 使用固定 `LinuxAttributePolicy` uid/gid，并继续 NoSuid/NoExec；create/mkdir 的 owner 不匹配固定策略、或 open/create/setattr 要求处理尚未协商的 killpriv-v2 时，在提交 engine 前返回 ENOSYS。rename whiteout/exchange 仍拒绝。没有通过丢弃新参数隐式声明支持 idmapped ownership 或 capability xattr 清除。
+
+发布包的 engine contract 使用 crate 内 `tests/support` 的只读分页 fixture，不能通过相对路径读取 core 的私有测试源码。归档验证应解包实际 `.crate`，只通过声明的依赖或同批次归档 patch 编译 all-targets；测试集合不依赖 monorepo 兄弟目录。
