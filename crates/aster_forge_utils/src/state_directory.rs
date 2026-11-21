@@ -50,12 +50,25 @@ impl StateDirectory {
     /// Rejects non-single-component names, symlinks, foreign or hard-linked files and I/O failures.
     pub fn open_lock(&self, name: &str) -> io::Result<File> {
         validate_name(name)?;
-        let file = File::from(openat(
-            &self.directory,
-            name,
-            OFlags::CREATE | OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
-        )?);
+        let open = || {
+            openat(
+                &self.directory,
+                name,
+                OFlags::CREATE
+                    | OFlags::RDWR
+                    | OFlags::NOFOLLOW
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+        };
+        let opened = open();
+        #[cfg(target_os = "macos")]
+        let opened = match opened {
+            Err(rustix::io::Errno::NOENT) => open(),
+            result => result,
+        };
+        let file = File::from(opened?);
         verify_file(&file)?;
         Ok(file)
     }
@@ -225,5 +238,32 @@ mod tests {
         std::fs::create_dir(path.join("non-regular")).unwrap();
         assert!(directory.open_lock("non-regular").is_err());
         assert!(directory.read("non-regular", 4).is_err());
+    }
+
+    #[test]
+    fn concurrent_lock_creation_retains_one_non_truncated_inode() {
+        let (path, _guard) = fixture();
+        let directory = std::sync::Arc::new(StateDirectory::open(&path).unwrap());
+        let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let threads: Vec<_> = (0..16)
+            .map(|_| {
+                let directory = directory.clone();
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    let file = directory.open_lock("shared.lock").unwrap();
+                    file.lock().unwrap();
+                    assert!(file.metadata().unwrap().is_file());
+                    let identity = file.metadata().unwrap().ino();
+                    file.unlock().unwrap();
+                    identity
+                })
+            })
+            .collect();
+        let identities: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert!(identities.iter().all(|id| *id == identities[0]));
     }
 }

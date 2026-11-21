@@ -73,7 +73,7 @@ fn capture_drains_past_limits_and_only_callbacks_retained_bytes() {
                 ProcessStream::Stderr,
                 &|stream, bytes| {
                     assert_eq!(stream, ProcessStream::Stderr);
-                    assert!(!bytes.is_empty());
+                    assert_ne!(bytes, b"");
                     chunks.lock().unwrap().extend_from_slice(bytes);
                 },
             ));
@@ -204,7 +204,7 @@ fn stdin_reports_write_zero_broken_pipe_and_shutdown_failures() {
 fn missing_input_or_pipe_is_a_noop() {
     let mut writer = Writer::default();
     ready(write_stdin(Some(&mut writer), None)).unwrap();
-    assert!(writer.bytes.is_empty());
+    assert_eq!(writer.bytes, Vec::<u8>::new());
     assert!(!writer.shutdown);
     ready(write_stdin(None::<Writer>, Some(vec![1]))).unwrap();
 }

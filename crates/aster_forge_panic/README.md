@@ -8,8 +8,6 @@ full reports and separate human, silent or product-defined diagnostic output.
 `DiagnosticSink` lets CLIs preserve their JSON envelope. Public diagnostics never
 receive raw payloads, backtraces, locations, file paths or writer error text.
 
-**Unreleased API:** the example and policies below apply to PR #65, not the published alpha.1.
-
 ```rust
 use aster_forge_panic::{install_panic_hook, PanicHookConfig, PanicOutput};
 
@@ -33,26 +31,19 @@ Part of [AsterForge](https://github.com/AsterCommunity/AsterForge), the product-
 
 ## Installation
 
-For the unreleased API shown above, use the PR branch (pin an audited commit
-with `rev` when integrating; after merge, use the merged revision):
+The current alpha uses `time` for UTC RFC3339 millisecond timestamps. Applications
+may still inject their timestamp callback. Out-of-range clocks report
+`<timestamp unavailable>` without panicking inside the hook.
 
 ```toml
 [dependencies]
-aster_forge_panic = { git = "https://github.com/AsterCommunity/AsterForge", branch = "feat/issue-62-panic-cli-policy" }
-```
-
-The published alpha.1 has the earlier hook API and does **not** provide
-`PanicOutput`, `DiagnosticSink`, or `ReportWriter`:
-
-```toml
-[dependencies]
-aster_forge_panic = "=0.1.0-alpha.1"
+aster_forge_panic = "=0.1.0-alpha.3"
 ```
 
 ## Documentation
 
 - [Integration guide and ownership boundaries](https://forge.docs.astercosm.com/crates/aster_forge_panic)
-- [Published alpha.1 API reference (earlier API)](https://docs.rs/aster_forge_panic/0.1.0-alpha.1)
+- [API reference](https://docs.rs/aster_forge_panic)
 
 This is an alpha release; public APIs may change. Product business rules, authorization and user-facing error mapping remain in the consuming application.
 

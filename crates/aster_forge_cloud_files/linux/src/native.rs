@@ -10,9 +10,9 @@ use std::{
 use aster_forge_cloud_files_core::CloudFilesBackend;
 use fuser::{
     BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags,
-    Generation, INodeNo, LockOwner, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr,
-    ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
-    TimeOrNow, WriteFlags,
+    Generation, INodeNo, LockOwner, MountOption, OpenAccMode, OpenFlags, Owner, RenameFlags,
+    ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    ReplyWrite, Request, TimeOrNow, WriteFlags,
 };
 use tokio::runtime::Handle;
 
@@ -313,7 +313,18 @@ where
         });
     }
 
-    fn open(&self, _request: &Request, inode: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(
+        &self,
+        _request: &Request,
+        inode: INodeNo,
+        flags: OpenFlags,
+        kill_suid_gid: bool,
+        reply: ReplyOpen,
+    ) {
+        if kill_suid_gid {
+            reply.error(Errno::ENOSYS);
+            return;
+        }
         if flags.acc_mode() != OpenAccMode::O_RDONLY {
             reply.error(Errno::EROFS);
             return;
@@ -610,9 +621,11 @@ where
         attribute_change_time: Option<SystemTime>,
         backup_time: Option<SystemTime>,
         flags: Option<BsdFileFlags>,
+        kill_suid_gid: bool,
         reply: ReplyAttr,
     ) {
-        if mode.is_some()
+        if kill_suid_gid
+            || mode.is_some()
             || uid.is_some()
             || gid.is_some()
             || atime.is_some()
@@ -668,7 +681,18 @@ where
         });
     }
 
-    fn open(&self, _request: &Request, inode: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(
+        &self,
+        _request: &Request,
+        inode: INodeNo,
+        flags: OpenFlags,
+        kill_suid_gid: bool,
+        reply: ReplyOpen,
+    ) {
+        if kill_suid_gid {
+            reply.error(Errno::ENOSYS);
+            return;
+        }
         let inode = match request_inode(inode) {
             Ok(inode) => inode,
             Err(error) => {
@@ -701,8 +725,18 @@ where
         mode: u32,
         umask: u32,
         flags: i32,
+        kill_suid_gid: bool,
+        owner: Owner,
         reply: ReplyCreate,
     ) {
+        if let Err(error) = check_creation_privileges(
+            self.engine.readonly().attribute_policy(),
+            owner,
+            kill_suid_gid,
+        ) {
+            reply.error(error);
+            return;
+        }
         let parent = match request_inode(parent) {
             Ok(parent) => parent,
             Err(error) => {
@@ -745,8 +779,15 @@ where
         name: &OsStr,
         mode: u32,
         umask: u32,
+        owner: Owner,
         reply: ReplyEntry,
     ) {
+        if let Err(error) =
+            check_creation_privileges(self.engine.readonly().attribute_policy(), owner, false)
+        {
+            reply.error(error);
+            return;
+        }
         let parent = match request_inode(parent) {
             Ok(parent) => parent,
             Err(error) => {
@@ -791,6 +832,7 @@ where
         new_parent: INodeNo,
         new_name: &OsStr,
         flags: RenameFlags,
+        _owner: Option<Owner>,
         reply: ReplyEmpty,
     ) {
         if flags.intersects(RenameFlags::RENAME_EXCHANGE | RenameFlags::RENAME_WHITEOUT) {
@@ -1248,4 +1290,43 @@ where
     }
     fuser::spawn_mount(filesystem, mountpoint, &options)
         .map(|inner| LinuxBackgroundSession { inner })
+}
+
+// This adapter has fixed per-mount ownership and does not negotiate killpriv-v2.
+// Reject idmapped/privilege requests it cannot honor before enqueueing mutations.
+fn check_creation_privileges(
+    policy: &crate::LinuxAttributePolicy,
+    owner: Owner,
+    kill_suid_gid: bool,
+) -> std::result::Result<(), Errno> {
+    if kill_suid_gid || owner.uid != policy.uid() || owner.gid != policy.gid() {
+        return Err(Errno::ENOSYS);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{LinuxAttributePolicy, native::check_creation_privileges};
+    use fuser::{Errno, Owner};
+    #[test]
+    fn creation_rejects_unrepresentable_owner_or_privilege_changes() {
+        let policy =
+            LinuxAttributePolicy::new(1000, 1001, 0o600, 0o700, std::time::Duration::ZERO).unwrap();
+        let owner = Owner {
+            uid: 1000,
+            gid: 1001,
+        };
+        assert_eq!(check_creation_privileges(&policy, owner, false), Ok(()));
+        for (owner, kill) in [
+            (owner, true),
+            (Owner { uid: 0, ..owner }, false),
+            (Owner { gid: 0, ..owner }, false),
+        ] {
+            assert_eq!(
+                check_creation_privileges(&policy, owner, kill),
+                Err(Errno::ENOSYS)
+            );
+        }
+    }
 }

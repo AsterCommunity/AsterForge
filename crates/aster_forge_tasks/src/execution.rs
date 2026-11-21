@@ -10,7 +10,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
@@ -76,7 +76,7 @@ pub struct TaskPermanentFailure<'a> {
     /// Whether a later manual retry should be allowed.
     pub failure_can_retry: bool,
     /// Timestamp when the failure is recorded.
-    pub finished_at: DateTime<Utc>,
+    pub finished_at: OffsetDateTime,
 }
 
 /// Retry update passed to product storage after an automatically retryable failure.
@@ -84,7 +84,7 @@ pub struct TaskRetryUpdate<'a> {
     /// Attempt count to persist for the just-finished execution.
     pub attempt_count: i32,
     /// Timestamp when the next automatic retry should become due.
-    pub retry_at: DateTime<Utc>,
+    pub retry_at: OffsetDateTime,
     /// Truncated/storable error string.
     pub storage_error: &'a str,
     /// Human-facing error string used for product step details; never logged by Forge.
@@ -234,7 +234,7 @@ where
     Kind: Copy + std::fmt::Display + Send + Sync + 'static,
     SortKey: Ord,
     SortFn: FnMut(&(Task, TaskLease)) -> SortKey,
-    LeaseExpiresFn: Fn(DateTime<Utc>) -> DateTime<Utc> + Copy + Send + Sync + 'static,
+    LeaseExpiresFn: Fn(OffsetDateTime) -> OffsetDateTime + Copy + Send + Sync + 'static,
     RetryDelayFn: Fn(i32) -> i64 + Copy + Send + Sync + 'static,
 {
     run_claimed_task_batch(claimed_tasks, sort_key, |(task, lease)| {
@@ -261,7 +261,7 @@ where
     Store: ClaimedTaskExecutionStore<Task, Kind> + 'static,
     Task: ExecutableTaskRecord<Kind> + Send + Sync + 'static,
     Kind: Copy + std::fmt::Display + Send + Sync + 'static,
-    LeaseExpiresFn: Fn(DateTime<Utc>) -> DateTime<Utc> + Copy + Send + Sync + 'static,
+    LeaseExpiresFn: Fn(OffsetDateTime) -> OffsetDateTime + Copy + Send + Sync + 'static,
     RetryDelayFn: Fn(i32) -> i64 + Copy + Send + Sync + 'static,
 {
     let span = tracing::info_span!("task_execution", task_id = task.id(), kind = %task.kind(), processing_token = lease.processing_token);
@@ -390,8 +390,8 @@ where
                 retry_class.should_auto_retry() && attempt_count < task.max_attempts();
 
             if should_auto_retry {
-                let retry_at =
-                    Utc::now() + chrono::Duration::seconds(retry_delay_secs(attempt_count));
+                let retry_at = OffsetDateTime::now_utc()
+                    + time::Duration::seconds(retry_delay_secs(attempt_count));
                 let retried = store
                     .mark_task_retry(
                         task,
@@ -428,7 +428,7 @@ where
                 store.record_task_transition(task, "retry");
                 Ok(TaskDispatchOutcome::retried())
             } else {
-                let finished_at = Utc::now();
+                let finished_at = OffsetDateTime::now_utc();
                 let failed = store
                     .mark_task_failed(
                         task,
@@ -502,7 +502,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use chrono::{DateTime, Utc};
+    use time::OffsetDateTime;
     use tokio_util::sync::CancellationToken;
 
     use super::{
@@ -630,8 +630,8 @@ mod tests {
         async fn touch_task_heartbeat(
             &self,
             _lease: TaskLease,
-            _now: DateTime<Utc>,
-            _lease_expires_at: DateTime<Utc>,
+            _now: OffsetDateTime,
+            _lease_expires_at: OffsetDateTime,
         ) -> std::result::Result<crate::TaskHeartbeatOutcome, Self::Error> {
             self.state().heartbeat_touches += 1;
             Ok(crate::TaskHeartbeatOutcome::Renewed)
@@ -788,7 +788,7 @@ mod tests {
     }
 
     type TestExecutionConfig =
-        ClaimedTaskExecutionConfig<fn(DateTime<Utc>) -> DateTime<Utc>, fn(i32) -> i64>;
+        ClaimedTaskExecutionConfig<fn(OffsetDateTime) -> OffsetDateTime, fn(i32) -> i64>;
 
     fn config() -> TestExecutionConfig {
         ClaimedTaskExecutionConfig {

@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_audit"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -27,7 +27,7 @@ tracing.workspace = true
 [dev-dependencies]
 aster_forge_test = { workspace = true, features = ["postgres"] }
 uuid.workspace = true
-chrono.workspace = true
+time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

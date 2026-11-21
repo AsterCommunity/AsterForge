@@ -14,6 +14,47 @@
   can resume without re-uploading existing versions. Downstream package versions
   and security release scope remain maintainer-owned.
 
+### Changed
+
+- **Maintained time APIs (breaking)** — Replace Forge's direct `chrono` usage
+  with workspace-owned `time::OffsetDateTime` throughout API cursors, task and
+  runtime leases, schedules, shared database entities, WebDAV and panic reports.
+  Migrate product trait implementations and timestamp fields together. API/step
+  timestamps remain RFC3339 strings/null; SQL column shapes stay unchanged,
+  scheduled dedupe keys retain UTC-second identity, and panic timestamps retain
+  UTC milliseconds. Out-of-range panic clocks return an unavailable marker.
+  The generated service's build timestamp also uses `time`. Chrono remains a
+  transitive dependency of published OIDC and SeaORM migration dependencies;
+  this does not resolve RUSTSEC-2026-0543 for the complete workspace lockfile.
+- **Dependency refresh** — Run `cargo upgrade --incompatible allow --pinned allow`
+  and `cargo update`, including Actix Web 4.20, fuser 0.19, SQLx 0.9.1 and
+  libsqlite3-sys 0.40. Linux FUSE accepts the new callback parameters and rejects
+  ownership/privilege requests the fixed mount policy cannot represent.
+- **Affected package versions** — Increment each of the 31 affected publishable
+  crates by one alpha release and synchronize exact workspace dependency pins.
+  Macros, API-doc macros and validation retain their versions. Versions record
+  release intent; publication remains a separate reviewed step.
+- **Daily security audit** — Run at 09:17 UTC every day instead of every Monday;
+  manual dispatch remains available.
+
+### Security
+
+- **SMTP dependency fixes** — Require lettre >=0.11.24 to address
+  RUSTSEC-2026-0560 through RUSTSEC-2026-0565 (STARTTLS response injection,
+  dot-stuffing, whitespace EHLO panic, quoted-recipient routing, display-name
+  panic and unbounded SMTP reply buffering). Add message/recipient, EHLO, bounded-response, STARTTLS-injection and
+  bare-newline/chunk-boundary dot-stuffing regression tests.
+- **Audit exceptions** — Remove the resolved libsqlite3-sys and crypto-bigint
+  exceptions after dependency updates. Retain the scoped RSA, h2, paste and
+  testcontainers tar exceptions with current dependency evidence; no new
+  chrono exception is added.
+
+### Fixed
+
+- **Concurrent private lock creation on macOS** — Retry one transient ENOENT
+  from descriptor-relative O_CREAT|O_NOFOLLOW before applying the same file
+  identity/ownership checks, preventing false container-lock failures.
+
 ## [2026-11-17 batch] - 2026-11-17
 
 Cumulative package changes since the first bulk release. This batch publishes

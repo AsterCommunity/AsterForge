@@ -1,7 +1,7 @@
 //! Cursor queries, response shapes, completeness checks and overfetch trimming.
 use crate::{ApiError, ApiSchema, Result};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 #[cfg(all(debug_assertions, feature = "openapi"))]
 use utoipa::{IntoParams, ToSchema};
 /// Cursor query for resources ordered by creation time and numeric id.
@@ -12,7 +12,8 @@ use utoipa::{IntoParams, ToSchema};
 )]
 pub struct CreatedAtCursorQuery {
     /// Cursor creation timestamp.
-    pub after_created_at: Option<DateTime<Utc>>,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub after_created_at: Option<OffsetDateTime>,
     /// Cursor numeric id used as a stable tie breaker.
     pub after_id: Option<i64>,
 }
@@ -25,7 +26,8 @@ pub struct CreatedAtCursorQuery {
 )]
 pub struct UpdatedAtCursorQuery {
     /// Cursor update timestamp.
-    pub after_updated_at: Option<DateTime<Utc>>,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub after_updated_at: Option<OffsetDateTime>,
     /// Cursor numeric id used as a stable tie breaker.
     pub after_id: Option<i64>,
 }
@@ -104,7 +106,8 @@ pub struct EnabledPriorityIdCursor {
 pub struct DateTimeIdCursor {
     /// Cursor timestamp.
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = String))]
-    pub value: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub value: OffsetDateTime,
     /// Cursor numeric id used as a stable tie breaker.
     pub id: i64,
 }
@@ -115,7 +118,8 @@ pub struct DateTimeIdCursor {
 pub struct DateTimeStringCursor {
     /// Cursor timestamp.
     #[cfg_attr(all(debug_assertions, feature = "openapi"), schema(value_type = String))]
-    pub value: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub value: OffsetDateTime,
     /// Cursor string id used as a stable tie breaker.
     pub id: String,
 }
@@ -126,10 +130,10 @@ pub struct DateTimeStringCursor {
 ///
 /// Returns an error when only one cursor component is present or the id is not positive.
 pub fn parse_datetime_id_cursor(
-    value: Option<DateTime<Utc>>,
+    value: Option<OffsetDateTime>,
     id: Option<i64>,
     value_name: &str,
-) -> Result<Option<(DateTime<Utc>, i64)>> {
+) -> Result<Option<(OffsetDateTime, i64)>> {
     match (value, id) {
         (None, None) => Ok(None),
         (Some(value), Some(id)) if id > 0 => Ok(Some((value, id))),
@@ -148,10 +152,10 @@ pub fn parse_datetime_id_cursor(
 ///
 /// Returns an error when only one cursor component is present or the string id is blank.
 pub fn parse_datetime_string_cursor(
-    value: Option<DateTime<Utc>>,
+    value: Option<OffsetDateTime>,
     id: Option<String>,
     value_name: &str,
-) -> Result<Option<(DateTime<Utc>, String)>> {
+) -> Result<Option<(OffsetDateTime, String)>> {
     match (value, id) {
         (None, None) => Ok(None),
         (Some(value), Some(id)) if !id.trim().is_empty() => Ok(Some((value, id))),
@@ -348,7 +352,7 @@ mod tests {
             assert!(parse_string_id_cursor(Some(blank.into()), Some(1), "resource").is_err());
             assert!(
                 parse_datetime_string_cursor(
-                    Some(DateTime::UNIX_EPOCH),
+                    Some(OffsetDateTime::UNIX_EPOCH),
                     Some(blank.into()),
                     "resource"
                 )
@@ -405,9 +409,11 @@ mod tests {
 
     #[test]
     fn parse_datetime_id_cursor_requires_both_parts() {
-        let timestamp = DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let timestamp = OffsetDateTime::parse(
+            "2024-01-02T03:04:05Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
 
         assert_eq!(
             parse_datetime_id_cursor(Some(timestamp), Some(9), "audit")
@@ -426,9 +432,11 @@ mod tests {
 
     #[test]
     fn parse_datetime_string_cursor_rejects_empty_id() {
-        let timestamp = DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
-            .unwrap()
-            .with_timezone(&Utc);
+        let timestamp = OffsetDateTime::parse(
+            "2024-01-02T03:04:05Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
 
         assert_eq!(
             parse_datetime_string_cursor(Some(timestamp), Some("abc".to_string()), "session")
@@ -534,5 +542,77 @@ mod tests {
         assert_eq!(slice.items, [] as [u8; 0]);
         assert_eq!(slice.total, 7);
         assert!(!slice.has_more);
+    }
+
+    #[test]
+    fn time_cursor_wire_remains_rfc3339_and_optional_fields_remain_optional() {
+        use crate::{
+            CreatedAtCursorQuery, DateTimeIdCursor, DateTimeStringCursor, UpdatedAtCursorQuery,
+        };
+        for text in [
+            "1970-01-01T00:00:00Z",
+            "1969-12-31T23:59:59.999999999Z",
+            "2000-02-29T12:34:56.123456789+08:00",
+        ] {
+            let timestamp =
+                time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
+                    .unwrap();
+            let numeric = serde_json::to_value(DateTimeIdCursor {
+                value: timestamp,
+                id: 9,
+            })
+            .unwrap();
+            let string = serde_json::to_value(DateTimeStringCursor {
+                value: timestamp,
+                id: "id".into(),
+            })
+            .unwrap();
+            for value in [numeric, string] {
+                let encoded = value["value"].as_str().expect("timestamp must be a string");
+                assert_eq!(
+                    time::OffsetDateTime::parse(
+                        encoded,
+                        &time::format_description::well_known::Rfc3339
+                    )
+                    .unwrap(),
+                    timestamp
+                );
+            }
+            let query: CreatedAtCursorQuery = serde_json::from_value(
+                serde_json::json!({"after_created_at": text, "after_id": 9}),
+            )
+            .unwrap();
+            assert_eq!(query.after_created_at, Some(timestamp));
+        }
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"after_created_at": null}),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<CreatedAtCursorQuery>(value)
+                    .unwrap()
+                    .after_created_at,
+                None
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<UpdatedAtCursorQuery>(serde_json::json!({}))
+                .unwrap()
+                .after_updated_at,
+            None
+        );
+        for invalid in [
+            "not a date",
+            "2026-02-29T00:00:00Z",
+            "2026-01-01T00:00:00",
+            "2026-01-01",
+        ] {
+            assert!(
+                serde_json::from_value::<CreatedAtCursorQuery>(
+                    serde_json::json!({"after_created_at": invalid})
+                )
+                .is_err()
+            );
+        }
     }
 }

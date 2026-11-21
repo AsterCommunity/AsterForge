@@ -2,8 +2,8 @@ name: Security Audit
 
 on:
   schedule:
-    # 每周一 09:17 UTC（北京时间 17:17）
-    - cron: '17 9 * * 1'
+    # 每天 09:17 UTC（北京时间 17:17）
+    - cron: '17 9 * * *'
   workflow_dispatch: # 支持手动触发
 
 permissions:

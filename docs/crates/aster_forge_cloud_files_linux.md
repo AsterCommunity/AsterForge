@@ -27,7 +27,7 @@
 - `LinuxRemoteEntry`/`LinuxRemoteChange` 把产品已提交的 remote upsert/delete 恢复到 engine overlay；
 - `spawn_mount_read_only`/`spawn_mount_writable` 返回 background session，`LinuxKernelNotifier` 应用 engine 产生的 entry/inode/delete invalidation plan。
 
-当前不包含：kernel writeback cache、`mmap`/大文件实机矩阵、Linux engine 内建 transport/worker、产品 metadata 数据库、change cursor policy、冲突策略、retry/backoff、daemon/service packaging 或桌面 UX。`fuser 0.18` dispatcher 对 `FUSE_INTERRUPT` 返回 `ENOSYS`，因此当前没有 request-unique 级精确 native cancellation；产品仍可使用 core hydration/upload/mutation cancellation 和 generation fence。Linux crate 不选择 operation/idempotency/item/inode identity，不持有 endpoint、认证、DTO 或产品错误文案。
+当前不包含：kernel writeback cache、`mmap`/大文件实机矩阵、Linux engine 内建 transport/worker、产品 metadata 数据库、change cursor policy、冲突策略、retry/backoff、daemon/service packaging 或桌面 UX。`fuser 0.19` dispatcher 对 `FUSE_INTERRUPT` 返回 `ENOSYS`，因此当前没有 request-unique 级精确 native cancellation；产品仍可使用 core hydration/upload/mutation cancellation 和 generation fence。Linux crate 不选择 operation/idempotency/item/inode identity，不持有 endpoint、认证、DTO 或产品错误文案。
 
 ## Cargo 集成
 
@@ -180,7 +180,7 @@ backend change + product conflict policy
 
 ## Interrupt 边界
 
-`fuser 0.18` 能解析 `FUSE_INTERRUPT`，但其高层 dispatcher 当前直接回复 `ENOSYS`，`Filesystem` trait 也没有可实现的 interrupt callback。因此 Linux adapter 没有伪造 request-unique cancellation。已接受的 FUSE task 仍由 bounded dispatcher 保证一次终结；daemon shutdown、generation takeover、hydration、upload 和 mutation cancellation 使用现有显式 handle/fence。升级 `fuser` 后只有在高层 API 暴露 request unique 与 interrupt callback，并完成 race/late-reply 实机矩阵，才能声明 native interrupt 支持。
+`fuser 0.19` 能解析 `FUSE_INTERRUPT`，但其高层 dispatcher 当前直接回复 `ENOSYS`，`Filesystem` trait 也没有可实现的 interrupt callback。因此 Linux adapter 没有伪造 request-unique cancellation。已接受的 FUSE task 仍由 bounded dispatcher 保证一次终结；daemon shutdown、generation takeover、hydration、upload 和 mutation cancellation 使用现有显式 handle/fence。升级 `fuser` 后只有在高层 API 暴露 request unique 与 interrupt callback，并完成 race/late-reply 实机矩阵，才能声明 native interrupt 支持。
 
 ## 准备 FUSE 设备
 
@@ -320,3 +320,7 @@ memory example 的可选 state 目录通过 `StateDirectory` 验证，读取拒�
 16 MiB 限制作用于序列化后的 JSON 体积，而非文件内容容量。文件字节以 JSON 数字数组编码，且 dirty snapshot、上传账本等可能重复保存内容，因此实际可承载的文件内容远小于 16 MiB；超额持久化失败会回滚写入，并在 FUSE 边界映射为 `EIO`。
 
 它仍是受限 synthetic store，不能用 JSON 全量 checkpoint 模型替代生产 durable store。已有状态若超限或目录可被其他用户写入，会被拒绝；不自动删除状态、迁移业务 schema 或 chmod 现有目录。
+
+## fuser 0.19 边界
+
+原生回调接收新的 `Owner` 与 `kill_suid_gid` 参数。当前 mount 使用固定 `LinuxAttributePolicy` uid/gid，并继续 NoSuid/NoExec；create/mkdir 的 owner 不匹配固定策略、或 open/create/setattr 要求处理尚未协商的 killpriv-v2 时，在提交 engine 前返回 ENOSYS。rename whiteout/exchange 仍拒绝。没有通过丢弃新参数隐式声明支持 idmapped ownership 或 capability xattr 清除。

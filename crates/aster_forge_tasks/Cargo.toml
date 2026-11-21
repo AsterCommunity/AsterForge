@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_tasks"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,7 +20,7 @@ runtime-component = ["runtime"]
 aster_forge_runtime = { workspace = true, optional = true }
 aster_forge_utils = { workspace = true }
 async-trait.workspace = true
-chrono = { workspace = true, features = ["clock"] }
+time.workspace = true
 futures.workspace = true
 rand.workspace = true
 serde.workspace = true

@@ -59,7 +59,7 @@ This file supplements [`../../../AGENTS.md`](../../../AGENTS.md) and applies to
   invalidation plan through `LinuxKernelNotifier`, and only then advance the product cursor.
 - Restore product-persisted remote entries with `activate_with_namespace_and_remote` before dirty
   snapshots. Never allocate remote inode records inside a FUSE callback or notifier path.
-- `fuser 0.18` does not expose a high-level interrupt callback and returns `ENOSYS` for
+- `fuser 0.19` does not expose a high-level interrupt callback and returns `ENOSYS` for
   `FUSE_INTERRUPT`. Do not claim request-unique cancellation until the dependency exposes that
   lifecycle and its late-reply races have native tests.
 - Every accepted native reply must finish exactly once. Queue saturation, dispatcher closing,

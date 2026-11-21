@@ -374,7 +374,7 @@ store
         details: details.map(|value| value.to_string()),
         ip_address: ctx.ip_address.clone(),
         user_agent: ctx.user_agent.clone(),
-        created_at: chrono::Utc::now(),
+        created_at: time::OffsetDateTime::now_utc(),
     })
     .await?;
 ```
@@ -855,3 +855,9 @@ WARN 记录边界失败及 future drop；drop 不推断取消来源、不宣称�
 `upsert_prevalidated` 更新已存在的行时，以实际 row 的身份保护 system visibility；数据库 collation 把不同拼写视为相等时，拒绝非原始拼写的更新，不写值或元数据。`ensure_defaults` 同样在修复该行元数据前拒绝与 registry 拼写冲突的历史 key，并返回不可重试错误；产品需显式迁移这些历史别名。不会自动修改历史 key 或数据库 collation。
 
 `AuditLogCreate::validate()` 可在入队前复用共享字段约束，无模型复制和数据库 I/O。连接层在构造错误前移除完整数据库 URL 及原始/编码后的 userinfo，重试日志与返回错误均使用脱敏结果；`DatabaseUrl::Debug` 的既有脱敏保持有效。
+
+## time 类型迁移
+
+本次 alpha 的时间类型使用 `time::OffsetDateTime`：将原 `DateTime<Utc>` 参数、返回值和产品 trait 实现一起迁移；取当前时间使用 `OffsetDateTime::now_utc()`。持续时间使用 `time::Duration`，std Duration 通过 `try_from` 转换。数据库实体使用 SeaORM 的 `TimeDateTimeWithTimeZone`；现有 SQL 列类型保持不变，产品历史 migration 仍由产品管理。
+
+序列化时间字段继续使用 RFC3339 字符串（含偏移/子秒）与 null，字段不改成 time 默认元组；产品自行声明的 DTO 应显式使用 `#[serde(with = "time::serde::rfc3339")]`，Option 使用 `time::serde::rfc3339::option`。OpenAPI 按 date-time/string 生成。time 默认日期范围是 -9999 至 9999 年，租约与调度的极限值处理按可表示范围做 checked/saturating 运算。任务持久化 dedupe key 继续 UTC 秒格式，时间偏移不生成另一份 key。

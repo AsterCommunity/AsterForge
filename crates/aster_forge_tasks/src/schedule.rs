@@ -10,8 +10,8 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use futures::FutureExt;
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
@@ -30,7 +30,7 @@ pub struct ScheduledTaskCatalogEntry<'a> {
     /// Operator-facing display name.
     pub display_name: &'a str,
     /// First due timestamp used when inserting a new catalog row.
-    pub first_run_at: DateTime<Utc>,
+    pub first_run_at: OffsetDateTime,
 }
 
 /// Request to atomically claim one due scheduled task firing.
@@ -43,7 +43,7 @@ pub struct ScheduledTaskClaimRequest<'a> {
     /// Process-unique runtime owner id.
     pub owner_id: &'a str,
     /// Current timestamp.
-    pub now: DateTime<Utc>,
+    pub now: OffsetDateTime,
     /// Claim TTL. Another runtime may reclaim after this duration.
     pub claim_ttl: Duration,
 }
@@ -60,11 +60,11 @@ pub struct ScheduledTaskClaim {
     /// Runtime owner id that owns this claim.
     pub owner_id: String,
     /// Due timestamp that was claimed.
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: OffsetDateTime,
     /// Claim acquisition timestamp.
-    pub claimed_at: DateTime<Utc>,
+    pub claimed_at: OffsetDateTime,
     /// Claim expiry timestamp.
-    pub claim_expires_at: DateTime<Utc>,
+    pub claim_expires_at: OffsetDateTime,
 }
 
 /// Completion update for a claimed scheduled task.
@@ -73,9 +73,9 @@ pub struct ScheduledTaskCompletion {
     /// Claimed firing to complete.
     pub claim: ScheduledTaskClaim,
     /// Runtime completion timestamp.
-    pub finished_at: DateTime<Utc>,
+    pub finished_at: OffsetDateTime,
     /// Next due timestamp after this completion.
-    pub next_run_at: DateTime<Utc>,
+    pub next_run_at: OffsetDateTime,
 }
 
 /// Renewal update for a claim whose task body is still running.
@@ -88,7 +88,7 @@ pub struct ScheduledTaskClaimRenewal<'a> {
     /// Owned claim to renew.
     pub claim: &'a ScheduledTaskClaim,
     /// Renewal timestamp.
-    pub now: DateTime<Utc>,
+    pub now: OffsetDateTime,
     /// Fresh claim TTL applied from `now`.
     pub claim_ttl: Duration,
 }
@@ -204,8 +204,14 @@ impl<Name, Outcome, State, LeaseStore, ScheduleStore, PanicFn, RecordFn>
     ) -> Self
     where
         PanicFn: Fn(String) -> Outcome,
-        RecordFn:
-            Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut,
+        RecordFn: Fn(
+            State,
+            Name,
+            ScheduledTaskClaim,
+            OffsetDateTime,
+            OffsetDateTime,
+            Outcome,
+        ) -> RecordFut,
         RecordFut: Future<Output = ()> + Send + 'static,
     {
         Self {
@@ -397,8 +403,14 @@ where
         IntervalFn: Fn(&State) -> Duration + Send + Sync + 'static,
         TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
         TaskFut: Future<Output = Outcome> + Send + 'static,
-        RecordFn:
-            Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut,
+        RecordFn: Fn(
+            State,
+            Name,
+            ScheduledTaskClaim,
+            OffsetDateTime,
+            OffsetDateTime,
+            Outcome,
+        ) -> RecordFut,
         RecordFut: Future<Output = ()> + Send + 'static,
     {
         self.tasks
@@ -551,7 +563,7 @@ pub async fn run_scheduled_periodic_task<
     TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
     TaskFut: Future<Output = Outcome> + Send + 'static,
     PanicFn: Fn(String) -> Outcome + Send + Sync + 'static,
-    RecordFn: Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut
+    RecordFn: Fn(State, Name, ScheduledTaskClaim, OffsetDateTime, OffsetDateTime, Outcome) -> RecordFut
         + Send
         + Sync
         + 'static,
@@ -620,7 +632,7 @@ pub async fn run_scheduled_claim_renewal_loop<Store>(
             _ = ticker.tick() => {
                 let renewal = ScheduledTaskClaimRenewal {
                     claim: &claim,
-                    now: Utc::now(),
+                    now: OffsetDateTime::now_utc(),
                     claim_ttl,
                 };
                 let result = tokio::select! {
@@ -675,14 +687,14 @@ async fn run_scheduled_periodic_iteration<
     TaskFn: Fn(State) -> TaskFut + Send + Sync + 'static,
     TaskFut: Future<Output = Outcome> + Send + 'static,
     PanicFn: Fn(String) -> Outcome + Send + Sync + 'static,
-    RecordFn: Fn(State, Name, ScheduledTaskClaim, DateTime<Utc>, DateTime<Utc>, Outcome) -> RecordFut
+    RecordFn: Fn(State, Name, ScheduledTaskClaim, OffsetDateTime, OffsetDateTime, Outcome) -> RecordFut
         + Send
         + Sync
         + 'static,
     RecordFut: Future<Output = ()> + Send + 'static,
     Outcome: Send + 'static,
 {
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     if let Err(error) = task
         .store
         .ensure_scheduled_task(ScheduledTaskCatalogEntry {
@@ -733,7 +745,7 @@ async fn run_scheduled_periodic_iteration<
         renewal_stop.clone(),
     ));
 
-    let started_at = Utc::now();
+    let started_at = OffsetDateTime::now_utc();
     let outcome = match std::panic::AssertUnwindSafe((task.hooks.task_fn)(task.state.clone()))
         .catch_unwind()
         .await
@@ -748,7 +760,7 @@ async fn run_scheduled_periodic_iteration<
             (task.hooks.panic_outcome)(panic_message)
         }
     };
-    let finished_at = Utc::now();
+    let finished_at = OffsetDateTime::now_utc();
 
     renewal_stop.cancel();
     if let Err(error) = renewal_handle.await {
@@ -816,11 +828,11 @@ async fn run_scheduled_periodic_iteration<
 /// Computes the next run timestamp after a completed scheduled task firing.
 #[must_use]
 pub fn next_scheduled_run_at(
-    finished_at: DateTime<Utc>,
+    finished_at: OffsetDateTime,
     interval: Duration,
-) -> Option<DateTime<Utc>> {
-    let interval = chrono::Duration::from_std(interval).ok()?;
-    finished_at.checked_add_signed(interval)
+) -> Option<OffsetDateTime> {
+    let interval = time::Duration::try_from(interval).ok()?;
+    finished_at.checked_add(interval)
 }
 
 #[cfg(test)]
@@ -828,9 +840,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use time::OffsetDateTime;
 
     use async_trait::async_trait;
-    use chrono::{TimeZone, Utc};
+
     use tokio_util::sync::CancellationToken;
 
     use super::{
@@ -889,8 +902,8 @@ mod tests {
             &self,
             _lease_id: &str,
             _owner_id: &str,
-            _now: chrono::DateTime<Utc>,
-            _expires_at: chrono::DateTime<Utc>,
+            _now: OffsetDateTime,
+            _expires_at: OffsetDateTime,
         ) -> Result<bool, Self::Error> {
             Ok(true)
         }
@@ -1219,15 +1232,15 @@ mod tests {
 
     #[test]
     fn next_scheduled_run_at_adds_interval() {
-        let finished_at = Utc.with_ymd_and_hms(2026, 6, 26, 1, 2, 3).unwrap();
+        let finished_at = time::macros::datetime!(2026-06-26 01:02:03 UTC);
         assert_eq!(
             next_scheduled_run_at(finished_at, std::time::Duration::from_mins(1)),
-            Some(Utc.with_ymd_and_hms(2026, 6, 26, 1, 3, 3).unwrap())
+            Some(time::macros::datetime!(2026-06-26 01:03:03 UTC))
         );
     }
 
     fn test_claim() -> ScheduledTaskClaim {
-        let now = Utc.with_ymd_and_hms(2026, 6, 26, 1, 0, 0).unwrap();
+        let now = time::macros::datetime!(2026-06-26 01:00:00 UTC);
         ScheduledTaskClaim {
             task_id: "aster_test:cleanup".to_string(),
             namespace: "aster_test".to_string(),
@@ -1423,8 +1436,8 @@ mod status_tests {
             &self,
             _: &str,
             _: &str,
-            _: DateTime<Utc>,
-            _: DateTime<Utc>,
+            _: OffsetDateTime,
+            _: OffsetDateTime,
         ) -> Result<bool, String> {
             Ok(false)
         }
@@ -1443,12 +1456,12 @@ mod status_tests {
             },
             status: Some(status.clone()),
         };
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         let claim = RuntimeLeaseClaim {
             lease_id: "scheduler",
             owner_id: "standby",
             now,
-            expires_at: now + chrono::Duration::seconds(30),
+            expires_at: now + time::Duration::seconds(30),
         };
         assert!(store.try_acquire(claim).await.is_err());
         assert!(!status.ready());
@@ -1486,8 +1499,8 @@ impl<S: aster_forge_runtime::RuntimeLeaseStore> aster_forge_runtime::RuntimeLeas
         &self,
         lease_id: &str,
         owner_id: &str,
-        now: DateTime<Utc>,
-        expires_at: DateTime<Utc>,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
     ) -> Result<bool, Self::Error> {
         let result = self.inner.renew(lease_id, owner_id, now, expires_at).await;
         if let Some(status) = &self.status {

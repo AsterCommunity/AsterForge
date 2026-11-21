@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_runtime"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,7 +17,7 @@ openapi = ["dep:utoipa"]
 [dependencies]
 aster_forge_utils = { workspace = true }
 async-trait.workspace = true
-chrono = { workspace = true, features = ["clock"] }
+time.workspace = true
 futures.workspace = true
 serde.workspace = true
 thiserror.workspace = true

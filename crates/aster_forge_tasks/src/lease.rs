@@ -287,14 +287,11 @@ pub const fn task_worker_shutdown_requested(lease: TaskLease) -> TaskCoreError {
 /// Returns the persisted lease expiry timestamp for a claim or heartbeat update.
 #[must_use]
 pub fn task_lease_expires_at(
-    now: chrono::DateTime<chrono::Utc>,
+    now: time::OffsetDateTime,
     processing_stale_secs: i64,
-) -> chrono::DateTime<chrono::Utc> {
-    now.checked_add_signed(
-        chrono::Duration::try_seconds(processing_stale_secs.max(1))
-            .unwrap_or(chrono::Duration::MAX),
-    )
-    .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
+) -> time::OffsetDateTime {
+    now.checked_add(time::Duration::seconds(processing_stale_secs.max(1)))
+        .unwrap_or(time::PrimitiveDateTime::MAX.assume_utc())
 }
 
 /// Returns the in-memory renewal timeout used to stop unsafe workers.
@@ -313,8 +310,8 @@ fn i64_to_u64_saturating(value: i64) -> u64 {
 mod tests {
     use std::time::Duration;
 
-    use chrono::Utc;
     use std::sync::{Arc, Barrier};
+    use time::OffsetDateTime;
     use tokio_util::sync::CancellationToken;
 
     use super::{
@@ -383,15 +380,15 @@ mod tests {
 
     #[test]
     fn lease_timing_helpers_match_yggdrasil_and_drive_policy() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
 
         assert_eq!(
             task_lease_expires_at(now, 60),
-            now + chrono::Duration::seconds(60)
+            now + time::Duration::seconds(60)
         );
         assert_eq!(
             task_lease_expires_at(now, 0),
-            now + chrono::Duration::seconds(1)
+            now + time::Duration::seconds(1)
         );
         assert_eq!(task_lease_renewal_timeout(60, 10), Duration::from_secs(50));
         assert_eq!(task_lease_renewal_timeout(1, 10), Duration::from_secs(1));
@@ -556,8 +553,8 @@ mod tests {
             async fn touch_task_heartbeat(
                 &self,
                 _lease: TaskLease,
-                _now: chrono::DateTime<Utc>,
-                _expires: chrono::DateTime<Utc>,
+                _now: OffsetDateTime,
+                _expires: OffsetDateTime,
             ) -> crate::Result<crate::TaskHeartbeatOutcome> {
                 let _rpc_dropped = self.dropped.clone().drop_guard();
                 self.entered.notify_one();

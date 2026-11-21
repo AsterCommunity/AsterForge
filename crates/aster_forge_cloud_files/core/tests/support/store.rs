@@ -121,10 +121,7 @@ impl MemoryCloudFilesStore {
                 "no active session for mutation scope",
             ));
         };
-        if active.generation != generation || active.state == SessionState::Closed {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(active.generation == generation && active.state != SessionState::Closed)
     }
 
     fn mutation_scope(state: &StoreState, operation_id: &OperationId) -> StoreResult<CloudScope> {

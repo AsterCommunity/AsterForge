@@ -372,11 +372,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    mod rollback_failure;
     use super::{
         CommitFailureAction, commit_failure_action, commit_outcome_known_rolled_back, rollback,
         transaction_delay, with_transaction,
     };
     use crate::{DbError, connection::DatabaseConfig};
+    use rollback_failure::FailingRollback;
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
     use std::fmt;
 
@@ -768,16 +770,11 @@ mod tests {
 
     #[tokio::test]
     async fn rollback_failure_preserves_original_product_error() {
-        let db = sqlite_db().await;
+        let db = FailingRollback;
         let logs = aster_forge_test::logs::CapturedLogs::default();
         let result = logs
             .capture_future(async {
-                super::with_transaction(&db, async |txn| {
-                    // Deliberately desynchronize SQLite from the ORM to force rollback failure.
-                    txn.execute_unprepared("ROLLBACK")
-                        .await
-                        .map_err(DbError::from)
-                        .map_err(ProductError::from)?;
+                super::with_transaction(&db, async |_txn| {
                     Err::<(), _>(ProductError::Validation("secret-callback-canary"))
                 })
                 .await
@@ -876,7 +873,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_rollback_failure_retains_callback_error_and_attempt_identity() {
-        let db = sqlite_db().await;
+        let db = FailingRollback;
         let logs = aster_forge_test::logs::CapturedLogs::default();
         let config = crate::retry::RetryConfig {
             max_retries: 0,
@@ -888,12 +885,8 @@ mod tests {
                 super::with_transaction_retry(
                     &db,
                     &config,
-                    |txn| {
+                    |_txn| {
                         Box::pin(async move {
-                            txn.execute_unprepared("ROLLBACK")
-                                .await
-                                .map_err(DbError::from)
-                                .map_err(ProductError::from)?;
                             Err::<(), _>(ProductError::Validation("secret-retry-canary"))
                         })
                     },

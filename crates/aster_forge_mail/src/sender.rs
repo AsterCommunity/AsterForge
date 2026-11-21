@@ -351,6 +351,7 @@ fn mailbox(recipient: MailRecipient) -> MailSendResult<Mailbox> {
 
 #[cfg(test)]
 mod tests {
+    mod security_regressions;
     use super::{MailDeliveryError, MemoryMailSender, SmtpMailSender, send_rendered_with};
     use crate::{
         DEFAULT_MAIL_SECURITY, DEFAULT_MAIL_SMTP_PORT, MailMessage, MailRecipient,

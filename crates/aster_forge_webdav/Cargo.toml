@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_webdav"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -22,7 +22,7 @@ aster_forge_utils = { workspace = true }
 aster_forge_xml = { workspace = true }
 async-trait.workspace = true
 bytes.workspace = true
-chrono = { workspace = true, features = ["clock"] }
+time.workspace = true
 futures.workspace = true
 headers.workspace = true
 http.workspace = true

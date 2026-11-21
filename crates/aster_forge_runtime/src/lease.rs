@@ -17,7 +17,7 @@ use std::fmt::Display;
 use std::future::Future;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 /// Minimum lease TTL used when a caller provides a zero duration.
@@ -111,14 +111,14 @@ impl RuntimeLeaseConfig {
         }
     }
 
-    fn expires_at(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        let ttl = chrono::Duration::from_std(self.effective_ttl()).unwrap_or(chrono::Duration::MAX);
-        // `now + ttl` would panic inside chrono's Add impl when the sum overflows
-        // DateTime's representable range (operator panics bypass clippy::panic).
+    fn expires_at(&self, now: OffsetDateTime) -> OffsetDateTime {
+        let ttl = time::Duration::try_from(self.effective_ttl()).unwrap_or(time::Duration::MAX);
+        // `now + ttl` would panic inside the date Add implementation when the sum overflows
+        // OffsetDateTime's representable range (operator panics bypass clippy::panic).
         // A lease expiring at the end of time is the correct saturated semantics
         // for absurd TTLs.
-        now.checked_add_signed(ttl)
-            .unwrap_or(DateTime::<Utc>::MAX_UTC)
+        now.checked_add(ttl)
+            .unwrap_or(time::PrimitiveDateTime::MAX.assume_utc())
     }
 }
 
@@ -130,9 +130,9 @@ pub struct RuntimeLeaseClaim<'a> {
     /// Process-unique identifier for the current runtime owner.
     pub owner_id: &'a str,
     /// Current timestamp chosen by the caller.
-    pub now: DateTime<Utc>,
+    pub now: OffsetDateTime,
     /// Expiry timestamp to persist when acquisition succeeds.
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: OffsetDateTime,
 }
 
 /// Current owner observed when a lease is held by another process.
@@ -141,7 +141,7 @@ pub struct RuntimeLeaseOwner {
     /// Owner identifier stored by the active process.
     pub owner_id: String,
     /// Current expiry timestamp for that owner.
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: OffsetDateTime,
 }
 
 /// Result of one acquisition attempt.
@@ -181,8 +181,8 @@ pub trait RuntimeLeaseStore: Send + Sync + 'static {
         &self,
         lease_id: &str,
         owner_id: &str,
-        now: DateTime<Utc>,
-        expires_at: DateTime<Utc>,
+        now: OffsetDateTime,
+        expires_at: OffsetDateTime,
     ) -> Result<bool, Self::Error>;
 
     /// Releases an owned lease during cooperative shutdown.
@@ -208,7 +208,7 @@ pub async fn run_runtime_lease_supervisor<Store, StartFn, Workload, StopFn, Stop
     StopFut: Future<Output = ()> + Send,
 {
     while !shutdown_token.is_cancelled() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         let claim = RuntimeLeaseClaim {
             lease_id: &config.lease_id,
             owner_id: &config.owner_id,
@@ -292,7 +292,7 @@ async fn run_owned_runtime_lease<Store, StartFn, Workload, StopFn, StopFut>(
             () = tokio::time::sleep(renew_interval) => {}
         }
 
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         match store
             .renew(
                 &config.lease_id,
@@ -360,7 +360,7 @@ mod tests {
     };
     use std::time::Duration;
 
-    use chrono::{DateTime, Utc};
+    use time::OffsetDateTime;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
@@ -371,23 +371,29 @@ mod tests {
 
     #[test]
     fn expires_at_saturates_instead_of_panicking_on_absurd_ttl() {
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
 
-        // Beyond chrono::Duration's range: from_std fails and Duration::MAX is used.
+        // Beyond time::Duration's range: try_from fails and Duration::MAX is used.
         let config =
             RuntimeLeaseConfig::new("test.background", "node-a").ttl(Duration::from_secs(u64::MAX));
-        assert_eq!(config.expires_at(now), DateTime::<Utc>::MAX_UTC);
+        assert_eq!(
+            config.expires_at(now),
+            time::PrimitiveDateTime::MAX.assume_utc()
+        );
 
-        // Inside chrono::Duration's range but beyond DateTime's representable range:
-        // must saturate, not panic inside chrono's Add impl.
+        // Inside time::Duration's range but beyond OffsetDateTime's representable range:
+        // must saturate, not panic inside the date Add implementation.
         let config = RuntimeLeaseConfig::new("test.background", "node-a")
             .ttl(Duration::from_secs(10_u64.pow(15)));
-        assert_eq!(config.expires_at(now), DateTime::<Utc>::MAX_UTC);
+        assert_eq!(
+            config.expires_at(now),
+            time::PrimitiveDateTime::MAX.assume_utc()
+        );
 
         // Normal TTLs still add exactly.
         let config =
             RuntimeLeaseConfig::new("test.background", "node-a").ttl(Duration::from_mins(1));
-        assert_eq!(config.expires_at(now), now + chrono::Duration::seconds(60));
+        assert_eq!(config.expires_at(now), now + time::Duration::seconds(60));
     }
 
     #[derive(Debug, Clone)]
@@ -401,7 +407,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestLeaseRow {
         owner_id: String,
-        expires_at: DateTime<Utc>,
+        expires_at: OffsetDateTime,
     }
 
     #[derive(Default)]
@@ -412,7 +418,7 @@ mod tests {
     }
 
     impl TestLeaseStore {
-        async fn hold(&self, lease_id: &str, owner_id: &str, expires_at: DateTime<Utc>) {
+        async fn hold(&self, lease_id: &str, owner_id: &str, expires_at: OffsetDateTime) {
             self.rows.lock().await.insert(
                 lease_id.to_string(),
                 TestLeaseRow {
@@ -462,8 +468,8 @@ mod tests {
             &self,
             lease_id: &str,
             owner_id: &str,
-            _now: DateTime<Utc>,
-            expires_at: DateTime<Utc>,
+            _now: OffsetDateTime,
+            expires_at: OffsetDateTime,
         ) -> Result<bool, Self::Error> {
             if let Some(result) = self.renew_results.lock().await.pop() {
                 return result;
@@ -544,7 +550,7 @@ mod tests {
             .hold(
                 "test.background",
                 "node-b",
-                Utc::now() + chrono::Duration::seconds(60),
+                OffsetDateTime::now_utc() + time::Duration::seconds(60),
             )
             .await;
         let started = Arc::new(AtomicUsize::new(0));

@@ -39,7 +39,7 @@ aster_forge_runtime = { git = "https://github.com/AsterCommunity/AsterForge", pa
 aster_forge_tasks = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_tasks" }
 aster_forge_test = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_test" }
 aster_forge_utils = { git = "https://github.com/AsterCommunity/AsterForge", package = "aster_forge_utils" }
-chrono = "0.4.45"
+time = { version = "0.3.55", features = ["formatting", "macros"] }
 config = { version = "0.15", default-features = false }
 rust-embed = "8"
 sea-orm = { version = "2.0.4", default-features = false }
@@ -172,4 +172,4 @@ sea-orm-migration = { workspace = true, features = ["sqlx-mysql", "sqlx-postgres
 testcontainers = { workspace = true, features = ["reusable-containers"] }
 
 [build-dependencies]
-chrono.workspace = true
+time.workspace = true

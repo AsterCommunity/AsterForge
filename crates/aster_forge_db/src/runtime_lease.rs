@@ -122,13 +122,13 @@ pub struct Model {
     /// Owner identifier stored by the active process.
     pub owner_id: String,
     /// Timestamp after which another owner may take over.
-    pub expires_at: DateTimeUtc,
+    pub expires_at: TimeDateTimeWithTimeZone,
     /// Timestamp of the last successful acquisition or renewal.
-    pub last_renewed_at: DateTimeUtc,
+    pub last_renewed_at: TimeDateTimeWithTimeZone,
     /// Row creation timestamp.
-    pub created_at: DateTimeUtc,
+    pub created_at: TimeDateTimeWithTimeZone,
     /// Row update timestamp.
-    pub updated_at: DateTimeUtc,
+    pub updated_at: TimeDateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -171,8 +171,8 @@ impl RuntimeLeaseStore for RuntimeLeaseDbStore {
         &self,
         lease_id: &str,
         owner_id: &str,
-        now: chrono::DateTime<chrono::Utc>,
-        expires_at: chrono::DateTime<chrono::Utc>,
+        now: time::OffsetDateTime,
+        expires_at: time::OffsetDateTime,
     ) -> std::result::Result<bool, Self::Error> {
         renew_lease(&self.db, lease_id, owner_id, now, expires_at).await
     }
@@ -255,8 +255,8 @@ async fn renew_lease(
     db: &DatabaseConnection,
     lease_id: &str,
     owner_id: &str,
-    now: chrono::DateTime<chrono::Utc>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    now: time::OffsetDateTime,
+    expires_at: time::OffsetDateTime,
 ) -> crate::Result<bool> {
     let update = Entity::update_many()
         .col_expr(Column::ExpiresAt, Expr::value(expires_at))
@@ -298,9 +298,9 @@ fn standby_from_model(model: Model) -> RuntimeLeaseAcquire {
 #[cfg(test)]
 mod tests {
     use aster_forge_runtime::{RuntimeLeaseAcquire, RuntimeLeaseClaim, RuntimeLeaseStore};
-    use chrono::Utc;
     use sea_orm::sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Schema};
+    use time::OffsetDateTime;
 
     use super::{Entity, RuntimeLeaseDbStore, create_runtime_leases_table};
 
@@ -319,14 +319,14 @@ mod tests {
     fn claim<'a>(
         lease_id: &'a str,
         owner_id: &'a str,
-        now: chrono::DateTime<Utc>,
+        now: OffsetDateTime,
         ttl_secs: i64,
     ) -> RuntimeLeaseClaim<'a> {
         RuntimeLeaseClaim {
             lease_id,
             owner_id,
             now,
-            expires_at: now + chrono::Duration::seconds(ttl_secs),
+            expires_at: now + time::Duration::seconds(ttl_secs),
         }
     }
 
@@ -358,7 +358,7 @@ mod tests {
     #[tokio::test]
     async fn acquiring_new_lease_inserts_owner() {
         let store = sqlite_store().await;
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
 
         let result = store
             .try_acquire(claim("aster.test", "node-a", now, 30))
@@ -371,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn held_unexpired_lease_returns_standby_owner() {
         let store = sqlite_store().await;
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         store
             .try_acquire(claim("aster.test", "node-a", now, 30))
             .await
@@ -393,7 +393,7 @@ mod tests {
     #[tokio::test]
     async fn expired_lease_can_be_acquired_by_new_owner() {
         let store = sqlite_store().await;
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         store
             .try_acquire(claim("aster.test", "node-a", now, 1))
             .await
@@ -403,7 +403,7 @@ mod tests {
             .try_acquire(claim(
                 "aster.test",
                 "node-b",
-                now + chrono::Duration::seconds(2),
+                now + time::Duration::seconds(2),
                 30,
             ))
             .await
@@ -415,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn same_owner_reacquire_renews_lease() {
         let store = sqlite_store().await;
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         store
             .try_acquire(claim("aster.test", "node-a", now, 1))
             .await
@@ -425,7 +425,7 @@ mod tests {
             .try_acquire(claim(
                 "aster.test",
                 "node-a",
-                now + chrono::Duration::seconds(1),
+                now + time::Duration::seconds(1),
                 30,
             ))
             .await
@@ -437,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn renew_requires_matching_owner() {
         let store = sqlite_store().await;
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         store
             .try_acquire(claim("aster.test", "node-a", now, 30))
             .await
@@ -447,8 +447,8 @@ mod tests {
             .renew(
                 "aster.test",
                 "node-b",
-                now + chrono::Duration::seconds(1),
-                now + chrono::Duration::seconds(31),
+                now + time::Duration::seconds(1),
+                now + time::Duration::seconds(31),
             )
             .await
             .expect("renew should query");
@@ -459,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn release_requires_matching_owner() {
         let store = sqlite_store().await;
-        let now = Utc::now();
+        let now = OffsetDateTime::now_utc();
         store
             .try_acquire(claim("aster.test", "node-a", now, 30))
             .await

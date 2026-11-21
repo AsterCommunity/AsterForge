@@ -47,3 +47,5 @@ Forge 默认不做下面这些事：
 ## 协议枚举代码生成
 
 产品无关的字符串枚举映射使用 [`aster_forge_macros`](../crates/aster_forge_macros.md)；已知值、状态机和验证策略由产品定义。
+
+依赖维护、time 类型迁移、审计残留和本次独立 alpha 版本表见 [2026-11 依赖维护](dependency-update-2026-11.md)。

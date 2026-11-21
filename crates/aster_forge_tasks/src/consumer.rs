@@ -680,13 +680,18 @@ mod tests {
             let _in_flight = InFlight::enter(self.claims_live.clone());
             self.claims.lock().unwrap().push(available);
             self.claiming.notify_one();
-            assert!(
-                self.claim_panics
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left
-                        .checked_sub(1))
-                    .is_err(),
-                "injected claim panic"
-            );
+            let mut left = self.claim_panics.load(Ordering::SeqCst);
+            while left > 0 {
+                match self.claim_panics.compare_exchange(
+                    left,
+                    left - 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => panic!("injected claim panic"),
+                    Err(current) => left = current,
+                }
+            }
             let return_empty = self.empty_claim_once.swap(false, Ordering::AcqRel);
             if self.block_claim.load(Ordering::Acquire) {
                 self.claim_gate.acquire().await.unwrap().forget();
