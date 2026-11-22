@@ -27,7 +27,9 @@ aster_forge_auth = { git = "https://github.com/AsterCommunity/AsterForge", defau
 | `aws-lc-rs`（默认） | 支持 | 支持 | 支持 | Forge 未暴露 |
 | `rust-crypto` | 支持 | 支持 | 支持 | Forge 未暴露 |
 
-可选 `password` feature 提供实例级 `PasswordHashRuntime`：同步密码学原语仍在 crypto，blocking 执行和 semaphore 成本控制由 auth 提供；产品选择并发上限、使用等待或 `try_verify_password` 立即拒绝、凭据来源和错误映射。取消请求不会提前释放仍在执行的 blocking job 额度。
+可选 `password` feature 提供实例级 `PasswordHashRuntime`：同步密码学原语仍在 crypto，blocking 执行和 semaphore 成本控制由 auth 提供；产品选择并发上限、凭据来源和错误映射。取消请求不会提前释放仍在执行的 blocking job 额度。
+
+`verify_password` 是等待语义，账号敏感验证的默认选择：已知账号与未知标识符的虚拟验证（dummy burn）共用同一排队行为，响应时间不泄露账号是否存在。`try_verify_password` 在池满时立即返回 `Busy`，只适用于响应时间不泄露账号信息的固定凭据检查（例如 metrics Basic auth 共享密码）；把它用于登录或 dummy burn 路径会让攻击者用并发请求制造饱和并凭响应时间探测账号存在性（AsterYggdrasil PR #14 的实际教训）。
 
 默认内核不引入 HTTP 框架、SeaORM、Redis、OpenAPI 或产品实体。JWT 签发/验签由 `jsonwebtoken` 完成。RustCrypto 的上游 feature 也会引入 RSA/EC/EdDSA 依赖，但 Forge 当前只暴露三种 HMAC，不支持把 HMAC key 当非对称密钥使用。RustCrypto JWT 依赖路径没有 AWS-LC，不代表产品其他 TLS/HTTP 依赖没有 AWS-LC；纯 Rust 不等于默认更安全，AWS-LC feature 也不等于 FIPS 合规。
 

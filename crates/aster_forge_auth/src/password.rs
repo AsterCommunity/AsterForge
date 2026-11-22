@@ -14,7 +14,9 @@ pub enum PasswordWorkError {
     /// A zero-sized executor budget was requested.
     #[error("password work concurrency must be positive")]
     InvalidConcurrency,
-    /// No immediate execution permit is available.
+    /// No immediate execution permit is available. Only returned by
+    /// [`crate::PasswordHashRuntime::try_verify_password`]; queued
+    /// verification waits for a permit instead.
     #[error("password work budget exhausted")]
     Busy,
     /// The execution semaphore was closed.
@@ -86,8 +88,18 @@ impl PasswordHashRuntime {
         .map_err(PasswordWorkError::from)
     }
 
-    /// Fail immediately when the CPU/memory budget is occupied. The blocking job
-    /// owns the permit, so cancellation cannot release capacity prematurely.
+    /// Fails immediately when the CPU/memory budget is occupied. The blocking
+    /// job owns the permit, so cancellation cannot release capacity
+    /// prematurely.
+    ///
+    /// Only use this for credential checks whose response time cannot leak
+    /// account information, such as a static password shared by every request
+    /// (a metrics endpoint). Account-sensitive paths — password login, or the
+    /// dummy burns that mask unknown identifiers — must use
+    /// [`Self::verify_password`] instead: under saturation this method returns
+    /// [`PasswordWorkError::Busy`] right away while queued verifications keep
+    /// waiting, and that response-time gap lets concurrent attackers probe
+    /// whether an account exists.
     ///
     /// # Errors
     /// Returns `Busy` on saturation, or a worker/cryptographic error.
@@ -104,7 +116,15 @@ impl PasswordHashRuntime {
         self.verify_with_permit(password, stored_hash, permit).await
     }
 
-    /// Verifies a password on the blocking pool after acquiring an execution permit.
+    /// Verifies a password on the blocking pool after acquiring an execution
+    /// permit, queueing until the budget is free.
+    ///
+    /// This is the default for account-sensitive verification, including dummy
+    /// burns against a placeholder hash for unknown identifiers: known and
+    /// unknown credentials share the same waiting semantics, so response
+    /// timing does not reveal whether an account exists. Use the immediate
+    /// [`Self::try_verify_password`] variant only when a `Busy` response
+    /// cannot leak account information.
     ///
     /// # Errors
     /// Returns an error when the worker fails or the stored verifier is invalid.
