@@ -1,6 +1,6 @@
 # Aster Metrics v1
 
-本合同固定 `aster-metrics/v1`，采用 OpenTelemetry Semantic Conventions 1.44.0。OTel instrument 名、类型、单位和属性是事实源；Prometheus 名称由 exporter 的标准 underscore/单位/Counter 后缀转换产生，OTLP 保留原始 instrument 与 Resource。默认仍为显式启用的 Prometheus pull，可选 OTLP HTTP/protobuf；两条 reader 只记录一次，不能把双路写入同一存储后的样本重复相加。
+本合同固定 `astercosm-metrics/v1`，采用 OpenTelemetry Semantic Conventions 1.44.0。产品 profile namespace 使用反向域名（例如 `com.astercosm.drive`），由产品调用 `with_profile` 传入；Forge 不拥有产品 namespace。OTel instrument 名、类型、单位和属性是事实源；Prometheus 名称由 exporter 的标准 underscore/单位/Counter 后缀转换产生，OTLP 保留原始 instrument 与 Resource。默认仍为显式启用的 Prometheus pull，可选 OTLP HTTP/protobuf；两条 reader 只记录一次，不能把双路写入同一存储后的样本重复相加。
 
 ## 所有权与迁移
 

@@ -31,5 +31,8 @@ tokio.workspace = true
 [lints]
 workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["md-5"]
+
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

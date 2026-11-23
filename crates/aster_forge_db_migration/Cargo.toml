@@ -10,6 +10,11 @@ description = "Shared SeaORM migration coordination and schema helpers for Aster
 readme = "README.md"
 publish = true
 
+[features]
+default = ["rustls"]
+rustls = ["sea-orm-migration/runtime-tokio-rustls"]
+native-tls = ["sea-orm-migration/runtime-tokio-native-tls"]
+
 [dependencies]
 sea-orm-migration.workspace = true
 tracing.workspace = true

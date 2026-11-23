@@ -118,7 +118,7 @@ http-body = "1"
 httpdate = "1"
 ipnet = "2.12.2"
 jsonwebtoken = { version = "12", default-features = false }
-lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.24", default-features = false, features = ["builder", "smtp-transport"] }
 md-5 = "0.11"
 moka = { version = "0.12.16", features = ["future"] }
 parking_lot = "0.13"
@@ -129,12 +129,12 @@ quick-xml = { version = "0.42", default-features = false }
 quote = "1"
 openidconnect = { version = "4.1.0", default-features = false }
 rand = { version = "0.10.4", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-redis = { version = "1.8.2", features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+redis = { version = "1.8.2", default-features = false, features = ["connection-manager", "tokio-comp", "script"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.4", features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "runtime-tokio-rustls"] }
-sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"] }
+sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11"

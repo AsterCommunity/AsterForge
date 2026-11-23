@@ -12,12 +12,13 @@ publish = true
 
 [features]
 default = []
-db-writer = ["dep:aster_forge_db", "dep:sea-orm"]
+db-writer = ["dep:aster_forge_db", "dep:sea-orm", "aster_forge_db/rustls", "sea-orm/runtime-tokio-rustls"]
+db-writer-native-tls = ["dep:aster_forge_db", "dep:sea-orm", "sea-orm/runtime-tokio-native-tls", "aster_forge_db/native-tls"]
 database-container-tests = ["db-writer"]
 mail-outbox-dependency = ["dep:aster_forge_mail"]
 
 [dependencies]
-aster_forge_db = { workspace = true, features = ["audit-log"], optional = true }
+aster_forge_db = { workspace = true, default-features = false, features = ["audit-log"], optional = true }
 aster_forge_mail = { workspace = true, optional = true }
 aster_forge_runtime = { workspace = true }
 sea-orm = { workspace = true, optional = true }

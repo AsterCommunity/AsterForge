@@ -192,7 +192,7 @@ impl MetricsProviderBuilder {
         let sdk = builder.build();
         let meter = sdk.meter_with_scope(
             opentelemetry::InstrumentationScope::builder("aster_forge")
-                .with_version("aster-metrics/v1")
+                .with_version(crate::METRICS_PROFILE_VERSION)
                 .with_schema_url("https://opentelemetry.io/schemas/1.44.0")
                 .build(),
         );

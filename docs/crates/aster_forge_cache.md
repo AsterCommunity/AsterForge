@@ -1,5 +1,7 @@
 # aster_forge_cache
 
+Redis 连接默认通过 rustls (`redis` feature)。需要平台 TLS 时，关闭默认 features 并使用 `redis-native-tls`；内存 backend 不编译任何 TLS 后端。
+
 `aster_forge_cache` 提供共享缓存抽象和内存/Redis 后端构造。公共 API 是 byte-oriented 的 object-safe trait，并通过扩展 trait 提供 JSON 便利方法。
 
 ## 适用场景

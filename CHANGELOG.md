@@ -35,6 +35,14 @@
   release intent; publication remains a separate reviewed step.
 - **Daily security audit** — Run at 09:17 UTC every day instead of every Monday;
   manual dispatch remains available.
+- **TLS backend selection** — Keep rustls as the default for SMTP, Redis and
+  SeaORM consumers while exposing explicit `native-tls` features alongside the
+  existing HTTP, external-auth and OTLP choices. The workspace default graph
+  now fails CI if `native-tls` is pulled in accidentally.
+- **Metrics profile identity** — Use `astercosm-metrics/v1` as the shared
+  schema token and document reverse-DNS product namespaces such as
+  `com.astercosm.drive`; the product still supplies its own namespace through
+  `with_profile`.
 
 ### Security
 

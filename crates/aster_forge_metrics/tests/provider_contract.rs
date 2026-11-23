@@ -161,7 +161,9 @@ async fn profile_resource_merge_retains_all_explicit_identity_and_omits_empty_fi
     for profile_first in [false, true] {
         let builder = MetricsProvider::builder();
         let builder = if profile_first {
-            builder.with_profile("aster", "aster-metrics/v1").unwrap()
+            builder
+                .with_profile("com.astercosm.example", METRICS_PROFILE_VERSION)
+                .unwrap()
         } else {
             builder
         };
@@ -176,7 +178,9 @@ async fn profile_resource_merge_retains_all_explicit_identity_and_omits_empty_fi
         let builder = if profile_first {
             builder
         } else {
-            builder.with_profile("aster", "aster-metrics/v1").unwrap()
+            builder
+                .with_profile("com.astercosm.example", METRICS_PROFILE_VERSION)
+                .unwrap()
         };
         let provider = builder.with_prometheus().unwrap().build().unwrap();
         let handle = provider
@@ -198,8 +202,8 @@ async fn profile_resource_merge_retains_all_explicit_identity_and_omits_empty_fi
             "service_name=\"example\"",
             "service_version=\"0.1.0\"",
             "service_instance_id=\"boot-1\"",
-            "service_namespace=\"aster\"",
-            "aster_metrics_schema_version=\"aster-metrics/v1\"",
+            "service_namespace=\"com.astercosm.example\"",
+            "aster_metrics_schema_version=\"astercosm-metrics/v1\"",
         ] {
             assert!(sample.contains(label), "missing {label}: {sample}");
         }

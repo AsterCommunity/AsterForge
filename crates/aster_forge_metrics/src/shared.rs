@@ -5,49 +5,49 @@ use tokio_util::sync::CancellationToken;
 
 crate::product_metrics! {
     struct InfrastructureMetricSet {
-        http_requests_total: counter("", "aster.http.server.requests", "aster.http.server.requests under aster-metrics/v1.", &["aster.request.outcome"]).with_unit("{request}"),
-        http_request_duration_seconds: histogram_with_buckets("", "http.server.request.duration", "http.server.request.duration under aster-metrics/v1.", &["http.request.method", "url.scheme", "http.route", "http.response.status_code", "error.type"], &[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]).with_unit("s").with_integer_labels(&["http.response.status_code"]),
-        http_active: up_down_counter("", "http.server.active_requests", "http.server.active_requests under aster-metrics/v1.", &["http.request.method", "url.scheme"]).with_unit("{request}"),
+        http_requests_total: counter("", "aster.http.server.requests", "aster.http.server.requests under astercosm-metrics/v1.", &["aster.request.outcome"]).with_unit("{request}"),
+        http_request_duration_seconds: histogram_with_buckets("", "http.server.request.duration", "http.server.request.duration under astercosm-metrics/v1.", &["http.request.method", "url.scheme", "http.route", "http.response.status_code", "error.type"], &[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0]).with_unit("s").with_integer_labels(&["http.response.status_code"]),
+        http_active: up_down_counter("", "http.server.active_requests", "http.server.active_requests under astercosm-metrics/v1.", &["http.request.method", "url.scheme"]).with_unit("{request}"),
         role_ready: gauge("", "aster.runtime.ready", "Current role ready endpoint result.", &[]).with_unit("{state}"),
         pool_connections: observable_up_down_counter("", "db.client.connection.count", "Native idle/used connection count.", &["db.client.connection.pool.name","db.client.connection.state"]).with_unit("{connection}"),
         pool_max: observable_up_down_counter("", "db.client.connection.max", "Actual finite connection pool limit.", &["db.client.connection.pool.name"]).with_unit("{connection}"),
         task_handler_active: up_down_counter("", "aster.task.handler.active", "Actually active local task handlers.", &["kind"]).with_unit("{execution}"),
         task_handler_duration: histogram_with_buckets("", "aster.task.handler.duration", "Local handler lifetime; return does not independently prove persistence.", &["kind","result"], &[0.01,0.1,1.0,5.0,15.0,60.0,300.0,900.0,3600.0]).with_unit("s"),
-        db_query_duration_seconds: histogram_with_buckets("", "db.client.operation.duration", "db.client.operation.duration under aster-metrics/v1.", &["db.system.name", "db.operation.name", "error.type"], &[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
-        auth_events_total: counter("", "aster.auth.events", "aster.auth.events under aster-metrics/v1.", &["action", "status", "reason"]).with_unit("{event}"),
-        application_events_total: counter("", "aster.application.events", "aster.application.events under aster-metrics/v1.", &["category", "event", "status"]).with_unit("{event}"),
-        config_reloads_total: counter("", "aster.config.reloads", "aster.config.reloads under aster-metrics/v1.", &["source", "decision", "status"]).with_unit("{operation}"),
-        config_reload_duration_seconds: histogram_with_buckets("", "aster.config.reload.duration", "aster.config.reload.duration under aster-metrics/v1.", &["source", "decision", "status"], &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
-        config_reload_changed_keys: histogram_with_buckets("", "aster.config.reload.changed_keys", "aster.config.reload.changed_keys under aster-metrics/v1.", &["source", "decision", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 500.0]).with_unit("{key}"),
-        config_mutations_total: counter("", "aster.config.mutations", "aster.config.mutations under aster-metrics/v1.", &["source", "operation", "status"]).with_unit("{operation}"),
-        config_mutation_changed_keys: histogram_with_buckets("", "aster.config.mutation.changed_keys", "aster.config.mutation.changed_keys under aster-metrics/v1.", &["source", "operation", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0]).with_unit("{key}"),
-        background_tasks_total: counter("", "aster.task.transitions", "aster.task.transitions under aster-metrics/v1.", &["kind", "status"]).with_unit("{transition}"),
+        db_query_duration_seconds: histogram_with_buckets("", "db.client.operation.duration", "db.client.operation.duration under astercosm-metrics/v1.", &["db.system.name", "db.operation.name", "error.type"], &[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
+        auth_events_total: counter("", "aster.auth.events", "aster.auth.events under astercosm-metrics/v1.", &["action", "status", "reason"]).with_unit("{event}"),
+        application_events_total: counter("", "aster.application.events", "aster.application.events under astercosm-metrics/v1.", &["category", "event", "status"]).with_unit("{event}"),
+        config_reloads_total: counter("", "aster.config.reloads", "aster.config.reloads under astercosm-metrics/v1.", &["source", "decision", "status"]).with_unit("{operation}"),
+        config_reload_duration_seconds: histogram_with_buckets("", "aster.config.reload.duration", "aster.config.reload.duration under astercosm-metrics/v1.", &["source", "decision", "status"], &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0]).with_unit("s"),
+        config_reload_changed_keys: histogram_with_buckets("", "aster.config.reload.changed_keys", "aster.config.reload.changed_keys under astercosm-metrics/v1.", &["source", "decision", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 500.0]).with_unit("{key}"),
+        config_mutations_total: counter("", "aster.config.mutations", "aster.config.mutations under astercosm-metrics/v1.", &["source", "operation", "status"]).with_unit("{operation}"),
+        config_mutation_changed_keys: histogram_with_buckets("", "aster.config.mutation.changed_keys", "aster.config.mutation.changed_keys under astercosm-metrics/v1.", &["source", "operation", "status"], &[0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0]).with_unit("{key}"),
+        background_tasks_total: counter("", "aster.task.transitions", "aster.task.transitions under astercosm-metrics/v1.", &["kind", "status"]).with_unit("{transition}"),
         background_tasks_oldest_age: gauge("", "aster.task.pending.oldest_age", "Age of the oldest durably queued task.", &[]).with_unit("s"),
         task_lease_takeovers: counter("", "aster.task.lease.takeovers", "Expired processing leases successfully reclaimed by this instance.", &["kind"]).with_unit("{takeover}"),
-        background_tasks_pending: gauge("", "aster.task.pending", "aster.task.pending under aster-metrics/v1.", &[]).with_unit("{task}"),
-        background_task_retries_total: counter("", "aster.task.retries", "aster.task.retries under aster-metrics/v1.", &["kind"]).with_unit("{retry}"),
-        external_operations_total: counter("", "aster.external.operations", "aster.external.operations under aster-metrics/v1.", &["system", "operation", "status"]).with_unit("{operation}"),
-        external_operation_duration_seconds: histogram_with_buckets("", "aster.external.operation.duration", "aster.external.operation.duration under aster-metrics/v1.", &["system", "operation", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0]).with_unit("s"),
+        background_tasks_pending: gauge("", "aster.task.pending", "aster.task.pending under astercosm-metrics/v1.", &[]).with_unit("{task}"),
+        background_task_retries_total: counter("", "aster.task.retries", "aster.task.retries under astercosm-metrics/v1.", &["kind"]).with_unit("{retry}"),
+        external_operations_total: counter("", "aster.external.operations", "aster.external.operations under astercosm-metrics/v1.", &["system", "operation", "status"]).with_unit("{operation}"),
+        external_operation_duration_seconds: histogram_with_buckets("", "aster.external.operation.duration", "aster.external.operation.duration under astercosm-metrics/v1.", &["system", "operation", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 15.0, 60.0]).with_unit("s"),
         #[cfg(feature = "runtime-health")]
         health_report_status: gauge("", "aster.runtime.health.status", "Aggregate health report: healthy=0, degraded=1, unhealthy=2.", &["scope"]).with_unit("{state}"),
         #[cfg(feature = "runtime-health")]
-        health_report_duration_seconds: histogram_with_buckets("", "aster.runtime.health.duration", "aster.runtime.health.duration under aster-metrics/v1.", &["scope", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]).with_unit("s"),
+        health_report_duration_seconds: histogram_with_buckets("", "aster.runtime.health.duration", "aster.runtime.health.duration under astercosm-metrics/v1.", &["scope", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]).with_unit("s"),
         #[cfg(feature = "runtime-health")]
         health_component_status: gauge("", "aster.runtime.component.health.status", "Component health: healthy=0, degraded=1, unhealthy=2.", &["scope", "component"]).with_unit("{state}"),
         #[cfg(feature = "runtime-health")]
-        health_component_duration_seconds: histogram_with_buckets("", "aster.runtime.component.health.duration", "aster.runtime.component.health.duration under aster-metrics/v1.", &["scope", "component", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]).with_unit("s"),
-        process_memory_rss_bytes: observable_up_down_counter("", "process.memory.usage", "process.memory.usage under aster-metrics/v1.", &[]).with_unit("By"),
-        process_cpu_time: observable_counter("", "process.cpu.time", "process.cpu.time under aster-metrics/v1.", &[]).with_unit("s"),
-        uptime_seconds: gauge("", "process.uptime", "process.uptime under aster-metrics/v1.", &[]).with_unit("s"),
-        observation_failures: observable_counter("", "aster.observability.failures", "aster.observability.failures under aster-metrics/v1.", &["component", "operation"]).with_unit("{failure}"),
+        health_component_duration_seconds: histogram_with_buckets("", "aster.runtime.component.health.duration", "aster.runtime.component.health.duration under astercosm-metrics/v1.", &["scope", "component", "status"], &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]).with_unit("s"),
+        process_memory_rss_bytes: observable_up_down_counter("", "process.memory.usage", "process.memory.usage under astercosm-metrics/v1.", &[]).with_unit("By"),
+        process_cpu_time: observable_counter("", "process.cpu.time", "process.cpu.time under astercosm-metrics/v1.", &[]).with_unit("s"),
+        uptime_seconds: gauge("", "process.uptime", "process.uptime under astercosm-metrics/v1.", &[]).with_unit("s"),
+        observation_failures: observable_counter("", "aster.observability.failures", "aster.observability.failures under astercosm-metrics/v1.", &["component", "operation"]).with_unit("{failure}"),
         #[cfg(feature = "allocator-metrics")]
-        process_heap_memory_mib: gauge("", "aster.process.heap", "aster.process.heap under aster-metrics/v1.", &["kind"]).with_unit("By"),
+        process_heap_memory_mib: gauge("", "aster.process.heap", "aster.process.heap under astercosm-metrics/v1.", &["kind"]).with_unit("By"),
         #[cfg(feature = "otlp")]
-        exporter_successes: observable_counter("", "aster.telemetry.exports", "aster.telemetry.exports under aster-metrics/v1.", &["exporter"]).with_unit("{export}"),
+        exporter_successes: observable_counter("", "aster.telemetry.exports", "aster.telemetry.exports under astercosm-metrics/v1.", &["exporter"]).with_unit("{export}"),
         #[cfg(feature = "otlp")]
-        exporter_failures: observable_counter("", "aster.telemetry.export.failures", "aster.telemetry.export.failures under aster-metrics/v1.", &["exporter"]).with_unit("{failure}"),
+        exporter_failures: observable_counter("", "aster.telemetry.export.failures", "aster.telemetry.export.failures under astercosm-metrics/v1.", &["exporter"]).with_unit("{failure}"),
         #[cfg(feature = "otlp")]
-        exporter_last_success: gauge("", "aster.telemetry.export.last_success", "aster.telemetry.export.last_success under aster-metrics/v1.", &["exporter"]).with_unit("s"),
+        exporter_last_success: gauge("", "aster.telemetry.export.last_success", "aster.telemetry.export.last_success under astercosm-metrics/v1.", &["exporter"]).with_unit("s"),
     }
 }
 impl InfrastructureMetricSet {

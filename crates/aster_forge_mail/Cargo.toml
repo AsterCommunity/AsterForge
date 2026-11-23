@@ -11,7 +11,9 @@ readme = "README.md"
 publish = true
 
 [features]
-default = []
+default = ["rustls"]
+rustls = ["lettre/tokio1-rustls-tls"]
+native-tls = ["lettre/tokio1-native-tls"]
 openapi = ["dep:utoipa"]
 persistence = ["dep:sea-orm"]
 runtime-component = [

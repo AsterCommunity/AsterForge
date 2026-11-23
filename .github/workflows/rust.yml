@@ -99,6 +99,8 @@ jobs:
         run: python3 scripts/check-http-construction.py --self-test
       - name: Lint attribute policy
         run: perl scripts/check-lint-attributes.pl
+      - name: Default TLS policy
+        run: python3 scripts/check-native-tls.py
 
   affected-crates:
     name: ${{ matrix.package }}

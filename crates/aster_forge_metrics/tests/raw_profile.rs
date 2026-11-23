@@ -17,7 +17,7 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
             instance_id: "boot-1".into(),
         })
         .unwrap()
-        .with_profile("example", "aster-metrics/v1")
+        .with_profile("com.astercosm.example", METRICS_PROFILE_VERSION)
         .unwrap()
         .with_prometheus()
         .unwrap()
@@ -47,7 +47,7 @@ async fn actual_export_matches_reviewed_wire_contract_and_resource() {
         "# TYPE aster_runtime_ready gauge",
         "aster_task_lease_takeovers_total{kind=\"archive\"",
         "# TYPE target_info gauge",
-        "aster_metrics_schema_version=\"aster-metrics/v1\"",
+        "aster_metrics_schema_version=\"astercosm-metrics/v1\"",
         "aster_node_mode=\"primary\"",
         "aster_role=\"api\"",
         "db_system_name=\"postgresql\"",

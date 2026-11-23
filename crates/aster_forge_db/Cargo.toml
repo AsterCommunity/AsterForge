@@ -13,7 +13,7 @@ publish = true
 [dependencies]
 aster_forge_api = { workspace = true }
 aster_forge_config = { workspace = true, features = ["sea-orm"], optional = true }
-aster_forge_mail = { workspace = true, default-features = true, features = ["persistence"], optional = true }
+aster_forge_mail = { workspace = true, default-features = false, features = ["persistence"], optional = true }
 aster_forge_metrics = { workspace = true }
 aster_forge_runtime = { workspace = true, optional = true }
 aster_forge_tasks = { workspace = true, optional = true }
@@ -28,7 +28,9 @@ tracing.workspace = true
 uuid.workspace = true
 
 [features]
-default = []
+default = ["rustls"]
+rustls = ["sea-orm/runtime-tokio-rustls"]
+native-tls = ["sea-orm/runtime-tokio-native-tls"]
 all = [
     "audit-log",
     "mail-outbox",
@@ -38,7 +40,8 @@ all = [
     "system-config",
 ]
 audit-log = []
-mail-outbox = ["dep:aster_forge_mail"]
+mail-outbox = ["dep:aster_forge_mail", "aster_forge_mail/rustls"]
+mail-outbox-native-tls = ["dep:aster_forge_mail", "aster_forge_mail/native-tls"]
 runtime-component = ["dep:aster_forge_runtime"]
 runtime-lease = ["dep:aster_forge_runtime"]
 scheduled-task = ["dep:aster_forge_tasks", "aster_forge_tasks/runtime"]

@@ -14,7 +14,8 @@ publish = true
 default = ["memory"]
 bloom = ["dep:bloomfilter", "dep:parking_lot"]
 memory = []
-redis = ["memory", "dep:aster_forge_utils", "dep:redis"]
+redis = ["memory", "dep:aster_forge_utils", "dep:redis", "redis/tokio-rustls-comp"]
+redis-native-tls = ["memory", "dep:aster_forge_utils", "dep:redis", "redis/tokio-native-tls-comp"]
 runtime-component = ["dep:aster_forge_runtime"]
 
 [dependencies]
