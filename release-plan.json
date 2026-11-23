@@ -3,145 +3,13 @@
   "plan": {
     "changed": [
       {
-        "name": "aster_forge_alloc",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_api",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_audit",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_auth",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_cache",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_cloud_files_core",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_linux",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_macos_bridge",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_windows",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_config",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_crypto",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_db",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_db_migration",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_events",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_external_auth",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_file_classification",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_http",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_logging",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_mail",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_metrics",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_middleware",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_observability",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_panic",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_process",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_runtime",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_storage_core",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_tasks",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_test",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_utils",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_webdav",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_xml",
-        "version": "0.1.0-alpha.3"
+        "name": "aster_forge_config_macros",
+        "version": "0.1.0-alpha.1"
       }
     ],
     "runtime_or_build_impact": [
       {
-        "name": "aster_forge_alloc",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_api",
-        "version": "0.1.0-alpha.2"
-      },
-      {
         "name": "aster_forge_audit",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_auth",
         "version": "0.1.0-alpha.4"
       },
       {
@@ -149,52 +17,16 @@
         "version": "0.1.0-alpha.3"
       },
       {
-        "name": "aster_forge_cloud_files_core",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_linux",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_macos_bridge",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_windows",
-        "version": "0.1.0-alpha.2"
-      },
-      {
         "name": "aster_forge_config",
         "version": "0.1.0-alpha.3"
       },
       {
-        "name": "aster_forge_crypto",
-        "version": "0.1.0-alpha.3"
+        "name": "aster_forge_config_macros",
+        "version": "0.1.0-alpha.1"
       },
       {
         "name": "aster_forge_db",
         "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_db_migration",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_events",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_external_auth",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_file_classification",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_http",
-        "version": "0.1.0-alpha.3"
       },
       {
         "name": "aster_forge_logging",
@@ -217,167 +49,15 @@
         "version": "0.1.0-alpha.4"
       },
       {
-        "name": "aster_forge_panic",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_process",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_runtime",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_storage_core",
-        "version": "0.1.0-alpha.2"
-      },
-      {
         "name": "aster_forge_tasks",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_test",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_utils",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_webdav",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_xml",
         "version": "0.1.0-alpha.3"
       }
     ],
     "dev_only_impact": [],
     "publish_order": [
       {
-        "name": "aster_forge_alloc",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_api",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_core",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_crypto",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_file_classification",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_http",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_process",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_storage_core",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_utils",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_auth",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_cloud_files_linux",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_macos_bridge",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_cloud_files_windows",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_runtime",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_test",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_xml",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_cache",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_db_migration",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_events",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_external_auth",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_logging",
-        "version": "0.1.0-alpha.2"
-      },
-      {
-        "name": "aster_forge_metrics",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_panic",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_tasks",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_webdav",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_config",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_mail",
-        "version": "0.1.0-alpha.3"
-      },
-      {
-        "name": "aster_forge_middleware",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_observability",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_db",
-        "version": "0.1.0-alpha.4"
-      },
-      {
-        "name": "aster_forge_audit",
-        "version": "0.1.0-alpha.4"
+        "name": "aster_forge_config_macros",
+        "version": "0.1.0-alpha.1"
       }
     ]
   }
