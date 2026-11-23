@@ -73,6 +73,9 @@ fn child() {
         return;
     };
     let path = std::env::var_os("FORGE_PANIC_TEST_PATH").unwrap();
+    if mode == "default" {
+        assert!(!std::path::Path::new(&path).parent().unwrap().exists());
+    }
     // The previous hook must not run and expose developer payloads.
     std::panic::set_hook(Box::new(|_| {
         let _ = writeln!(io::stderr(), "OLD-HOOK-SECRET");
@@ -84,7 +87,7 @@ fn child() {
         _ => PanicOutput::Sink(Arc::new(JsonSink)),
     };
     let mut config = PanicHookConfig::new("HookTest", "1", "https://example.test")
-        .with_crash_log_path(path)
+        .with_crash_log_path(&path)
         .with_output(output)
         .with_timestamp(fixed_time);
     let entered = Arc::new(Barrier::new(2));
@@ -104,6 +107,9 @@ fn child() {
         config = config.with_report_writer(Arc::new(FailedWriter));
     }
     assert_eq!(install_panic_hook(config), InstallOutcome::Installed);
+    if mode == "default" {
+        assert!(!std::path::Path::new(&path).parent().unwrap().exists());
+    }
     if mode == "host" {
         std::panic::set_hook(Box::new(|_| {
             let _ = writeln!(io::stderr(), "host-hook");
@@ -174,7 +180,11 @@ fn isolated_output_policies() {
         let dir = TestTempDir::new("panic-hook-policies");
         // macOS temp path can contain OS symlinks. Resolve the trusted temp root
         // before passing a no-follow managed path to the default writer.
-        let path = dir.path().canonicalize().unwrap().join("crash.log");
+        let path = if mode == "default" {
+            dir.path().canonicalize().unwrap().join("data/crash.log")
+        } else {
+            dir.path().canonicalize().unwrap().join("crash.log")
+        };
         if mode == "unavailable" {
             std::fs::create_dir(&path).unwrap();
         }
@@ -197,17 +207,17 @@ fn isolated_output_policies() {
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
                 assert_eq!(events.len(), 2);
-                assert_eq!(
-                    events[0]["report_written"],
-                    mode == "json" || (mode == "default" && cfg!(target_os = "linux"))
-                );
+                assert_eq!(events[0]["report_written"], mode == "json");
                 assert_eq!(events[0]["timestamp"], "2030-01-02T03:04:05.000Z");
             }
             "host" => assert_eq!(stderr.replace("\r\n", "\n"), "host-hook\nhost-hook\n"),
             _ => assert!(stderr.is_empty(), "{mode}: {stderr}"),
         }
-        if mode == "failed" || (mode == "default" && !cfg!(target_os = "linux")) {
+        if mode == "failed" || mode == "default" {
             assert!(!path.exists());
+            if mode == "default" {
+                assert!(!path.parent().unwrap().exists());
+            }
         } else if mode == "unavailable" {
             assert!(path.is_dir());
         } else if mode == "host" {

@@ -249,6 +249,12 @@ stop 停止 admission，等待已接受写入直到 deadline 或不可继续的�
 等待方或 flush future 不会丢弃已接受记录。取消 stop 等待方后仍需另一次 stop 完成 join。
 产品应保留 writer 句柄，在失败退出前获取 `unconfirmed()` 并执行自己的恢复策略。
 
+启用 `db-writer` 或 `db-writer-native-tls` 后，可使用
+`preserve_unconfirmed(writer, directory)` 将残留记录写入私有的
+`audit-<uuid>.json`。文件包含 `version: 1`、队列/失败分类和完整记录，并使用临时文件加
+rename 原子发布；Forge 永远不会自动重放这些记录，产品或运维必须先核对数据库提交结果。
+`finish_audit(result, writer, directory, timeout)` 在返回前完成 stop 和保全；残留记录会返回包含原始服务错误及恢复路径的错误。目录路径必须不含符号链接，已有恢复目录须属于当前用户且权限为 `0700`；macOS 还拒绝扩展 ACL，其他非 Unix 平台保守返回 Unsupported。祖先目录由产品/OS 信任，不防御相同 UID 的恶意进程。
+
 `flush(deadline)` 在 future 首次 poll 时固定已接收范围，batch 和 direct 必须分别确认。
 后续记录不会延长等待，其失败不会污染先前已确认范围；过期 deadline 不发起新的强制
 写入，空范围仍可成功。正常 threshold/timer 或其他 flush 请求仍可独立写入。

@@ -5,10 +5,14 @@ use std::sync::Mutex;
 
 use crate::ReportWriter;
 
+// TODO(AsterFS): reuse AsterFS private-file opening and platform ACL validation when available.
+// Preserve eager opening, no ancestor creation, nonblocking append and fail-closed behavior;
+// panic report formatting and public-output policy remain owned by this crate.
+
 /// Preopened private report file with nonblocking lock acquisition.
 ///
-/// Linux: walks every path component using directory descriptors and NOFOLLOW,
-/// creates missing directories with 0700 and files with 0600, rejects parent
+/// Linux: walks every existing parent path component using directory descriptors and NOFOLLOW,
+/// creates files with 0600, rejects parent
 /// traversal, links, special files, foreign ownership and group/other file access.
 /// Existing files are never chmodded or truncated. Ancestors must be managed by
 /// the application/OS; this does not defend against an attacker with the same UID.
@@ -76,10 +80,6 @@ fn open_private(path: &Path) -> io::Result<File> {
             _ => return Err(invalid()),
         };
         if components.peek().is_some() {
-            match fs::mkdirat(&directory, name, Mode::from_raw_mode(0o700)) {
-                Ok(()) | Err(rustix::io::Errno::EXIST) => {}
-                Err(error) => return Err(error.into()),
-            }
             directory = fs::openat(&directory, name, flags, Mode::empty())?;
         } else {
             let flags = OFlags::WRONLY
@@ -131,7 +131,10 @@ mod tests {
     #[test]
     fn private_append_and_busy_lock() {
         let dir = TestTempDir::new("panic-private");
-        let path = dir.path().canonicalize().unwrap().join("nested/crash.log");
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = nested.join("crash.log");
         let writer = PrivateReportWriter::try_new(&path).unwrap();
         writer.write_report("one\n").unwrap();
         PrivateReportWriter::try_new(&path)
@@ -143,19 +146,20 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert_eq!(
-            std::fs::metadata(path.parent().unwrap())
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
         let _guard = writer.file.as_ref().unwrap().lock().unwrap();
         assert_eq!(
             writer.write_report("blocked").unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn missing_parent_is_not_created() {
+        let dir = TestTempDir::new("panic-no-parent-create");
+        let missing = dir.path().join("data");
+        let result = PrivateReportWriter::try_new(missing.join("crash.log"));
+        assert!(result.is_err());
+        assert!(!missing.exists());
     }
 
     #[test]

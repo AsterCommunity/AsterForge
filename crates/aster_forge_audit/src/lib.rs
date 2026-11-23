@@ -24,6 +24,8 @@ use std::future::Future;
 
 #[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
 mod db_writer;
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+mod recovery_file;
 
 use aster_forge_runtime::{
     RuntimeComponentBundleRegistration, RuntimeComponentKind, RuntimeComponentRegistry,
@@ -36,6 +38,8 @@ pub use db_writer::{
     DEFAULT_AUDIT_LOG_DELAYED_FLUSH_AFTER, DEFAULT_AUDIT_LOG_QUEUE_CAPACITY,
     audit_component_with_writer, audit_component_with_writer_after, audit_writer_component,
 };
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+pub use db_writer::{finish_audit, preserve_unconfirmed};
 
 /// Stable component name used for process lifecycle audit records.
 pub const AUDIT_LOGS_COMPONENT: &str = "audit_logs";

@@ -4,6 +4,9 @@
 //! schema snapshot is different: it is a suite-scoped product fixture that can be consumed by
 //! many nextest processes after its producer exits. This module owns only the locked, atomic
 //! metadata publication protocol; products own fixture names, contents, validation, and cleanup.
+//!
+// TODO(AsterFS): use the shared AsterFS private-state/atomic-publication primitives for both
+// Unix and Windows; retain the cross-process fixture lock and fingerprint protocol here.
 
 use crate::suite::TestContainerSuite;
 use fs2::FileExt;
@@ -127,7 +130,7 @@ impl SuiteFixtureState {
 /// [`Self::publish`] leaves no visible fixture state, so the next process can safely clean the
 /// product's deterministic candidate resource and rebuild it.
 pub struct SuiteFixtureLock {
-    _file: File,
+    file: File,
     #[cfg(unix)]
     directory: std::sync::Arc<aster_forge_utils::state_directory::StateDirectory>,
     state_path: PathBuf,
@@ -141,6 +144,39 @@ impl SuiteFixtureLock {
     /// Panics when the fixture name is invalid or the lock file cannot be opened or locked.
     #[must_use]
     pub fn acquire(suite: &TestContainerSuite, fixture: &str) -> Self {
+        let lock = Self::open(suite, fixture);
+        lock.file
+            .lock_exclusive()
+            .unwrap_or_else(|error| panic!("failed to lock suite fixture state: {error}"));
+        lock
+    }
+
+    async fn acquire_async(suite: &TestContainerSuite, fixture: &str) -> Self {
+        loop {
+            let suite = suite.clone();
+            let fixture = fixture.to_owned();
+            let acquired = tokio::task::spawn_blocking(move || {
+                let lock = Self::open(&suite, &fixture);
+                match lock.file.try_lock_exclusive() {
+                    Ok(()) => Some(lock),
+                    Err(error)
+                        if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+                    {
+                        None
+                    }
+                    Err(error) => panic!("failed to try suite fixture lock: {error}"),
+                }
+            })
+            .await
+            .expect("fixture lock task should complete");
+            if let Some(lock) = acquired {
+                return lock;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    fn open(suite: &TestContainerSuite, fixture: &str) -> Self {
         assert_valid_fixture_name(fixture);
         let state_path = suite.fixture_state_path(fixture);
         let lock_path = suite.fixture_lock_path(fixture);
@@ -167,14 +203,8 @@ impl SuiteFixtureLock {
                     lock_path.display()
                 )
             });
-        file.lock_exclusive().unwrap_or_else(|error| {
-            panic!(
-                "failed to lock suite fixture state {}: {error}",
-                lock_path.display()
-            )
-        });
         Self {
-            _file: file,
+            file,
             #[cfg(unix)]
             directory: suite.directory.clone(),
             state_path,
@@ -326,6 +356,105 @@ impl SuiteFixtureLock {
     }
 }
 
+/// Validates or rebuilds one product-owned schema/template fixture under the suite lock.
+///
+/// Forge owns locking, fingerprint comparison, cleanup ordering, and atomic state publication.
+/// Products provide the resource probe, migration/seed builder, and cleanup operation.
+pub struct TemplateFixtureSpec<'a> {
+    /// Product-defined fixture name used for the cross-process lock.
+    pub fixture: &'a str,
+    /// Deterministic resource name used to recover interrupted builds.
+    pub resource: &'a str,
+    /// Identity of the shared database/container holding the fixture.
+    pub container_identity: &'a str,
+    /// Product-defined schema or migration fingerprint.
+    pub fingerprint: &'a str,
+    /// Version of the product code that created the fixture.
+    pub producer_version: &'a str,
+}
+
+/// Product-defined identity of a reusable migrated database.
+#[derive(Clone, Copy)]
+pub struct SchemaFixtureSpec<'a> {
+    /// Lock/state key scoped to the test suite.
+    pub fixture: &'a str,
+    /// Deterministic database name; interrupted builds are removed before rebuilding.
+    pub resource: &'a str,
+    /// Product migration/schema fingerprint.
+    pub fingerprint: &'a str,
+    /// Product fixture implementation version.
+    pub producer_version: &'a str,
+}
+
+/// Product-owned operations required to validate, build, and remove a reusable fixture.
+pub struct TemplateFixtureActions<Check, Build, Cleanup> {
+    /// Probes whether the named resource can be used. The name is owned so the async operation
+    /// may outlive the fixture lock's borrow.
+    pub is_usable: Check,
+    /// Creates and initializes the resource, returning its name.
+    pub build: Build,
+    /// Removes an obsolete resource.
+    pub cleanup: Cleanup,
+}
+
+/// Reuses a matching fixture or rebuilds and publishes it while holding its cross-process lock.
+///
+/// # Panics
+/// Panics when fixture state is corrupt or lock/state filesystem operations fail.
+pub async fn ensure_template_locked<Check, CheckFut, Build, BuildFut, Cleanup, CleanupFut>(
+    suite: &TestContainerSuite,
+    spec: TemplateFixtureSpec<'_>,
+    actions: TemplateFixtureActions<Check, Build, Cleanup>,
+) -> String
+where
+    Check: Fn(String) -> CheckFut,
+    CheckFut: std::future::Future<Output = bool>,
+    Build: FnOnce() -> BuildFut,
+    BuildFut: std::future::Future<Output = String>,
+    Cleanup: Fn(String) -> CleanupFut,
+    CleanupFut: std::future::Future<Output = ()>,
+{
+    assert_valid_fixture_name(spec.fixture);
+    let expected = SuiteFixtureState::new(
+        spec.fixture,
+        spec.container_identity,
+        spec.fingerprint,
+        spec.resource,
+        spec.producer_version,
+    );
+    let lock = SuiteFixtureLock::acquire_async(suite, spec.fixture).await;
+    if let Some(state) = lock.load() {
+        if state.matches(
+            spec.fixture,
+            spec.container_identity,
+            spec.fingerprint,
+            spec.producer_version,
+        ) && state.resource() == spec.resource
+            && (actions.is_usable)(state.resource().to_owned()).await
+        {
+            return state.resource().to_owned();
+        }
+        if state.container_identity() == spec.container_identity
+            && state.resource() != spec.resource
+        {
+            (actions.cleanup)(state.resource().to_owned()).await;
+        }
+        lock.clear();
+    }
+    (actions.cleanup)(spec.resource.to_owned()).await;
+    let resource = (actions.build)().await;
+    assert_eq!(
+        resource, spec.resource,
+        "fixture builder must return its declared resource"
+    );
+    assert!(
+        (actions.is_usable)(resource.clone()).await,
+        "new fixture failed its usability probe"
+    );
+    lock.publish(&expected);
+    resource
+}
+
 fn assert_valid_fixture_name(name: &str) {
     assert!(
         !name.is_empty()
@@ -338,7 +467,7 @@ fn assert_valid_fixture_name(name: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SuiteFixtureLock, SuiteFixtureState};
+    use super::{SuiteFixtureLock, SuiteFixtureState, TemplateFixtureActions, TemplateFixtureSpec};
     use crate::suite::TestContainerSuite;
     use std::sync::mpsc;
     use std::time::Duration;
@@ -408,5 +537,178 @@ mod tests {
                 "fixture name {name:?} should be rejected"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn template_helper_reuses_matching_state_and_rebuilds_changed_fingerprint() {
+        use super::ensure_template_locked;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let suite = TestContainerSuite::new("forge-template-helper-test");
+        let fixture = format!("schema-template-{}", std::process::id());
+        let lock = SuiteFixtureLock::acquire(&suite, &fixture);
+        lock.clear();
+        drop(lock);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let cleanups = Arc::new(AtomicUsize::new(0));
+        let first_builds = builds.clone();
+        let first = ensure_template_locked(
+            &suite,
+            TemplateFixtureSpec {
+                fixture: &fixture,
+                resource: "template_a",
+                container_identity: "container-a",
+                fingerprint: "schema-v1",
+                producer_version: "producer-v1",
+            },
+            TemplateFixtureActions {
+                is_usable: |_| async { true },
+                build: move || async move {
+                    first_builds.fetch_add(1, Ordering::SeqCst);
+                    "template_a".to_owned()
+                },
+                cleanup: |_| async {},
+            },
+        )
+        .await;
+        let second_builds = builds.clone();
+        let reused = ensure_template_locked(
+            &suite,
+            TemplateFixtureSpec {
+                fixture: &fixture,
+                resource: "template_a",
+                container_identity: "container-a",
+                fingerprint: "schema-v1",
+                producer_version: "producer-v1",
+            },
+            TemplateFixtureActions {
+                is_usable: |_| async { true },
+                build: move || async move {
+                    second_builds.fetch_add(1, Ordering::SeqCst);
+                    "unexpected".to_owned()
+                },
+                cleanup: |_| async {},
+            },
+        )
+        .await;
+        assert_eq!(first, "template_a");
+        assert_eq!(reused, first);
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+        let rebuild_count = builds.clone();
+        let cleanup_count = cleanups.clone();
+        let rebuilt = ensure_template_locked(
+            &suite,
+            TemplateFixtureSpec {
+                fixture: &fixture,
+                resource: "template_b",
+                container_identity: "container-a",
+                fingerprint: "schema-v2",
+                producer_version: "producer-v1",
+            },
+            TemplateFixtureActions {
+                is_usable: |_| async { true },
+                build: move || async move {
+                    rebuild_count.fetch_add(1, Ordering::SeqCst);
+                    "template_b".to_owned()
+                },
+                cleanup: move |resource: String| {
+                    assert!(["template_a", "template_b"].contains(&resource.as_str()));
+                    cleanup_count.fetch_add(1, Ordering::SeqCst);
+                    async {}
+                },
+            },
+        )
+        .await;
+        assert_eq!(rebuilt, "template_b");
+        assert_eq!(cleanups.load(Ordering::SeqCst), 2);
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+        SuiteFixtureLock::acquire(&suite, &fixture).clear();
+    }
+    #[tokio::test]
+    async fn cancelled_template_build_never_publishes_partial_state() {
+        use super::ensure_template_locked;
+        let suite = TestContainerSuite::new("forge-template-cancel-test");
+        let fixture = format!("cancelled-template-{}", std::process::id());
+        SuiteFixtureLock::acquire(&suite, &fixture).clear();
+        let spec = || TemplateFixtureSpec {
+            fixture: &fixture,
+            resource: "candidate",
+            container_identity: "container",
+            fingerprint: "v1",
+            producer_version: "v1",
+        };
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let signal = entered.clone();
+        {
+            let attempt = ensure_template_locked(
+                &suite,
+                spec(),
+                TemplateFixtureActions {
+                    is_usable: |_| async { true },
+                    cleanup: |_| async {},
+                    build: || async {
+                        signal.notify_one();
+                        std::future::pending::<String>().await
+                    },
+                },
+            );
+            tokio::pin!(attempt);
+            tokio::select! {
+                () = entered.notified() => {},
+                _ = &mut attempt => panic!("pending builder unexpectedly completed"),
+            }
+            // Dropping the future releases the fixture lock without publishing state.
+        }
+        assert!(SuiteFixtureLock::acquire(&suite, &fixture).load().is_none());
+        let rebuilt = ensure_template_locked(
+            &suite,
+            spec(),
+            TemplateFixtureActions {
+                is_usable: |_| async { true },
+                cleanup: |resource: String| async move {
+                    assert_eq!(resource, "candidate");
+                },
+                build: || async { "candidate".to_owned() },
+            },
+        )
+        .await;
+        assert_eq!(rebuilt, "candidate");
+        SuiteFixtureLock::acquire(&suite, &fixture).clear();
+    }
+    #[test]
+    fn async_lock_wait_leaves_the_only_blocking_thread_available() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let suite = TestContainerSuite::new("forge-lock-pool-test");
+            let fixture = format!("one-thread-{}", std::process::id());
+            let lock = SuiteFixtureLock::acquire(&suite, &fixture);
+            let waiter_suite = suite.clone();
+            let waiter_fixture = fixture.clone();
+            let waiter = tokio::spawn(async move {
+                SuiteFixtureLock::acquire_async(&waiter_suite, &waiter_fixture).await
+            });
+            // Let the waiter attempt the held OS lock before submitting build-like file work.
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let directory = crate::temp::TestTempDir::new("fixture-blocking-pool");
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                tokio::fs::write(directory.join("build"), b"data"),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            drop(lock);
+            let acquired = tokio::time::timeout(Duration::from_secs(2), waiter)
+                .await
+                .unwrap()
+                .unwrap();
+            drop(acquired);
+        });
     }
 }

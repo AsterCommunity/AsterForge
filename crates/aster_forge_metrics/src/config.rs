@@ -201,11 +201,17 @@ impl ValidatableConfig for ObservabilityConfig {
         #[cfg(feature = "otlp")]
         if otlp_enabled {
             let transport = self.otlp_transport();
-            transport.validate().map_err(|_| {
-                ConfigCoreError::invalid_value("invalid observability OTLP configuration")
-            })?;
+            transport
+                .validate()
+                .map_err(|error| ConfigCoreError::invalid_value(error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+impl ValidatableConfig for MetricsIdentity {
+    fn validate(&self) -> ConfigResult<()> {
+        validate_identity(self)
     }
 }
 
@@ -222,7 +228,7 @@ impl ObservabilityConfig {
         impl ObservabilityConfigSource for Source<'_> {
             fn validate(&self) -> MetricResult<()> {
                 ValidatableConfig::validate(self.config)
-                    .map_err(|_| MetricError::InvalidConfiguration)
+                    .map_err(|error| MetricError::InvalidConfiguration(error.to_string()))
             }
             fn environment(&self) -> &str {
                 &self.config.environment
@@ -272,26 +278,32 @@ impl MetricsProvider {
             prometheus: prometheus.clone().unwrap_or_default(),
             otlp_metrics: otlp.clone().unwrap_or_default(),
         };
-        ValidatableConfig::validate(&shared).map_err(|_| MetricError::InvalidConfiguration)?;
+        ValidatableConfig::validate(&shared)
+            .map_err(|error| MetricError::InvalidConfiguration(error.to_string()))?;
         if prometheus
             .as_ref()
             .is_some_and(|settings| settings.enabled && !cfg!(feature = "backend-prometheus"))
         {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(MetricError::InvalidConfiguration(
+                "observability.prometheus requires the backend-prometheus feature".into(),
+            ));
         }
         let prometheus_enabled = prometheus.as_ref().is_some_and(|settings| settings.enabled);
         if otlp
             .as_ref()
             .is_some_and(|settings| settings.enabled && !cfg!(feature = "otlp"))
         {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics requires the otlp feature".into(),
+            ));
         }
         let otlp_enabled = otlp.as_ref().is_some_and(|settings| settings.enabled);
         if !prometheus_enabled && !otlp_enabled {
             return MetricsProvider::builder().build();
         }
         let identity = source.identity();
-        validate_identity(&identity)?;
+        validate_identity(&identity)
+            .map_err(|error| MetricError::InvalidConfiguration(error.to_string()))?;
         let builder = MetricsProvider::builder().with_resource(MetricsResource {
             service_name: identity.service_name.clone(),
             service_version: identity.service_version.clone(),
@@ -308,7 +320,9 @@ impl MetricsProvider {
         };
         #[cfg(feature = "otlp")]
         let builder = if otlp_enabled {
-            let settings = otlp.ok_or(MetricError::InvalidConfiguration)?;
+            let settings = otlp.ok_or_else(|| {
+                MetricError::InvalidConfiguration("OTLP settings are missing".into())
+            })?;
             let transport = OtlpMetricsConfig {
                 endpoint: settings.endpoint,
                 headers: settings.headers,
@@ -343,29 +357,34 @@ impl MetricsProvider {
     }
 }
 
-fn validate_identity(identity: &MetricsIdentity) -> MetricResult<()> {
-    for value in [
-        &identity.service_name,
-        &identity.service_version,
-        &identity.profile_namespace,
-        &identity.role,
-        &identity.instance_id,
+fn validate_identity(identity: &MetricsIdentity) -> ConfigResult<()> {
+    for (field, value) in [
+        ("service_name", &identity.service_name),
+        ("service_version", &identity.service_version),
+        ("profile_namespace", &identity.profile_namespace),
+        ("role", &identity.role),
+        ("instance_id", &identity.instance_id),
     ]
     .into_iter()
     .chain(
         identity
             .node_mode
             .as_ref()
-            .filter(|value| !value.is_empty()),
+            .filter(|value| !value.is_empty())
+            .map(|value| ("node_mode", value)),
     ) {
         if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(ConfigCoreError::invalid_value(format!(
+                "observability.identity.{field} must be nonempty, at most 128 bytes, and contain no control characters"
+            )));
         }
     }
     if identity.profile_namespace.trim() != identity.profile_namespace
         || !identity.profile_namespace.contains('.')
     {
-        return Err(MetricError::InvalidConfiguration);
+        return Err(ConfigCoreError::invalid_value(
+            "observability.identity.profile_namespace must be a reverse-DNS namespace",
+        ));
     }
     Ok(())
 }

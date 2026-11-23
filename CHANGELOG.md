@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Audit recovery files** — Preserve stopped writers' unconfirmed audit records in
+  versioned private JSON for database reconciliation. Shutdown helpers retain the
+  service failure and report incomplete drain even when preservation succeeds;
+  records are never replayed automatically.
+- **Reusable schema fixtures** — PostgreSQL/MySQL test containers reuse migrated
+  template databases by schema fingerprint and producer version, with locked
+  rebuilds, connection probes and interrupted-build cleanup. Products retain
+  migration, seed, naming and fingerprint ownership.
+
 - **Release automation** — Detect manually versioned, unpublished crates and
   open a release PR containing format-preserving dependency pin updates and an
   explicit release plan. Validate committed lock contents, affected consumers,
@@ -49,7 +58,9 @@
   explicit cross-section `validate` step.
 - **Observability configuration** — Provide reusable metrics identity,
   Prometheus/OTLP settings, bounded validation, and validated provider/recorder
-  assembly for downstream products.
+  assembly for downstream products. `MetricsIdentity` implements `ValidatableConfig`;
+  `MetricError::InvalidConfiguration(String)` retains field and constraint diagnostics
+  across loader and direct-provider entrypoints (breaking: no longer a Copy/unit variant).
 
 ### Security
 
@@ -65,6 +76,11 @@
   not remediation.
 
 ### Fixed
+
+- **Panic filesystem side effects** — Linux private report writers require existing
+  ancestor directories, so installing the default hook cannot create `data/`.
+  Explicit bootstrap may create that directory before installing a new writer.
+  Filesystem behavior is checked on Linux, macOS and Windows before release gates.
 
 - **Concurrent private lock creation on macOS** — Retry one transient ENOENT
   from descriptor-relative O_CREAT|O_NOFOLLOW before applying the same file

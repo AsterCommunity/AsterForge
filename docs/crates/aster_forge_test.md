@@ -95,11 +95,37 @@ let database = postgres
     .await;
 ```
 
-跨进程复用 migration template 时，先由产品在 `SuiteFixtureLock` 内调用
-`create_shared_database()`、迁移并发布 `SuiteFixtureState`；普通测试继续用
-`create_database_from_template()` 创建进程所有的隔离库。MySQL 对应提供
-`create_shared_database()` / `drop_shared_database()`，但产品仍负责账号、migration 和 schema
-snapshot。
+跨进程复用 migration template 时，PostgreSQL 和 MySQL 都提供
+`ensure_schema_template(spec, initialize)`。Forge 持有跨进程锁，比较 container identity、
+迁移指纹与 producer version，在五秒总预算内执行连接、查询与关闭探活，清理旧库/中断构建遗留库，再建库并原子
+发布 fixture 状态。产品只提供 `SchemaFixtureSpec` 和运行 migration/seed 的回调：
+
+```rust
+use aster_forge_test::fixture::SchemaFixtureSpec;
+
+let template = container.ensure_schema_template(
+    SchemaFixtureSpec {
+        fixture: "migration-template",
+        resource: "myproduct_template", // 产品决定资源名；同一 fixture 的调用方须共享此契约
+        fingerprint: env!("ASTER_TEST_SCHEMA_FINGERPRINT"),
+        producer_version: env!("CARGO_PKG_VERSION"),
+    },
+    |db| async move {
+        product_migrations(&db).await;
+        product_seed(&db).await;
+    },
+).await;
+```
+
+回调创建的连接须在返回前关闭；Forge 关闭传入的 connection。PostgreSQL 使用
+`create_database_from_template` 创建独立测试库；MySQL 可用返回的模板库加载产品所需的
+schema snapshot，账号授权和 seed 选择仍归产品。指纹哈希哪些迁移源由产品的 build.rs
+决定；迁移内容变化必须改变 fingerprint，模板生成机制变化必须改变 producer version。
+
+非数据库 fixture 可使用 `fixture::ensure_template_locked`，通过
+`TemplateFixtureSpec` / `TemplateFixtureActions` 注入 probe/build/cleanup。文件锁通过 blocking pool 单次非阻塞尝试获取，争用时异步等待重试，避免等待者占满
+线程池并阻止持锁构建执行文件操作。状态损坏仍 fail-fast；
+构建 panic/取消时不发布状态，下一次调用先清理确定名称的未完成资源。
 
 ## 容器复用与隔离
 

@@ -1,4 +1,4 @@
-name: Rust Panic Contract
+name: Rust Filesystem Contract
 
 on:
   workflow_call:
@@ -8,9 +8,9 @@ permissions:
 
 jobs:
   panic-contract:
-    name: Panic contract (${{ matrix.os }})
+    name: Filesystem contract (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -28,5 +28,11 @@ jobs:
         uses: ./.github/actions/sync-forge-dependencies
       - name: Test real hook and platform file contract
         run: cargo test --locked -p aster_forge_panic --all-targets
+      - name: Test shared filesystem helpers on this platform
+        run: cargo test --locked -p aster_forge_utils -p aster_forge_tasks
+      - name: Test fixture lock and state publication on this platform
+        run: cargo test --locked -p aster_forge_test --features containers --lib
+      - name: Test private audit recovery and writer lifecycle
+        run: cargo test --locked -p aster_forge_audit --features db-writer --test writer
       - name: Lint platform-specific panic paths
         run: cargo clippy --locked -p aster_forge_panic --all-targets -- -D warnings

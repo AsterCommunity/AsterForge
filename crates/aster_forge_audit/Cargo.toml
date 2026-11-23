@@ -13,8 +13,8 @@ publish = true
 [features]
 default = []
 db-writer-core = ["dep:aster_forge_db", "dep:sea-orm"]
-db-writer = ["db-writer-core", "aster_forge_db/rustls", "sea-orm/runtime-tokio-rustls"]
-db-writer-native-tls = ["db-writer-core", "sea-orm/runtime-tokio-native-tls", "aster_forge_db/native-tls"]
+db-writer = ["db-writer-core", "dep:serde", "dep:serde_json", "dep:rustix", "dep:uuid", "aster_forge_db/rustls", "sea-orm/runtime-tokio-rustls"]
+db-writer-native-tls = ["db-writer-core", "dep:serde", "dep:serde_json", "dep:rustix", "dep:uuid", "sea-orm/runtime-tokio-native-tls", "aster_forge_db/native-tls"]
 database-container-tests = ["db-writer"]
 mail-outbox-dependency = ["dep:aster_forge_mail", "aster_forge_mail/rustls"]
 
@@ -23,13 +23,18 @@ aster_forge_db = { workspace = true, default-features = false, features = ["audi
 aster_forge_mail = { workspace = true, optional = true }
 aster_forge_runtime = { workspace = true }
 sea-orm = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time"] }
+uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
 aster_forge_test = { workspace = true, features = ["postgres"] }
-uuid.workspace = true
 chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, optional = true }

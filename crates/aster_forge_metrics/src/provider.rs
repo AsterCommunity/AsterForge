@@ -83,7 +83,9 @@ impl MetricsProviderBuilder {
     /// Returns a redacted error for an empty service name or oversized/control-character attributes.
     pub fn with_resource(mut self, resource: MetricsResource) -> MetricResult<Self> {
         if resource.service_name.is_empty() {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(MetricError::InvalidConfiguration(
+                "service name is empty".into(),
+            ));
         }
         let mut attributes = Vec::new();
         for (key, value) in [
@@ -95,7 +97,9 @@ impl MetricsProviderBuilder {
             ("service.instance.id", resource.instance_id),
         ] {
             if value.len() > 128 || value.chars().any(char::is_control) {
-                return Err(MetricError::InvalidConfiguration);
+                return Err(MetricError::InvalidConfiguration(format!(
+                    "resource attribute {key} is oversized or contains control characters"
+                )));
             }
             if !value.is_empty() {
                 attributes.push(opentelemetry::KeyValue::new(key, value));
@@ -113,13 +117,12 @@ impl MetricsProviderBuilder {
     /// # Errors
     /// Rejects empty, oversized or control-character profile fields.
     pub fn with_profile(mut self, namespace: &str, version: &str) -> MetricResult<Self> {
-        if namespace.trim().is_empty()
-            || version.trim().is_empty()
-            || [namespace, version]
-                .iter()
-                .any(|value| value.len() > 128 || value.chars().any(char::is_control))
-        {
-            return Err(MetricError::InvalidConfiguration);
+        for (field, value) in [("namespace", namespace), ("version", version)] {
+            if value.trim().is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+                return Err(MetricError::InvalidConfiguration(format!(
+                    "metrics.profile.{field} must be nonempty, at most 128 bytes, and contain no control characters"
+                )));
+            }
         }
         self.profile = Some((namespace.to_owned(), version.to_owned()));
         Ok(self)
@@ -130,7 +133,9 @@ impl MetricsProviderBuilder {
     /// Returns an error if pull export is already configured or its reader cannot be created.
     pub fn with_prometheus(mut self) -> MetricResult<Self> {
         if self.registry.is_some() {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(MetricError::InvalidConfiguration(
+                "metrics pull exporter is already configured".into(),
+            ));
         }
         let registry = prometheus::Registry::new();
         let reader = opentelemetry_prometheus::exporter()
@@ -159,18 +164,26 @@ impl MetricsProviderBuilder {
     /// # Errors
     /// Returns an error if the resource limits are invalid.
     pub fn build(self) -> MetricResult<MetricsProvider> {
-        if self.limits.max_instruments == 0
-            || self.limits.max_series_per_instrument == 0
-            || self.limits.max_label_bytes == 0
-            || self.limits.max_total_series == 0
-            || self.limits.max_total_series > 1_048_576
-            || self.limits.max_exposition_bytes == 0
-            || self.limits.max_instruments > 4096
-            || self.limits.max_series_per_instrument > 65536
-            || self.limits.max_label_bytes > 4096
-            || self.limits.max_exposition_bytes > 64 * 1024 * 1024
-        {
-            return Err(MetricError::InvalidConfiguration);
+        for (field, value, maximum) in [
+            ("max_instruments", self.limits.max_instruments, 4096),
+            (
+                "max_series_per_instrument",
+                self.limits.max_series_per_instrument,
+                65536,
+            ),
+            ("max_label_bytes", self.limits.max_label_bytes, 4096),
+            ("max_total_series", self.limits.max_total_series, 1_048_576),
+            (
+                "max_exposition_bytes",
+                self.limits.max_exposition_bytes,
+                64 * 1024 * 1024,
+            ),
+        ] {
+            if value == 0 || value > maximum {
+                return Err(MetricError::InvalidConfiguration(format!(
+                    "metrics.limits.{field} must be between 1 and {maximum}"
+                )));
+            }
         }
         let limit = self.limits.max_series_per_instrument;
         let mut builder = self.sdk.with_view(move |_| {
@@ -389,10 +402,11 @@ impl MetricsProvider {
 
     /// Idempotent shutdown. If the caller times out, the job retains its permit;
     /// callers can poll the actual result with `shutdown_result`.
+    ///
     /// # Errors
     /// Returns an error on concurrent lifecycle operations, timeout or SDK shutdown failure.
     pub async fn shutdown(&self, timeout: Duration) -> MetricResult<()> {
-        if let Some(result) = *self.inner.shutdown_result.lock() {
+        if let Some(result) = self.inner.shutdown_result.lock().clone() {
             return result;
         }
         let permit = self
@@ -409,7 +423,7 @@ impl MetricsProvider {
             let result = sdk
                 .shutdown_with_timeout(timeout)
                 .map_err(|_| MetricError::Shutdown);
-            *result_slot.lock() = Some(result);
+            *result_slot.lock() = Some(result.clone());
             result
         });
         tokio::time::timeout(timeout, task)
@@ -421,7 +435,7 @@ impl MetricsProvider {
     /// Returns the shutdown outcome once a shutdown has completed; `None` before that.
     #[must_use]
     pub fn shutdown_result(&self) -> Option<MetricResult<()>> {
-        *self.inner.shutdown_result.lock()
+        self.inner.shutdown_result.lock().clone()
     }
 
     /// # Errors

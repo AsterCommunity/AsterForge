@@ -732,3 +732,141 @@ async fn exact_audit_field_boundaries_admit_valid_and_reject_overflow() {
     assert!(writer.unconfirmed().is_empty());
     writer.stop(deadline()).await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recovery_file_preserves_unconfirmed_records_without_replay() {
+    use aster_forge_test::temp::TestTempDir;
+
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let writer = writer(&db, 4, 1, Duration::from_secs(30));
+    writer.start().await.unwrap();
+    writer.record(request(991)).await.unwrap();
+    let report = writer.stop(deadline()).await;
+    assert_eq!(report.snapshot.queued, 1);
+    assert_eq!(writer.unconfirmed().len(), 1);
+
+    let directory = TestTempDir::new("audit-recovery");
+    let recovery_directory = directory.path().canonicalize().unwrap().join("private");
+    let recovery_path = preserve_unconfirmed(&writer, &recovery_directory)
+        .unwrap()
+        .expect("unconfirmed record should be preserved");
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&recovery_path).unwrap()).unwrap();
+    assert_eq!(envelope["version"], 1);
+    assert_eq!(envelope["requires_database_reconciliation"], true);
+    assert_eq!(envelope["queued"], 1);
+    assert_eq!(envelope["batch_failure_class"], "Permanent");
+    assert!(envelope["direct_failure_class"].is_null());
+    assert!(!envelope.to_string().contains("no such table"));
+    assert_eq!(envelope["records"][0]["entity_id"], 991);
+    assert_eq!(writer.unconfirmed().len(), 1);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&recovery_directory)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&recovery_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    db.close().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recovery_requires_stopped_writer_and_finish_never_hides_incomplete_drain() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let writer = writer(&db, 4, 1, Duration::from_secs(30));
+    let root = aster_forge_test::temp::TestTempDir::new("audit-finish");
+    let directory = root.path().canonicalize().unwrap().join("private");
+    assert_eq!(
+        preserve_unconfirmed(&writer, &directory)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert!(!directory.exists());
+    writer.start().await.unwrap();
+    writer.record(request(992)).await.unwrap();
+    let error = finish_audit(
+        Err::<(), _>(std::io::Error::other("original service failure")),
+        &writer,
+        &directory,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("original service failure"));
+    assert!(error.to_string().contains("saved to"));
+    assert!(
+        finish_audit(Ok(()), &writer, &directory, Duration::ZERO)
+            .await
+            .is_err()
+    );
+    assert_eq!(writer.unconfirmed().len(), 1);
+    let alias = root.path().canonicalize().unwrap().join("alias");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&directory, &alias).unwrap();
+        assert!(preserve_unconfirmed(&writer, &alias).is_err());
+    }
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_recovery_preserves_service_result_without_creating_storage() {
+    let db = sqlite().await;
+    let writer = AuditWriter::new(db.clone());
+    let root = aster_forge_test::temp::TestTempDir::new("audit-empty");
+    let directory = root.join("absent");
+    assert_eq!(
+        finish_audit(Ok(42), &writer, &directory, Duration::ZERO)
+            .await
+            .unwrap(),
+        42
+    );
+    assert!(preserve_unconfirmed(&writer, &directory).unwrap().is_none());
+    assert!(!directory.exists());
+    let error = finish_audit(
+        Err::<(), _>(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "service",
+        )),
+        &writer,
+        &directory,
+        Duration::ZERO,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    db.close().await.unwrap();
+}
+
+#[cfg(not(unix))]
+#[tokio::test]
+async fn unsupported_recovery_platform_fails_closed() {
+    let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+    let writer = writer(&db, 4, 1, Duration::from_secs(30));
+    writer.start().await.unwrap();
+    writer.record(request(993)).await.unwrap();
+    writer.stop(deadline()).await;
+    let root = aster_forge_test::temp::TestTempDir::new("audit-unsupported");
+    let path = root.join("absent");
+    assert_eq!(
+        preserve_unconfirmed(&writer, &path).unwrap_err().kind(),
+        std::io::ErrorKind::Unsupported
+    );
+    assert!(!path.exists());
+}

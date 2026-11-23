@@ -117,6 +117,51 @@ impl MysqlTestContainer {
         &self.root_url
     }
 
+    /// Reuses a migrated schema fixture or rebuilds it under the cross-process fixture lock.
+    ///
+    /// Forge owns container identity, connection probes, cleanup, creation, and state publication.
+    /// The product callback owns migrations and seed data; all callback connections must close
+    /// before it returns. Returns the template database name.
+    ///
+    /// # Panics
+    /// Panics for invalid names, failed database operations, or a failed product callback.
+    pub async fn ensure_schema_template<F, Fut>(
+        &self,
+        spec: crate::fixture::SchemaFixtureSpec<'_>,
+        initialize: F,
+    ) -> String
+    where
+        F: FnOnce(sea_orm::DatabaseConnection) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        use crate::fixture::{TemplateFixtureActions, TemplateFixtureSpec, ensure_template_locked};
+        assert_valid_database_name(spec.resource);
+        ensure_template_locked(
+            &self.suite,
+            TemplateFixtureSpec {
+                fixture: spec.fixture,
+                resource: spec.resource,
+                container_identity: self.container_identity(),
+                fingerprint: spec.fingerprint,
+                producer_version: spec.producer_version,
+            },
+            TemplateFixtureActions {
+                is_usable: |resource: String| async move {
+                    assert_valid_database_name(&resource);
+                    crate::database::fixture_is_usable(&self.database_url(&resource)).await
+                },
+                build: || async move {
+                    self.create_shared_database(spec.resource).await;
+                    let connection = connect_with_retry(&self.database_url(spec.resource), "MySQL").await;
+                    initialize(connection.clone()).await;
+                    connection.close().await.expect("schema fixture connection should close");
+                    spec.resource.to_owned()
+                },
+                cleanup: |resource: String| async move { self.drop_shared_database(&resource).await },
+            },
+        ).await
+    }
+
     /// Returns a stable identity for the running suite container.
     #[must_use]
     pub fn container_identity(&self) -> &str {

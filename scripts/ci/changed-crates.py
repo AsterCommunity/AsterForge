@@ -27,6 +27,7 @@ DEDICATED_PACKAGES = {
 GLOBAL_PATHS = {
     "Cargo.toml",
     "Cargo.lock",
+    "release-plan.json",
     "rust-toolchain.toml",
     "rust-toolchain",
     "rustfmt.toml",
@@ -175,7 +176,7 @@ def make_outputs(names: set[str], changed_paths: list[str], metadata: dict) -> d
     suites = {
         "generic": bool(generic),
         "rust": bool(names),
-        "panic": "aster_forge_panic" in names,
+        "panic": bool(names & {"aster_forge_panic", "aster_forge_utils", "aster_forge_tasks", "aster_forge_test", "aster_forge_audit"}),
         "process": "aster_forge_process" in names,
         "auth": "aster_forge_auth" in names,
         "cloud_files": any(name.startswith("aster_forge_cloud_files_") for name in names),
