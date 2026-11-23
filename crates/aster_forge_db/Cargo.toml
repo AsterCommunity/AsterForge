@@ -12,7 +12,7 @@ publish = true
 
 [dependencies]
 aster_forge_api = { workspace = true }
-aster_forge_config = { workspace = true, features = ["sea-orm"], optional = true }
+aster_forge_config = { workspace = true, features = ["sea-orm-core"], optional = true }
 aster_forge_mail = { workspace = true, default-features = false, features = ["persistence"], optional = true }
 aster_forge_metrics = { workspace = true }
 aster_forge_runtime = { workspace = true, optional = true }

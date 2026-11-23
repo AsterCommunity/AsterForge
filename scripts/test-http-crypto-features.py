@@ -169,6 +169,37 @@ aster_forge_external_auth = {{ path = {json.dumps(str(ROOT / "crates/aster_forge
             assert "__rustls-aws-lc-rs" not in deps["reqwest"], deps["reqwest"]
             assert "native-tls" not in deps["reqwest"], deps["reqwest"]
         print("PASS combined DB/middleware/observability: HTTP-only and ring OTLP keep AWS-LC disabled", flush=True)
+        database = base / "database-system-config"
+        database.mkdir()
+        (database / "src").mkdir()
+        (database / "Cargo.toml").write_text(f'''[workspace]
+[package]
+name = "database-system-config-consumer"
+version = "0.0.0"
+edition = "2024"
+[features]
+native = ["aster_forge_db/native-tls"]
+rustls = ["aster_forge_db/rustls"]
+[dependencies]
+aster_forge_db = {{ path = {json.dumps(str(ROOT / "crates/aster_forge_db"))}, default-features = false, features = ["system-config"] }}
+aster_forge_config = {{ path = {json.dumps(str(ROOT / "crates/aster_forge_config"))} }}
+sea-orm = {{ version = "2.0.4", default-features = false }}
+''')
+        (database / "src/main.rs").write_text('''fn main() {
+    fn mapped<T: sea_orm::ActiveEnum>() {}
+    mapped::<aster_forge_config::ConfigValueType>();
+    mapped::<aster_forge_config::ConfigVisibility>();
+    mapped::<aster_forge_config::ConfigSource>();
+}
+''')
+        for features, expected, forbidden in [
+            (["native"], "native-tls", "rustls"),
+            (["rustls"], "rustls", "native-tls"),
+        ]:
+            cargo(database, ["check"], features)
+            deps = resolved(database, features)
+            assert expected in deps and forbidden not in deps, (features, deps.keys())
+        print("PASS system-config enum mappings preserve independent native/rustls DB backends", flush=True)
         print("PASS isolated dependency trees, downstream external auth and disabled APIs", flush=True)
 
 
