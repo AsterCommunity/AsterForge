@@ -25,9 +25,11 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+mod config;
 mod instruments;
 mod provider;
 mod shared;
+pub use config::*;
 pub use instruments::*;
 pub use provider::*;
 pub use shared::{InfrastructureMetricsRecorder, normalized_http_method};

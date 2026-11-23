@@ -14,6 +14,7 @@ members = [
     "crates/aster_forge_cloud_files/macos_bridge",
     "crates/aster_forge_cloud_files/windows",
     "crates/aster_forge_config",
+    "crates/aster_forge_config_macros",
     "crates/aster_forge_auth",
     "crates/aster_forge_crypto",
     "crates/aster_forge_db",
@@ -69,6 +70,7 @@ aster_forge_alloc = { path = "crates/aster_forge_alloc", version = "=0.1.0-alpha
 aster_forge_api = { path = "crates/aster_forge_api", version = "=0.1.0-alpha.2" }
 aster_forge_cloud_files_core = { path = "crates/aster_forge_cloud_files/core", version = "=0.1.0-alpha.2" }
 aster_forge_config = { path = "crates/aster_forge_config", version = "=0.1.0-alpha.3" }
+aster_forge_config_macros = { path = "crates/aster_forge_config_macros", version = "=0.1.0-alpha.1" }
 aster_forge_crypto = { path = "crates/aster_forge_crypto", version = "=0.1.0-alpha.3" }
 aster_forge_db = { path = "crates/aster_forge_db", version = "=0.1.0-alpha.4", default-features = false }
 aster_forge_events = { path = "crates/aster_forge_events", version = "=0.1.0-alpha.3" }
@@ -125,6 +127,8 @@ parking_lot = "0.13"
 percent-encoding = "2.3"
 process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 proc-macro2 = "1"
+proc-macro-crate = "3.5.0"
+syn = { version = "2", features = ["full"] }
 quick-xml = { version = "0.42", default-features = false }
 quote = "1"
 openidconnect = { version = "4.1.0", default-features = false }
@@ -133,7 +137,7 @@ redis = { version = "1.8.2", default-features = false, features = ["connection-m
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros"] }
+sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite", "macros", "with-chrono"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

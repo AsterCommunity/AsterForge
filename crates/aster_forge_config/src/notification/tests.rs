@@ -1,4 +1,4 @@
-#[cfg(not(feature = "redis-pubsub"))]
+#[cfg(not(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls")))]
 use super::CONFIG_SYNC_BACKEND_REDIS;
 use super::{
     CONFIG_SYNC_BACKEND_DISABLED, ConfigChangeEvent, ConfigChangeNotifier,
@@ -330,7 +330,7 @@ fn config_sync_topic_maps_to_redis_channel_shape() {
     );
 }
 
-#[cfg(not(feature = "redis-pubsub"))]
+#[cfg(not(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls")))]
 #[test]
 fn redis_config_sync_backend_requires_feature() {
     let result = build_config_sync_runtime(

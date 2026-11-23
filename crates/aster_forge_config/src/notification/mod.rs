@@ -28,7 +28,7 @@ pub use message::{
     ConfigReloadWorkerConfig, decode_config_reload_transport_payload,
     handle_config_reload_notification,
 };
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 pub use notifier::RedisConfigChangeNotifier;
 pub use notifier::{
     ConfigChangeNotifier, ConfigNotification, InMemoryConfigNotifier, SharedConfigChangeNotifier,

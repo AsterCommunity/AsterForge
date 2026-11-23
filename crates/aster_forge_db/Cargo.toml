@@ -40,8 +40,9 @@ all = [
     "system-config",
 ]
 audit-log = []
-mail-outbox = ["dep:aster_forge_mail", "aster_forge_mail/rustls"]
-mail-outbox-native-tls = ["dep:aster_forge_mail", "aster_forge_mail/native-tls"]
+mail-outbox-core = ["dep:aster_forge_mail"]
+mail-outbox = ["mail-outbox-core", "aster_forge_mail/rustls"]
+mail-outbox-native-tls = ["mail-outbox-core", "aster_forge_mail/native-tls"]
 runtime-component = ["dep:aster_forge_runtime"]
 runtime-lease = ["dep:aster_forge_runtime"]
 scheduled-task = ["dep:aster_forge_tasks", "aster_forge_tasks/runtime"]

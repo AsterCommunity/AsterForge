@@ -12,8 +12,9 @@ publish = true
 
 [features]
 default = []
-redis = ["dep:redis", "redis/tokio-rustls-comp"]
-redis-native-tls = ["dep:redis", "redis/tokio-native-tls-comp"]
+redis-core = ["dep:redis"]
+redis = ["redis-core", "redis/tokio-rustls-comp"]
+redis-native-tls = ["redis-core", "redis/tokio-native-tls-comp"]
 
 [dependencies]
 async-trait.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "aster_forge_config_macros"
+version = "0.1.0-alpha.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Derive macros for AsterForge configuration validation"
+readme = "README.md"
+publish = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+proc-macro-crate.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[lints]
+workspace = true

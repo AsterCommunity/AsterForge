@@ -27,6 +27,11 @@ HTTP / DB / auth / tasks / 产品事件
 
 ## Cargo 与启用边界
 
+`ObservabilityConfig` 是可复用的 Forge 配置段，实现了
+`aster_forge_config::ValidatableConfig`。它负责环境、Prometheus/OTLP 开关、OTLP 限制和
+basic-auth hash 的基础校验；产品通过 `MetricsIdentity` 创建 provider。需要额外产品规则时，
+组合该配置段并在自己的 `ValidatableConfig` 实现中先调用 Forge 校验。
+
 | Cargo feature | 编译能力 | 运行方式 |
 | --- | --- | --- |
 | 默认 | descriptors、typed instruments、Noop provider | builder 不添加 reader 时不采集 |

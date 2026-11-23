@@ -4,6 +4,8 @@
 //! the boundary. The core deliberately keeps variants small and transport
 //! neutral so it can be reused by HTTP services, CLI tools, workers, and tests.
 
+use crate::ValidatableConfig;
+
 /// Result type returned by configuration-core operations.
 pub type Result<T> = std::result::Result<T, ConfigCoreError>;
 
@@ -43,3 +45,38 @@ impl ConfigCoreError {
         Self::Notification(message.into())
     }
 }
+
+impl<T: ValidatableConfig> ValidatableConfig for Option<T> {
+    fn validate(&self) -> Result<()> {
+        if let Some(value) = self {
+            value.validate()
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<T: ValidatableConfig> ValidatableConfig for Vec<T> {
+    fn validate(&self) -> Result<()> {
+        for value in self {
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+macro_rules! impl_noop_validation {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl ValidatableConfig for $type {
+                fn validate(&self) -> Result<()> {
+                    Ok(())
+                }
+            }
+        )+
+    };
+}
+
+impl_noop_validation!(
+    String, bool, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64
+);

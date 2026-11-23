@@ -9,7 +9,17 @@ import sys
 
 def main() -> int:
     result = subprocess.run(
-        ["cargo", "tree", "--workspace", "--all-targets", "--locked", "-e", "normal"],
+        [
+            "cargo",
+            "tree",
+            "--workspace",
+            "--all-targets",
+            "--locked",
+            "--prefix",
+            "none",
+            "-e",
+            "normal,build",
+        ],
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -18,7 +28,11 @@ def main() -> int:
     if result.returncode:
         print(result.stdout, end="")
         return result.returncode
-    native = [line for line in result.stdout.splitlines() if "native-tls" in line]
+    native = [
+        line
+        for line in result.stdout.splitlines()
+        if any(token in {"native-tls", "native-tls-vendored"} for token in line.split())
+    ]
     if native:
         print("default workspace graph unexpectedly enables native-tls:", file=sys.stderr)
         print("\n".join(native), file=sys.stderr)

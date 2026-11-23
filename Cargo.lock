@@ -631,6 +631,7 @@ dependencies = [
 name = "aster_forge_cache"
 version = "0.1.0-alpha.3"
 dependencies = [
+ "aster_forge_config",
  "aster_forge_runtime",
  "aster_forge_test",
  "aster_forge_utils",
@@ -703,6 +704,7 @@ dependencies = [
 name = "aster_forge_config"
 version = "0.1.0-alpha.3"
 dependencies = [
+ "aster_forge_config_macros",
  "aster_forge_events",
  "aster_forge_test",
  "aster_forge_utils",
@@ -718,6 +720,16 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "aster_forge_config_macros"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -839,6 +851,7 @@ dependencies = [
 name = "aster_forge_logging"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "aster_forge_config",
  "aster_forge_test",
  "serde",
  "serde_json",
@@ -877,6 +890,8 @@ name = "aster_forge_metrics"
 version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_alloc",
+ "aster_forge_config",
+ "aster_forge_crypto",
  "aster_forge_http",
  "aster_forge_runtime",
  "hashbrown 0.17.1",
@@ -888,6 +903,7 @@ dependencies = [
  "prometheus",
  "prost",
  "reqwest",
+ "serde",
  "sysinfo",
  "thiserror 2.0.21",
  "tokio",
@@ -984,6 +1000,7 @@ dependencies = [
 name = "aster_forge_tasks"
 version = "0.1.0-alpha.3"
 dependencies = [
+ "aster_forge_config",
  "aster_forge_runtime",
  "aster_forge_test",
  "aster_forge_utils",

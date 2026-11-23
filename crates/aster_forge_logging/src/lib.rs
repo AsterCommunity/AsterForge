@@ -79,6 +79,14 @@ impl LoggingConfig {
     }
 }
 
+impl aster_forge_config::ValidatableConfig for LoggingConfig {
+    fn validate(&self) -> aster_forge_config::Result<()> {
+        // Filter errors and writer fallback are reported by init_logging; validation
+        // must preserve RUST_LOG precedence and zero-retention rotation semantics.
+        Ok(())
+    }
+}
+
 /// Result returned after installing the tracing subscriber.
 pub struct LoggingInitResult {
     /// Guard that keeps the non-blocking logging worker alive.

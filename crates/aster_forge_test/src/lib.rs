@@ -20,7 +20,10 @@ pub mod suite;
 #[cfg(feature = "containers")]
 pub mod wait;
 
-#[cfg(any(feature = "mysql", feature = "postgres"))]
+#[cfg(any(
+    any(feature = "mysql", feature = "mysql-native-tls"),
+    any(feature = "postgres", feature = "postgres-native-tls")
+))]
 mod database;
 
 #[cfg(feature = "process")]
@@ -29,9 +32,9 @@ pub mod process;
 #[cfg(feature = "smtp")]
 pub mod smtp;
 
-#[cfg(feature = "mysql")]
+#[cfg(any(feature = "mysql", feature = "mysql-native-tls"))]
 pub mod mysql;
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "postgres-native-tls"))]
 pub mod postgres;
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 pub mod redis;

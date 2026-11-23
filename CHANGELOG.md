@@ -43,6 +43,13 @@
   schema token and document reverse-DNS product namespaces such as
   `com.astercosm.drive`; the product still supplies its own namespace through
   `with_profile`.
+- **Configuration validation contract** — Add an unconditional section-validation
+  derive and a shared `load_config` pipeline. Forge-owned sections and product
+  sections must implement `ValidatableConfig`; root configurations retain an
+  explicit cross-section `validate` step.
+- **Observability configuration** — Provide reusable metrics identity,
+  Prometheus/OTLP settings, bounded validation, and validated provider/recorder
+  assembly for downstream products.
 
 ### Security
 

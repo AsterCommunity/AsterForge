@@ -18,6 +18,55 @@
     )
 )]
 
+extern crate self as aster_forge_config;
+
+/// Configuration section validation contract.
+pub trait ValidatableConfig {
+    /// Validates invariants owned by this configuration value.
+    ///
+    /// # Errors
+    /// Returns a configuration error when an invariant is violated.
+    fn validate(&self) -> Result<()>;
+}
+
+/// Generated orchestration for a root configuration's named fields.
+pub trait ConfigSections {
+    /// Validates every configuration field in declaration order.
+    ///
+    /// # Errors
+    /// Returns the first section validation error.
+    fn validate_sections(&self) -> Result<()>;
+}
+
+/// Loads an already-deserialized configuration through the Forge validation pipeline.
+///
+/// The loader runs generated section validation first and then the root value's
+/// cross-section validation. Applications should use this entry point after choosing
+/// their deserializer instead of duplicating that call sequence.
+///
+/// # Errors
+/// Returns a parsing error mapped into [`ConfigCoreError`], or a section/root validation error.
+pub fn load_config<T, E, F>(loader: F) -> Result<T>
+where
+    T: ConfigSections + ValidatableConfig,
+    E: std::fmt::Display,
+    F: FnOnce() -> std::result::Result<T, E>,
+{
+    let config = loader().map_err(|error| ConfigCoreError::invalid_value(error.to_string()))?;
+    config.validate_sections()?;
+    config.validate()?;
+    Ok(config)
+}
+
+/// Generates unconditional field validation; every field must implement the contract.
+///
+/// ```compile_fail
+/// struct UnvalidatedSection;
+/// #[derive(aster_forge_config::ValidateConfig)]
+/// struct Root { section: UnvalidatedSection }
+/// ```
+pub use aster_forge_config_macros::ValidateConfig;
+
 pub mod avatar;
 mod error;
 mod notification;
@@ -26,7 +75,7 @@ mod runtime;
 mod value;
 
 pub use error::{ConfigCoreError, Result};
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 pub use notification::RedisConfigChangeNotifier;
 pub use notification::{
     CONFIG_SYNC_BACKEND_DISABLED, CONFIG_SYNC_BACKEND_REDIS, ConfigChangeEvent,
