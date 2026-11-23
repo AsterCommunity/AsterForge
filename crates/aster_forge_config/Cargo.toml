@@ -22,7 +22,7 @@ sea-orm-native-tls = ["sea-orm-core", "sea-orm/runtime-tokio-native-tls"]
 
 [dependencies]
 async-trait.workspace = true
-aster_forge_config_macros = { path = "../aster_forge_config_macros", version = "=0.1.0-alpha.1" }
+aster_forge_config_macros.workspace = true
 aster_forge_events = { workspace = true }
 aster_forge_utils = { workspace = true }
 futures.workspace = true
