@@ -17,7 +17,7 @@
 
 use std::str::FromStr;
 
-#[cfg(feature = "sea-orm")]
+#[cfg(any(feature = "sea-orm", feature = "sea-orm-native-tls"))]
 use sea_orm::entity::prelude::*;
 
 /// Storage width required for persisted extension and category values.
@@ -59,39 +59,69 @@ impl FileClassificationError {
 /// High-level file category inferred from extension and MIME type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(all(debug_assertions, feature = "openapi"), derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "sea-orm", derive(EnumIter, DeriveActiveEnum))]
 #[cfg_attr(
-    feature = "sea-orm",
+    any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+    derive(EnumIter, DeriveActiveEnum)
+)]
+#[cfg_attr(
+    any(feature = "sea-orm", feature = "sea-orm-native-tls"),
     sea_orm(rs_type = "String", db_type = "String(StringLen::N(32))")
 )]
 #[serde(rename_all = "lowercase")]
 pub enum FileCategory {
     /// Image files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "image"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "image")
+    )]
     Image,
     /// Video files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "video"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "video")
+    )]
     Video,
     /// Audio files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "audio"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "audio")
+    )]
     Audio,
     /// Document and plain text files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "document"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "document")
+    )]
     Document,
     /// Spreadsheet files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "spreadsheet"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "spreadsheet")
+    )]
     Spreadsheet,
     /// Presentation files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "presentation"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "presentation")
+    )]
     Presentation,
     /// Archive and compressed files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "archive"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "archive")
+    )]
     Archive,
     /// Source code and structured text files.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "code"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "code")
+    )]
     Code,
     /// Files that do not match a known category.
-    #[cfg_attr(feature = "sea-orm", sea_orm(string_value = "other"))]
+    #[cfg_attr(
+        any(feature = "sea-orm", feature = "sea-orm-native-tls"),
+        sea_orm(string_value = "other")
+    )]
     Other,
 }
 
@@ -555,7 +585,7 @@ mod tests {
         assert!(parse_extension_filters(&too_many).is_err());
     }
 
-    #[cfg(feature = "sea-orm")]
+    #[cfg(any(feature = "sea-orm", feature = "sea-orm-native-tls"))]
     #[test]
     fn file_category_has_stable_sea_orm_values() {
         assert_eq!(FileCategory::Image.to_value(), "image");

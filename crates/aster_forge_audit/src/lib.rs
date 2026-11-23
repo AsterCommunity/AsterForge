@@ -22,7 +22,7 @@
 
 use std::future::Future;
 
-#[cfg(feature = "db-writer")]
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
 mod db_writer;
 
 use aster_forge_runtime::{
@@ -30,7 +30,7 @@ use aster_forge_runtime::{
     StartupPhaseFailurePolicy, runtime_component,
 };
 
-#[cfg(feature = "db-writer")]
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
 pub use db_writer::{
     AUDIT_WRITER_START_PHASE, AuditLogBufferConfig, AuditWriter, DEFAULT_AUDIT_LOG_BATCH_SIZE,
     DEFAULT_AUDIT_LOG_DELAYED_FLUSH_AFTER, DEFAULT_AUDIT_LOG_QUEUE_CAPACITY,

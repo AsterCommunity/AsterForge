@@ -17,6 +17,7 @@ sea-orm = ["dep:sea-orm"]
 rustls-aws-lc-rs = ["aster_forge_http?/rustls-aws-lc-rs"]
 rustls-ring = ["aster_forge_http?/rustls-ring"]
 native-tls = ["aster_forge_http?/native-tls"]
+native-tls-vendored = ["aster_forge_http?/native-tls-vendored"]
 oidc = ["dep:aster_forge_http", "dep:openidconnect", "dep:reqwest"]
 oauth2 = ["dep:aster_forge_http", "dep:base64", "dep:rand", "dep:reqwest", "dep:sha2"]
 github = ["oauth2"]
@@ -33,7 +34,9 @@ async-trait.workspace = true
 base64 = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-reqwest = { workspace = true, features = ["json"], optional = true }
+# Deliberately no TLS feature here: the product selects rustls or native-tls
+# through the feature forwarding above.
+reqwest = { workspace = true, default-features = false, features = ["json"], optional = true }
 sea-orm = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

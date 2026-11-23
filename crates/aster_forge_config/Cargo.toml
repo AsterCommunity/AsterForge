@@ -13,11 +13,16 @@ publish = true
 [features]
 default = []
 openapi = ["dep:utoipa"]
-redis-pubsub = ["dep:redis", "aster_forge_events/redis"]
-sea-orm = ["dep:sea-orm"]
+redis-pubsub-core = ["dep:redis", "aster_forge_events/redis-core"]
+redis-pubsub = ["redis-pubsub-core", "redis/tokio-rustls-comp", "aster_forge_events/redis"]
+redis-pubsub-native-tls = ["redis-pubsub-core", "redis/tokio-native-tls-comp", "aster_forge_events/redis-native-tls"]
+sea-orm-core = ["dep:sea-orm"]
+sea-orm = ["sea-orm-core", "sea-orm/runtime-tokio-rustls"]
+sea-orm-native-tls = ["sea-orm-core", "sea-orm/runtime-tokio-native-tls"]
 
 [dependencies]
 async-trait.workspace = true
+aster_forge_config_macros.workspace = true
 aster_forge_events = { workspace = true }
 aster_forge_utils = { workspace = true }
 futures.workspace = true

@@ -7,7 +7,7 @@
 mod supervisor;
 mod transient_bus;
 
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 mod redis_transport;
 
 pub use supervisor::{
@@ -16,7 +16,7 @@ pub use supervisor::{
 };
 pub use transient_bus::TransientEventBus;
 
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 pub use redis_transport::{
     EventConnectionObserver, RedisEventBus, RedisEventBusError, RedisEventReconnectPolicy,
     RedisEventSubscription,

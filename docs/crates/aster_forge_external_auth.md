@@ -250,3 +250,5 @@ observer 优先于 fallback UA。OAuth2 token/userinfo、GitHub/QQ 扩展请求�
 ## HTTP 编译能力与 TLS 后端
 
 alpha.1 之后，连接器显式请求 HTTP 的 `json` 和 crypto 的 `sha256`，不再引入 Argon2 或 secret-envelope 算法。默认保留 `oidc`、`oauth2`、`rustls-aws-lc-rs`。关闭默认 features 后分别选择 provider 和 `rustls-aws-lc-rs`、`rustls-ring` 或 `native-tls`；ring 需要产品入口显式安装 provider。TLS 只在 HTTP 连接器存在时转发；产品注入的客户端仍拥有运行时策略。
+
+需要系统 TLS 或 vendored OpenSSL 时分别使用 `native-tls` 或 `native-tls-vendored`；两者都不是默认路径。`reqwest` 的 `default-features = false` 是刻意的，TLS 后端由产品 feature 统一选择。

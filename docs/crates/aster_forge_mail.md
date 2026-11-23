@@ -1,5 +1,7 @@
 # aster_forge_mail
 
+SMTP 默认使用 rustls。产品可在关闭默认 features 后选择 `native-tls`；两条路径都由 lettre 显式启用，Forge 不在运行时切换 TLS。
+
 `aster_forge_mail` 提供产品无关的邮件基础机械层。它拥有 Aster 产品共享的邮件状态、模板 code 和投递控制流，但不拥有 SMTP 配置 key、产品模板 payload、用户上下文、审计记录或数据库实体。
 
 当前这个 crate 主要覆盖各服务里重复出现的 outbox 投递机制：

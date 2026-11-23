@@ -1,5 +1,34 @@
 # aster_forge_config
 
+## 配置段校验契约
+
+Forge 提供 `ValidatableConfig` 作为所有配置段的统一契约。每个段都必须实现
+`validate()`；没有段级规则的类型也要显式返回 `Ok(())`。根配置使用
+`#[derive(aster_forge_config::ValidateConfig)]`，derive 会无条件调用每个字段的
+校验，因此字段漏实现 trait 会在编译期失败。
+
+derive 生成的 `validate_sections()` 负责逐段调用，根配置自己的 `validate()` 负责跨段
+约束。正式加载统一使用 `load_config`，下游不需要手写两个调用：
+
+```rust
+#[derive(aster_forge_config::ValidateConfig, serde::Deserialize)]
+struct AppConfig {
+    cache: CacheConfig,
+}
+
+impl aster_forge_config::ValidatableConfig for AppConfig {
+    fn validate(&self) -> aster_forge_config::Result<()> {
+        Ok(())
+    }
+}
+
+let config: AppConfig = aster_forge_config::load_config(|| toml::from_str(input))?;
+```
+
+Forge 配置段可以提供基础校验；产品需要增加规则时使用组合类型实现自己的
+`ValidatableConfig`，先调用 Forge 段校验，再执行产品规则。产品不能替换或跳过 Forge
+基础边界。
+
 `aster_forge_config` 提供 Aster 服务的运行时配置公共内核。它负责配置定义注册、结构化值转换、存储字符串验证、默认值 seed 记录生成、定义元数据覆盖、展示脱敏、审计字符串转换、运行时快照 reload diff，以及可选的 Redis reload pub/sub 通知。
 
 它不负责管理 API、前端配置页、翻译文案、业务 normalizer 的具体规则，也不负责把配置变更写入审计。`system_config` 的共享 SeaORM entity、store、table builder 和 index builder 放在 `aster_forge_db::system_config`；产品仓库只需要把自己的配置项注册进 Forge registry，并在产品边界绑定 registry、权限和审计语义。

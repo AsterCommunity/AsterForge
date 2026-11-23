@@ -21,7 +21,7 @@ pub mod audit_log;
 #[cfg(feature = "runtime-component")]
 mod component;
 pub mod connection;
-#[cfg(feature = "mail-outbox")]
+#[cfg(any(feature = "mail-outbox", feature = "mail-outbox-native-tls"))]
 pub mod mail_outbox;
 pub mod pagination;
 pub mod retry;
@@ -66,7 +66,7 @@ pub use connection::{
     DatabaseConfig, DatabaseUrl, DbHandles, connect, connect_reader_for_writer,
     connect_reader_for_writer_with_metrics, connect_with_metrics,
 };
-#[cfg(feature = "mail-outbox")]
+#[cfg(any(feature = "mail-outbox", feature = "mail-outbox-native-tls"))]
 pub use mail_outbox::{
     MAIL_OUTBOX_ATTEMPT_COUNT_COLUMN, MAIL_OUTBOX_CREATED_AT_COLUMN, MAIL_OUTBOX_DUE_INDEX,
     MAIL_OUTBOX_ID_COLUMN, MAIL_OUTBOX_LAST_ERROR_COLUMN, MAIL_OUTBOX_NEXT_ATTEMPT_AT_COLUMN,

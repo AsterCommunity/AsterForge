@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 use std::sync::Arc;
 
 use crate::{ConfigCoreError, Result};
 
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 use super::notifier::RedisConfigChangeNotifier;
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 use super::notifier::SharedConfigChangeNotifier;
 use super::runtime::ConfigSyncRuntime;
 
@@ -139,6 +139,39 @@ impl ConfigSyncConfig {
     }
 }
 
+impl crate::ValidatableConfig for ConfigSyncConfig {
+    fn validate(&self) -> Result<()> {
+        match self.backend.trim().to_ascii_lowercase().as_str() {
+            "" | "disabled" | "none" => Ok(()),
+            CONFIG_SYNC_BACKEND_REDIS => {
+                #[cfg(not(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls")))]
+                return Err(ConfigCoreError::invalid_value(
+                    "config_sync.backend 'redis' requires the redis-pubsub feature",
+                ));
+                #[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
+                match &self.endpoint {
+                    ConfigSyncEndpoint::Url(endpoint) if endpoint.trim().is_empty() => {
+                        Err(ConfigCoreError::invalid_value(
+                            "config_sync.endpoint is required when config_sync.backend is redis",
+                        ))
+                    }
+                    ConfigSyncEndpoint::Credentials { base_url, .. }
+                        if base_url.trim().is_empty() =>
+                    {
+                        Err(ConfigCoreError::invalid_value(
+                            "config_sync.endpoint base_url is required when config_sync.backend is redis",
+                        ))
+                    }
+                    _ => Ok(()),
+                }
+            }
+            backend => Err(ConfigCoreError::invalid_value(format!(
+                "unsupported config_sync.backend '{backend}'"
+            ))),
+        }
+    }
+}
+
 /// Returns the conventional config-sync topic for a product namespace.
 #[must_use]
 pub fn default_config_sync_topic(namespace: &str) -> String {
@@ -202,7 +235,7 @@ fn config_sync_topic(config: &ConfigSyncConfig, namespace: &str) -> String {
     }
 }
 
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 fn build_redis_config_sync_runtime(
     config: &ConfigSyncConfig,
     namespace: &str,
@@ -244,7 +277,7 @@ fn build_redis_config_sync_runtime(
     ))
 }
 
-#[cfg(not(feature = "redis-pubsub"))]
+#[cfg(not(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls")))]
 fn build_redis_config_sync_runtime(
     _config: &ConfigSyncConfig,
     _namespace: &str,
@@ -256,7 +289,10 @@ fn build_redis_config_sync_runtime(
     ))
 }
 
-#[cfg(any(feature = "redis-pubsub", test))]
+#[cfg(any(
+    any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"),
+    test
+))]
 pub(super) fn redis_channel_from_topic(topic: &str) -> String {
     topic.trim().replace('.', ":")
 }

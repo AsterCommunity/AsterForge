@@ -79,6 +79,14 @@ impl TaskConsumerConfig {
     }
 }
 
+impl aster_forge_config::ValidatableConfig for TaskConsumerConfig {
+    fn validate(&self) -> aster_forge_config::Result<()> {
+        (*self)
+            .validate()
+            .map_err(|error| aster_forge_config::ConfigCoreError::invalid_value(error.to_string()))
+    }
+}
+
 impl Default for TaskConsumerConfig {
     fn default() -> Self {
         Self {

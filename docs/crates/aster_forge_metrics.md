@@ -27,6 +27,11 @@ HTTP / DB / auth / tasks / 产品事件
 
 ## Cargo 与启用边界
 
+`ObservabilityConfig` 是可复用的 Forge 配置段，实现了
+`aster_forge_config::ValidatableConfig`。它负责环境、Prometheus/OTLP 开关、OTLP 限制和
+basic-auth hash 的基础校验；产品通过 `MetricsIdentity` 创建 provider。需要额外产品规则时，
+组合该配置段并在自己的 `ValidatableConfig` 实现中先调用 Forge 校验。
+
 | Cargo feature | 编译能力 | 运行方式 |
 | --- | --- | --- |
 | 默认 | descriptors、typed instruments、Noop provider | builder 不添加 reader 时不采集 |
@@ -108,7 +113,7 @@ fn create(instance_id: String) -> MetricResult<MetricsProvider> {
 
 产品身份、节点模式与进程职责是独立维度：例如 `service.name=asterdrive`、`aster.node.mode=primary/follower`、`aster.role=all/api/worker`。Forge 不定义产品枚举或拼接这些值；没有节点模式的产品可将 `node_mode` 留空。节点模式遵守相同的 128-byte/控制字符限制，`aster.node.mode` 与 `aster_node_mode` 均保留为资源身份，禁止业务 instrument 同名标签覆盖。
 
-Prometheus 生成 target_info；产品显式调用 with_profile(namespace, version) 添加 service namespace 和 schema，通用 builder 不替产品选择 namespace。Resource 属性附到样本。`job`、`instance` 由抓取配置附加，不混同于进程 instance ID。OTLP 使用显式 resource，不运行环境资源检测器。
+Prometheus 生成 target_info；产品显式调用 `with_profile("com.astercosm.<product>", METRICS_PROFILE_VERSION)` 添加反向域名 service namespace 和统一 `astercosm-metrics/v1` schema。通用 builder 不替产品选择 namespace。Resource 属性附到样本。`job`、`instance` 由抓取配置附加，不混同于进程 instance ID。OTLP 使用显式 resource，不运行环境资源检测器。
 
 provider 的 clone 共享实例，创建第二个 provider 才有独立系列和预算。共享 schema 和每套产品 schema 各注册一次，再 clone recorder/handles 注入消费者；重复注册名称会返回错误。
 

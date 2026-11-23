@@ -14,10 +14,13 @@ publish = true
 default = ["memory"]
 bloom = ["dep:bloomfilter", "dep:parking_lot"]
 memory = []
-redis = ["memory", "dep:aster_forge_utils", "dep:redis"]
+redis-core = ["memory", "dep:aster_forge_utils", "dep:redis"]
+redis = ["redis-core", "redis/tokio-rustls-comp"]
+redis-native-tls = ["redis-core", "redis/tokio-native-tls-comp"]
 runtime-component = ["dep:aster_forge_runtime"]
 
 [dependencies]
+aster_forge_config.workspace = true
 aster_forge_runtime = { workspace = true, optional = true }
 aster_forge_utils = { workspace = true, optional = true }
 async-trait.workspace = true

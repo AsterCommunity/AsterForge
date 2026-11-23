@@ -35,6 +35,21 @@
   release intent; publication remains a separate reviewed step.
 - **Daily security audit** — Run at 09:17 UTC every day instead of every Monday;
   manual dispatch remains available.
+- **TLS backend selection** — Keep rustls as the default for SMTP, Redis and
+  SeaORM consumers while exposing explicit `native-tls` features alongside the
+  existing HTTP, external-auth and OTLP choices. The workspace default graph
+  now fails CI if `native-tls` is pulled in accidentally.
+- **Metrics profile identity** — Use `astercosm-metrics/v1` as the shared
+  schema token and document reverse-DNS product namespaces such as
+  `com.astercosm.drive`; the product still supplies its own namespace through
+  `with_profile`.
+- **Configuration validation contract** — Add an unconditional section-validation
+  derive and a shared `load_config` pipeline. Forge-owned sections and product
+  sections must implement `ValidatableConfig`; root configurations retain an
+  explicit cross-section `validate` step.
+- **Observability configuration** — Provide reusable metrics identity,
+  Prometheus/OTLP settings, bounded validation, and validated provider/recorder
+  assembly for downstream products.
 
 ### Security
 

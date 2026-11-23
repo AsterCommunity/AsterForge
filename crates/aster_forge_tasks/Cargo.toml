@@ -17,6 +17,7 @@ runtime = ["dep:aster_forge_runtime", "dep:uuid"]
 runtime-component = ["runtime"]
 
 [dependencies]
+aster_forge_config.workspace = true
 aster_forge_runtime = { workspace = true, optional = true }
 aster_forge_utils = { workspace = true }
 async-trait.workspace = true

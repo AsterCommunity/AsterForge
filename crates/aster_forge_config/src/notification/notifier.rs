@@ -4,7 +4,7 @@ use tokio::sync::broadcast;
 
 use crate::{ConfigCoreError, Result};
 
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 use super::message::decode_config_reload_transport_payload;
 use super::message::{ConfigChangeEvent, ConfigReloadMessage};
 
@@ -15,7 +15,7 @@ pub struct ConfigNotification {
 
 enum ConfigNotificationReceiver {
     InMemory(broadcast::Receiver<ConfigChangeEvent>),
-    #[cfg(feature = "redis-pubsub")]
+    #[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
     Redis(aster_forge_events::RedisEventSubscription),
 }
 
@@ -26,7 +26,7 @@ impl ConfigNotification {
         }
     }
 
-    #[cfg(feature = "redis-pubsub")]
+    #[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
     fn from_redis(subscription: aster_forge_events::RedisEventSubscription) -> Self {
         Self {
             receiver: ConfigNotificationReceiver::Redis(subscription),
@@ -44,7 +44,7 @@ impl ConfigNotification {
                 .recv()
                 .await
                 .map_err(|error| ConfigCoreError::notification(error.to_string())),
-            #[cfg(feature = "redis-pubsub")]
+            #[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
             ConfigNotificationReceiver::Redis(subscription) => loop {
                 let payload = subscription
                     .receive()
@@ -111,7 +111,7 @@ impl ConfigChangeNotifier for InMemoryConfigNotifier {
     }
 }
 
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 mod redis_transport {
     use super::{ConfigChangeNotifier, ConfigNotification, ConfigReloadMessage};
     use crate::{ConfigCoreError, Result};
@@ -181,5 +181,5 @@ mod redis_transport {
     }
 }
 
-#[cfg(feature = "redis-pubsub")]
+#[cfg(any(feature = "redis-pubsub", feature = "redis-pubsub-native-tls"))]
 pub use redis_transport::RedisConfigChangeNotifier;

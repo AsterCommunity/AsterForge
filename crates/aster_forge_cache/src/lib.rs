@@ -22,7 +22,7 @@ pub mod bloom;
 mod health;
 #[cfg(feature = "memory")]
 mod memory;
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 mod redis_cache;
 #[cfg(feature = "memory")]
 mod reservation;
@@ -40,7 +40,7 @@ pub use health::{
 };
 #[cfg(feature = "memory")]
 pub use memory::MemoryCache;
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 pub use redis_cache::RedisCache;
 
 /// Result type returned by cache operations.
@@ -72,7 +72,7 @@ pub enum CacheError {
     },
 }
 
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 impl From<redis::RedisError> for CacheError {
     fn from(value: redis::RedisError) -> Self {
         Self::RedisConnection(value.to_string())
@@ -212,7 +212,31 @@ impl CacheConfig {
     }
 }
 
-#[cfg(feature = "redis")]
+impl aster_forge_config::ValidatableConfig for CacheConfig {
+    fn validate(&self) -> aster_forge_config::Result<()> {
+        match self.normalized_backend().as_ref() {
+            "memory" => Ok(()),
+            "redis" => match &self.endpoint {
+                CacheEndpoint::Url(endpoint) if endpoint.trim().is_empty() => {
+                    Err(aster_forge_config::ConfigCoreError::invalid_value(
+                        "cache.endpoint is required when cache.backend is redis",
+                    ))
+                }
+                CacheEndpoint::Credentials { base_url, .. } if base_url.trim().is_empty() => {
+                    Err(aster_forge_config::ConfigCoreError::invalid_value(
+                        "cache.endpoint base_url is required when cache.backend is redis",
+                    ))
+                }
+                _ => Ok(()),
+            },
+            backend => Err(aster_forge_config::ConfigCoreError::invalid_value(format!(
+                "unsupported cache.backend '{backend}'"
+            ))),
+        }
+    }
+}
+
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 fn redis_backend_target_url(endpoint: &str) -> String {
     let Some((scheme, rest)) = endpoint.split_once("://") else {
         return "configured".to_string();
@@ -227,7 +251,7 @@ fn redis_backend_target_url(endpoint: &str) -> String {
     }
 }
 
-#[cfg(feature = "redis")]
+#[cfg(any(feature = "redis", feature = "redis-native-tls"))]
 fn redis_backend_target(endpoint: &CacheEndpoint) -> String {
     match endpoint {
         CacheEndpoint::Url(url) => redis_backend_target_url(url),
@@ -318,7 +342,7 @@ impl CacheExt for dyn CacheBackend {
 /// and [`CacheBackendFailurePolicy::ReturnError`] is selected.
 #[cfg(feature = "memory")]
 #[cfg_attr(
-    not(feature = "redis"),
+    not(any(feature = "redis", feature = "redis-native-tls")),
     expect(
         clippy::unused_async,
         reason = "The Redis feature awaits connection setup; keep one factory API across feature sets."
@@ -329,7 +353,7 @@ pub async fn create_cache_with_policy(
     failure_policy: CacheBackendFailurePolicy,
 ) -> Result<Arc<dyn CacheBackend>> {
     match config.normalized_backend().as_ref() {
-        #[cfg(feature = "redis")]
+        #[cfg(any(feature = "redis", feature = "redis-native-tls"))]
         "redis" => {
             match redis_cache::RedisCache::from_endpoint(&config.endpoint, config.default_ttl).await
             {
@@ -505,7 +529,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "redis")]
+    #[cfg(any(feature = "redis", feature = "redis-native-tls"))]
     #[tokio::test]
     async fn explicit_error_policy_returns_redis_construction_error() {
         let Err(error) = super::create_cache_with_policy(
@@ -524,7 +548,7 @@ mod tests {
         assert!(error.to_string().contains("redis cache connection"));
     }
 
-    #[cfg(feature = "redis")]
+    #[cfg(any(feature = "redis", feature = "redis-native-tls"))]
     #[test]
     fn redis_backend_target_strips_credentials() {
         assert_eq!(
@@ -535,7 +559,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "redis")]
+    #[cfg(any(feature = "redis", feature = "redis-native-tls"))]
     #[test]
     fn redis_backend_target_keeps_host_without_credentials() {
         assert_eq!(
@@ -544,7 +568,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "redis")]
+    #[cfg(any(feature = "redis", feature = "redis-native-tls"))]
     #[test]
     fn redis_backend_target_handles_malformed_or_empty_hosts() {
         assert_eq!(

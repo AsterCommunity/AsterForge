@@ -19,16 +19,19 @@ pub fn load() -> Result<super::AppConfig> {
     let path = config_path();
     ensure_default_config_exists(&path, &super::AppConfig::default())?;
 
-    let mut loaded = ::config::Config::builder()
-        .add_source(::config::File::from(path.as_path()).required(false))
-        .add_source(
-            ::config::Environment::with_prefix("ASTER")
-                .separator("__")
-                .try_parsing(true),
-        )
-        .build()?
-        .try_deserialize::<super::AppConfig>()?;
-    normalize_paths(&mut loaded, &path)?;
+    let loaded = aster_forge_config::load_config(|| -> Result<super::AppConfig> {
+        let mut config = ::config::Config::builder()
+            .add_source(::config::File::from(path.as_path()).required(false))
+            .add_source(
+                ::config::Environment::with_prefix("ASTER")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?
+            .try_deserialize::<super::AppConfig>()?;
+        normalize_paths(&mut config, &path)?;
+        Ok(config)
+    })?;
     tracing::info!(path = %path.display(), "loaded configuration file");
     Ok(loaded)
 }
