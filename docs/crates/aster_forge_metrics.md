@@ -250,7 +250,7 @@ async fn run_sampler(recorder: InfrastructureMetricsRecorder) {
 
 | `MetricError` | 常见原因与处理边界 |
 | --- | --- |
-| `InvalidConfiguration` / `Initialization` | 启动配置或 exporter 初始化失败；产品映射为启动错误 |
+| `InvalidConfiguration(String)` / `Initialization` | 启动配置或 exporter 初始化失败；配置错误携带字段路径/约束原因，产品映射为启动错误 |
 | `InvalidDescriptor` / `DuplicateRegistration` / `WrongKind` | schema 或 typed handle 使用错误；启动/测试时修正 |
 | `InstrumentLimit` / `SeriesLimit` / `InvalidLabels` | 预算或标签设计错误；检查有限分类及系列组合 |
 | `InvalidValue` | 非有限/负 histogram、无效 gauge、counter 累计溢出 |

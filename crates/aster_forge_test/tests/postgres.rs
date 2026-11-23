@@ -71,3 +71,69 @@ async fn concurrent_postgres_container_starts_share_one_reusable_container() {
 
     assert_eq!(first.container_identity(), second.container_identity());
 }
+
+#[tokio::test]
+async fn postgres_schema_fixture_reuses_rebuilds_and_recovers_missing_database() {
+    use aster_forge_test::fixture::{SchemaFixtureSpec, SuiteFixtureLock};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let suite = TestContainerSuite::new("forge-postgres-schema-fixture");
+    let container = PostgresTestContainer::start(&suite).await;
+    let resource = unique_database_name("schema");
+    let fixture = format!("migrated-{resource}");
+    let builds = &AtomicUsize::new(0);
+    let spec = SchemaFixtureSpec {
+        fixture: &fixture,
+        resource: &resource,
+        fingerprint: "schema-v1",
+        producer_version: "producer-v1",
+    };
+    // A database left behind before state publication must be removed before migration.
+    let _leftover = container.create_shared_database(&resource).await;
+    for current in [
+        spec,
+        spec,
+        SchemaFixtureSpec {
+            fingerprint: "schema-v2",
+            ..spec
+        },
+        SchemaFixtureSpec {
+            fingerprint: "schema-v2",
+            producer_version: "producer-v2",
+            ..spec
+        },
+    ] {
+        let name = container
+            .ensure_schema_template(current, |db| async move {
+                builds.fetch_add(1, Ordering::SeqCst);
+                db.execute_unprepared("CREATE TABLE marker (id BIGINT PRIMARY KEY)")
+                    .await
+                    .unwrap();
+                db.execute_unprepared("INSERT INTO marker VALUES (1)")
+                    .await
+                    .unwrap();
+            })
+            .await;
+        assert_eq!(name, resource);
+    }
+    assert_eq!(builds.load(Ordering::SeqCst), 3);
+    container.drop_shared_database(&resource).await;
+    let current = SchemaFixtureSpec {
+        fingerprint: "schema-v2",
+        producer_version: "producer-v2",
+        ..spec
+    };
+    let build = |db: sea_orm::DatabaseConnection| async move {
+        builds.fetch_add(1, Ordering::SeqCst);
+        db.execute_unprepared("CREATE TABLE marker (id BIGINT PRIMARY KEY)")
+            .await
+            .unwrap();
+    };
+    let (one, two) = tokio::join!(
+        container.ensure_schema_template(current, build),
+        container.ensure_schema_template(current, build)
+    );
+    assert_eq!(one, two);
+    assert_eq!(builds.load(Ordering::SeqCst), 4);
+    container.drop_shared_database(&resource).await;
+    SuiteFixtureLock::acquire(&suite, spec.fixture).clear();
+}

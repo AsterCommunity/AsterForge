@@ -18,13 +18,14 @@ use std::{
     },
 };
 
-/// Stable, deliberately redacted errors: never contain labels or exporter credentials.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+/// Stable metric failure classifications. Built-in configuration diagnostics identify fields
+/// and constraints without their values; custom sources must also redact credentials.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MetricError {
     /// Provider construction parameters are invalid (limits, profile references, or exporter
     /// settings).
-    #[error("invalid metrics configuration")]
-    InvalidConfiguration,
+    #[error("invalid metrics configuration: {0}")]
+    InvalidConfiguration(String),
     /// Metric descriptor fails validation (name, unit, buckets, or label schema).
     #[error("invalid metric descriptor")]
     InvalidDescriptor,

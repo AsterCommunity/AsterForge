@@ -62,12 +62,12 @@ fn profile_rejects_missing_oversized_and_control_character_identity() {
         (&"a".repeat(129), "v1"),
         ("aster", &"v".repeat(129)),
     ] {
-        assert_eq!(
+        assert!(matches!(
             MetricsProvider::builder()
                 .with_profile(namespace, version)
                 .err(),
-            Some(MetricError::InvalidConfiguration)
-        );
+            Some(MetricError::InvalidConfiguration(_))
+        ));
     }
     MetricsProvider::builder()
         .with_profile(&"a".repeat(128), &"v".repeat(128))
@@ -236,7 +236,7 @@ fn node_mode_identity_is_bounded_and_rejects_control_characters() {
                 node_mode,
                 ..Default::default()
             }),
-            Err(MetricError::InvalidConfiguration)
+            Err(MetricError::InvalidConfiguration(_))
         ));
     }
     for node_mode in [String::new(), "n".repeat(128)] {

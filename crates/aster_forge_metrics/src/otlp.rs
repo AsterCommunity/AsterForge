@@ -52,37 +52,69 @@ impl OtlpMetricsConfig {
     /// # Errors
     /// Returns a redacted error for invalid endpoints, headers, timeouts or size limits.
     pub fn validate(&self) -> MetricResult<()> {
-        let url =
-            reqwest::Url::parse(&self.endpoint).map_err(|_| MetricError::InvalidConfiguration)?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host().is_none()
+        let url = reqwest::Url::parse(&self.endpoint).map_err(|_| {
+            MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.endpoint is invalid".into(),
+            )
+        })?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.endpoint scheme must be http or https".into(),
+            ));
+        }
+        if url.host().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
-            || self.timeout.is_zero()
-            || self.timeout > Duration::from_mins(1)
-            || self.interval < Duration::from_secs(1)
-            || self.interval > Duration::from_hours(1)
-            || self.timeout > self.interval
-            || self.headers.len() > 16
-            || self.max_request_bytes == 0
-            || self.max_request_bytes > 64 * 1024 * 1024
-            || self.max_response_bytes == 0
-            || self.max_response_bytes > 1024 * 1024
         {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.endpoint must not contain credentials, query, or fragment".into(),
+            ));
+        }
+        if self.timeout.is_zero()
+            || self.timeout > Duration::from_mins(1)
+            || self.timeout > self.interval
+        {
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.timeout must be positive, at most 60 seconds, and not exceed interval".into(),
+            ));
+        }
+        if self.interval < Duration::from_secs(1) || self.interval > Duration::from_hours(1) {
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.interval must be between 1 second and 1 hour".into(),
+            ));
+        }
+        if self.headers.len() > 16 {
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.headers count exceeds 16".into(),
+            ));
+        }
+        if self.max_request_bytes == 0 || self.max_request_bytes > 64 * 1024 * 1024 {
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.max_request_bytes must be 1..=67108864".into(),
+            ));
+        }
+        if self.max_response_bytes == 0 || self.max_response_bytes > 1024 * 1024 {
+            return Err(MetricError::InvalidConfiguration(
+                "observability.otlp_metrics.max_response_bytes must be 1..=1048576".into(),
+            ));
         }
         for (key, value) in &self.headers {
-            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                .map_err(|_| MetricError::InvalidConfiguration)?;
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|_| {
+                MetricError::InvalidConfiguration(
+                    "observability.otlp_metrics.headers name is invalid".into(),
+                )
+            })?;
             if matches!(
                 name.as_str(),
                 "content-type" | "content-length" | "host" | "connection" | "transfer-encoding"
             ) || value.len() > 4096
                 || reqwest::header::HeaderValue::from_str(value).is_err()
             {
-                return Err(MetricError::InvalidConfiguration);
+                return Err(MetricError::InvalidConfiguration(
+                    "observability.otlp_metrics.headers is reserved, oversized, or contains invalid bytes".into(),
+                ));
             }
         }
         Ok(())
@@ -134,7 +166,9 @@ impl MetricsProviderBuilder {
     ) -> MetricResult<(Self, OtlpExportDiagnostics)> {
         config.validate()?;
         if self.otlp_diagnostics.is_some() {
-            return Err(MetricError::InvalidConfiguration);
+            return Err(MetricError::InvalidConfiguration(
+                "OTLP exporter is already configured".into(),
+            ));
         }
         let timeout = config.timeout;
         // reqwest's blocking client must be built outside an async runtime.
@@ -518,7 +552,10 @@ mod tests {
     #[test]
     fn configuration_errors_are_redacted_and_bounded() {
         let mut cfg = config("https://user:secret@collector.invalid/v1/metrics".into());
-        assert_eq!(cfg.validate(), Err(MetricError::InvalidConfiguration));
+        assert!(matches!(
+            cfg.validate(),
+            Err(MetricError::InvalidConfiguration(_))
+        ));
         assert!(!cfg.validate().unwrap_err().to_string().contains("secret"));
         cfg.endpoint = "http://127.0.0.1:4318/v1/metrics".into();
         cfg.headers.insert("content-type".into(), "bad".into());

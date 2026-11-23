@@ -264,6 +264,41 @@ mod tests {
         );
     }
 
+    fn config_path_context() -> (PathBuf, PathBuf) {
+        #[cfg(windows)]
+        let base_dir = PathBuf::from(r"C:\srv\asterapp");
+        #[cfg(not(windows))]
+        let base_dir = PathBuf::from("/srv/asterapp");
+
+        (base_dir.clone(), base_dir.join("data"))
+    }
+
+    fn runtime_path(parts: &[&str]) -> String {
+        parts
+            .iter()
+            .fold(PathBuf::new(), |path, part| path.join(part))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn absolute_config_path() -> String {
+        #[cfg(windows)]
+        let path = Path::new(r"C:\var\lib\asterapp\..\app\data");
+        #[cfg(not(windows))]
+        let path = Path::new("/var/lib/asterapp/../app/data");
+
+        path.to_string_lossy().into_owned()
+    }
+
+    fn absolute_sqlite_path() -> String {
+        #[cfg(windows)]
+        let path = Path::new(r"C:\var\lib\asterapp\..\app\custom.db");
+        #[cfg(not(windows))]
+        let path = Path::new("/var/lib/asterapp/../app/custom.db");
+
+        path.to_string_lossy().into_owned()
+    }
+
     #[test]
     fn join_path_handles_empty_and_absolute_roots() {
         assert_eq!(join_path("", ""), "");
@@ -373,98 +408,106 @@ mod tests {
 
     #[test]
     fn resolve_config_relative_path_accepts_plain_and_data_prefixed_relative_values() {
-        let base_dir = Path::new("/srv/asterapp");
-        let config_dir = Path::new("/srv/asterapp/data");
+        let (base_dir, config_dir) = config_path_context();
 
         assert_eq!(
-            resolve_config_relative_path(base_dir, config_dir, ".tmp").unwrap(),
-            "data/.tmp"
+            resolve_config_relative_path(&base_dir, &config_dir, ".tmp").unwrap(),
+            runtime_path(&["data", ".tmp"])
         );
         assert_eq!(
-            resolve_config_relative_path(base_dir, config_dir, "data/.tmp").unwrap(),
-            "data/.tmp"
+            resolve_config_relative_path(&base_dir, &config_dir, "data/.tmp").unwrap(),
+            runtime_path(&["data", ".tmp"])
         );
         assert_eq!(
-            resolve_config_relative_path(base_dir, config_dir, "../shared").unwrap(),
+            resolve_config_relative_path(&base_dir, &config_dir, "../shared").unwrap(),
             "shared"
         );
     }
 
     #[test]
     fn resolve_config_relative_path_preserves_empty_and_absolute_values() {
-        let base_dir = Path::new("/srv/asterapp");
-        let config_dir = Path::new("/srv/asterapp/data");
+        let (base_dir, config_dir) = config_path_context();
+
+        let absolute_path = absolute_config_path();
 
         assert_eq!(
-            resolve_config_relative_path(base_dir, config_dir, "").unwrap(),
+            resolve_config_relative_path(&base_dir, &config_dir, "").unwrap(),
             ""
         );
         assert_eq!(
-            resolve_config_relative_path(base_dir, config_dir, "/var/lib/asterapp/../app/data")
-                .unwrap(),
-            "/var/lib/app/data"
+            resolve_config_relative_path(&base_dir, &config_dir, &absolute_path).unwrap(),
+            super::normalize_path(Path::new(&absolute_path))
+                .to_string_lossy()
+                .as_ref()
         );
     }
 
     #[test]
     fn resolve_config_relative_path_rejects_values_outside_base_dir() {
-        let base_dir = Path::new("/srv/asterapp");
-        let config_dir = Path::new("/srv/asterapp/data");
+        let (base_dir, config_dir) = config_path_context();
 
-        let error = resolve_config_relative_path(base_dir, config_dir, "../../shared")
+        let error = resolve_config_relative_path(&base_dir, &config_dir, "../../shared")
             .expect_err("path outside base_dir should be rejected");
         assert!(error.to_string().contains("outside data base_dir"));
     }
 
     #[test]
     fn resolve_config_relative_sqlite_url_accepts_plain_and_data_prefixed_relative_values() {
-        let base_dir = Path::new("/srv/asterapp");
-        let config_dir = Path::new("/srv/asterapp/data");
+        let (base_dir, config_dir) = config_path_context();
+        let expected_url = format!(
+            "sqlite://{}?mode=rwc",
+            runtime_path(&["data", "asterapp.db"])
+        );
+        let absolute_path = absolute_sqlite_path();
+        let expected_absolute_url = format!(
+            "sqlite://{}?mode=rwc",
+            super::normalize_path(Path::new(&absolute_path)).display()
+        );
 
         assert_eq!(
             resolve_config_relative_sqlite_url(
-                base_dir,
-                config_dir,
+                &base_dir,
+                &config_dir,
                 "sqlite://asterapp.db?mode=rwc"
             )
             .unwrap(),
-            "sqlite://data/asterapp.db?mode=rwc"
+            expected_url
         );
         assert_eq!(
             resolve_config_relative_sqlite_url(
-                base_dir,
-                config_dir,
+                &base_dir,
+                &config_dir,
                 "sqlite://data/asterapp.db?mode=rwc"
             )
             .unwrap(),
-            "sqlite://data/asterapp.db?mode=rwc"
+            expected_url
         );
         assert_eq!(
             resolve_config_relative_sqlite_url(
-                base_dir,
-                config_dir,
-                "sqlite:///var/lib/asterapp/custom.db?mode=rwc"
+                &base_dir,
+                &config_dir,
+                &format!("sqlite://{absolute_path}?mode=rwc")
             )
             .unwrap(),
-            "sqlite:///var/lib/asterapp/custom.db?mode=rwc"
+            expected_absolute_url
         );
     }
 
     #[test]
     fn resolve_config_relative_sqlite_url_preserves_non_file_backed_values() {
-        let base_dir = Path::new("/srv/asterapp");
-        let config_dir = Path::new("/srv/asterapp/data");
+        let (base_dir, config_dir) = config_path_context();
 
         assert_eq!(
-            resolve_config_relative_sqlite_url(base_dir, config_dir, "sqlite::memory:").unwrap(),
+            resolve_config_relative_sqlite_url(&base_dir, &config_dir, "sqlite::memory:").unwrap(),
             "sqlite::memory:"
         );
         assert_eq!(
-            resolve_config_relative_sqlite_url(base_dir, config_dir, "sqlite://:memory:").unwrap(),
+            resolve_config_relative_sqlite_url(&base_dir, &config_dir, "sqlite://:memory:")
+                .unwrap(),
             "sqlite://:memory:"
         );
         assert_eq!(
-            resolve_config_relative_sqlite_url(base_dir, config_dir, "postgres://localhost/db")
+            resolve_config_relative_sqlite_url(&base_dir, &config_dir, "postgres://localhost/db")
                 .unwrap(),
             "postgres://localhost/db"
         );
@@ -472,12 +515,11 @@ mod tests {
 
     #[test]
     fn resolve_config_relative_sqlite_url_rejects_values_outside_base_dir() {
-        let base_dir = Path::new("/srv/asterapp");
-        let config_dir = Path::new("/srv/asterapp/data");
+        let (base_dir, config_dir) = config_path_context();
 
         let error = resolve_config_relative_sqlite_url(
-            base_dir,
-            config_dir,
+            &base_dir,
+            &config_dir,
             "sqlite://../../shared/asterapp.db?mode=rwc",
         )
         .expect_err("sqlite path outside base_dir should be rejected");

@@ -26,7 +26,7 @@ aster_forge_audit = "=0.1.0-alpha.3"
 
 Default features: none.
 
-Available features: `database-container-tests`, `db-writer`, `mail-outbox-dependency`. Select features according to the integration documentation.
+Available features: `database-container-tests`, `db-writer`, `db-writer-native-tls`, `mail-outbox-dependency`. The writer features include private recovery-file preservation.
 
 ## Documentation
 

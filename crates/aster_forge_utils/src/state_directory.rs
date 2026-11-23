@@ -2,6 +2,10 @@
 //!
 //! Shared by process coordination and durable adapter fixtures. This owns filesystem mechanics,
 //! never the caller's path selection, document schema, locking protocol, or recovery policy.
+//!
+// TODO(AsterFS): move verified directory handles, no-follow file access and durable atomic
+// replacement to AsterFS when its platform contracts cover these operations. Keep suite
+// identities, fixture metadata, lock ownership and stale-resource policy in their consumers.
 
 use std::fs::{DirBuilder, File};
 use std::io::{self, Read, Write};

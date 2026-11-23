@@ -17,10 +17,13 @@ their owning contracts; selector/policy and unknown scripts fall back to every
 crate. Unknown/removed crate paths also fall back to every crate. Root
 documentation changes skip Rust compilation.
 
+Changes to `release-plan.json` select workspace validation, including the three-platform
+filesystem suite, so publication cannot rely only on package/archive compilation checks.
+
 | Workflow | Scope |
 | --- | --- |
 | `rust-crate.yml` | Reusable per-crate MSRV check, default-feature tests and Clippy; feature matrices stay in dedicated contracts or full validation |
-| `rust-panic.yml` | Panic contract on Linux, macOS and Windows |
+| `rust-panic.yml` | Filesystem behavior on Linux/macOS/Windows: panic install/private files, utils/task cleanup, fixture locks/publication, and audit recovery |
 | `rust-process.yml` | Process contract on three OSes, plus nonzero-test Miri gate |
 | `rust-auth.yml` | Exclusive JWT backends, platform tests and isolated consumers |
 | `rust-http-crypto.yml` | Isolated HTTP/crypto consumer feature contracts |

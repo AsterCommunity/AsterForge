@@ -1,5 +1,7 @@
 //! Explicitly owned audit persistence using the product-neutral DB store.
 
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +16,9 @@ use aster_forge_runtime::{
 use sea_orm::DatabaseConnection;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+use serde::Serialize;
 
 use crate::{AUDIT_LOGS_COMPONENT, AUDIT_MANAGER_COMPONENT, AUDIT_MANAGER_FLUSH_SHUTDOWN_PHASE};
 
@@ -189,6 +194,133 @@ impl AuditWriter {
     #[must_use]
     pub fn unconfirmed(&self) -> Vec<AuditLogCreate> {
         self.writer.unconfirmed()
+    }
+}
+
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+#[derive(Serialize)]
+struct AuditRecoveryEnvelope {
+    version: u32,
+    requires_database_reconciliation: bool,
+    queued: usize,
+    direct_pending: usize,
+    batch_failure_records: usize,
+    batch_failure_class: Option<&'static str>,
+    direct_failure_class: Option<&'static str>,
+    records: Vec<AuditRecoveryRecord>,
+}
+
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+#[derive(Serialize)]
+struct AuditRecoveryRecord {
+    user_id: i64,
+    action: String,
+    entity_type: String,
+    entity_id: Option<i64>,
+    entity_name: Option<String>,
+    details: Option<String>,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
+    created_at: String,
+}
+
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+impl From<AuditLogCreate> for AuditRecoveryRecord {
+    fn from(record: AuditLogCreate) -> Self {
+        Self {
+            user_id: record.user_id,
+            action: record.action,
+            entity_type: record.entity_type,
+            entity_id: record.entity_id,
+            entity_name: record.entity_name,
+            details: record.details,
+            ip_address: record.ip_address,
+            user_agent: record.user_agent,
+            created_at: record.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+fn failure_classification<E>(failure: Option<&WriteFailure<E>>) -> Option<&'static str> {
+    failure.map(|failure| match failure.class {
+        WriteFailureClass::Retryable => "Retryable",
+        WriteFailureClass::Permanent => "Permanent",
+        WriteFailureClass::UnknownCommit => "UnknownCommit",
+    })
+}
+
+/// Persists unconfirmed audit records after a drain attempt. The output is for operator
+/// reconciliation only and is never replayed by Forge.
+///
+/// # Errors
+/// Returns filesystem, privacy validation, or serialization errors. No file is written when the
+/// writer has no unconfirmed records.
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+pub fn preserve_unconfirmed(writer: &AuditWriter, directory: &Path) -> io::Result<Option<PathBuf>> {
+    let snapshot = writer.snapshot();
+    if snapshot.state != BufferedWriterState::Stopped {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "stop the audit writer before preserving records",
+        ));
+    }
+    let records = writer.unconfirmed();
+    if records.is_empty() {
+        return Ok(None);
+    }
+    let envelope = AuditRecoveryEnvelope {
+        version: 1,
+        requires_database_reconciliation: true,
+        queued: snapshot.queued,
+        direct_pending: snapshot.direct_pending,
+        batch_failure_records: snapshot.batch_failure_records,
+        batch_failure_class: failure_classification(snapshot.batch_failure.as_ref()),
+        direct_failure_class: failure_classification(snapshot.direct_failure.as_ref()),
+        records: records.into_iter().map(Into::into).collect(),
+    };
+    let payload = serde_json::to_vec_pretty(&envelope)
+        .map_err(|error| io::Error::other(format!("serialize audit recovery: {error}")))?;
+    crate::recovery_file::write_private(directory, &payload).map(Some)
+}
+
+/// Stops the writer, preserves any unconfirmed records, and returns the service result.
+///
+/// # Errors
+/// Returns the original service error when drain succeeds. Incomplete drain returns an error
+/// including the original service failure and the recovery path or preservation failure.
+#[cfg(any(feature = "db-writer", feature = "db-writer-native-tls"))]
+pub async fn finish_audit<T>(
+    result: Result<T, io::Error>,
+    writer: &AuditWriter,
+    directory: &Path,
+    drain_timeout: Duration,
+) -> Result<T, io::Error> {
+    let now = Instant::now();
+    let deadline = now.checked_add(drain_timeout);
+    let report = writer.stop(deadline.unwrap_or(now)).await;
+    let remaining = report.snapshot.queued + report.snapshot.direct_pending;
+    match preserve_unconfirmed(writer, directory) {
+        Ok(Some(path)) => Err(io::Error::other(format!(
+            "{}; {remaining} unconfirmed audit records saved to {} for database reconciliation",
+            result.err().map_or_else(
+                || "audit drain incomplete".into(),
+                |error| error.to_string()
+            ),
+            path.display(),
+        ))),
+        Err(error) => Err(io::Error::other(format!(
+            "{}; failed to preserve {remaining} unconfirmed audit records: {error}",
+            result.err().map_or_else(
+                || "audit drain incomplete".into(),
+                |error| error.to_string()
+            ),
+        ))),
+        Ok(None) if deadline.is_none() && result.is_ok() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "audit drain timeout exceeds clock range",
+        )),
+        Ok(None) => result,
     }
 }
 

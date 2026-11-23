@@ -131,6 +131,17 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(outputs["has_panic"], "true")
         self.assertEqual(outputs["has_template"], "true")
 
+    def test_filesystem_packages_select_platform_behavior_contract(self):
+        for package in ["aster_forge_utils", "aster_forge_tasks", "aster_forge_test", "aster_forge_audit"]:
+            with self.subTest(package=package):
+                self.assertEqual(ci.make_outputs({package}, [], self.metadata)["has_panic"], "true")
+
+    def test_release_plan_requires_workspace_and_platform_behavior_validation(self):
+        names = ci.affected_packages(["release-plan.json"], self.metadata)
+        self.assertEqual(names, set(self.metadata["workspace_members"]))
+        outputs = ci.make_outputs(names | {"aster_forge_panic"}, [], self.metadata)
+        self.assertEqual(outputs["has_panic"], "true")
+
     def test_dedicated_crates_are_not_duplicated_in_generic_matrix(self):
         outputs = ci.make_outputs(
             {"aster_forge_cloud_files_linux", "aster_forge_utils"}, [], self.metadata
