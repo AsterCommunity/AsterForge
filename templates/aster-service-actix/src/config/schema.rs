@@ -4,7 +4,9 @@
 //! defaults keep the generated service runnable; `config.toml` can override any subset of them.
 
 /// Static service configuration used by the generated skeleton.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, aster_forge_config::ValidateConfig)]
+#[derive(
+    Debug, Clone, serde::Deserialize, serde::Serialize, aster_forge_config::ValidateConfig,
+)]
 #[serde(default)]
 pub struct AppConfig {
     /// HTTP server settings.
@@ -68,7 +70,9 @@ pub struct ServerConfig {
 impl aster_forge_config::ValidatableConfig for ServerConfig {
     fn validate(&self) -> aster_forge_config::Result<()> {
         if self.host.trim().is_empty() || self.port == 0 {
-            return Err(aster_forge_config::ConfigCoreError::invalid_value("invalid server host or port"));
+            return Err(aster_forge_config::ConfigCoreError::invalid_value(
+                "invalid server host or port",
+            ));
         }
         Ok(())
     }
@@ -100,7 +104,9 @@ pub struct DatabaseConfig {
 impl aster_forge_config::ValidatableConfig for DatabaseConfig {
     fn validate(&self) -> aster_forge_config::Result<()> {
         if self.pool_size == 0 {
-            return Err(aster_forge_config::ConfigCoreError::invalid_value("database pool size must be positive"));
+            return Err(aster_forge_config::ConfigCoreError::invalid_value(
+                "database pool size must be positive",
+            ));
         }
         Ok(())
     }
