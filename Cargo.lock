@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_audit"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "aster_forge_db",
  "aster_forge_mail",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_auth"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "aster_forge_crypto",
  "async-trait",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_cache"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_config",
  "aster_forge_runtime",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_cloud_files_core"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_cloud_files_linux"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_cloud_files_core",
  "aster_forge_utils",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_cloud_files_macos_bridge"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_cloud_files_core",
  "async-trait",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_cloud_files_windows"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_cloud_files_core",
  "async-trait",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_config"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_config_macros",
  "aster_forge_events",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_config_macros"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_crypto"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_db"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "aster_forge_api",
  "aster_forge_config",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_db_migration"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_test",
  "sea-orm-migration",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_events"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_test",
  "aster_forge_utils",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_external_auth"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "actix-web",
  "aster_forge_crypto",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_file_classification"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "sea-orm",
  "serde",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_http"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "http 1.5.0",
  "rcgen",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_logging"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aster_forge_config",
  "aster_forge_test",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_mail"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_runtime",
  "aster_forge_tasks",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_metrics"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "aster_forge_alloc",
  "aster_forge_config",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_middleware"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "actix-governor",
  "actix-web",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_observability"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "actix-web",
  "aster_forge_metrics",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_panic"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_test",
  "rustix",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_runtime"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_utils",
  "async-trait",
@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_tasks"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_config",
  "aster_forge_runtime",
@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_test"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "aster_forge_http",
  "aster_forge_utils",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_utils"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "headers",
  "http 1.5.0",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_webdav"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "actix-web",
  "aster_forge_utils",
@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_xml"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 dependencies = [
  "aster_forge_utils",
  "criterion",

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2026-11-23 batch] - 2026-11-23
+
+Changes since `da09ee6b6ae57baba3a423438305e927ea51e475`. This batch selects
+28 changed crates, including their affected internal consumers. Each advances
+by one alpha version; the other seven crates retain their published versions.
+
 ### Added
 
 - **Audit recovery files** — Preserve stopped writers' unconfirmed audit records in
@@ -10,8 +16,43 @@
   records are never replayed automatically.
 - **Reusable schema fixtures** — PostgreSQL/MySQL test containers reuse migrated
   template databases by schema fingerprint and producer version, with locked
-  rebuilds, connection probes and interrupted-build cleanup. Products retain
+  rebuilds, bounded connection probes and interrupted-build cleanup. Products retain
   migration, seed, naming and fingerprint ownership.
+
+### Changed
+
+- **TLS backend selection** — Keep rustls as the default for SMTP, Redis and
+  SeaORM consumers while exposing explicit `native-tls` features alongside the
+  existing HTTP, external-auth and OTLP choices. The workspace default graph
+  now fails CI if `native-tls` is pulled in accidentally.
+- **Metrics profile identity** — Use `astercosm-metrics/v1` as the shared
+  schema token and document reverse-DNS product namespaces such as
+  `com.astercosm.drive`; the product still supplies its own namespace through
+  `with_profile`.
+- **Configuration validation (breaking)** — Add an unconditional section-validation
+  derive and a shared `load_config` pipeline. Forge-owned sections and product
+  sections must implement `ValidatableConfig`; root configurations retain an
+  explicit cross-section `validate` step.
+- **Observability configuration (breaking)** — Provide reusable metrics identity,
+  Prometheus/OTLP settings, bounded validation, and validated provider/recorder
+  assembly for downstream products. `MetricsIdentity` implements `ValidatableConfig`;
+  `MetricError::InvalidConfiguration(String)` retains field and constraint diagnostics
+  across loader and direct-provider entrypoints and is no longer a Copy/unit variant.
+- **Public API documentation** — Complete API rustdoc and enable the workspace
+  `missing_docs` lint; clarify password verification timing contracts.
+
+### Fixed
+
+- **Panic filesystem side effects** — Linux private report writers require existing
+  ancestor directories, so installing the default hook cannot create `data/`.
+  Explicit bootstrap may create that directory before installing a new writer.
+  Filesystem behavior is checked on Linux, macOS and Windows before release gates.
+
+## [2026-11-21 batch] - 2026-11-21
+
+The 31-crate release recorded by `da09ee6b6ae57baba3a423438305e927ea51e475`.
+
+### Added
 
 - **Release automation** — Detect manually versioned, unpublished crates and
   open a release PR containing format-preserving dependency pin updates and an
@@ -44,23 +85,6 @@
   release intent; publication remains a separate reviewed step.
 - **Daily security audit** — Run at 09:17 UTC every day instead of every Monday;
   manual dispatch remains available.
-- **TLS backend selection** — Keep rustls as the default for SMTP, Redis and
-  SeaORM consumers while exposing explicit `native-tls` features alongside the
-  existing HTTP, external-auth and OTLP choices. The workspace default graph
-  now fails CI if `native-tls` is pulled in accidentally.
-- **Metrics profile identity** — Use `astercosm-metrics/v1` as the shared
-  schema token and document reverse-DNS product namespaces such as
-  `com.astercosm.drive`; the product still supplies its own namespace through
-  `with_profile`.
-- **Configuration validation contract** — Add an unconditional section-validation
-  derive and a shared `load_config` pipeline. Forge-owned sections and product
-  sections must implement `ValidatableConfig`; root configurations retain an
-  explicit cross-section `validate` step.
-- **Observability configuration** — Provide reusable metrics identity,
-  Prometheus/OTLP settings, bounded validation, and validated provider/recorder
-  assembly for downstream products. `MetricsIdentity` implements `ValidatableConfig`;
-  `MetricError::InvalidConfiguration(String)` retains field and constraint diagnostics
-  across loader and direct-provider entrypoints (breaking: no longer a Copy/unit variant).
 
 ### Security
 
@@ -76,11 +100,6 @@
   not remediation.
 
 ### Fixed
-
-- **Panic filesystem side effects** — Linux private report writers require existing
-  ancestor directories, so installing the default hook cannot create `data/`.
-  Explicit bootstrap may create that directory before installing a new writer.
-  Filesystem behavior is checked on Linux, macOS and Windows before release gates.
 
 - **Concurrent private lock creation on macOS** — Retry one transient ENOENT
   from descriptor-relative O_CREAT|O_NOFOLLOW before applying the same file
@@ -169,6 +188,8 @@ continue to own their versions independently.
 - **External auth provider destinations (breaking)** — Dedicated Google, GitHub and QQ drivers use official destinations unconditionally. Use generic OIDC/OAuth2 for custom issuers or compatible services. Provider-option diagnostics omit rejected documents; mail diagnostic fields escape control characters. Scope/domain deduplication, mail fallback parsing and saturated cache reservations avoid repeated full scans while preserving order, fallback and TTL semantics.
 - **HTTP and local state boundaries** — Both HTTP transports combine repeated forwarding fields before trusted-proxy resolution; an active CORS policy disabling credentials removes inherited credential headers. Unix test state uses verified per-user directories, non-truncating no-follow locks and private atomic files. The Linux memory example uses the same state-file mechanics, replaces restored ledgers with private files before mounting, and bounds documents to 16 MiB with 1 MiB upload chunks; it remains a synthetic adapter.
 
-[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/964540389db08b070b24bcfb24cd353576a07932...HEAD
+[Unreleased]: https://github.com/AsterCommunity/AsterForge/compare/b0c0e306e5c8cd299c04da5ff0b946b6f019e06e...HEAD
+[2026-11-23 batch]: https://github.com/AsterCommunity/AsterForge/compare/da09ee6b6ae57baba3a423438305e927ea51e475...b0c0e306e5c8cd299c04da5ff0b946b6f019e06e
+[2026-11-21 batch]: https://github.com/AsterCommunity/AsterForge/compare/964540389db08b070b24bcfb24cd353576a07932...da09ee6b6ae57baba3a423438305e927ea51e475
 [2026-11-17 batch]: https://github.com/AsterCommunity/AsterForge/compare/0030ea4083e8739b176ec0cc0edf2ee1fae5f920...964540389db08b070b24bcfb24cd353576a07932
 [0.1.0-alpha.1]: https://github.com/AsterCommunity/AsterForge/commit/0030ea4083e8739b176ec0cc0edf2ee1fae5f920

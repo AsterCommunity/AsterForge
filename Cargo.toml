@@ -68,21 +68,21 @@ undocumented_unsafe_blocks = "deny"
 [workspace.dependencies]
 aster_forge_alloc = { path = "crates/aster_forge_alloc", version = "=0.1.0-alpha.2" }
 aster_forge_api = { path = "crates/aster_forge_api", version = "=0.1.0-alpha.2" }
-aster_forge_cloud_files_core = { path = "crates/aster_forge_cloud_files/core", version = "=0.1.0-alpha.2" }
-aster_forge_config = { path = "crates/aster_forge_config", version = "=0.1.0-alpha.3" }
-aster_forge_config_macros = { path = "crates/aster_forge_config_macros", version = "=0.1.0-alpha.1" }
-aster_forge_crypto = { path = "crates/aster_forge_crypto", version = "=0.1.0-alpha.3" }
-aster_forge_db = { path = "crates/aster_forge_db", version = "=0.1.0-alpha.4", default-features = false }
-aster_forge_events = { path = "crates/aster_forge_events", version = "=0.1.0-alpha.3" }
-aster_forge_http = { path = "crates/aster_forge_http", version = "=0.1.0-alpha.3" }
-aster_forge_mail = { path = "crates/aster_forge_mail", version = "=0.1.0-alpha.3", default-features = false }
-aster_forge_metrics = { path = "crates/aster_forge_metrics", version = "=0.1.0-alpha.4", default-features = false }
-aster_forge_runtime = { path = "crates/aster_forge_runtime", version = "=0.1.0-alpha.3" }
-aster_forge_tasks = { path = "crates/aster_forge_tasks", version = "=0.1.0-alpha.3", default-features = false }
-aster_forge_test = { path = "crates/aster_forge_test", version = "=0.1.0-alpha.4" }
-aster_forge_utils = { path = "crates/aster_forge_utils", version = "=0.1.0-alpha.3" }
+aster_forge_cloud_files_core = { path = "crates/aster_forge_cloud_files/core", version = "=0.1.0-alpha.3" }
+aster_forge_config = { path = "crates/aster_forge_config", version = "=0.1.0-alpha.4" }
+aster_forge_config_macros = { path = "crates/aster_forge_config_macros", version = "=0.1.0-alpha.2" }
+aster_forge_crypto = { path = "crates/aster_forge_crypto", version = "=0.1.0-alpha.4" }
+aster_forge_db = { path = "crates/aster_forge_db", version = "=0.1.0-alpha.5", default-features = false }
+aster_forge_events = { path = "crates/aster_forge_events", version = "=0.1.0-alpha.4" }
+aster_forge_http = { path = "crates/aster_forge_http", version = "=0.1.0-alpha.4" }
+aster_forge_mail = { path = "crates/aster_forge_mail", version = "=0.1.0-alpha.4", default-features = false }
+aster_forge_metrics = { path = "crates/aster_forge_metrics", version = "=0.1.0-alpha.5", default-features = false }
+aster_forge_runtime = { path = "crates/aster_forge_runtime", version = "=0.1.0-alpha.4" }
+aster_forge_tasks = { path = "crates/aster_forge_tasks", version = "=0.1.0-alpha.4", default-features = false }
+aster_forge_test = { path = "crates/aster_forge_test", version = "=0.1.0-alpha.5" }
+aster_forge_utils = { path = "crates/aster_forge_utils", version = "=0.1.0-alpha.4" }
 aster_forge_validation = { path = "crates/aster_forge_validation", version = "=0.1.0-alpha.1" }
-aster_forge_xml = { path = "crates/aster_forge_xml", version = "=0.1.0-alpha.3" }
+aster_forge_xml = { path = "crates/aster_forge_xml", version = "=0.1.0-alpha.4" }
 libc = { version = "0.2" }
 proptest = { version = "1.12.0" }
 roxmltree = { version = "0.21.2" }
