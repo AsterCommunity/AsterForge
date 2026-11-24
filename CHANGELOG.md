@@ -12,6 +12,8 @@
   `retain_recent()` for product maintenance, and preserves configured outer
   middleware behavior on rejection. Upgrade workspace `process-wrap` to 11,
   `syn` to 3 and Redis to 1.8.3.
+- **Middleware crate release intent** — Advance `aster_forge_middleware` from
+  `0.1.0-alpha.5` to `0.1.0-alpha.6`; no other in-workspace crate depends on it.
 
 ## [2026-11-23 batch] - 2026-11-23
 

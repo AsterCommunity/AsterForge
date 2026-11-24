@@ -1,6 +1,6 @@
 [package]
 name = "aster_forge_middleware"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -35,10 +35,11 @@ axum = ["dep:axum", "dep:cookie", "dep:http-body"]
 metrics = ["dep:aster_forge_metrics"]
 
 [dev-dependencies]
-reqwest.workspace = true
+aster_forge_http.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 tower = { workspace = true, features = ["util"] }
 
 [lints]

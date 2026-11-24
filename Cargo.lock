@@ -904,9 +904,10 @@ dependencies = [
 
 [[package]]
 name = "aster_forge_middleware"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "actix-web",
+ "aster_forge_http",
  "aster_forge_metrics",
  "aster_forge_utils",
  "axum",
@@ -918,12 +919,12 @@ dependencies = [
  "http-body",
  "ipnet",
  "rand 0.10.4",
- "reqwest",
  "sea-orm",
  "serde_json",
  "subtle",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tracing",
  "uuid",

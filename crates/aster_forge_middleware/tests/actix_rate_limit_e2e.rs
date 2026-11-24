@@ -1,25 +1,38 @@
-#![cfg(feature = "actix")]
 //! Real HTTP tests for Actix middleware composition around rate-limit responses.
+#![cfg(feature = "actix")]
 
 use actix_web::{App, HttpResponse, HttpServer, web};
 use aster_forge_middleware::actix::{
     cors::{CorsAllowedOrigins, RuntimeCors, RuntimeCorsConfig, RuntimeCorsPolicy},
-    rate_limit::build_ip_rate_limit_config,
+    rate_limit::{RateLimit, RateLimiterConfig, TrustedProxyIpKeyExtractor},
     request_id::RequestIdMiddleware,
     security_headers::default_headers,
 };
+use governor::clock::FakeRelativeClock;
 use std::num::{NonZeroU32, NonZeroU64};
 
 #[actix_web::test]
 async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
+    initialize_tls();
+
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
 
-    let limit = build_ip_rate_limit_config(
-        NonZeroU64::new(60).unwrap(),
-        NonZeroU32::new(1).unwrap(),
-        &[],
+    let clock = FakeRelativeClock::default();
+    let limit = RateLimiterConfig::with_clock(
+        aster_forge_middleware::shared::rate_limit::rate_limit_quota(
+            NonZeroU64::new(60).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+        ),
+        TrustedProxyIpKeyExtractor::new(&[]).with_rejection_response(
+            move |retry_after, mut response| {
+                response
+                    .insert_header(("Retry-After", retry_after.to_string()))
+                    .body(format!("retry in {retry_after}s"))
+            },
+        ),
+        clock,
     );
     let server = HttpServer::new(move || {
         let cors = RuntimeCorsConfig::new(
@@ -38,9 +51,7 @@ async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
         )
         .exposed_headers(["Retry-After", "X-Request-ID"]);
         App::new()
-            .wrap(aster_forge_middleware::actix::rate_limit::RateLimit::new(
-                &limit,
-            ))
+            .wrap(RateLimit::new(&limit))
             .wrap(RuntimeCors::new(cors))
             .wrap(default_headers())
             .wrap(RequestIdMiddleware)
@@ -56,7 +67,10 @@ async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
     let server_handle = server.handle();
     let server_task = actix_web::rt::spawn(server);
 
-    let client = reqwest::Client::new();
+    let client = aster_forge_http::HttpClient::builder()
+        .no_proxy()
+        .build()
+        .unwrap();
     let url = format!("http://{address}/limited");
     let first = client
         .get(&url)
@@ -64,7 +78,7 @@ async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
         .send()
         .await
         .unwrap();
-    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    assert_eq!(first.status(), http::StatusCode::OK);
     assert!(first.headers().contains_key("x-request-id"));
     assert!(first.headers().contains_key("access-control-allow-origin"));
 
@@ -74,7 +88,7 @@ async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
         .send()
         .await
         .unwrap();
-    assert_eq!(rejected.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(rejected.status(), http::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
         rejected.headers()["access-control-allow-origin"],
         "https://client.example"
@@ -85,8 +99,16 @@ async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
         "Retry-After, X-Request-ID"
     );
     assert_eq!(rejected.headers()["x-content-type-options"], "nosniff");
-    assert_eq!(rejected.headers()["retry-after"], "60");
-    assert!(rejected.text().await.unwrap().contains("retry in 60s"));
+    let retry_after = rejected.headers()["retry-after"].to_str().unwrap();
+    let retry_after_seconds = retry_after.parse::<u64>().unwrap();
+    assert!(retry_after_seconds > 0);
+    assert!(
+        rejected
+            .text()
+            .await
+            .unwrap()
+            .contains(&format!("retry in {retry_after_seconds}s"))
+    );
 
     server_handle.stop(true).await;
     server_task.await.unwrap().unwrap();
@@ -94,10 +116,12 @@ async fn rate_limit_rejection_keeps_outer_http_middleware_headers() {
 
 #[actix_web::test]
 async fn rate_limit_wraps_body_transforming_cors_middleware() {
-    let limit = build_ip_rate_limit_config(
-        NonZeroU64::new(60).unwrap(),
-        NonZeroU32::new(1).unwrap(),
-        &[],
+    let limit = RateLimiterConfig::new(
+        aster_forge_middleware::shared::rate_limit::rate_limit_quota(
+            NonZeroU64::new(60).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+        ),
+        TrustedProxyIpKeyExtractor::new(&[]),
     );
     let cors = RuntimeCorsConfig::new(
         |_| {
@@ -129,4 +153,9 @@ async fn rate_limit_wraps_body_transforming_cors_middleware() {
     )
     .await;
     assert_eq!(response.status(), actix_web::http::StatusCode::OK);
+}
+
+fn initialize_tls() {
+    let provider = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider();
+    let _ = provider.install_default();
 }

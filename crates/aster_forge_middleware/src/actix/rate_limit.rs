@@ -196,8 +196,9 @@ where
 
         if let Err(not_until) = self.config.limiter.check_key(&key) {
             let retry_after = retry_after_for_clock(&not_until, self.config.limiter.clock());
-            let response =
-                extractor.exceed_rate_limit_response(retry_after, HttpResponse::TooManyRequests());
+            let mut response = HttpResponse::TooManyRequests();
+            response.insert_header(("Retry-After", retry_after.to_string()));
+            let response = extractor.exceed_rate_limit_response(retry_after, response);
             let (http_req, _) = req.into_parts();
             return Box::pin(ok(
                 ServiceResponse::new(http_req, response).map_into_right_body()
@@ -369,7 +370,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{RateLimit, RateLimitKeyExtractor, RateLimiterConfig};
+    use super::{RateLimit, RateLimitKeyExtractor, RateLimiterConfig, TrustedProxyIpKeyExtractor};
     use crate::shared::rate_limit::rate_limit_quota;
     use actix_web::dev::ServiceRequest;
     use actix_web::{
@@ -455,10 +456,14 @@ mod tests {
 
     #[actix_web::test]
     async fn allows_requests_within_burst_and_rejects_the_next_one() {
+        use governor::clock::FakeRelativeClock;
+
         let quota = rate_limit_quota(NonZeroU64::new(60).unwrap(), NonZeroU32::new(3).unwrap());
+        let config =
+            RateLimiterConfig::with_clock(quota, StringKeyExtractor, FakeRelativeClock::default());
         let app = actix_test::init_service(
             App::new()
-                .wrap(RateLimit::new(&string_config(quota)))
+                .wrap(RateLimit::new(&config))
                 .route("/", web::get().to(HttpResponse::Ok)),
         )
         .await;
@@ -484,7 +489,7 @@ mod tests {
         assert_eq!(
             retry_after,
             Some(60),
-            "retry delay must round up to whole seconds"
+            "the fake clock keeps retry delay deterministic"
         );
     }
 
@@ -584,12 +589,18 @@ mod tests {
 
     #[actix_web::test]
     async fn default_rejection_is_plaintext_with_retry_after_header() {
+        use governor::clock::FakeRelativeClock;
+
         // The plaintext default is the TrustedProxyIpKeyExtractor behavior;
         // requests without a peer address fall back to the loopback bucket key.
-        let config = crate::actix::rate_limit::build_ip_rate_limit_config(
+        let quota = crate::shared::rate_limit::rate_limit_quota(
             NonZeroU64::new(30).unwrap(),
             NonZeroU32::new(1).unwrap(),
-            &[],
+        );
+        let config = RateLimiterConfig::with_clock(
+            quota,
+            crate::actix::rate_limit::TrustedProxyIpKeyExtractor::new(&[]),
+            FakeRelativeClock::default(),
         );
         let app = actix_test::init_service(
             App::new()
@@ -724,18 +735,20 @@ mod tests {
 
     #[actix_web::test]
     async fn custom_rejection_response_preserves_product_envelope() {
-        let config = crate::actix::rate_limit::build_ip_rate_limit_config_with_rejection_response(
-            NonZeroU64::new(60).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            &[],
+        use governor::clock::FakeRelativeClock;
+
+        let extractor = TrustedProxyIpKeyExtractor::new(&[]).with_rejection_response(
             |retry_after, mut response| {
-                response
-                    .insert_header(("Retry-After", retry_after.to_string()))
-                    .json(serde_json::json!({
-                        "code": "rate_limited",
-                        "retry_after": retry_after,
-                    }))
+                response.json(serde_json::json!({
+                    "code": "rate_limited",
+                    "retry_after": retry_after,
+                }))
             },
+        );
+        let config = RateLimiterConfig::with_clock(
+            rate_limit_quota(NonZeroU64::new(60).unwrap(), NonZeroU32::new(1).unwrap()),
+            extractor,
+            FakeRelativeClock::default(),
         );
         let app = actix_test::init_service(
             App::new()
@@ -762,7 +775,7 @@ mod tests {
         )
         .await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(second.headers().contains_key("Retry-After"));
+        assert_eq!(second.headers().get("Retry-After").unwrap(), "60");
         let body: serde_json::Value = actix_test::read_body_json(second).await;
         assert_eq!(body["code"], "rate_limited");
         assert!(body["retry_after"].as_u64().is_some_and(|value| value > 0));
