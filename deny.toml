@@ -59,10 +59,9 @@ allow = [
     "0BSD",
 ]
 confidence-threshold = 0.8
-# GPL 强 copyleft 与本项目 MIT OR Apache-2.0 分发方向冲突，不放行：
-# actix-governor 0.10 起为 GPL-3.0-or-later（底层 governor crate 仍是 MIT OR Apache-2.0），
-# 需以 governor 自写中间件替换，licenses 检查将保持失败直到替换完成。
-# aster_forge_middleware 是 Drive / Yggdrasil 侧 actix-governor 依赖的上游根。
+# GPL 强 copyleft 与本项目 MIT OR Apache-2.0 分发方向冲突，不放行。
+# actix-governor（GPL-3.0-or-later）已于 #93 移除：actix::rate_limit 直接基于
+# governor crate 自研，下游 Drive / Yggdrasil 迁移后随之解除。
 # 跟踪 issue: https://github.com/AsterCommunity/AsterForge/issues/93
 exceptions = [
     # Mozilla 根证书数据（Mozilla CA 证书库），仅数据非代码

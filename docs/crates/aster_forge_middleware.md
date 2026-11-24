@@ -42,7 +42,7 @@ aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge",
 | CSRF | `shared::csrf`：token、常量时间比较、来源校验、错误分类 | `actix::csrf`：request/cookie helpers | `axum::csrf`：helpers、`CsrfConfig` + `csrf` |
 | Runtime CORS | `shared::cors`：policy、错误类型、同一份校验/响应头引擎 | `RuntimeCors` + `RuntimeCorsConfig` | `RuntimeCorsConfig` + `runtime_cors` |
 | Client IP | `aster_forge_utils::net`：IP/CIDR 与 forwarded 解析 | `actix::client_ip` | `axum::client_ip`：HTTP headers、ConnectInfo |
-| Rate limit | `shared::rate_limit`：governor quota、normalized string keys、retry metadata | `actix::rate_limit`：governor config/extractor | `axum::rate_limit`：IP/string middleware |
+| Rate limit | `shared::rate_limit`：governor quota、normalized string keys、retry metadata | `actix::rate_limit`：rate-limit config/extractor/middleware | `axum::rate_limit`：IP/string middleware |
 | Request ID | 两端统一生成新的 UUID v4 | `RequestIdMiddleware` | `request_id` |
 | Security headers | `shared::security_headers`：默认值 | `default_headers()` | `security_headers` |
 | HTTP metrics | `aster_forge_metrics`：recorder | `MetricsMiddleware` | `metrics` |
@@ -53,7 +53,7 @@ aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge",
 
 ```toml
 aster_forge_middleware = { git = "https://github.com/AsterCommunity/AsterForge", default-features = false, features = ["axum"] }
-# 需要 HTTP metrics 时再加入 "metrics"；Axum-only 依赖树不包含 actix-web/actix-governor。
+# 需要 HTTP metrics 时再加入 "metrics"；Axum-only 依赖树不包含 actix-web。
 ```
 
 最小接入：
@@ -125,7 +125,7 @@ Forge 保留 factory 的状态、body、非 CORS 响应头和重复 `Set-Cookie`
 Access-Control-Request-Method、Access-Control-Request-Headers，保留已有值与 `Vary: *`。
 拒绝响应中的 Access-Control-Allow-Origin/Credentials/Methods/Headers、Expose-Headers 和 Max-Age
 会被移除，避免产品复用响应时遗留的 CORS 头重新放行请求。产品无需根据 403 或 body 大小猜测拒绝来源。
-这项回调只处理 CORS 策略拒绝，外层 governor 等其他中间件的拒绝响应仍需由产品正确组装层顺序。
+这项回调只处理 CORS 策略拒绝，外层 rate limit 等其他中间件的拒绝响应仍需由产品正确组装层顺序。
 
 ## Actix 接入示例
 
@@ -136,21 +136,25 @@ cargo run -p aster_forge_middleware --example actix_middleware
 cargo check -p aster_forge_middleware --example actix_middleware --features metrics
 ```
 
-Actix 最后安装的 `.wrap(...)` 最先处理请求。示例从外到内为代理来源边界 → 可选 metrics → request ID → security headers → CORS → Governor → API scope CSRF → handler。两份示例都监听 `127.0.0.1:3000`，分别运行；示例 `/api/demo` 的 POST 使用 `example_csrf` cookie 与 `X-Example-CSRF` header，`/health` 不安装 CSRF。
+Actix 最后安装的 `.wrap(...)` 最先处理请求。示例从外到内为代理来源边界 → 可选 metrics → request ID → security headers → CORS → Rate Limit → API scope CSRF → handler。两份示例都监听 `127.0.0.1:3000`，分别运行；示例 `/api/demo` 的 POST 使用 `example_csrf` cookie 与 `X-Example-CSRF` header，`/health` 不安装 CSRF。
 
 该示例直接监听 TCP、不信任任何代理，因此在 `connection_info()` 首次读取之前移除影响 scheme/host 的代理头。真实产品应从 direct peer 判定可信代理后处理这些头，并保留自己的 cookie/bearer 认证边界。AD 的业务错误码、认证、权限和 runtime component 继续归 AD；示例只展示 middleware 组合。
 
 ## Rate Limit
 
-模块：`shared::rate_limit`（框架无关）与 `actix::rate_limit`（Actix governor 适配）；Axum 见上文。
+模块：`shared::rate_limit`（框架无关，直接基于 `governor` crate）与 `actix::rate_limit`（Actix 适配）；Axum 见上文。
 
 主要类型和函数：
 
 - `TrustedProxyIpKeyExtractor`
 - `NormalizedStringRateLimiter`
 - `RateLimitRejection`
-- `build_ip_governor_config(seconds_per_request, burst_size, trusted_proxies)`
-- `build_ip_governor_config_with_rejection_response(...)`
+- `RateLimitKeyExtractor`：key 提取与 `429` 响应的中性契约
+- `RateLimiterConfig::new(quota, extractor)`：跨 worker 共享的限流配置
+- `RateLimiterConfig::retain_recent()`：清理已过期的 key bucket；高基数/客户端可控 key 应由产品维护任务定期调用
+- `RateLimit::new(&config)`：Actix middleware（`.wrap(...)` / `Condition` 内使用，支持下游 body-transforming middleware）
+- `build_ip_rate_limit_config(seconds_per_request, burst_size, trusted_proxies)`
+- `build_ip_rate_limit_config_with_rejection_response(...)`
 - `retry_after_seconds(not_until)`
 
 Forge 负责产品无关的 rate-limit 机械行为：
@@ -158,11 +162,11 @@ Forge 负责产品无关的 rate-limit 机械行为：
 - 解析可信代理 CIDR / 单 IP 列表。
 - 仅当 direct peer 是可信代理时，从右向左检查 `X-Forwarded-For`，跳过可信代理并取首个不可信地址作为客户端 IP；不能越过不可信跳点采用更左侧的可伪造值。遇到非法跳点、缺失头或全可信链时回退 direct peer。
 - 无 peer 地址的部署（Unix domain socket）所有客户端回落共享 `127.0.0.1` 这一个限流桶，一人突发全员被拒；UDS 形态的产品应禁用 IP 限流或改用 `NormalizedStringRateLimiter` 业务 key 限流。
-- 为 `actix-governor` 提供可复用 IP key extractor。
-- 从非零 `(seconds_per_request, burst_size)` 构造 governor quota。
+- 基于与 Actix 解耦的 `RateLimitKeyExtractor` 契约提供可复用 IP key extractor 与 `.wrap(...)` middleware。
+- 从非零 `(seconds_per_request, burst_size)` 构造 rate-limit quota。
 - 允许产品注入自己的 `429` response factory，同时继续复用可信代理和 client IP 提取。
 - 提供按字符串 key 限流的 `NormalizedStringRateLimiter`，默认 trim 并 lowercase key。
-- 把 governor rejection 转成可复用的 `retry_after_seconds`；所有不足整秒的等待向上取整，最小为 1 秒，避免 `Retry-After: 0` 诱导客户端立即重试。
+- 把限流 rejection 转成可复用的 `retry_after_seconds`；所有不足整秒的等待向上取整，最小为 1 秒，避免 `Retry-After: 0` 诱导客户端立即重试。
 
 产品侧仍然负责：
 
@@ -174,20 +178,19 @@ Forge 负责产品无关的 rate-limit 机械行为：
 典型 Actix API 接入：
 
 ```rust
-use actix_governor::GovernorConfig;
-use actix_web::http::StatusCode;
 use aster_forge_middleware::actix::rate_limit::{
-    TrustedProxyIpKeyExtractor, build_ip_governor_config_with_rejection_response,
+    RateLimit, build_ip_rate_limit_config_with_rejection_response,
 };
-use governor::middleware::NoOpMiddleware;
 use std::num::{NonZeroU32, NonZeroU64};
 
 fn build_config(
     seconds_per_request: NonZeroU64,
     burst_size: NonZeroU32,
     trusted_proxies: &[String],
-) -> GovernorConfig<TrustedProxyIpKeyExtractor, NoOpMiddleware> {
-    build_ip_governor_config_with_rejection_response(
+) -> aster_forge_middleware::actix::rate_limit::RateLimiterConfig<
+    aster_forge_middleware::actix::rate_limit::TrustedProxyIpKeyExtractor,
+> {
+    build_ip_rate_limit_config_with_rejection_response(
         seconds_per_request,
         burst_size,
         trusted_proxies,
@@ -204,8 +207,12 @@ fn build_config(
 }
 ```
 
-不要为修改 `429` body 再复制一份 `KeyExtractor`。产品只注入 response factory；trusted proxy、
-`X-Forwarded-For` 和 governor quota 的机械逻辑继续由 Forge 持有。
+不要为修改 `429` body 再复制一份 `RateLimitKeyExtractor`。产品只注入 response factory；trusted proxy、
+`X-Forwarded-For` 和 quota 的机械逻辑继续由 Forge 持有。middleware 的安装形状是
+`.wrap(RateLimit::new(&config))`；clone 出的 `RateLimiterConfig` 在所有 worker 间共享同一份配额状态。
+若限流拒绝响应也必须经过 CORS、安全头或 request-id middleware，应让这些 middleware 位于
+RateLimit 外层（Actix 中后添加的 `.wrap(...)` 先执行）；放在 RateLimit 内层的 middleware
+不会看到它短路生成的 429。
 
 典型协议端点接入：
 

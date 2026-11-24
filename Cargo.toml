@@ -95,7 +95,6 @@ opentelemetry-prometheus = { version = "0.33.1", default-features = false }
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "metrics"] }
 prost = "0.14"
 actix-web = "4.20.0"
-actix-governor = "0.10"
 axum = "0.8.9"
 aes-gcm = "0.11"
 async-trait = "0.1"
@@ -125,15 +124,15 @@ md-5 = "0.11"
 moka = { version = "0.12.16", features = ["future"] }
 parking_lot = "0.13"
 percent-encoding = "2.3"
-process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
+process-wrap = { version = "11.0.0", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 proc-macro2 = "1"
 proc-macro-crate = "3.5.0"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 quick-xml = { version = "0.42", default-features = false }
 quote = "1"
 openidconnect = { version = "4.1.0", default-features = false }
 rand = { version = "0.10.4", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-redis = { version = "1.8.2", default-features = false, features = ["connection-manager", "tokio-comp", "script"] }
+redis = { version = "1.8.3", default-features = false, features = ["connection-manager", "tokio-comp", "script"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std"] }
