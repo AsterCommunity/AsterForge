@@ -1,5 +1,4 @@
 //! Actix composition based on `AsterDrive`'s app-data, policy resolver and response adapters.
-use actix_governor::Governor;
 use actix_web::{
     App, Error, HttpResponse, HttpServer,
     dev::{Service, ServiceRequest},
@@ -11,7 +10,7 @@ use aster_forge_middleware::actix::{
         RuntimeCorsConfig, RuntimeCorsPolicy,
     },
     csrf::{self, CsrfTokenNames, RequestSourceMode},
-    rate_limit::build_ip_governor_config_with_rejection_response,
+    rate_limit::{RateLimit, build_ip_rate_limit_config_with_rejection_response},
     request_id::RequestIdMiddleware,
     security_headers::default_headers,
 };
@@ -96,7 +95,7 @@ async fn main() -> io::Result<()> {
             .map_err(io::Error::other)?,
         public_origins: vec!["http://localhost:5173".into()],
     });
-    let governor = build_ip_governor_config_with_rejection_response(
+    let governor = build_ip_rate_limit_config_with_rejection_response(
         NonZeroU64::new(1).ok_or_else(|| io::Error::other("invalid period"))?,
         NonZeroU32::new(20).ok_or_else(|| io::Error::other("invalid burst"))?,
         &[],
@@ -133,7 +132,7 @@ async fn main() -> io::Result<()> {
                 "/health",
                 web::get().to(|| async { HttpResponse::Ok().body("healthy") }),
             )
-            .wrap(Governor::new(&governor))
+            .wrap(RateLimit::new(&governor))
             .wrap(runtime_cors())
             .wrap(default_headers())
             .wrap(RequestIdMiddleware);

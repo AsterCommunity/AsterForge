@@ -2,35 +2,229 @@
 //!
 //! This module keeps product-neutral rate-limit mechanics in Forge while leaving
 //! product response envelopes and protocol-specific error bodies in application
-//! crates. It provides:
+//! crates. It wraps the [`governor`] crate's keyed rate limiter directly and
+//! provides:
 //!
-//! - a trusted-proxy-aware IP key extractor for `actix-governor`;
-//! - small quota helpers for building Actix governor configs from non-zero
+//! - [`RateLimitKeyExtractor`], the key-extraction and rejection-response
+//!   contract used by the middleware;
+//! - [`RateLimiterConfig`], a cloneable configuration that shares one quota
+//!   state across Actix workers;
+//! - [`RateLimit`], the Actix middleware installed via [`actix_web::dev::Transform`];
+//! - a trusted-proxy-aware IP key extractor ([`TrustedProxyIpKeyExtractor`]);
+//! - small helpers for building IP configs from non-zero
 //!   `(seconds_per_request, burst_size)` pairs;
 //! - a keyed string limiter for protocol endpoints that rate-limit by usernames,
-//!   emails, or other normalized business keys.
+//!   emails, or other normalized business keys (see [`NormalizedStringRateLimiter`]).
 
 use std::fmt;
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
-use actix_governor::{
-    GovernorConfig, GovernorConfigBuilder, KeyExtractor, SimpleKeyExtractionError,
-};
-use actix_web::dev::ServiceRequest;
+use actix_web::body::EitherBody;
+use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
 use actix_web::http::header::ContentType;
-use actix_web::{HttpResponse, HttpResponseBuilder};
-use governor::NotUntil;
-use governor::clock::QuantaInstant;
+use actix_web::{Error, HttpResponse, HttpResponseBuilder};
+use futures::future::{LocalBoxFuture, Ready, err, ok};
+use governor::clock::{Clock, DefaultClock};
 use governor::middleware::NoOpMiddleware;
+use governor::state::keyed::DefaultKeyedStateStore;
+use governor::{Quota, RateLimiter};
 use ipnet::IpNet;
 
 pub use crate::shared::rate_limit::{
     NormalizedStringRateLimiter, RateLimitRejection, retry_after_seconds,
 };
 
-/// Trusted-proxy-aware IP key extractor for `actix-governor`.
+/// Keyed rate limiter shared by all workers of one [`RateLimiterConfig`].
+type SharedKeyedRateLimiter<K, C> =
+    RateLimiter<K, DefaultKeyedStateStore<K>, C, NoOpMiddleware<<C as Clock>::Instant>>;
+
+/// Product-neutral contract for deriving a rate-limit key from a request and
+/// rendering the rejection response when a key exceeds its quota.
+///
+/// Extraction errors abort the request with the returned error untouched, so
+/// implementations can map failures to any response they need. Extractors that
+/// can always derive a key (e.g. [`TrustedProxyIpKeyExtractor`], which falls
+/// back to the peer address or loopback) simply never return `Err`.
+pub trait RateLimitKeyExtractor: Send + Sync + 'static {
+    /// The bucket key. Distinct keys never share quota state.
+    type Key: Hash + Eq + Clone + Send + Sync + 'static;
+
+    /// Derives the bucket key for a request.
+    ///
+    /// # Errors
+    ///
+    /// Returns the extraction error untouched; it aborts the request with the
+    /// error's own response rendering.
+    fn extract_key(&self, req: &ServiceRequest) -> Result<Self::Key, Error>;
+
+    /// Builds the response returned when the key exceeds its quota.
+    ///
+    /// `retry_after_seconds` is the rounded-up wait time (always at least 1).
+    /// The provided builder is already initialized with `429 Too Many Requests`;
+    /// implementations may override the status.
+    fn exceed_rate_limit_response(
+        &self,
+        retry_after_seconds: u64,
+        response: HttpResponseBuilder,
+    ) -> HttpResponse;
+}
+
+/// Cloneable rate-limit configuration holding one shared quota state.
+///
+/// Clones share the same limiter, so counters survive Actix worker forks; wrap
+/// the config in [`RateLimit::new`] per worker app.
+pub struct RateLimiterConfig<K: RateLimitKeyExtractor, C: Clock = DefaultClock> {
+    limiter: Arc<SharedKeyedRateLimiter<K::Key, C>>,
+    extractor: Arc<K>,
+}
+
+impl<K: RateLimitKeyExtractor, C: Clock> Clone for RateLimiterConfig<K, C> {
+    fn clone(&self) -> Self {
+        Self {
+            limiter: Arc::clone(&self.limiter),
+            extractor: Arc::clone(&self.extractor),
+        }
+    }
+}
+
+impl<K: RateLimitKeyExtractor> RateLimiterConfig<K, DefaultClock> {
+    /// Builds a config from a [`Quota`] and a key extractor.
+    ///
+    /// Use [`crate::shared::rate_limit::rate_limit_quota`] to build a quota from
+    /// the non-zero `(seconds_per_request, burst_size)` pairs used by product
+    /// config models.
+    #[must_use]
+    pub fn new(quota: Quota, extractor: K) -> Self {
+        Self::with_clock(quota, extractor, DefaultClock::default())
+    }
+}
+
+impl<K: RateLimitKeyExtractor, C: Clock> RateLimiterConfig<K, C> {
+    /// Builds a config using an explicitly supplied clock.
+    ///
+    /// This supports deterministic tests and products with a deliberate custom clock source.
+    #[must_use]
+    pub fn with_clock(quota: Quota, extractor: K, clock: C) -> Self {
+        Self {
+            limiter: Arc::new(RateLimiter::new(
+                quota,
+                DefaultKeyedStateStore::default(),
+                clock,
+            )),
+            extractor: Arc::new(extractor),
+        }
+    }
+
+    /// Removes expired key buckets; call from the owning product's maintenance runtime.
+    ///
+    /// Keyed state is otherwise retained for the lifetime of this config. Products that accept
+    /// attacker-controlled or high-cardinality keys should schedule this method periodically.
+    pub fn retain_recent(&self) {
+        self.limiter.retain_recent();
+    }
+}
+
+/// Actix middleware that rate-limits requests by [`RateLimitKeyExtractor`] keys.
+///
+/// Clone one [`RateLimiterConfig`], then install one [`RateLimit::new`] per
+/// worker app; all installed wrappers consume the same quota state.
+pub struct RateLimit<K: RateLimitKeyExtractor, C: Clock = DefaultClock> {
+    config: RateLimiterConfig<K, C>,
+}
+
+impl<K: RateLimitKeyExtractor, C: Clock> RateLimit<K, C> {
+    /// Wraps a config clone for installation on one worker app.
+    #[must_use]
+    pub fn new(config: &RateLimiterConfig<K, C>) -> Self {
+        Self {
+            config: config.clone(),
+        }
+    }
+}
+
+impl<S, B, K, C> Transform<S, ServiceRequest> for RateLimit<K, C>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
+    B: actix_web::body::MessageBody + 'static,
+    K: RateLimitKeyExtractor + 'static,
+    C: Clock + 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = Error;
+    type InitError = ();
+    type Transform = RateLimitService<S, K, C>;
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(RateLimitService {
+            service: std::rc::Rc::new(service),
+            config: self.config.clone(),
+        })
+    }
+}
+
+/// Service wrapper installed by [`RateLimit`].
+pub struct RateLimitService<S, K: RateLimitKeyExtractor, C: Clock = DefaultClock> {
+    service: std::rc::Rc<S>,
+    config: RateLimiterConfig<K, C>,
+}
+
+impl<S, B, K, C> Service<ServiceRequest> for RateLimitService<S, K, C>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
+    B: actix_web::body::MessageBody + 'static,
+    K: RateLimitKeyExtractor + 'static,
+    C: Clock + 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = Error;
+    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let service = std::rc::Rc::clone(&self.service);
+        let extractor = Arc::clone(&self.config.extractor);
+
+        let key = match extractor.extract_key(&req) {
+            Ok(key) => key,
+            Err(error) => return Box::pin(err(error)),
+        };
+
+        if let Err(not_until) = self.config.limiter.check_key(&key) {
+            let retry_after = retry_after_for_clock(&not_until, self.config.limiter.clock());
+            let response =
+                extractor.exceed_rate_limit_response(retry_after, HttpResponse::TooManyRequests());
+            let (http_req, _) = req.into_parts();
+            return Box::pin(ok(
+                ServiceResponse::new(http_req, response).map_into_right_body()
+            ));
+        }
+
+        Box::pin(async move {
+            service
+                .call(req)
+                .await
+                .map(ServiceResponse::map_into_left_body)
+        })
+    }
+}
+
+fn retry_after_for_clock<C: Clock>(not_until: &governor::NotUntil<C::Instant>, clock: &C) -> u64 {
+    let delay = not_until.wait_time_from(clock.now());
+    delay
+        .as_secs()
+        .saturating_add(u64::from(delay.subsec_nanos() > 0))
+        .max(1)
+}
+
+type RejectionResponseFactory =
+    dyn Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static;
+
+/// Trusted-proxy-aware IP key extractor.
 ///
 /// The extractor uses the direct peer address by default. When the peer address
 /// matches a trusted proxy, `X-Forwarded-For` is walked from right to left, skipping
@@ -42,12 +236,6 @@ pub use crate::shared::rate_limit::{
 /// `127.0.0.1`, so every client shares one rate-limit bucket and a single
 /// burst rejects all of them. Products serving over UDS should disable IP
 /// rate limiting or use [`NormalizedStringRateLimiter`] business keys instead.
-type RejectionResponseFactory =
-    dyn Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static;
-
-/// Prepared state for the trusted-proxy-aware extractor: trusted proxy ranges and the optional
-/// custom rejection response factory. See the module documentation for key derivation and
-/// fallback rules.
 #[derive(Clone)]
 pub struct TrustedProxyIpKeyExtractor {
     trusted: Vec<IpNet>,
@@ -92,9 +280,10 @@ impl TrustedProxyIpKeyExtractor {
 
     /// Uses a product-provided response factory when the request exceeds its quota.
     ///
-    /// The factory receives the retry delay in whole seconds and the response builder created by
-    /// `actix-governor`. Products can use this to preserve their response envelope and error code
-    /// without reimplementing trusted-proxy extraction.
+    /// The factory receives the retry delay in whole seconds and the response builder
+    /// initialized with `429 Too Many Requests`. Products can use this to preserve
+    /// their response envelope and error code without reimplementing trusted-proxy
+    /// extraction.
     #[must_use]
     pub fn with_rejection_response<F>(mut self, factory: F) -> Self
     where
@@ -117,11 +306,10 @@ impl TrustedProxyIpKeyExtractor {
     }
 }
 
-impl KeyExtractor for TrustedProxyIpKeyExtractor {
+impl RateLimitKeyExtractor for TrustedProxyIpKeyExtractor {
     type Key = IpAddr;
-    type KeyExtractionError = SimpleKeyExtractionError<&'static str>;
 
-    fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
+    fn extract_key(&self, req: &ServiceRequest) -> Result<Self::Key, Error> {
         // A localhost fallback is a bucket key, never proof that a proxy sent these headers.
         Ok(req
             .peer_addr()
@@ -132,85 +320,510 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
 
     fn exceed_rate_limit_response(
         &self,
-        negative: &NotUntil<QuantaInstant>,
+        retry_after: u64,
         mut response: HttpResponseBuilder,
     ) -> HttpResponse {
-        let retry_after = retry_after_seconds(negative);
         if let Some(factory) = &self.rejection_response {
             return factory(retry_after, response);
         }
         response
+            .insert_header(("Retry-After", retry_after.to_string()))
             .content_type(ContentType::plaintext())
             .body(format!("Too many requests, retry in {retry_after}s"))
     }
 }
 
-/// Builds an Actix governor config using the trusted-proxy-aware IP extractor.
+/// Builds a rate-limit config using the trusted-proxy-aware IP extractor.
 ///
-/// The inputs are non-zero to match the application config model and avoid
-/// runtime builder failures.
-///
-/// # Panics
-///
-/// Panics if `actix-governor` rejects a quota whose period and burst size are both non-zero.
-#[expect(
-    clippy::expect_used,
-    reason = "non-zero quota fields make actix-governor finish() infallible"
-)]
-pub fn build_ip_governor_config(
+/// The inputs are non-zero to match the application config model; the quota
+/// construction is therefore infallible.
+#[must_use]
+pub fn build_ip_rate_limit_config(
     seconds_per_request: NonZeroU64,
     burst_size: NonZeroU32,
     trusted_proxies: &[String],
-) -> GovernorConfig<TrustedProxyIpKeyExtractor, NoOpMiddleware> {
-    GovernorConfigBuilder::default()
-        .key_extractor(TrustedProxyIpKeyExtractor::new(trusted_proxies))
-        .seconds_per_request(seconds_per_request.get())
-        .burst_size(burst_size.get())
-        .finish()
-        .expect("non-zero rate limit tier should always build")
+) -> RateLimiterConfig<TrustedProxyIpKeyExtractor> {
+    RateLimiterConfig::new(
+        crate::shared::rate_limit::rate_limit_quota(seconds_per_request, burst_size),
+        TrustedProxyIpKeyExtractor::new(trusted_proxies),
+    )
 }
 
-/// Builds an Actix governor config with a product-provided rejection response.
-///
-/// # Panics
-///
-/// Panics if `actix-governor` rejects a quota whose period and burst size are both non-zero.
-#[expect(
-    clippy::expect_used,
-    reason = "non-zero quota fields make actix-governor finish() infallible"
-)]
-pub fn build_ip_governor_config_with_rejection_response<F>(
+/// Builds a rate-limit config with a product-provided rejection response.
+#[must_use]
+pub fn build_ip_rate_limit_config_with_rejection_response<F>(
     seconds_per_request: NonZeroU64,
     burst_size: NonZeroU32,
     trusted_proxies: &[String],
     rejection_response: F,
-) -> GovernorConfig<TrustedProxyIpKeyExtractor, NoOpMiddleware>
+) -> RateLimiterConfig<TrustedProxyIpKeyExtractor>
 where
     F: Fn(u64, HttpResponseBuilder) -> HttpResponse + Send + Sync + 'static,
 {
-    GovernorConfigBuilder::default()
-        .key_extractor(
-            TrustedProxyIpKeyExtractor::new(trusted_proxies)
-                .with_rejection_response(rejection_response),
-        )
-        .seconds_per_request(seconds_per_request.get())
-        .burst_size(burst_size.get())
-        .finish()
-        .expect("non-zero rate limit tier should always build")
+    RateLimiterConfig::new(
+        crate::shared::rate_limit::rate_limit_quota(seconds_per_request, burst_size),
+        TrustedProxyIpKeyExtractor::new(trusted_proxies)
+            .with_rejection_response(rejection_response),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TrustedProxyIpKeyExtractor, build_ip_governor_config_with_rejection_response};
-    use actix_governor::{Governor, KeyExtractor};
-    use actix_web::{App, HttpResponse, http::StatusCode, test as actix_test, web};
+    use super::{RateLimit, RateLimitKeyExtractor, RateLimiterConfig};
+    use crate::shared::rate_limit::rate_limit_quota;
+    use actix_web::dev::ServiceRequest;
+    use actix_web::{
+        App, HttpResponse, HttpResponseBuilder, http::StatusCode, test as actix_test, web,
+    };
+    use governor::Quota;
     use std::net::IpAddr;
     use std::num::{NonZeroU32, NonZeroU64};
+    use std::time::Duration;
+
+    struct StringKeyExtractor;
+
+    impl RateLimitKeyExtractor for StringKeyExtractor {
+        type Key = String;
+
+        fn extract_key(&self, _req: &ServiceRequest) -> Result<Self::Key, actix_web::Error> {
+            Ok("test-key".to_string())
+        }
+
+        fn exceed_rate_limit_response(
+            &self,
+            retry_after: u64,
+            mut response: HttpResponseBuilder,
+        ) -> HttpResponse {
+            response
+                .insert_header(("Retry-After", retry_after.to_string()))
+                .body(format!("limited, retry in {retry_after}s"))
+        }
+    }
+
+    /// A key extractor whose extraction always fails with a 400.
+    struct FailingKeyExtractor;
+
+    impl RateLimitKeyExtractor for FailingKeyExtractor {
+        type Key = String;
+
+        fn extract_key(&self, _req: &ServiceRequest) -> Result<Self::Key, actix_web::Error> {
+            Err(actix_web::error::ErrorBadRequest("bad key"))
+        }
+
+        fn exceed_rate_limit_response(
+            &self,
+            _retry_after: u64,
+            _response: HttpResponseBuilder,
+        ) -> HttpResponse {
+            HttpResponse::TooManyRequests().finish()
+        }
+    }
+
+    /// A key extractor that fails only on its first extraction.
+    ///
+    /// Requests rejected by extraction must not consume quota, so the second
+    /// request sees a full bucket even with a burst of one.
+    struct FailOnceExtractor {
+        failed: std::sync::atomic::AtomicBool,
+    }
+
+    impl RateLimitKeyExtractor for FailOnceExtractor {
+        type Key = String;
+
+        fn extract_key(&self, _req: &ServiceRequest) -> Result<Self::Key, actix_web::Error> {
+            if self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                Ok("counted".to_string())
+            } else {
+                Err(actix_web::error::ErrorBadRequest("transient failure"))
+            }
+        }
+
+        fn exceed_rate_limit_response(
+            &self,
+            retry_after: u64,
+            mut response: HttpResponseBuilder,
+        ) -> HttpResponse {
+            response
+                .insert_header(("Retry-After", retry_after.to_string()))
+                .finish()
+        }
+    }
+
+    fn string_config(quota: Quota) -> RateLimiterConfig<StringKeyExtractor> {
+        RateLimiterConfig::new(quota, StringKeyExtractor)
+    }
+
+    #[actix_web::test]
+    async fn allows_requests_within_burst_and_rejects_the_next_one() {
+        let quota = rate_limit_quota(NonZeroU64::new(60).unwrap(), NonZeroU32::new(3).unwrap());
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&string_config(quota)))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        for _ in 0..3 {
+            let request = actix_test::TestRequest::get().uri("/").to_request();
+            assert_eq!(
+                actix_test::call_service(&app, request).await.status(),
+                StatusCode::OK,
+                "requests within the burst must pass"
+            );
+        }
+
+        let rejected =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = rejected
+            .headers()
+            .get("Retry-After")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        assert_eq!(
+            retry_after,
+            Some(60),
+            "retry delay must round up to whole seconds"
+        );
+    }
+
+    #[actix_web::test]
+    async fn burst_of_one_rejects_every_request_after_the_first() {
+        let quota = rate_limit_quota(NonZeroU64::new(60).unwrap(), NonZeroU32::new(1).unwrap());
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&string_config(quota)))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let first =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        for _ in 0..2 {
+            let rejected = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::get().uri("/").to_request(),
+            )
+            .await;
+            assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
+    #[actix_web::test]
+    async fn distinct_keys_never_share_quota_state() {
+        let quota = rate_limit_quota(NonZeroU64::new(60).unwrap(), NonZeroU32::new(1).unwrap());
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&string_config(quota)))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        // One limiter, one default key: exhausting the key must not affect a
+        // different extractor instance with its own state store.
+        let exhausted =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(exhausted.status(), StatusCode::OK);
+
+        let rejected =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let other_config = string_config(quota);
+        let other_app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&other_config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+        let other = actix_test::call_service(
+            &other_app,
+            actix_test::TestRequest::get().uri("/").to_request(),
+        )
+        .await;
+        assert_eq!(other.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn quota_refills_after_the_period_elapses() {
+        use governor::clock::FakeRelativeClock;
+
+        let clock = FakeRelativeClock::default();
+        let quota = rate_limit_quota(NonZeroU64::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let config = RateLimiterConfig::with_clock(quota, StringKeyExtractor, clock.clone());
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let first =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let rejected =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        clock.advance(Duration::from_secs(1));
+
+        let refilled =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(refilled.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn default_rejection_is_plaintext_with_retry_after_header() {
+        // The plaintext default is the TrustedProxyIpKeyExtractor behavior;
+        // requests without a peer address fall back to the loopback bucket key.
+        let config = crate::actix::rate_limit::build_ip_rate_limit_config(
+            NonZeroU64::new(30).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            &[],
+        );
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let exhausted =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(exhausted.status(), StatusCode::OK);
+
+        let rejected =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(rejected.headers().contains_key("Retry-After"));
+        assert_eq!(
+            rejected
+                .headers()
+                .get("Content-Type")
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain; charset=utf-8"),
+            "default rejection body is plaintext"
+        );
+        let body = actix_test::read_body(rejected).await;
+        let body_text = String::from_utf8_lossy(&body);
+        assert!(
+            body_text.contains("retry in 30s"),
+            "default body should advertise the retry delay"
+        );
+    }
+
+    #[actix_web::test]
+    async fn failed_extraction_does_not_consume_quota() {
+        let quota = rate_limit_quota(NonZeroU64::new(3600).unwrap(), NonZeroU32::new(1).unwrap());
+        let config: RateLimiterConfig<FailOnceExtractor> = RateLimiterConfig::new(
+            quota,
+            FailOnceExtractor {
+                failed: std::sync::atomic::AtomicBool::new(false),
+            },
+        );
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        // First request fails extraction and must leave the full bucket intact.
+        let failed = actix_test::try_call_service(
+            &app,
+            actix_test::TestRequest::get().uri("/").to_request(),
+        )
+        .await;
+        assert!(failed.is_err());
+
+        // Second request passes: the extraction failure consumed nothing.
+        let passed =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(passed.status(), StatusCode::OK);
+
+        // Third request is the one that exhausts the bucket.
+        let exhausted =
+            actix_test::call_service(&app, actix_test::TestRequest::get().uri("/").to_request())
+                .await;
+        assert_eq!(exhausted.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[actix_web::test]
+    async fn key_extraction_errors_are_propagated_untouched() {
+        let quota = rate_limit_quota(NonZeroU64::new(60).unwrap(), NonZeroU32::new(1).unwrap());
+        let config: RateLimiterConfig<FailingKeyExtractor> =
+            RateLimiterConfig::new(quota, FailingKeyExtractor);
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let response = actix_test::try_call_service(
+            &app,
+            actix_test::TestRequest::get().uri("/").to_request(),
+        )
+        .await;
+        // The middleware must surface the extractor error untouched; the test
+        // harness renders it via the error's own ResponseError impl.
+        assert!(response.is_err());
+        let response = response.unwrap_err();
+        assert_eq!(
+            response.as_response_error().status_code(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[actix_web::test]
+    async fn cloned_configs_consume_the_same_allowance_across_worker_apps() {
+        let quota = rate_limit_quota(NonZeroU64::new(3600).unwrap(), NonZeroU32::new(1).unwrap());
+        let shared = string_config(quota);
+        let worker_one = shared.clone();
+        let worker_two = shared.clone();
+        let app_one = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&worker_one))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+        let app_two = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&worker_two))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let first = actix_test::call_service(
+            &app_one,
+            actix_test::TestRequest::get().uri("/").to_request(),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = actix_test::call_service(
+            &app_two,
+            actix_test::TestRequest::get().uri("/").to_request(),
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[actix_web::test]
+    async fn custom_rejection_response_preserves_product_envelope() {
+        let config = crate::actix::rate_limit::build_ip_rate_limit_config_with_rejection_response(
+            NonZeroU64::new(60).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            &[],
+            |retry_after, mut response| {
+                response
+                    .insert_header(("Retry-After", retry_after.to_string()))
+                    .json(serde_json::json!({
+                        "code": "rate_limited",
+                        "retry_after": retry_after,
+                    }))
+            },
+        );
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let first = actix_test::TestRequest::get()
+            .uri("/")
+            .peer_addr("127.0.0.1:12345".parse().unwrap())
+            .to_request();
+        assert_eq!(
+            actix_test::call_service(&app, first).await.status(),
+            StatusCode::OK
+        );
+
+        let second = actix_test::call_service(
+            &app,
+            actix_test::TestRequest::get()
+                .uri("/")
+                .peer_addr("127.0.0.1:12345".parse().unwrap())
+                .to_request(),
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(second.headers().contains_key("Retry-After"));
+        let body: serde_json::Value = actix_test::read_body_json(second).await;
+        assert_eq!(body["code"], "rate_limited");
+        assert!(body["retry_after"].as_u64().is_some_and(|value| value > 0));
+    }
+
+    #[actix_web::test]
+    async fn trusted_proxy_extractor_uses_client_ip_from_forwarded_chain_as_key() {
+        // Two clients behind one trusted proxy must get independent buckets.
+        let config = crate::actix::rate_limit::build_ip_rate_limit_config(
+            NonZeroU64::new(60).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            &["10.0.0.0/8".to_string()],
+        );
+        let app = actix_test::init_service(
+            App::new()
+                .wrap(RateLimit::new(&config))
+                .route("/", web::get().to(HttpResponse::Ok)),
+        )
+        .await;
+
+        let client_a = actix_test::TestRequest::get()
+            .uri("/")
+            .peer_addr("10.0.0.5:12345".parse().unwrap())
+            .insert_header(("X-Forwarded-For", "203.0.113.10"))
+            .to_request();
+        assert_eq!(
+            actix_test::call_service(&app, client_a).await.status(),
+            StatusCode::OK
+        );
+
+        // Same client IP again: rejected.
+        let client_a_again = actix_test::TestRequest::get()
+            .uri("/")
+            .peer_addr("10.0.0.5:12345".parse().unwrap())
+            .insert_header(("X-Forwarded-For", "203.0.113.10"))
+            .to_request();
+        assert_eq!(
+            actix_test::call_service(&app, client_a_again)
+                .await
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        // Different client behind the same proxy: independent bucket.
+        let client_b = actix_test::TestRequest::get()
+            .uri("/")
+            .peer_addr("10.0.0.5:54321".parse().unwrap())
+            .insert_header(("X-Forwarded-For", "198.51.100.2"))
+            .to_request();
+        assert_eq!(
+            actix_test::call_service(&app, client_b).await.status(),
+            StatusCode::OK
+        );
+    }
 
     #[test]
     fn trusted_proxy_extractor_accepts_cidr_and_single_ip() {
-        let extractor =
-            TrustedProxyIpKeyExtractor::new(&["10.0.0.0/8".to_string(), "192.168.1.1".to_string()]);
+        let extractor = crate::actix::rate_limit::TrustedProxyIpKeyExtractor::new(&[
+            "10.0.0.0/8".to_string(),
+            "192.168.1.1".to_string(),
+        ]);
 
         assert!(extractor.is_trusted("10.0.0.5".parse().unwrap()));
         assert!(extractor.is_trusted("192.168.1.1".parse().unwrap()));
@@ -219,6 +832,7 @@ mod tests {
 
     #[actix_web::test]
     async fn trusted_proxy_extractor_stops_at_first_untrusted_hop_from_trusted_peer() {
+        use crate::actix::rate_limit::TrustedProxyIpKeyExtractor;
         let extractor = TrustedProxyIpKeyExtractor::new(&["10.0.0.0/8".to_string()]);
         for (peer, forwarded, expected) in [
             (
@@ -241,7 +855,7 @@ mod tests {
                 .insert_header(("X-Forwarded-For", forwarded))
                 .to_srv_request();
             assert_eq!(
-                extractor.extract(&req).unwrap(),
+                extractor.extract_key(&req).unwrap(),
                 expected.parse::<IpAddr>().unwrap(),
                 "peer={peer}, forwarded={forwarded}"
             );
@@ -250,6 +864,7 @@ mod tests {
 
     #[actix_web::test]
     async fn trusted_proxy_extractor_falls_back_for_invalid_forwarded_ip_or_missing_peer() {
+        use crate::actix::rate_limit::TrustedProxyIpKeyExtractor;
         let extractor = TrustedProxyIpKeyExtractor::new(&["10.0.0.0/8".to_string()]);
         let invalid_forwarded = actix_test::TestRequest::default()
             .peer_addr("10.0.0.5:12345".parse().unwrap())
@@ -257,13 +872,13 @@ mod tests {
             .to_srv_request();
 
         assert_eq!(
-            extractor.extract(&invalid_forwarded).unwrap(),
+            extractor.extract_key(&invalid_forwarded).unwrap(),
             "10.0.0.5".parse::<IpAddr>().unwrap()
         );
 
         let missing_peer = actix_test::TestRequest::default().to_srv_request();
         assert_eq!(
-            extractor.extract(&missing_peer).unwrap(),
+            extractor.extract_key(&missing_peer).unwrap(),
             "127.0.0.1".parse::<IpAddr>().unwrap()
         );
 
@@ -272,51 +887,8 @@ mod tests {
             .insert_header(("x-forwarded-for", "203.0.113.1"))
             .to_srv_request();
         assert_eq!(
-            loopback_trusted.extract(&missing_peer).unwrap(),
+            loopback_trusted.extract_key(&missing_peer).unwrap(),
             "127.0.0.1".parse::<IpAddr>().unwrap()
         );
-    }
-
-    #[actix_web::test]
-    async fn custom_rejection_response_preserves_product_envelope() {
-        let config = build_ip_governor_config_with_rejection_response(
-            NonZeroU64::new(60).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            &[],
-            |retry_after, mut response| {
-                response
-                    .insert_header(("Retry-After", retry_after.to_string()))
-                    .json(serde_json::json!({
-                        "code": "rate_limited",
-                        "retry_after": retry_after,
-                    }))
-            },
-        );
-        let app = actix_test::init_service(
-            App::new()
-                .wrap(Governor::new(&config))
-                .route("/", web::get().to(HttpResponse::Ok)),
-        )
-        .await;
-
-        let first = actix_test::TestRequest::get()
-            .uri("/")
-            .peer_addr("127.0.0.1:12345".parse().unwrap())
-            .to_request();
-        assert_eq!(
-            actix_test::call_service(&app, first).await.status(),
-            StatusCode::OK
-        );
-
-        let second = actix_test::TestRequest::get()
-            .uri("/")
-            .peer_addr("127.0.0.1:12345".parse().unwrap())
-            .to_request();
-        let response = actix_test::call_service(&app, second).await;
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(response.headers().contains_key("Retry-After"));
-        let body: serde_json::Value = actix_test::read_body_json(response).await;
-        assert_eq!(body["code"], "rate_limited");
-        assert!(body["retry_after"].as_u64().is_some_and(|value| value > 0));
     }
 }

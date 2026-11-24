@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Actix rate limiting (breaking)** — Replace the GPL-licensed `actix-governor`
+  adapter with Forge's `governor`-backed `RateLimitKeyExtractor`, shared
+  `RateLimiterConfig` and Actix middleware. Migrate callers to the new helper
+  names and `.wrap(RateLimit::new(&config))`; old `GovernorConfig` helpers are
+  removed. The middleware supports body-transforming services, exposes
+  `retain_recent()` for product maintenance, and preserves configured outer
+  middleware behavior on rejection. Upgrade workspace `process-wrap` to 11,
+  `syn` to 3 and Redis to 1.8.3.
+
 ## [2026-11-23 batch] - 2026-11-23
 
 Changes since `da09ee6b6ae57baba3a423438305e927ea51e475`. This batch selects
