@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Windows Cloud Files bindings for the product-neutral Forge cloud-files core"
 readme = "README.md"
+keywords = ["windows", "cloud-files", "files", "filesystem"]
+categories = ["filesystem", "os"]
 publish = true
 
 [dependencies]

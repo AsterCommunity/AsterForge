@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral outbound HTTP client mechanics for Aster services"
 readme = "README.md"
+keywords = ["http", "http-client", "reqwest", "rustls", "proxy"]
+categories = ["network-programming", "web-programming"]
 publish = true
 
 [features]

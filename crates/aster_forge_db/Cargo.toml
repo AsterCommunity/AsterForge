@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared database utilities for Aster services"
 readme = "README.md"
+keywords = ["database", "sea-orm", "sql", "orm"]
+categories = ["database"]
 publish = true
 
 [dependencies]

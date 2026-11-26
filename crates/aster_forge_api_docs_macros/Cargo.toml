@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "OpenAPI attribute macros shared by Aster services"
 readme = "README.md"
+keywords = ["openapi", "macros", "docs", "attributes"]
+categories = ["development-tools", "web-programming"]
 publish = true
 
 [lib]

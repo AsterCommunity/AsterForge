@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared background task primitives for Aster services"
 readme = "README.md"
+keywords = ["tasks", "background", "scheduler", "worker"]
+categories = ["asynchronous", "concurrency"]
 publish = true
 
 [features]

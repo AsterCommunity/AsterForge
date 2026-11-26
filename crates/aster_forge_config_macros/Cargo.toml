@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Derive macros for AsterForge configuration validation"
 readme = "README.md"
+keywords = ["config", "macros", "derive", "validation"]
+categories = ["development-tools", "config"]
 publish = true
 
 [lib]

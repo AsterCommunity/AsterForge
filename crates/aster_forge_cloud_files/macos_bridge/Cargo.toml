@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral Rust bridge contracts for Apple File Provider extensions"
 readme = "README.md"
+keywords = ["file-provider", "macos", "apple", "cloud-files"]
+categories = ["filesystem", "os"]
 publish = true
 
 [lib]

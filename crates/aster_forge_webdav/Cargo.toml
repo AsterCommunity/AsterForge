@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral WebDAV protocol engine contracts for Aster services"
 readme = "README.md"
+keywords = ["webdav", "http", "protocol", "dav"]
+categories = ["network-programming", "web-programming"]
 publish = true
 
 [features]

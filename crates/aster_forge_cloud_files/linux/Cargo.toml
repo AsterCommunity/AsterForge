@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral Linux FUSE bindings for Forge cloud-files core"
 readme = "README.md"
+keywords = ["fuse", "linux", "filesystem", "cloud-files"]
+categories = ["filesystem", "os"]
 publish = true
 
 [dependencies]

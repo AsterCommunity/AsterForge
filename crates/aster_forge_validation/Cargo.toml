@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared validation helpers for Aster services"
 readme = "README.md"
+keywords = ["validation", "input", "sanitization"]
+categories = ["development-tools"]
 publish = true
 
 [dependencies]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral declarative macros for lossless string protocol enums"
 readme = "README.md"
+keywords = ["macros", "enums", "string", "protocol"]
+categories = ["development-tools", "rust-patterns"]
 publish = true
 
 [dev-dependencies]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "File extension parsing and category classification helpers"
 readme = "README.md"
+keywords = ["files", "extensions", "classification", "parsing"]
+categories = ["parsing", "filesystem"]
 publish = true
 
 [features]

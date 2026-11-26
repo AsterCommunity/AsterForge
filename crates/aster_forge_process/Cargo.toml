@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Bounded child-process lifecycle mechanics for Aster services"
 readme = "README.md"
+keywords = ["process", "subprocess", "child-process", "lifecycle"]
+categories = ["os", "development-tools"]
 publish = true
 
 [dependencies]

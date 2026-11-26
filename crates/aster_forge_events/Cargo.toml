@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral transient event transport primitives"
 readme = "README.md"
+keywords = ["events", "event-bus", "transport", "pubsub"]
+categories = ["asynchronous"]
 publish = true
 
 [features]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "HTTP observability endpoints for Aster services"
 readme = "README.md"
+keywords = ["observability", "metrics", "health", "prometheus"]
+categories = ["web-programming", "development-tools"]
 publish = true
 
 [features]

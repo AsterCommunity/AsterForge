@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared storage utility helpers for Aster services"
 readme = "README.md"
+keywords = ["storage", "filesystem", "files", "paths"]
+categories = ["filesystem"]
 publish = true
 
 [dependencies]

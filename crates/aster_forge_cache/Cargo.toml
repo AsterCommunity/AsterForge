@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared cache abstractions and backend constructors for Aster services"
 readme = "README.md"
+keywords = ["cache", "caching", "redis", "memory"]
+categories = ["caching", "asynchronous"]
 publish = true
 
 [features]

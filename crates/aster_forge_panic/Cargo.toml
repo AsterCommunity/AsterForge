@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared panic hook and crash report writer for Aster services"
 readme = "README.md"
+keywords = ["panic", "crash-report", "diagnostics", "backtrace"]
+categories = ["development-tools"]
 publish = true
 
 [dependencies]

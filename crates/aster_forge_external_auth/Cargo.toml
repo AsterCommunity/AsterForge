@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Feature-gated external authentication provider drivers for Aster services"
 readme = "README.md"
+keywords = ["authentication", "oauth", "oidc", "sso"]
+categories = ["authentication", "api-bindings"]
 publish = true
 
 [features]

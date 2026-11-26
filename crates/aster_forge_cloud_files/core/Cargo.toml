@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral contracts for native cloud-files integrations"
 readme = "README.md"
+keywords = ["cloud-files", "storage", "files", "contracts"]
+categories = ["filesystem", "api-bindings"]
 publish = true
 
 [dependencies]

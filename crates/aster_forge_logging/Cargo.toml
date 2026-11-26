@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared tracing subscriber setup for Aster services"
 readme = "README.md"
+keywords = ["logging", "tracing", "subscriber", "diagnostics"]
+categories = ["development-tools"]
 publish = true
 
 [dependencies]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared integration-test infrastructure for Aster services"
 readme = "README.md"
+keywords = ["testing", "integration-testing", "fixtures", "testcontainers"]
+categories = ["development-tools"]
 publish = true
 
 [features]

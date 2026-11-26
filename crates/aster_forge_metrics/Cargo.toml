@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared metrics recorder traits and subsystem registration primitives"
 readme = "README.md"
+keywords = ["metrics", "telemetry", "prometheus", "observability"]
+categories = ["development-tools"]
 publish = true
 
 [features]

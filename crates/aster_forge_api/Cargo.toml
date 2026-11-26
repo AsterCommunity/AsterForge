@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared API response and pagination helpers for Aster services"
 readme = "README.md"
+keywords = ["api", "pagination", "response", "http"]
+categories = ["web-programming", "api-bindings"]
 publish = true
 
 [features]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Product-neutral local session authentication mechanics"
 readme = "README.md"
+keywords = ["authentication", "session", "password", "login"]
+categories = ["authentication"]
 publish = true
 
 [features]

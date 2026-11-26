@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared HTTP middleware for Aster services"
 readme = "README.md"
+keywords = ["middleware", "http", "request", "response"]
+categories = ["web-programming", "network-programming"]
 publish = true
 
 [dependencies]

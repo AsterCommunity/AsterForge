@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared audit runtime integration for Aster services"
 readme = "README.md"
+keywords = ["audit", "logging", "security", "compliance"]
+categories = ["development-tools"]
 publish = true
 
 [features]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared mail infrastructure helpers for Aster services"
 readme = "README.md"
+keywords = ["email", "mail", "smtp", "outbox"]
+categories = ["email"]
 publish = true
 
 [features]

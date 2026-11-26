@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared cryptographic helpers for Aster services"
 readme = "README.md"
+keywords = ["cryptography", "crypto", "password", "hashing", "encryption"]
+categories = ["cryptography"]
 publish = true
 
 [features]

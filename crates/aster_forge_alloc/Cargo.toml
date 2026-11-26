@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared allocator tracking and memory statistics helpers"
 readme = "README.md"
+keywords = ["allocator", "memory", "stats", "tracking"]
+categories = ["memory-management", "development-tools"]
 publish = true
 
 [features]

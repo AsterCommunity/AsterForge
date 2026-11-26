@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Bounded, source-backed XML parsing for Aster services"
 readme = "README.md"
+keywords = ["xml", "parser", "parsing", "bounded"]
+categories = ["parsing", "encoding"]
 publish = true
 
 [dependencies]

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared low-level utility helpers for Aster services"
 readme = "README.md"
+keywords = ["utils", "helpers", "utilities"]
+categories = ["development-tools", "rust-patterns"]
 publish = true
 
 [dependencies]

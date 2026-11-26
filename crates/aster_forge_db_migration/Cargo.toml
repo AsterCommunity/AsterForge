@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared SeaORM migration coordination and schema helpers for Aster products"
 readme = "README.md"
+keywords = ["database", "migration", "sea-orm", "schema"]
+categories = ["database"]
 publish = true
 
 [features]

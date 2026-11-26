@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Shared runtime configuration primitives for Aster services"
 readme = "README.md"
+keywords = ["config", "configuration", "settings", "runtime"]
+categories = ["config"]
 publish = true
 
 [features]
